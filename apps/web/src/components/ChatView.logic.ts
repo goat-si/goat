@@ -1,3 +1,4 @@
+import { toServerClock } from "@goat/client-runtime/clock";
 import { threadHasStarted } from "../lib/chatThreadActions";
 import type { MessagesTimeline } from "./chat/MessagesTimeline";
 import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@goat/contracts";
@@ -1010,6 +1011,7 @@ export interface LocalDispatchSnapshot {
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
   options?: {
+    environmentId?: import("@goat/contracts").EnvironmentId;
     preparingWorktree?: boolean;
     latestUserMessageId?: ChatMessage["id"] | null;
     submissionIntent?: ComposerSubmissionIntent;
@@ -1018,7 +1020,11 @@ export function createLocalDispatchSnapshot(
   const latestRun = activeThread?.latestRun ?? null;
   const runtime = activeThread?.runtime ?? null;
   return {
-    startedAt: new Date().toISOString(),
+    startedAt: new Date(
+      options?.environmentId === undefined
+        ? Date.now()
+        : toServerClock(options.environmentId, Date.now()),
+    ).toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
     submissionIntent: options?.submissionIntent ?? "foreground",
     latestUserMessageId: options?.latestUserMessageId ?? null,

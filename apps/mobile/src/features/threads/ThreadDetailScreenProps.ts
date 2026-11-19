@@ -4,10 +4,7 @@ import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { HandoffEndpoints } from "@goat/client-runtime/handoff";
-import type {
-  CodexFeedbackSubmission,
-  EnvironmentThreadStatus,
-} from "@goat/client-runtime/state/threads";
+import type { CodexFeedbackSubmission } from "@goat/client-runtime/state/threads";
 import type {
   OrchestrationV2ProviderSession,
   EnvironmentId,
@@ -99,7 +96,6 @@ export interface ThreadDetailScreenProps {
   readonly activePendingUserInputAnswers: Record<string, string | ReadonlyArray<string>> | null;
   readonly respondingUserInputId: RuntimeRequestId | null;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
-  readonly threadSyncStatus?: EnvironmentThreadStatus;
   readonly historyControls?: ThreadFeedHistoryControls;
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;

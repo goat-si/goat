@@ -14,10 +14,6 @@ import {
 } from "@goat/client-runtime/state/thread-activity-announcement";
 import {
   EMPTY_PENDING_FILE_SURFACE_IDS,
-  noopHeldTurnDiff,
-  noopHeldRevert,
-  noopHeldAttachment,
-  ignoreComposerFocus,
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
@@ -365,6 +361,10 @@ import {
   startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   shouldRefocusComposerOnWindowFocus,
+  noopHeldTurnDiff,
+  noopHeldRevert,
+  noopHeldAttachment,
+  ignoreComposerFocus,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -1443,6 +1443,7 @@ export default function ChatView(props: ChatViewProps) {
     isSendBusy,
     backgroundSubmissionPending,
   } = useLocalDispatchState({
+    environmentId,
     activeThread,
     activeLatestRun,
     latestUserMessageId:

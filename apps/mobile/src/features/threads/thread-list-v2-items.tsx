@@ -77,6 +77,9 @@ import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { ThreadListV2Duration } from "./thread-list-pane-clock";
 import {
+  TITLE_FAVICON_SIZE,
+  TITLE_FAVICON_OFFSET,
+  TITLE_TEXT_INSET,
   DONE_STATUS_LABEL,
   STATUS_LABEL_BY_STATUS,
   ThreadListV2RowOrigin,
@@ -90,17 +93,11 @@ export { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
-const TITLE_FAVICON_SIZE = 15;
-// Centers the favicon on the first line of the text-base title.
-const TITLE_FAVICON_OFFSET = 4;
-// Lines below the title start where the title text does.
-const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;
-
 export {
   ThreadListV2WorkingShelfHeader,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2SettledShelfHeader,
-} from "./thread-list-v2-section";
+} from "./thread-list-v2-shelf-header";
 
 const PENDING_TASK_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
@@ -458,6 +455,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     hasQueuedMessages: props.hasQueuedMessages,
     isRegeneratingTitle,
     providerName: providerNameLabel,
+    statusLabel: showsWoke
+      ? "Woke"
+      : (statusLabel?.label ??
+        (status === "waiting" ? "Waiting" : status === "working" ? "Working" : undefined)),
+    timeLabel: snoozedRow ? (props.snoozeWakeLabelText ?? props.timeLabel) : props.timeLabel,
   });
   const timeLabel = props.timeLabel;
 
@@ -885,6 +887,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 {statusLabel.label}
                 {status === "working" || status === "waiting" ? (
                   <ThreadListV2Duration
+                    environmentId={thread.environmentId}
                     startedAt={
                       status === "working"
                         ? resolveThreadWorkingStartedAt(thread)
@@ -1273,6 +1276,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ThreadRowMenu
+            accessibilityLabel={rowAccessibilityLabel}
             actions={[
               ...(thread.branch
                 ? [

@@ -1,3 +1,4 @@
+import { parseUrl } from "./parseUrl.ts";
 import { PRODUCTION_SCHEME } from "./mobileAppIdentity.ts";
 
 /** Query parameter of a `goat://pair` link that carries the server's pairing URL. */
@@ -19,8 +20,8 @@ export function buildMobilePairingLink(pairingUrl: string): string {
 
 /** Reads the pairing URL out of a `goat://pair` link, or null for any other link. */
 export function readPairingAppLink(value: string): string | null {
-  if (!URL.canParse(value)) return null;
-  const url = new URL(value);
+  const url = parseUrl(value);
+  if (url === null) return null;
   if (!PAIRING_APP_LINK_PROTOCOL.test(url.protocol) || url.host !== "pair") return null;
   if (url.pathname !== "" && url.pathname !== "/") return null;
   return url.searchParams.get(MOBILE_PAIRING_URL_PARAM)?.trim() || null;

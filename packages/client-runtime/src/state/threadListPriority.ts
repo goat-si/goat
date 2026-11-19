@@ -109,7 +109,10 @@ export function resolveWindowTitleThreadStatus(thread: ThreadListStatusInput): s
 }
 
 type UnseenCompletionInput = {
-  readonly latestRun?: { readonly completedAt: string | null } | null | undefined;
+  readonly latestRun?:
+    | { readonly completedAt: string | null; readonly status?: string }
+    | null
+    | undefined;
   readonly notificationCompletedAt?: string | null | undefined;
   readonly markedUnreadCompletionAt?: string | null | undefined;
   readonly lastVisitedAt?: string | null | undefined;
@@ -118,7 +121,9 @@ type UnseenCompletionInput = {
 export function hasUnseenCompletion(thread: UnseenCompletionInput): boolean {
   const automatic =
     thread.notificationCompletedAt === undefined
-      ? thread.latestRun?.completedAt
+      ? thread.latestRun?.status === "interrupted" || thread.latestRun?.status === "cancelled"
+        ? null
+        : thread.latestRun?.completedAt
       : thread.notificationCompletedAt;
   const times = [automatic, thread.markedUnreadCompletionAt]
     .map((at) => Date.parse(at ?? ""))

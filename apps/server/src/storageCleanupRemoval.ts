@@ -1,5 +1,6 @@
 import type { ProjectId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { verifySnapshot } from "./worktreeSnapshots/captureSnapshot.ts";
@@ -7,7 +8,12 @@ import { findOpenHandles } from "./worktreeSnapshots/openHandles.ts";
 import { WorktreeSnapshotStore } from "./worktreeSnapshots/WorktreeSnapshotStore.ts";
 
 export type RemovalDecision =
-  | { readonly _tag: "remove"; readonly snapshotRef: string; readonly hasChanges: boolean }
+  | {
+      readonly _tag: "remove";
+      readonly snapshotRef: string;
+      readonly hasChanges: boolean;
+      readonly repository: string;
+    }
   | { readonly _tag: "keep"; readonly reason: string };
 
 /**
@@ -17,6 +23,7 @@ export type RemovalDecision =
 export const makeWorktreeRemovalGate = Effect.gen(function* () {
   const store = yield* WorktreeSnapshotStore;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const path = yield* Path.Path;
   const read = (cwd: string, args: string[]) =>
     git
       .execute({ operation: "StorageCleanup.removalGate", cwd, args, maxOutputBytes: 64 * 1024 })
@@ -30,6 +37,12 @@ export const makeWorktreeRemovalGate = Effect.gen(function* () {
       readonly branch: string | null;
       readonly reason: string;
     }) {
+      const commonDir = yield* read(input.worktreePath, ["rev-parse", "--git-common-dir"]);
+      if (commonDir === "")
+        return { _tag: "keep", reason: "couldn't identify the owning repository" } as const;
+      const commonPath = path.resolve(input.worktreePath, commonDir);
+      const repository =
+        path.basename(commonPath) === ".git" ? path.dirname(commonPath) : commonPath;
       const status = yield* read(input.worktreePath, [
         "status",
         "--porcelain=v1",
@@ -37,7 +50,9 @@ export const makeWorktreeRemovalGate = Effect.gen(function* () {
         "--ignore-submodules=none",
       ]);
       const hasChanges = status !== "";
-      const snapshot = yield* store.capture({ ...input, baseRef: null }).pipe(Effect.result);
+      const snapshot = yield* store
+        .capture({ ...input, workspaceRoot: repository, baseRef: null })
+        .pipe(Effect.result);
       if (snapshot._tag === "Failure")
         return { _tag: "keep", reason: `snapshot failed: ${snapshot.failure.detail}` } as const;
       const handles = yield* findOpenHandles(input.worktreePath);
@@ -68,7 +83,7 @@ export const makeWorktreeRemovalGate = Effect.gen(function* () {
       }).pipe(Effect.result);
       if (verified._tag === "Failure")
         return { _tag: "keep", reason: verified.failure.detail } as const;
-      return { _tag: "remove", snapshotRef, hasChanges } as const;
+      return { _tag: "remove", snapshotRef, hasChanges, repository } as const;
     },
     Effect.catch((error) =>
       Effect.succeed({

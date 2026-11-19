@@ -1,3 +1,4 @@
+import { parseUrl } from "@goat/shared/parseUrl";
 import { DEFAULT_OPENCODEX_BASE_URL, type ProviderInstanceConfig } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ensureLocalApi } from "../../localApi";
@@ -82,8 +83,8 @@ export function ProviderCodexHomeRouteSection({
         canOpenDashboard
           ? async () => {
               const baseUrl = settings.opencodexBaseUrl;
-              if (!URL.canParse(baseUrl)) throw new Error(LOCAL_ADDRESS);
-              const url = new URL(baseUrl);
+              const url = parseUrl(baseUrl);
+              if (url === null) throw new Error(LOCAL_ADDRESS);
               if (
                 url.protocol !== "http:" ||
                 !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||

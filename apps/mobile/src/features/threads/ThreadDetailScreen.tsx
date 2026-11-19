@@ -1,3 +1,4 @@
+import { RECONNECT_ERROR_DELAY_MS } from "./threadDetailTiming";
 import { USER_INPUT_TOGGLE_TIMING } from "./threadDetailMotion";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { CloudTaskStatus } from "./CloudTaskStatus";
@@ -165,8 +166,6 @@ import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
 import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
-// Connection failures survive retries and app suspension.
-const RECONNECT_ERROR_DELAY_MS = 5_000;
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -342,20 +341,6 @@ function ThreadDetailBody(
   );
   const composerKeyboardOffset = composerBottomInset;
   const contentPresentationKind = props.contentPresentation.kind;
-  const realThreadSyncLabel = (() => {
-    switch (props.threadSyncStatus) {
-      case "empty":
-      case "cached":
-      case "synchronizing":
-        if (contentPresentationKind === "ready") {
-          return "Syncing messages...";
-        }
-        return contentPresentationKind === "loading" ? "Loading messages..." : null;
-      default:
-        return null;
-    }
-  })();
-  const threadSyncLabel = useDelayedStatus(selectedThreadKey, realThreadSyncLabel);
   const connectionRetrying =
     props.connectionStateLabel === "connecting" || props.connectionStateLabel === "reconnecting";
   const retryError = connectionRetrying ? props.connectionError : null;
@@ -565,17 +550,11 @@ function ThreadDetailBody(
     }
     if (startHold !== null && contentPresentationKind === "ready") return startHold;
     if (props.creationState?.kind === "preparing") {
-      if (props.worktreeSetup) return null;
-      return {
-        kind: "preparing",
-        label: props.creationState.preparingWorktree ? "Setting up worktree…" : "Starting…",
-      };
+      if (props.worktreeSetup || props.creationState.preparingWorktree) return null;
+      return { kind: "preparing", label: "Starting…" };
     }
     if (props.creationState?.kind === "failed") {
       return null;
-    }
-    if (threadSyncLabel !== null) {
-      return { kind: "syncing", label: threadSyncLabel };
     }
     const childInput = childThreadInputs[0];
     if (childInput && contentPresentationKind === "ready") {
@@ -1194,6 +1173,11 @@ function ThreadDetailBody(
                 pendingHandoff={props.pendingHandoff}
                 worktreeSetup={props.worktreeSetup}
                 setupWorkingStartedAt={props.setupWorkingStartedAt}
+                preparingWorktree={
+                  props.creationState?.kind === "preparing" &&
+                  props.creationState.preparingWorktree &&
+                  !props.worktreeSetup
+                }
                 queuedMessages={props.queuedMessages}
                 dispatchingMessageId={props.dispatchingMessageId}
                 onEditPendingMessage={
@@ -1307,6 +1291,7 @@ function ThreadDetailBody(
                 className="w-full"
               >
                 <FloatingWorkingControl
+                  environmentId={props.environmentId}
                   colorScheme={isDarkMode ? "dark" : "light"}
                   status={floatingStatus}
                   extensionStatus={piExtensionForControl(floatingStatus, extensionStatus)}

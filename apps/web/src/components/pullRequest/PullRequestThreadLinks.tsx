@@ -193,7 +193,7 @@ function ThreadPicker({
   const projects = useProjects();
   const [query, setQuery] = useState("");
   // Mounts older settled threads matching the query, which shells may leave out.
-  useThreadSearch([environmentId], query, { titlesOnly: true });
+  const threadSearch = useThreadSearch([environmentId], query, { titlesOnly: true });
   const projectNames = new Map(
     projects
       .filter((project) => project.environmentId === environmentId)
@@ -214,9 +214,18 @@ function ThreadPicker({
     <Command mode="none" value={query} onValueChange={setQuery} aria-label="Choose a thread">
       <CommandInput placeholder="Search threads or projects..." disabled={pending} />
       <CommandList className="max-h-80 overflow-y-auto">
+        {candidates.length > 0 && threadSearch.failed && !threadSearch.isPending ? (
+          <div role="status" className="px-3 py-6 text-center text-sm text-muted-foreground">
+            Couldn't search threads.
+          </div>
+        ) : null}
         {candidates.length === 0 ? (
           <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-            No active threads found.
+            {threadSearch.isPending
+              ? "Searching threads…"
+              : threadSearch.failed
+                ? "Couldn't search threads."
+                : "No active threads found."}
           </div>
         ) : (
           candidates.map((thread) => {

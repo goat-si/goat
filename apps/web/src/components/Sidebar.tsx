@@ -1,3 +1,4 @@
+import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
@@ -227,7 +228,6 @@ import { SidebarProjectScope } from "./sidebar/SidebarProjectScope";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
 import {
-  scrollSidebarToTop,
   resolveSidebarRouteReveal,
   type SidebarRouteReveal,
   useActiveRowReveal,
@@ -291,10 +291,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "goat:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "goat:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "goat:sidebar:working-expanded";
-function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
-  return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-}
-
 const NO_DRAGGED_ORDER: readonly string[] = [];
 const NO_DRAGGED_ORDERS: {
   readonly settledOrder: readonly string[];
@@ -2889,7 +2885,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   role="status"
                   className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
                 >
-                  {threadSearch.isPending ? "Searching thread messages…" : "No threads found"}
+                  {threadSearch.isPending
+                    ? "Searching thread messages…"
+                    : threadSearch.failed
+                      ? "Couldn't search thread messages."
+                      : "No threads found"}
                 </p>
               </>
             )

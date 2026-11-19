@@ -77,6 +77,7 @@ function fleetFor(
       entry: entries.get(id)!,
       connection: connections.get(id)!,
       serverConfig: null,
+      refusedRouteIds: [],
     }),
   );
   const summaries = createEnvironmentSummaryAtoms({ catalogValueAtom, presentationAtom });

@@ -1,3 +1,5 @@
+import { cleanCheckpointRefs } from "./storageCleanupCheckpoints.ts";
+import { worktreeOwner } from "./storageCleanupOwners.ts";
 import { makeWorktreeMeasurement } from "./storageCleanupMeasurement.ts";
 import { keyAt, makeCanonicalWorktreePaths, worktreePathOf } from "./storageCleanupCanonical.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
@@ -152,34 +154,6 @@ function heldForLimitRecovery(
   )
     return false;
   return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
-}
-
-/** Only a complete subagent chain within this worktree shares ownership. */
-function worktreeOwner<T extends Pick<OrchestrationV2ThreadShell, "id" | "lineage">>(
-  threads: ReadonlyArray<T>,
-) {
-  if (threads.length === 1) return threads[0];
-  const byId = new Map(threads.map((thread) => [thread.id, thread]));
-  const tops = threads.filter((thread) => !byId.has(thread.lineage.parentThreadId!));
-  if (tops.length !== 1) return undefined;
-  const owner = tops[0]!;
-  for (const thread of threads) {
-    let current = thread;
-    const seen = new Set<string>();
-    while (current.id !== owner.id) {
-      if (
-        seen.has(current.id) ||
-        current.lineage.relationshipToParent !== "subagent" ||
-        current.lineage.rootThreadId !== owner.lineage.rootThreadId
-      )
-        return undefined;
-      seen.add(current.id);
-      const parent = byId.get(current.lineage.parentThreadId!);
-      if (parent === undefined) return undefined;
-      current = parent;
-    }
-  }
-  return owner;
 }
 
 export class StorageCleanup extends Context.Service<
@@ -682,11 +656,9 @@ const make = Effect.gen(function* () {
         if (!deleted && group.some((member) => member.pinnedAt != null))
           return keep("thread is pinned");
         if (project === undefined) return keep("project is unavailable");
-        if (
-          thread.branch === null ||
-          !group.every((member) => storageCleanupThreadIdle(member, now, serverSettings))
-        )
+        if (!group.every((member) => storageCleanupThreadIdle(member, now, serverSettings)))
           return keep(waitForStop("thread is running or has pending work"));
+        if (thread.branch === null) return keep("thread has no branch");
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
         if (yield* hasTerminal(worktreePaths)) return keep(waitForStop("open terminal"));
@@ -911,8 +883,10 @@ const make = Effect.gen(function* () {
           reason: sentence(removalReason),
         });
         if (removal._tag === "keep") return keep(removal.reason);
+        if (submodules.manifestOnly && snapshotCovers && removal.hasChanges)
+          return keep("cannot safely force-remove a worktree with an uninitialized submodule");
         // Clean only untracked files. Ordinary worktrees retain Git's final tracked-edit check.
-        if (settings.worktreeKeepWhen === "tracked-changes")
+        if (settings.worktreeKeepWhen === "tracked-changes" && !submodules.force)
           yield* cleanupGit(worktreePath, ["clean", "-ffdx"], "git clean");
         if (submodules.force) {
           const changes = yield* localChangesReason(worktreePath, settings);
@@ -920,13 +894,13 @@ const make = Effect.gen(function* () {
         }
         yield* removeLinkedWorktree({
           operation: "StorageCleanup.cleanupGit",
-          cwd: project.workspaceRoot,
+          cwd: removal.repository,
           worktreePath,
           // Git requires force for submodules; recursive checks above cannot make removal atomic.
           // Without snapshot coverage, Git's own check still refuses an edit that lands now.
           force: submodules.force || (snapshotCovers && removal.hasChanges),
           execute: git.execute,
-          run: (args) => cleanupGit(project.workspaceRoot, [...args], "git worktree remove"),
+          run: (args) => cleanupGit(removal.repository, [...args], "git worktree remove"),
         });
         entries.push({
           ...entry,
@@ -1019,6 +993,9 @@ const make = Effect.gen(function* () {
     const serverSettings = yield* settingsService.getSettings;
     const settings = serverSettings.storageCleanup;
     const entries: StorageCleanupReportEntry[] = [];
+    yield* cleanCheckpointRefs(git).pipe(
+      Effect.catch((cause) => Effect.logWarning("checkpoint ref cleanup failed", { cause })),
+    );
     const deletedWorktrees = yield* runWorktreeCleanup({
       nowMs: now,
       snapshotDays: settings.worktreeSnapshotDays,
@@ -1185,8 +1162,10 @@ const make = Effect.gen(function* () {
     );
     yield* forkParked(
       Stream.runForEach(events, (event) => {
-        if (event.type === "thread.deleted") deletions++;
-        else if (
+        if (event.type === "thread.deleted") {
+          deletions++;
+          return requestSweep;
+        } else if (
           event.type !== "provider-session.updated" ||
           (event.payload.status !== "stopped" && event.payload.status !== "error")
         )

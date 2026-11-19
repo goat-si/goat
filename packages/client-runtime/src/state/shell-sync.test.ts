@@ -281,14 +281,12 @@ describe("environment shell synchronization", () => {
         ),
       );
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
-        network: "online",
-        phase: "connected",
-        stage: null,
+        network: "online" as const,
+        phase: "connected" as const,
         attempt: 1,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, { kind: "snapshot", snapshot: batchSnapshot });
       yield* Queue.offer(events, { kind: "synchronized" });
@@ -554,14 +552,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",
@@ -574,36 +571,32 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 2,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
-        stage: null,
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 2,
         generation: 2,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Deferred.await(saveStarted);
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 3,
         generation: 3,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((state) => state.status === "synchronizing"),
@@ -698,14 +691,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",
@@ -720,14 +712,12 @@ describe("environment shell synchronization", () => {
       // Disconnect flush starts an immediate persist of the unenriched snapshot
       // (debounced path needs TestClock advancement; flush does not).
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
-        stage: null,
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 1,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Deferred.await(unenrichedSaveStarted);
 
@@ -816,14 +806,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",

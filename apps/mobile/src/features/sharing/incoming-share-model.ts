@@ -11,7 +11,10 @@ import {
 import * as Schema from "effect/Schema";
 import type { ResolvedSharePayload, SharePayload } from "expo-sharing";
 
-import { DraftComposerAttachmentSchema } from "../../lib/composer-image-schema";
+import {
+  DraftComposerAttachmentSchema,
+  normalizePersistedShareDraft,
+} from "../../lib/composer-image-schema";
 import { fitComposerImage } from "../../lib/composerImageFit";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import { estimateBase64ByteSize } from "../../lib/base64";
@@ -49,7 +52,7 @@ export const IncomingShareDraftSchema = Schema.Struct({
 const decodeIncomingShareDraftSync = Schema.decodeUnknownSync(IncomingShareDraftSchema);
 
 export function decodeIncomingShareDraft(value: unknown): IncomingShareDraft {
-  return decodeIncomingShareDraftSync(value);
+  return decodeIncomingShareDraftSync(normalizePersistedShareDraft(value));
 }
 
 /** Strip iOS /private so /var and /private/var paths compare equally. */
@@ -336,7 +339,7 @@ export async function buildIncomingShareDraft(input: {
           }
         }
         attachments.push({
-          id: `${input.id}:file:${index}`,
+          id: `${input.id}-file-${index}`,
           type: "file",
           name,
           mimeType,
@@ -401,7 +404,7 @@ export async function buildIncomingShareDraft(input: {
       }
       const dataUrl = `data:${mimeType};base64,${base64}`;
       attachments.push({
-        id: `${input.id}:image:${index}`,
+        id: `${input.id}-image-${index}`,
         type: "image",
         name: resolved?.originalName ?? fallbackName(uri, index, mimeType),
         mimeType,

@@ -1,3 +1,4 @@
+import { parseUrl } from "@goat/shared/parseUrl";
 // Adapted from opencode (MIT). Copyright (c) 2025 opencode. See LICENSE.opencode.
 import type { WordLink } from "./word-protocol";
 
@@ -6,7 +7,7 @@ const schemes = new Set(["http:", "https:", "mailto:"]);
 
 /** A document's link address, normalized, when the host may open it; undefined otherwise, so the link stays text. */
 export function externalUrl(href: string) {
-  const url = URL.parse(href);
+  const url = parseUrl(href);
 
   return url && schemes.has(url.protocol) ? url.href : undefined;
 }

@@ -1,3 +1,5 @@
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -64,6 +66,7 @@ const personalSkill = {
 
 const makePiSpawner = Effect.fnUntraced(function* (
   discovery: { readonly state?: unknown; readonly models?: ReadonlyArray<unknown> } = {},
+  versionText = "pi 1.0.2\n",
 ) {
   const pendingCommand = yield* Deferred.make<void>();
   const launches: Array<ChildProcess.StandardCommand> = [];
@@ -93,7 +96,7 @@ const makePiSpawner = Effect.fnUntraced(function* (
               ? {
                   commands: [
                     personalSkill,
-                    ...(cwd === "/machine"
+                    ...(cwd?.endsWith("/pi-status-probe")
                       ? []
                       : [
                           {
@@ -120,7 +123,7 @@ const makePiSpawner = Effect.fnUntraced(function* (
             ),
           ).pipe(Effect.asVoid);
         }),
-        stdout: version ? Stream.succeed(encoder.encode("pi 1.0.2\n")) : Stream.fromQueue(stdout),
+        stdout: version ? Stream.succeed(encoder.encode(versionText)) : Stream.fromQueue(stdout),
         stderr: Stream.empty,
         all: Stream.empty,
         getInputFd: () => Sink.drain,
@@ -142,6 +145,36 @@ const create = (config: Partial<PiSettings> = {}, enabled = true) =>
   });
 
 it.layer(layerTest)("PiDriver workspace discovery", (it) => {
+  it.effect("creates a private health probe directory before starting Pi and OmO", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const host = yield* ProviderHost.ProviderHost;
+      const probeCwd = path.join(host.paths.providerStatusCacheDir, "pi-status-probe");
+      assert.isFalse(yield* fs.exists(probeCwd));
+      const { spawner, launches } = yield* makePiSpawner();
+      const instance = yield* create().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      yield* instance.snapshot.refresh;
+      assert.isTrue(yield* fs.exists(probeCwd));
+      const stat = yield* fs.stat(probeCwd);
+      if (stat.mode !== undefined) assert.equal(Number(stat.mode) & 0o077, 0);
+      assert.isTrue(launches.some((launch) => launch.options.cwd === probeCwd));
+      const omoProbe = yield* makePiSpawner({}, "omo 5.1.40\n");
+      const omo = yield* OmoDriver.create({
+        instanceId: ProviderInstanceId.make("omo-probe"),
+        displayName: undefined,
+        accentColor: undefined,
+        environment: [],
+        enabled: true,
+        config: { ...OmoDriver.defaultConfig(), enabled: true, binaryPath: "custom-pi" },
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, omoProbe.spawner));
+      yield* omo.snapshot.refresh;
+      assert.isTrue(omoProbe.launches.some((launch) => launch.options.cwd === probeCwd));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("maintenance resolves the executable once per uncached lookup", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -465,6 +498,9 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
 
   it.effect("keeps each workspace's skills and commands separate from the machine catalog", () =>
     Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const path = yield* Path.Path;
+      const probeCwd = path.join(host.paths.providerStatusCacheDir, "pi-status-probe");
       const { spawner, launches } = yield* makePiSpawner();
       const instance = yield* create({ launchArgs: '--approve --skill "extra skill"' }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -510,7 +546,8 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
       assert.equal(workspaceLaunch!.options.env?.PI_CODING_AGENT_DIR, "/isolated-pi");
       // Discovery processes are stopped as soon as they answer, so neither may start Pi's
       // network refresh at launch.
-      for (const cwd of ["/machine", "/first"]) {
+      assert.isFalse(launches.some((launch) => launch.options.cwd === "/machine"));
+      for (const cwd of [probeCwd, "/first"]) {
         const discovery = launches.find(
           (launch) => launch.options.cwd === cwd && launch.args.includes("--mode"),
         );

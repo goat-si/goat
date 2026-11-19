@@ -707,14 +707,23 @@ export function CommandPalette(props: {
                 contentContainerClassName="pb-2"
                 ListEmptyComponent={
                   <Text className="p-5 text-center text-foreground-muted">
-                    {search.isPending ? "Searching…" : "No results"}
+                    {search.isPending
+                      ? "Searching…"
+                      : search.failed
+                        ? "Couldn't search messages"
+                        : "No results"}
                   </Text>
                 }
                 // Message results from slower environments may still arrive below.
                 ListFooterComponent={
-                  results.length > 0 && search.isPending && !query.startsWith(">") ? (
-                    <Text className="px-5 pt-2 text-xs text-foreground-muted">
-                      Searching messages…
+                  results.length > 0 &&
+                  !query.startsWith(">") &&
+                  (search.isPending || search.failed) ? (
+                    <Text
+                      accessibilityRole="alert"
+                      className="px-5 pt-2 text-xs text-foreground-muted"
+                    >
+                      {search.isPending ? "Searching messages…" : "Couldn't search messages"}
                     </Text>
                   ) : undefined
                 }

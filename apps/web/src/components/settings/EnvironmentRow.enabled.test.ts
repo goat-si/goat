@@ -33,6 +33,7 @@ describe("saved Connect presentation when enabled", () => {
         displayUrl: null,
         relayManaged: true,
         serverConfig: null,
+        refusedRouteIds: [],
         connection: { phase: "available", error: null, traceId: null },
       }),
     ).toBe("GOAT Connect");
