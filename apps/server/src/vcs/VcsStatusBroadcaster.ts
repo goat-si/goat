@@ -1,3 +1,10 @@
+import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
+export {
+  VcsAutomaticFetchInterval,
+  VcsAutoPullPolicy,
+  layerAutomaticFetchInterval,
+  layerAutoPullPolicy,
+} from "./vcsBackgroundPolicy.ts";
 import { makeBranchUpdates } from "./branchUpdates.ts";
 import { remoteRefreshFailureDiagnostics } from "./vcsStatusDiagnostics.ts";
 import { makeHeadWatchers } from "./headWatchers.ts";
@@ -29,16 +36,12 @@ import type {
   VcsStatusSubscriptionInput,
 } from "@goat/contracts";
 import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL, GitManagerError } from "@goat/contracts";
-import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import { mergeGitStatusParts } from "@goat/shared/git";
 import * as KeyedLock from "@goat/shared/KeyedLock";
-import { resolveProjectSettings } from "@goat/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ServerSettings from "../serverSettings.ts";
 
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
@@ -67,49 +70,6 @@ interface ActiveRemotePoller {
   readonly subscriberCount: number;
   readonly demandCwds: Ref.Ref<ReadonlyMap<string, number>>;
 }
-
-export class VcsAutomaticFetchInterval extends Context.Reference<Effect.Effect<Duration.Duration>>(
-  "goat/vcs/VcsAutomaticFetchInterval",
-  { defaultValue: () => Effect.succeed(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL) },
-) {}
-
-export const layerAutomaticFetchInterval = Layer.effect(
-  VcsAutomaticFetchInterval,
-  Effect.gen(function* () {
-    const serverSettings = yield* ServerSettings.ServerSettingsService;
-    return serverSettings.getSettings.pipe(
-      Effect.map(
-        (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
-      ),
-      Effect.orElseSucceed(() => DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL),
-    );
-  }),
-);
-
-export class VcsAutoPullPolicy extends Context.Reference<{
-  readonly isEnabled: (cwd: string) => Effect.Effect<boolean, never>;
-}>("goat/vcs/VcsAutoPullPolicy", {
-  defaultValue: () => ({ isEnabled: () => Effect.succeed(false) }),
-}) {}
-
-export const layerAutoPullPolicy = Layer.effect(
-  VcsAutoPullPolicy,
-  Effect.gen(function* () {
-    const projects = yield* ProjectStore.ProjectStoreV2;
-    const serverSettings = yield* ServerSettings.ServerSettingsService;
-    return {
-      isEnabled: Effect.fn("VcsAutoPullPolicy.isEnabled")(
-        function* (cwd: string) {
-          const project = yield* projects.findActiveByWorkspaceRoot(cwd);
-          if (project._tag === "None") return false;
-          const settings = yield* serverSettings.getSettings;
-          return resolveProjectSettings(settings, project.value.projectId).settings.defaultAutoPull;
-        },
-        Effect.orElseSucceed(() => false),
-      ),
-    };
-  }),
-);
 
 function remoteRefreshFailureDelay(
   consecutiveFailures: number,
