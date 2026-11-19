@@ -30,6 +30,7 @@
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#171717";
         const CUSTOM_THEMES_STORAGE_KEY = "goat:themes:v1";
+        const ENVIRONMENT_THEMES_STORAGE_KEY = "goat:environment-themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "goat:theme-follow-system";
         const THEME_APPEARANCE_MODE_STORAGE_KEY = "goat:theme-appearance-mode";
         const THEME_HALVES_STORAGE_KEY = "goat:theme-halves:v1";
@@ -223,10 +224,9 @@
               (appearance === value.appearance || isRecord(colors)),
           );
         };
-        const findCustomTheme = (themeId) => {
-          if (RESERVED_THEME_IDS.includes(themeId)) return null;
+        const findStoredTheme = (storageKey, themeId) => {
           try {
-            const parsed = JSON.parse(readStorage(CUSTOM_THEMES_STORAGE_KEY) ?? "null");
+            const parsed = JSON.parse(readStorage(storageKey) ?? "null");
             if (!Array.isArray(parsed)) return null;
             return (
               parsed.find((value) => isStoredCustomTheme(value) && value.id === themeId) ?? null
@@ -234,6 +234,13 @@
           } catch {
             return null;
           }
+        };
+        const findCustomTheme = (themeId) => {
+          if (RESERVED_THEME_IDS.includes(themeId)) return null;
+          return (
+            findStoredTheme(CUSTOM_THEMES_STORAGE_KEY, themeId) ??
+            findStoredTheme(ENVIRONMENT_THEMES_STORAGE_KEY, themeId)
+          );
         };
 
         try {

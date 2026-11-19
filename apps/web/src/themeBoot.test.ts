@@ -146,6 +146,21 @@ const CHARCOAL_DARK_ONLY = {
 };
 
 describe("index.html boot script", () => {
+  it("paints the cached published theme before the server connects", () => {
+    const colors = { ...getDefaultThemeColors("dark"), canvas: "#1a1b26", chrome: "#111122" };
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "nightfall",
+        "goat:environment-themes:v1": JSON.stringify([
+          { id: "nightfall", label: "Nightfall", appearance: "dark", colors },
+        ]),
+      },
+      prefersDark: true,
+    });
+    expect(boot.themeId).toBe("nightfall");
+    expect(boot.bootVariables["--boot-background"]).toBe(colors.canvas);
+    expect(boot.backgroundColor).toBe(colors.chrome);
+  });
   const parityCases: ReadonlyArray<{
     name: string;
     storage: Record<string, string>;

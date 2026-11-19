@@ -85,6 +85,7 @@ export function useEnvironmentThemeSync(): void {
   const lastPublished = useRef<ReadonlyArray<EnvironmentTheme> | null>(null);
 
   useEffect(() => {
+    if (published === null) return;
     if (lastPublished.current !== null && Equal.equals(lastPublished.current, published)) return;
     lastPublished.current = published;
 

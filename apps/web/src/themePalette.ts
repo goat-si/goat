@@ -5,6 +5,7 @@ import "culori/css";
 import { converter, parse } from "culori/fn";
 import { setThemePreviewAppearance } from "./themePreviewAppearance";
 export { getThemePreviewAppearance, subscribeToThemePreview } from "./themePreviewAppearance";
+import { readEnvironmentThemeCache, writeEnvironmentThemeCache } from "./environmentThemeCache";
 import {
   BUILT_IN_THEMES,
   normalizeThemeId,
@@ -53,8 +54,7 @@ export type ThemeFile = Readonly<{
   managed?: boolean;
 }>;
 
-// Do not persist server-published palettes; they become stale when the environment theme changes.
-let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> = [];
+let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> | null = null;
 
 const customThemeListeners = new Set<() => void>();
 type CustomThemeLibrarySnapshot =
@@ -213,15 +213,19 @@ export function getCustomThemes(): ReadonlyArray<ThemeDefinition> {
 }
 
 export function getEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
+  if (environmentThemeDefinitions === null) {
+    environmentThemeDefinitions = readEnvironmentThemeCache(parseStoredThemes);
+  }
   return environmentThemeDefinitions;
 }
 
 /** Returns structural change; reconnects recreate arrays with identical colors. */
 export function setEnvironmentThemes(themes: ReadonlyArray<ThemeDefinition>): boolean {
-  if (Equal.equals(environmentThemeDefinitions, themes)) return false;
+  const changed = !Equal.equals(getEnvironmentThemes(), themes);
   environmentThemeDefinitions = themes;
-  notifyCustomThemeListeners();
-  return true;
+  writeEnvironmentThemeCache(themes);
+  if (changed) notifyCustomThemeListeners();
+  return changed;
 }
 
 export function isReservedThemeId(themeId: string): boolean {
@@ -990,7 +994,7 @@ export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | nu
   return (
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId) ??
     getCustomThemes().find((definition) => definition.id === themeId) ??
-    environmentThemeDefinitions.find((definition) => definition.id === themeId) ??
+    getEnvironmentThemes().find((definition) => definition.id === themeId) ??
     null
   );
 }

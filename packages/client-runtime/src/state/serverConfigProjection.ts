@@ -153,7 +153,7 @@ export function applyServerConfigProjection(
       return Option.map(current, (projection) => ({
         config: {
           ...projection.config,
-          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
+          environmentThemes: event.payload.themes,
         },
         latestEvent: event,
         source: "live",
