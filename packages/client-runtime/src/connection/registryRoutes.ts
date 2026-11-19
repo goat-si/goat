@@ -5,16 +5,49 @@ import type { ConnectionCatalogEntry, ConnectionProfile, ConnectionRoute } from 
 import type { ConnectionTarget } from "./model.ts";
 import type * as ConnectionProfileStore from "./profileStore.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
-import { entryWithRoutes, routeIsShown } from "./routes.ts";
+import { connectionRouteId, entryWithRoutes, routeIsShown } from "./routes.ts";
 
-/** An environment left with only Pen routes the closed gate hides stays saved, off the list. */
-export function targetsOfShownEnvironments<T extends ConnectionTarget>(
-  targets: ReadonlyArray<T>,
-): ReadonlyArray<T> {
-  const shown = new Set(
-    targets.filter((target) => routeIsShown({ target })).map((target) => target.environmentId),
+/** A saved route the closed Pen gate hides, and its slot among the environment's saved routes. */
+export interface HiddenRoute {
+  readonly index: number;
+  readonly route: ConnectionRoute;
+}
+
+export function splitHiddenRoutes(routes: ReadonlyArray<ConnectionRoute>) {
+  const shown: Array<ConnectionRoute> = [];
+  const hidden: Array<HiddenRoute> = [];
+  routes.forEach((route, index) =>
+    routeIsShown(route) ? shown.push(route) : hidden.push({ index, route }),
   );
-  return targets.filter((target) => shown.has(target.environmentId));
+  return { shown, hidden };
+}
+
+/** The routes to save: the live ones in their order, each hidden one back in its slot. */
+export function withHiddenRoutes(
+  shown: ReadonlyArray<ConnectionRoute>,
+  hidden: ReadonlyArray<HiddenRoute>,
+): ReadonlyArray<ConnectionRoute> {
+  const routes = [...shown];
+  for (const { index, route } of hidden) routes.splice(Math.min(index, routes.length), 0, route);
+  return routes;
+}
+
+/** A saved environment's live entry holds only the routes the Pen gate shows; none, no entry. */
+export function savedCatalogEntry(loaded: ReadonlyArray<ConnectionRoute>, enabled: boolean) {
+  const seen = new Set<string>();
+  const usable = loaded.filter((route) => {
+    const id = connectionRouteId(route.target);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return !(id.startsWith("learned:") && Option.isNone(route.profile));
+  });
+  const { shown, hidden } = splitHiddenRoutes(usable.length > 0 ? usable : loaded.slice(0, 1));
+  const first = shown[0];
+  const entry =
+    first === undefined
+      ? undefined
+      : entryWithRoutes({ target: first.target, profile: first.profile, enabled }, shown);
+  return { entry, hidden };
 }
 
 export const loadCatalogRoute = (

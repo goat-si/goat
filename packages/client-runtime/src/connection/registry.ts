@@ -41,8 +41,11 @@ import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
 import {
+  type HiddenRoute,
   loadCatalogRoute,
-  targetsOfShownEnvironments,
+  savedCatalogEntry,
+  splitHiddenRoutes,
+  withHiddenRoutes,
   withoutKey,
   withRoutes,
 } from "./registryRoutes.ts";
@@ -60,7 +63,6 @@ import {
   hasSavedBearerRoute,
   mergeLearnedRoutes,
   routesAfterRemoving,
-  routeIsShown,
   upsertRoute,
   type ReportedEndpoint,
 } from "./routes.ts";
@@ -213,7 +215,7 @@ export const make = Effect.gen(function* () {
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
-  const persistedTargets = targetsOfShownEnvironments(yield* storage.list);
+  const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
   const loadRoute = loadCatalogRoute(profiles);
   const persistedRoutesByEnvironment = new Map<EnvironmentId, Array<ConnectionTarget>>();
@@ -222,34 +224,20 @@ export const make = Effect.gen(function* () {
     routes.push(target);
     persistedRoutesByEnvironment.set(target.environmentId, routes);
   }
+  // Routes the closed Pen gate hides stay saved here, out of every live entry.
+  const hiddenRoutes = new Map<EnvironmentId, ReadonlyArray<HiddenRoute>>();
   const initialEntries = new Map(
-    yield* Effect.forEach(
+    (yield* Effect.forEach(
       persistedRoutesByEnvironment,
       Effect.fn("EnvironmentRegistry.loadCatalogEntry")(function* ([environmentId, targets]) {
         const loaded = yield* Effect.forEach(targets, loadRoute, { concurrency: "unbounded" });
-        const seen = new Set<string>();
-        const usable = loaded.filter((route) => {
-          const id = connectionRouteId(route.target);
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return !(id.startsWith("learned:") && Option.isNone(route.profile));
-        });
-        const routes = usable.length > 0 ? usable : loaded.slice(0, 1);
-        const first = routes[0]!;
-        return [
-          environmentId,
-          entryWithRoutes(
-            {
-              target: first.target,
-              profile: first.profile,
-              enabled: !disabledEnvironmentIds.has(environmentId),
-            },
-            routes,
-          ),
-        ] as const;
+        const enabled = !disabledEnvironmentIds.has(environmentId);
+        const { entry, hidden } = savedCatalogEntry(loaded, enabled);
+        if (hidden.length > 0) hiddenRoutes.set(environmentId, hidden);
+        return entry === undefined ? [] : [[environmentId, entry] as const];
       }),
       { concurrency: "unbounded" },
-    ),
+    )).flat(),
   );
   const entries =
     yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(initialEntries);
@@ -458,8 +446,13 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const persistedRoutes = (entry: ConnectionCatalogEntry) =>
-    connectionRoutes(entry).map((route) => route.target as PersistedConnectionTarget);
+  const persistedRoutes = (entry: ConnectionCatalogEntry) => {
+    const environmentId = entry.target.environmentId;
+    const routes = withHiddenRoutes(connectionRoutes(entry), hiddenRoutes.get(environmentId) ?? []);
+    const { hidden } = splitHiddenRoutes(routes);
+    if (hidden.length > 0) hiddenRoutes.set(environmentId, hidden);
+    return routes.map((route) => route.target as PersistedConnectionTarget);
+  };
 
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
@@ -593,11 +586,12 @@ export const make = Effect.gen(function* () {
 
           if (persisted) {
             const removed = yield* registrations.remove(target.environmentId).pipe(
-              Effect.tap(() =>
-                Ref.update(persistedEnvironmentIds, (current) =>
+              Effect.tap(() => {
+                hiddenRoutes.delete(target.environmentId);
+                return Ref.update(persistedEnvironmentIds, (current) =>
                   withoutKey(current, target.environmentId),
-                ),
-              ),
+                );
+              }),
               Effect.as(true),
               Effect.catch((error) =>
                 Effect.logWarning(
@@ -775,6 +769,7 @@ export const make = Effect.gen(function* () {
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
     yield* registrations.remove(environmentId);
+    hiddenRoutes.delete(environmentId);
     yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
@@ -957,10 +952,9 @@ export const make = Effect.gen(function* () {
         const route = routes.find((candidate) => connectionRouteId(candidate.target) === routeId);
         if (route === undefined) return;
         const remaining = routesAfterRemoving(routes, routeId);
-        if (remaining.length === 0) return yield* removeLocked(environmentId);
-        if (remaining.some((left) => routeIsShown(left)))
-          yield* replaceRoutesLocked(entry, remaining);
-        else yield* retireLocked(environmentId, remaining);
+        if (remaining.length > 0) yield* replaceRoutesLocked(entry, remaining);
+        else if (hiddenRoutes.has(environmentId)) yield* retireLocked(environmentId);
+        else return yield* removeLocked(environmentId);
         yield* forkSshDisconnect(environmentId, route);
       }),
     );
@@ -969,12 +963,12 @@ export const make = Effect.gen(function* () {
   /** Only Pen routes the closed gate hides are left: saved with the environment's data, off the list. */
   const retireLocked = Effect.fn("EnvironmentRegistry.retireLocked")(function* (
     environmentId: EnvironmentId,
-    routes: ReadonlyArray<ConnectionRoute>,
   ) {
+    const hidden = hiddenRoutes.get(environmentId) ?? [];
     yield* forgetRoutingTrust(environmentId, "set-connection-routes");
     yield* registrations.setRoutes(
       environmentId,
-      routes.map((left) => left.target as PersistedConnectionTarget),
+      hidden.map(({ route }) => route.target as PersistedConnectionTarget),
     );
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));

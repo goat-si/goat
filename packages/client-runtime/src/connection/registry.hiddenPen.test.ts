@@ -4,11 +4,17 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { PenConnectionProfile } from "./catalog.ts";
+import { BearerConnectionRegistration, PenConnectionProfile } from "./catalog.ts";
 import { PenConnectionTarget } from "./model.ts";
 import * as EnvironmentRegistry from "./registry.ts";
-import { connectionRouteId } from "./routes.ts";
-import { BEARER_PROFILE, BEARER_TARGET, makeHarness, routesOf } from "./registry.testkit.ts";
+import { connectionRouteId, connectionRoutes } from "./routes.ts";
+import {
+  BEARER_CREDENTIAL,
+  BEARER_PROFILE,
+  BEARER_TARGET,
+  makeHarness,
+  routesOf,
+} from "./registry.testkit.ts";
 
 const environmentId = BEARER_TARGET.environmentId;
 const penId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
@@ -54,4 +60,52 @@ it.effect(
         ).toBe(true);
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
+);
+
+const bearerAgain = new BearerConnectionRegistration({
+  target: BEARER_TARGET,
+  profile: BEARER_PROFILE,
+  credential: BEARER_CREDENTIAL,
+});
+
+it.effect.each(["after its last shown route is removed", "after a restart"] as const)(
+  "registering the environment again keeps its hidden Pen route %s",
+  (when) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        when === "after a restart" ? [pen] : [BEARER_TARGET, pen],
+        when === "after a restart" ? [penProfile] : [BEARER_PROFILE, penProfile],
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        if (when !== "after a restart")
+          yield* registry.removeRoute(environmentId, connectionRouteId(BEARER_TARGET));
+        yield* registry.register(bearerAgain);
+        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual(
+          when === "after a restart" ? [pen, BEARER_TARGET] : [BEARER_TARGET, pen],
+        );
+        expect((yield* Ref.get(harness.storedProfiles)).has(penId)).toBe(true);
+        const live = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
+        expect(
+          live === undefined ? [] : connectionRoutes(live).map((route) => route.target),
+        ).toEqual([BEARER_TARGET]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);
+
+it.effect("a hidden Pen route saved first does not name or stand in for the environment", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([pen, BEARER_TARGET], [penProfile, BEARER_PROFILE]);
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const live = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
+      expect(live?.target).toEqual(BEARER_TARGET);
+      expect(live?.alternateRoutes).toBeUndefined();
+      yield* registry.setEnabled(environmentId, false);
+      expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+        pen,
+        BEARER_TARGET,
+      ]);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
 );
