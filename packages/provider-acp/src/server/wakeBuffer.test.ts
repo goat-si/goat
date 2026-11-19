@@ -43,3 +43,22 @@ it.effect("keeps admitted results when the buffer contains only result-bearing f
     expect(retained[0]).toBe(first);
   }),
 );
+
+it.effect("keeps buffered frames when a thought cannot fit even after eligible evictions", () =>
+  Effect.gen(function* () {
+    const buffer = makeAcpWakeBuffer();
+    const answer = frame("agent_message_chunk", "a".repeat(3 * 1024 * 1024));
+    const thought = frame("agent_thought_chunk", "A buffered thought.");
+    expect(yield* buffer.append(answer, true)).toBe(true);
+    expect(yield* buffer.append(thought, false)).toBe(true);
+    const oversized = frame("agent_thought_chunk", "b".repeat(2 * 1024 * 1024));
+    expect(yield* buffer.append(oversized, false)).toBe(false);
+    expect(yield* buffer.length).toBe(2);
+    const retained = yield* buffer.take(sessionId);
+    expect(
+      retained.map((item) =>
+        item === answer ? "answer" : item === thought ? "thought" : "unexpected",
+      ),
+    ).toEqual(["answer", "thought"]);
+  }),
+);

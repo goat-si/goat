@@ -20,7 +20,7 @@ function frameKind(
 }
 
 export function makeAcpWakeBuffer() {
-  const frames: Array<{
+  let frames: Array<{
     notification: AcpSchema.SessionNotification;
     characters: number;
     kind: WakeFrameKind;
@@ -38,18 +38,27 @@ export function makeAcpWakeBuffer() {
         const characters = encodeWakeFrame(notification).length;
         if (characters > MAX_WAKE_CHARACTERS) return false;
         const kind = frameKind(notification, offerEvidence);
-        while (
+        if (
           frames.length >= MAX_WAKE_FRAMES ||
           totalCharacters + characters > MAX_WAKE_CHARACTERS
         ) {
-          const firstThought = frames.findIndex((frame) => frame.kind === "thought");
-          const evictionIndex =
-            firstThought >= 0 || kind === "thought"
-              ? firstThought
-              : frames.findIndex((frame) => frame.kind === "other");
-          if (evictionIndex < 0) return false;
-          const [evicted] = frames.splice(evictionIndex, 1);
-          totalCharacters -= evicted?.characters ?? 0;
+          const evictions = new Set<(typeof frames)[number]>();
+          let retainedCharacters = totalCharacters;
+          const fits = () =>
+            frames.length - evictions.size < MAX_WAKE_FRAMES &&
+            retainedCharacters + characters <= MAX_WAKE_CHARACTERS;
+          const expendableKinds = kind === "thought" ? ["thought"] : ["thought", "other"];
+          for (const expendableKind of expendableKinds) {
+            for (const frame of frames) {
+              if (fits()) break;
+              if (frame.kind !== expendableKind) continue;
+              evictions.add(frame);
+              retainedCharacters -= frame.characters;
+            }
+          }
+          if (!fits()) return false;
+          frames = frames.filter((frame) => !evictions.has(frame));
+          totalCharacters = retainedCharacters;
         }
         frames.push({ notification, characters, kind });
         totalCharacters += characters;
