@@ -264,20 +264,8 @@ export function canReuseCodexContextUsage(previous: ModelSelection, next: ModelS
   );
 }
 
-export function codexProviderTurnTokenUsage(
-  tokenUsage: CodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
-  updatedAt: string,
-) {
-  return {
-    usedTokens: Math.max(0, tokenUsage.last.totalTokens),
-    maxTokens: tokenUsage.modelContextWindow ?? null,
-    inputTokens: Math.max(0, tokenUsage.last.inputTokens),
-    cachedInputTokens: Math.max(0, tokenUsage.last.cachedInputTokens),
-    outputTokens: Math.max(0, tokenUsage.last.outputTokens),
-    reasoningOutputTokens: Math.max(0, tokenUsage.last.reasoningOutputTokens),
-    updatedAt,
-  };
-}
+import { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
+export { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 
