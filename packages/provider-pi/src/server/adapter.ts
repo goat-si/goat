@@ -1,3 +1,4 @@
+import { forkPiSession } from "./forkSession.ts";
 import type { PiProviderRetryState } from "./compactionTitle.ts";
 import { piThreadSnapshot } from "./threadSnapshot.ts";
 import { piApprovalRequestKind } from "./approvalRequestKind.ts";
@@ -14,7 +15,7 @@ import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
-import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
+import { piForkBoundary, type PiForkBoundary } from "./forkBoundary.ts";
 import { piQuestion, piUiResponse } from "./extensionDialog.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -3303,58 +3304,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     target: { type: "provider_turn", providerTurn: target },
                     providerThreadTurns: sourceTurns,
                   });
-            // CLI --fork sets the destination cwd; RPC switch_session/clone would retain the source cwd.
-            const forkLaunch = buildPiRpcLaunch({
-              launchArgs: resolvedLaunchArgs.args,
-              environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
-              mcpSession: undefined,
-              extensionPath: undefined,
-              shortLived: true,
-              disableExtensions: true,
-              disableTools: true,
+            const nativeId = yield* forkPiSession({
+              sourceFile,
+              boundary,
+              createdAt: source.createdAt,
+              cwd,
+              driver,
               profile,
+              options,
+              launchArgs: resolvedLaunchArgs.args,
+              spawner,
             });
-            const nativeId = yield* Effect.scoped(
-              Effect.gen(function* () {
-                const forkConnection = yield* makePiRpcConnection({
-                  command: options.settings.binaryPath || profile.defaultBinary,
-                  args: [...forkLaunch.args, "--fork", sourceFile],
-                  cwd,
-                  env: forkLaunch.env,
-                });
-                yield* Stream.fromQueue(forkConnection.events).pipe(
-                  Stream.runDrain,
-                  Effect.ignore,
-                  Effect.forkScoped,
-                );
-                const beforeEntry =
-                  boundary.type === "nothing"
-                    ? null
-                    : yield* piForkEntry(
-                        driver,
-                        boundary,
-                        source.createdAt,
-                        readPiEntries(profile.pagedEntries, (input) =>
-                          forkConnection.request(input),
-                        ),
-                      );
-                if (beforeEntry !== null) {
-                  const result = yield* forkConnection.request({
-                    type: "fork",
-                    entryId: beforeEntry,
-                  });
-                  if (recordField(result, "cancelled") === true) {
-                    return yield* protocolError("A Pi extension cancelled the session fork");
-                  }
-                }
-                const state = yield* forkConnection.request({ type: "get_state" });
-                const file = recordString(state, "sessionFile");
-                if (file === undefined || file === sourceFile) {
-                  return yield* protocolError("Pi fork did not create a distinct session file");
-                }
-                return file;
-              }),
-            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
             const now = yield* DateTime.now;
             return yield* registerThread(
               {
