@@ -110,10 +110,12 @@ function InstanceSessionManagement(
   const canRead = useEnvironmentScope(props.environmentId, AuthOrchestrationReadScope);
   const { projectId } = props;
   const projectGeneration = useRef(0);
+  const deletionsDuringList = useRef<Set<string> | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Late continuations must not act on a replaced project scope.
   useLayoutEffect(() => {
     return () => {
       projectGeneration.current += 1;
+      deletionsDuringList.current = null;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retiring a project invalidates its pending operations even when the instance stays mounted.
   }, [projectId]);
@@ -200,6 +202,8 @@ function InstanceSessionManagement(
     if (projectId === null || loading || loggingOut) return;
     const paging = page?.continuation !== undefined || page?.cursor !== undefined;
     if (!paging) clearSessionList();
+    const deletedSessionIds = new Set<string>();
+    deletionsDuringList.current = deletedSessionIds;
     setLoading(true);
     const result = await listSessions({
       environmentId: props.environmentId,
@@ -214,11 +218,14 @@ function InstanceSessionManagement(
       },
     });
     if (generation !== projectGeneration.current) return;
+    deletionsDuringList.current = null;
     setLoading(false);
     if (result._tag === "Success") {
-      setSessions((current) =>
-        paging ? [...current, ...result.value.sessions] : result.value.sessions,
+      // A pending list can return a snapshot taken before a deletion completed.
+      const listedSessions = result.value.sessions.filter(
+        (session) => !deletedSessionIds.has(session.sessionId),
       );
+      setSessions((current) => (paging ? [...current, ...listedSessions] : listedSessions));
       setNextCursor(result.value.nextCursor);
       setContinuation(result.value.continuation ?? null);
       if (result.value.truncated === true) setTruncatedNotice(true);
@@ -309,6 +316,7 @@ function InstanceSessionManagement(
     if (generation !== projectGeneration.current) return;
     setDeletingSessionId(null);
     if (result._tag === "Success") {
+      deletionsDuringList.current?.add(session.sessionId);
       setSessions((current) =>
         current.filter((candidate) => candidate.sessionId !== session.sessionId),
       );
