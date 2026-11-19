@@ -482,3 +482,21 @@ describe("composerStripAttachments", () => {
     expect(isComposerImageAttachment(oversizedImage)).toBe(false);
   });
 });
+
+it("shows failed document uploads in the strip while keeping normal documents as chips", async () => {
+  const { composerStripAttachments } = await import("./composerImages");
+  const doc = (id: string) => ({
+    id,
+    type: "file" as const,
+    name: `${id}.pdf`,
+    mimeType: "application/pdf",
+    sizeBytes: 12,
+    fileUri: `file:///${id}.pdf`,
+  });
+  expect(
+    composerStripAttachments(
+      [doc("ready"), doc("failed")],
+      (attachment) => attachment.id === "failed",
+    ).map((attachment) => attachment.id),
+  ).toEqual(["failed"]);
+});

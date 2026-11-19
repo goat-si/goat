@@ -1,5 +1,6 @@
 import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
 export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
+import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import * as Dialog from "../../components/ui/Dialog";
@@ -214,7 +215,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     draftMessage.trim().length > 0 ||
     draftAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
-  const stripAttachments = composerStripAttachments(draftAttachments);
   const stop = useComposerStopGuard({
     canStop: props.canStopThread,
     runId: props.selectedThread.runtime?.activeRunId ?? null,
@@ -235,6 +235,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   };
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
+  const stripAttachments = composerStripAttachments(
+    draftAttachments,
+    (attachment) =>
+      uploadStates[composerAttachmentUploadKey(props.environmentId, attachment.id)]?.status ===
+      "failed",
+  );
   const attachmentsUploading =
     props.connectionState === "connected" &&
     composerAttachmentsStillUploading({

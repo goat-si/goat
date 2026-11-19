@@ -81,12 +81,14 @@ export type DraftComposerAttachment = DraftComposerImageAttachment | DraftCompos
 /** Non-media attachments require chip references; missing references mean lost draft files. */
 export function composerStripAttachments(
   attachments: ReadonlyArray<DraftComposerAttachment>,
+  uploadFailed?: (attachment: DraftComposerAttachment) => boolean,
 ): ReadonlyArray<DraftComposerAttachment> {
   return attachments.filter(
     (attachment) =>
       attachment.type === "image" ||
       imageMimeType(attachment) !== null ||
-      videoMimeType(attachment) !== null,
+      videoMimeType(attachment) !== null ||
+      uploadFailed?.(attachment) === true,
   );
 }
 
