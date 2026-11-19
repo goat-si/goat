@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   deriveWsBaseUrl,
@@ -8,6 +8,9 @@ import {
 } from "./endpoint.ts";
 import { resolveAssetUrl } from "../state/assets.ts";
 import { makeEnvironmentHttpApiUrlBuilder } from "../rpc/http.ts";
+
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
 
 describe("advertised endpoint helpers", () => {
   it("normalizes HTTP and WebSocket base URLs", () => {

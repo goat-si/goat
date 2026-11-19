@@ -2,6 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
+
 const { openExternalMock, writeTextMock } = vi.hoisted(() => ({
   openExternalMock: vi.fn(),
   writeTextMock: vi.fn(),

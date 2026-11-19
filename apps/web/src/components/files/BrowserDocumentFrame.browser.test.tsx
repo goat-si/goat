@@ -6,6 +6,9 @@ import { render } from "../../../test/render";
 
 import { BrowserDocumentFrame, HtmlRenderDocument } from "./BrowserDocumentFrame";
 
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
+
 const sizeChanged = (height: number) => ({
   jsonrpc: "2.0",
   method: "ui/notifications/size-changed",

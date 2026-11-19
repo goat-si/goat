@@ -534,7 +534,11 @@ export const make = Effect.gen(function* () {
               pullRequestRoutingConnectionKey(registered)
               ? { ...registered, ...unsupportedState(previous) }
               : registered;
-          const persisted = (yield* Ref.get(persistedEnvironmentIds)).has(target.environmentId);
+          // Only a registration this channel lists is its to remove: an id it holds only hidden
+          // Pen routes for may meanwhile have been paired again by another channel.
+          const persisted =
+            previous !== undefined &&
+            (yield* Ref.get(persistedEnvironmentIds)).has(target.environmentId);
           if (
             persisted ||
             (previous !== undefined &&

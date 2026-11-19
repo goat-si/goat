@@ -1,3 +1,4 @@
+import { vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
@@ -6,6 +7,9 @@ import {
   RemoteEnvironmentAuthTimeoutError,
   RemoteEnvironmentAuthUndeclaredStatusError,
 } from "./http.ts";
+
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
 
 describe("Pen route HTTP errors", () => {
   it.effect("redacts capability URLs from errors and their causes", () => {

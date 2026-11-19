@@ -288,3 +288,30 @@ it.effect(
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
 );
+
+it.effect(
+  "a local backend taking the id of an environment saved with only Pen routes leaves the catalog alone",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([pen], [penProfile]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        // Another desktop channel pairs the environment while this one holds only its Pen route.
+        yield* Ref.update(harness.storedTargets, (current) => [...current, BEARER_TARGET]);
+        yield* registry.registerPlatform(
+          new PrimaryConnectionRegistration({
+            target: new PrimaryConnectionTarget({
+              environmentId,
+              label: "Local",
+              httpBaseUrl: "http://127.0.0.1:3773",
+              wsBaseUrl: "ws://127.0.0.1:3773",
+            }),
+          }),
+        );
+        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+          pen,
+          BEARER_TARGET,
+        ]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);
