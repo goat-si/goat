@@ -38,11 +38,9 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type EnvironmentId,
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type ThreadId,
 } from "@goat/contracts";
 import { clampFileAttachmentUploadBytes } from "@goat/client-runtime/state/attachments";
 import { nextPastedTextFileName, pastedTextDisposition } from "@goat/client-runtime/text-paste";
@@ -143,15 +141,7 @@ const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
 const EMPTY_CHECKPOINT_SUMMARIES_ATOM = Atom.make<ReadonlyArray<ThreadCheckpointSummary>>([]);
 const EMPTY_THREAD_SEQUENCE_ATOM = Atom.make(0);
 
-/** Resolve per call so callbacks created before editing still target the current draft. */
-function activeComposerDraftKey(thread: {
-  readonly environmentId: EnvironmentId;
-  readonly id: ThreadId;
-}): string {
-  const threadKey = scopedThreadKey(thread.environmentId, thread.id);
-  const edit = getQueuedRunEdit(threadKey);
-  return edit === null ? threadKey : queuedEditDraftKey(threadKey, edit.runId);
-}
+import { activeComposerDraftKey } from "./activeComposerDraftKey";
 
 export function useThreadComposerState() {
   const sideChatCommand = useSideChatCommand();
