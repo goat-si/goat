@@ -7,7 +7,11 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
-import { AVAILABLE_CONNECTION_STATE, PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PrimaryConnectionTarget,
+  type PreparedConnection,
+} from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -55,8 +59,12 @@ it.effect("resubscribes after a shell stream defect without a reconnect", () =>
     const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
       target,
       state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
-      session: yield* SubscriptionRef.make(Option.some(session)),
-      prepared: yield* SubscriptionRef.make(Option.some(prepared)),
+      session: yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+        Option.some(session),
+      ),
+      prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
+        Option.some(prepared),
+      ),
       connect: Effect.void,
       disconnect: Effect.void,
       retryNow: Effect.void,
