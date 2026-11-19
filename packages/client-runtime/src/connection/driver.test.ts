@@ -423,7 +423,7 @@ describe("SSH driver routing", () => {
           }),
         );
         expect(yield* driver.checkRoute(entry, entry)).toBe("unchecked");
-        expect(yield* driver.preflight(entry, entry)).toBe(false);
+        expect(yield* driver.preflight(entry, entry)).toBe("unchecked");
         expect(ensures).toBe(0);
       }),
   );
