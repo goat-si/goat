@@ -66,6 +66,19 @@ it("shows a captured MCP app for a failed deferred write", () => {
   ]);
 });
 
+it("keeps the file name when detailed file changes are empty", () => {
+  const item: OrchestrationV2TurnItem = {
+    ...base("empty-edit", "2026-06-20T00:00:03.000Z", 2),
+    type: "file_change",
+    fileName: "src/a.ts",
+    changes: [],
+  };
+  const [activity] = buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
+    entry.type === "activity-group" ? entry.activities : [],
+  );
+  expect(activity?.workEntry.changedFiles).toEqual(["src/a.ts"]);
+});
+
 it.each([undefined, [{ operation: "update", path: "src/a.ts" }]])(
   "keeps single-file edit rows when changes are %j",
   (changes) => {
