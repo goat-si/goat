@@ -21,6 +21,7 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
+  isAtomCommandInterrupted,
   runAtomCommand,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -294,7 +295,7 @@ export function createTerminalSession(
   let resizeRegistry: AtomRegistry.AtomRegistry | null = null;
   let shellResized: ReturnType<typeof runAtomCommand> | null = null;
 
-  const sendResize = () => {
+  const sendResize = (retry = false) => {
     if (generation === null || resizeRegistry === null || !options.canOperate()) return;
     const registry = resizeRegistry;
     const resized = runAtomCommand(registry, atoms.resize, {
@@ -303,6 +304,15 @@ export function createTerminalSession(
     });
     shellResized = resized;
     void resized.then((result) => {
+      if (
+        !retry &&
+        resized === shellResized &&
+        result._tag === "Failure" &&
+        !isAtomCommandInterrupted(result)
+      ) {
+        sendResize(true);
+        return;
+      }
       const data = options.initialInput;
       if (
         result._tag !== "Success" ||

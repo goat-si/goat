@@ -8,6 +8,7 @@ import {
 } from "@goat/contracts";
 import { compileResolvedKeybindingsConfig, DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { Atom, AsyncResult } from "effect/reactivity";
+import * as Cause from "effect/Cause";
 import type { GhosttyTerminalSurfaceOptions } from "~/terminal/ghostty/surface";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -21,6 +22,10 @@ const fixture = vi.hoisted(() => ({
   statusByThreadId: new Map<string, "running" | "exited">(),
   pendingSurfaces: [] as Array<() => void>,
   resetSessions: () => {},
+  resizeCommand: {},
+  runResize: (_input: unknown): Promise<AsyncResult.AsyncResult<unknown, unknown>> =>
+    Promise.resolve(AsyncResult.success(undefined)),
+  reportedSize: null as { cols: number; rows: number } | null,
   surfaceOptions: [] as GhosttyTerminalSurfaceOptions[],
   metadata: new Map<
     string,
@@ -30,7 +35,13 @@ const fixture = vi.hoisted(() => ({
 
 // Every surface method is a no-op; `then` stays undefined so awaiting the surface resolves to it.
 const fakeSurface: object = new Proxy(
-  { input: document.createElement("textarea") },
+  {
+    input: document.createElement("textarea"),
+    resendSize: () => {
+      const size = fixture.reportedSize;
+      if (size) fixture.surfaceOptions.at(-1)?.onResize(size.cols, size.rows);
+    },
+  },
   {
     get: (target, key) =>
       key === "then" ? undefined : key in target ? Reflect.get(target, key) : () => undefined,
@@ -76,7 +87,8 @@ vi.mock("../state/session", () => ({
   usePreparedConnection: () => null,
 }));
 vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: () => async () => ({ _tag: "Success" }),
+  useAtomCommand: (command: object) => async (args: unknown) =>
+    command === fixture.resizeCommand ? fixture.runResize(args) : AsyncResult.success(undefined),
 }));
 // The commands are replaced above; importing their runtime would connect a client.
 vi.mock("../state/server", async () => {
@@ -91,7 +103,9 @@ vi.mock("../lib/previewShown", async () => {
       useRightPanelStore((state) => selectActiveRightPanel(state.byThreadKey, ref) === "preview"),
   };
 });
-vi.mock("../state/terminal", () => ({ terminalEnvironment: { write: {}, resize: {} } }));
+vi.mock("../state/terminal", () => ({
+  terminalEnvironment: { write: {}, resize: fixture.resizeCommand },
+}));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: {} } }));
 vi.mock("../state/projects", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
@@ -172,6 +186,8 @@ function setup() {
   ]);
   fixture.pendingSurfaces = [];
   fixture.surfaceOptions = [];
+  fixture.reportedSize = null;
+  fixture.runResize = () => Promise.resolve(AsyncResult.success(undefined));
   fixture.metadata.clear();
   useRightPanelStore.setState(useRightPanelStore.getInitialState());
   useTerminalUiStateStore.setState(useTerminalUiStateStore.getInitialState());
@@ -309,4 +325,58 @@ it("only activates terminal paths confirmed to exist on their environment", asyn
   expect(await validate("~/notes.ts:5:2")).toBe(true);
   await hover("~/notes.ts:5:2");
   expect(canActivate("~/notes.ts:5:2")).toBe(true);
+});
+
+it("retries a failed measured resize once and then gives up", async () => {
+  const { other: threadRef } = setup();
+  const resize = vi.fn(async () => AsyncResult.failure(Cause.fail("resize failed")));
+  fixture.runResize = resize;
+  fixture.reportedSize = { cols: 100, rows: 30 };
+  await using _screen = await render(<Drawer threadRef={threadRef} onCloseTerminal={() => {}} />);
+  await act(async () => {
+    fixture.pendingSurfaces.shift()?.();
+  });
+  await act(async () => {
+    fixture.surfaceOptions.at(-1)?.onResize(100, 30);
+  });
+  await vi.waitFor(() => expect(resize).toHaveBeenCalledTimes(2));
+  await act(async () => {});
+  expect(resize).toHaveBeenCalledTimes(2);
+});
+
+it("does not retry an old resize after the attachment generation changes", async () => {
+  const { other: threadRef } = setup();
+  const failed = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+  const resize = vi
+    .fn()
+    .mockImplementationOnce(() => failed.promise)
+    .mockResolvedValue(AsyncResult.success(undefined));
+  fixture.runResize = resize;
+  fixture.reportedSize = { cols: 100, rows: 30 };
+  const { attachedTerminalSessionAtom } = await import("../state/terminalSessions");
+  const session = attachedTerminalSessionAtom(threadRef.environmentId, {
+    threadId: threadRef.threadId,
+    terminalId: "term-1",
+    cwd: "/repo",
+  });
+  await using _screen = await render(<Drawer threadRef={threadRef} onCloseTerminal={() => {}} />);
+  await act(async () => {
+    fixture.pendingSurfaces.shift()?.();
+  });
+  await act(async () => {
+    fixture.surfaceOptions.at(-1)?.onResize(100, 30);
+  });
+  expect(resize).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    const current = appAtomRegistry.get(session);
+    appAtomRegistry.set(session as Atom.Writable<typeof current>, {
+      ...current,
+      output: { ...current.output, generation: current.output.generation + 1 },
+    });
+  });
+  const callsAfterReattach = resize.mock.calls.length;
+  await act(async () => {
+    failed.resolve(AsyncResult.failure(Cause.fail("resize failed")));
+  });
+  expect(resize).toHaveBeenCalledTimes(callsAfterReattach);
 });
