@@ -1,3 +1,9 @@
+import {
+  compactionLabel,
+  isFileAttachment,
+  isFreshTimestamp,
+  isImageAttachment,
+} from "./threadFeedPresentationHelpers";
 import { feedHasLanded, feedHeaderHidden } from "./thread-feed-landing";
 import { initialFeedViewportWidth } from "./thread-feed-initial-width";
 import { worktreeSetupPresentation } from "./worktree-setup-state";
@@ -58,7 +64,6 @@ import {
   ThreadId,
   type ChatAttachment,
   type ChatFileAttachment,
-  type ChatImageAttachment,
   type EnvironmentId,
   type MessageId,
   type RunId,
@@ -91,7 +96,6 @@ import {
 } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
-import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { TurnDiffStat } from "./TurnDiffStat";
@@ -296,13 +300,6 @@ const FEED_REFLOW_HOLD_MS = 600;
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
 const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
 
-// Virtualization remounts old rows; only newly created content should replay an entrance.
-const FRESH_ENTRY_WINDOW_MS = 3_000;
-function isFreshTimestamp(input: string): boolean {
-  const timestamp = Date.parse(input);
-  return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
-
 export interface ThreadFeedHandle {
   /** A send re-arms following the end, whatever the reader had scrolled to. */
   readonly resetEndFollow: () => void;
@@ -353,14 +350,6 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-}
-
-function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
-  return attachment.type === "image" || imageMimeType(attachment) !== null;
-}
-
-function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAttachment {
-  return attachment.type === "file";
 }
 
 function MessageAttachmentFile(props: {
@@ -832,13 +821,6 @@ function ThreadAutomationMessageRow(props: {
       ) : null}
     </View>
   );
-}
-
-/** Leads with why GOAT compacted, when it did so without being asked. */
-function compactionLabel(label: string, title: string | undefined) {
-  return title !== undefined && label.startsWith("Context compacted")
-    ? title + label.slice("Context compacted".length)
-    : label;
 }
 
 function RunFoldButton({
