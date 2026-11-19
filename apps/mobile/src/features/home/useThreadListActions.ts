@@ -1,3 +1,4 @@
+import { clearDeletedThreadDraft } from "../../state/clearDeletedThreadDraft";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import * as ThreadUndo from "@goat/client-runtime/state/thread-undo";
@@ -211,6 +212,7 @@ function useThreadActionExecutor(
       if (action === "archive" || action === "unarchive" || action === "delete") {
         refreshArchivedThreadsForEnvironment(thread.environmentId);
       }
+      if (action === "delete") clearDeletedThreadDraft(key);
       onCompleted?.(action, thread);
       return true;
     })();
@@ -234,9 +236,7 @@ function confirmThreadDeletion(
     message,
     confirmText: "Delete",
     destructive: true,
-    onConfirm: () => {
-      void executeAction("delete", thread);
-    },
+    onConfirm: () => executeAction("delete", thread),
   });
 }
 

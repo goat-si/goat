@@ -956,7 +956,9 @@ function ThreadRouteContent(
         });
   const threadSyncLabel = useDelayedStatus(
     selectedThread === null ? "" : scopedThreadKey(selectedThread.environmentId, selectedThread.id),
-    threadSyncStatusLabel(selectedThreadDetailState.status, contentPresentation.kind),
+    creationState === null
+      ? threadSyncStatusLabel(selectedThreadDetailState.status, contentPresentation.kind)
+      : null,
   );
   const inspectorHeader = props.inspectorPresentation ? (
     <ThreadInspectorHeader

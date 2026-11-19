@@ -1,3 +1,12 @@
+import { UserMessageVideo } from "./UserMessageVideo";
+import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
+import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
+import {
+  compactionLabel,
+  isFileAttachment,
+  isFreshTimestamp,
+  isImageAttachment,
+} from "./threadFeedPresentationHelpers";
 import { feedHasLanded, feedHeaderHidden } from "./thread-feed-landing";
 import { initialFeedViewportWidth } from "./thread-feed-initial-width";
 import { worktreeSetupPresentation } from "./worktree-setup-state";
@@ -58,7 +67,6 @@ import {
   ThreadId,
   type ChatAttachment,
   type ChatFileAttachment,
-  type ChatImageAttachment,
   type EnvironmentId,
   type MessageId,
   type RunId,
@@ -91,7 +99,6 @@ import {
 } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
-import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { TurnDiffStat } from "./TurnDiffStat";
@@ -296,13 +303,6 @@ const FEED_REFLOW_HOLD_MS = 600;
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
 const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
 
-// Virtualization remounts old rows; only newly created content should replay an entrance.
-const FRESH_ENTRY_WINDOW_MS = 3_000;
-function isFreshTimestamp(input: string): boolean {
-  const timestamp = Date.parse(input);
-  return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
-
 export interface ThreadFeedHandle {
   /** A send re-arms following the end, whatever the reader had scrolled to. */
   readonly resetEndFollow: () => void;
@@ -353,14 +353,6 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-}
-
-function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
-  return attachment.type === "image" || imageMimeType(attachment) !== null;
-}
-
-function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAttachment {
-  return attachment.type === "file";
 }
 
 function MessageAttachmentFile(props: {
@@ -584,17 +576,6 @@ function MessageAttachmentList(props: {
     ) : (
       <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
     ),
-  );
-}
-
-function MessageAttachmentUnknown(props: { readonly name: string }) {
-  return (
-    <View className="flex-row items-center gap-2 py-1">
-      <PierreEntryIcon path={props.name} kind="file" size={16} />
-      <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
-        {props.name}
-      </Text>
-    </View>
   );
 }
 
@@ -832,13 +813,6 @@ function ThreadAutomationMessageRow(props: {
       ) : null}
     </View>
   );
-}
-
-/** Leads with why GOAT compacted, when it did so without being asked. */
-function compactionLabel(label: string, title: string | undefined) {
-  return title !== undefined && label.startsWith("Context compacted")
-    ? title + label.slice("Context compacted".length)
-    : label;
 }
 
 function RunFoldButton({
@@ -1331,7 +1305,7 @@ function renderFeedEntry(
             ) : null}
             {bubbleBodyVisible ? (
               <View className={cn("gap-2 px-3.5 pb-2.5", foldRowId === null && "pt-2.5")}>
-                {entry.pendingMessage?.attachments.map((attachment) =>
+                {entry.pendingMessage?.attachments.map((attachment, index) =>
                   attachment.type === "image" && attachment.uploadedAttachmentId ? (
                     <MessageAttachmentImage
                       key={attachment.id}
@@ -1340,6 +1314,15 @@ function renderFeedEntry(
                       name={attachment.name}
                       mimeType={attachment.mimeType}
                       className="h-[140px] w-[180px] rounded-[14px]"
+                      handoff={sentImageHandoff(
+                        props.environmentId,
+                        message.id,
+                        index,
+                        attachment.id,
+                      )}
+                      onImageLoad={(image) =>
+                        rememberSentImage(props.environmentId, message.id, index, image)
+                      }
                       onPressPreview={props.onPressPreview}
                     />
                   ) : attachment.type === "image" ? (
@@ -1358,9 +1341,25 @@ function renderFeedEntry(
                     >
                       <Image
                         source={{ uri: attachment.previewUri }}
+                        onLoad={({ nativeEvent: { source } }) =>
+                          rememberSentImage(props.environmentId, message.id, index, {
+                            uri: attachment.previewUri,
+                            aspectRatio: source.width / source.height,
+                          })
+                        }
                         style={{ width: 180, height: 140, borderRadius: 14 }}
                       />
                     </Pressable>
+                  ) : videoMimeType(attachment) !== null ? (
+                    <UserMessageVideo
+                      key={attachment.id}
+                      environmentId={props.environmentId}
+                      messageId={message.id}
+                      index={index}
+                      local={attachment}
+                      uploaded={null}
+                      onPlaybackStart={props.onPlaybackStart}
+                    />
                   ) : (
                     <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
                   ),
@@ -1376,12 +1375,27 @@ function renderFeedEntry(
                           attachmentId={attachment.id}
                           name={attachment.name}
                           mimeType={attachment.mimeType}
+                          handoff={sentImageHandoff(
+                            props.environmentId,
+                            message.id,
+                            attachments.indexOf(attachment),
+                          )}
                           className={
                             inlineAttachmentIds.size
                               ? "h-24 w-24 rounded-[14px] bg-user-bubble-foreground/15"
                               : "aspect-[1.3] w-full rounded-[14px] bg-user-bubble-foreground/15"
                           }
                           onPressPreview={props.onPressPreview}
+                        />
+                      ) : isFileAttachment(attachment) && videoMimeType(attachment) !== null ? (
+                        <UserMessageVideo
+                          key={attachment.id}
+                          environmentId={props.environmentId}
+                          messageId={message.id}
+                          index={attachments.indexOf(attachment)}
+                          local={null}
+                          uploaded={attachment}
+                          onPlaybackStart={props.onPlaybackStart}
                         />
                       ) : isFileAttachment(attachment) ? (
                         <MessageAttachmentFile

@@ -1,3 +1,5 @@
+import { uploadingComposerAttachmentKeys } from "../lib/composerAttachmentUploadQueue";
+import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
@@ -569,6 +571,11 @@ export async function preserveUploadedAttachmentsForEditor(
 
 // Everything a drain pass decides from. Each queued environment's session is
 // read here so a granted or revoked operate scope re-runs the drain.
+const uploadingComposerAttachmentKeysAtom = Atom.map(
+  composerAttachmentUploadsAtom,
+  uploadingComposerAttachmentKeys,
+);
+
 export const deliveryInputsAtom = Atom.make((get) => {
   const connectedEnvironments = get(workspaceConnections.environmentsAtom);
   const operableEnvironments = new Set<EnvironmentId>();
@@ -592,6 +599,7 @@ export const deliveryInputsAtom = Atom.make((get) => {
     serverConfigs: get(environmentServerConfigsAtom),
     connectedEnvironments,
     operableEnvironments,
+    uploadingAttachmentKeys: get(uploadingComposerAttachmentKeysAtom),
   };
 }).pipe(Atom.withLabel("mobile:thread-outbox:delivery-inputs"));
 
