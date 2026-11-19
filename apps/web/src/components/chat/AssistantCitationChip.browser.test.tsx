@@ -133,6 +133,16 @@ describe("citation comment source disappearance", () => {
 });
 
 describe("citation comment caret", () => {
+  it("saves with Tab then Enter after typing a comment", async () => {
+    using _source = setup();
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(undefined, onSave);
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("agreed");
+    await userEvent.keyboard("{Tab}");
+    await userEvent.keyboard("{Enter}");
+    expect(onSave).toHaveBeenCalledWith("agreed");
+  });
   it("opens a saved comment with the caret after its end, scrolled into view", async () => {
     using _source = setup();
     const comment = `${"line\n".repeat(40)}end`;
