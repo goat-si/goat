@@ -319,6 +319,50 @@ it.layer(NodeServices.layer)("makeKimiPromptOutcomeWatch", (it) => {
       }),
   );
 
+  it.effect("keeps seen turns for an existing session when the session cursor limit is full", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const directory = path.join(home, "sessions", "workspace", SESSION_ID, "agents", "main");
+      yield* fs.makeDirectory(directory, { recursive: true });
+      const wire = path.join(directory, "wire.jsonl");
+      yield* fs.writeFileString(wire, "");
+      const polls = yield* Queue.unbounded<void>();
+      const watch = yield* makeKimiPromptOutcomeWatch().pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          open: (filePath, options) =>
+            Effect.addFinalizer(() => Queue.offer(polls, undefined)).pipe(
+              Effect.andThen(fs.open(filePath, options)),
+            ),
+        }),
+      );
+      const first = yield* watch(SESSION_ID, { KIMI_CODE_HOME: home });
+      const prefix = promptTurn(1) + completedTurn(1);
+      yield* fs.writeFileString(wire, prefix, { flag: "a" });
+      assert.isUndefined(yield* first(endTurn));
+      yield* Queue.take(polls);
+      for (let session = 0; session < 128; session++) {
+        yield* watch(`other-session-${session}`, { KIMI_CODE_HOME: home });
+      }
+      const overflow = yield* watch("overflow-session", { KIMI_CODE_HOME: home });
+      assert.isUndefined(yield* overflow(endTurn));
+      const second = yield* watch(SESSION_ID, { KIMI_CODE_HOME: home });
+      yield* Queue.take(polls);
+      yield* fs.writeFileString(wire, prefix + promptTurn(1) + failedTurn(1));
+      const pending = yield* second(endTurn).pipe(Effect.forkChild);
+      yield* Queue.take(polls);
+      yield* fs.writeFileString(
+        wire,
+        promptTurn(2) + failedTurn(2).replace("upstream overloaded", "new failure"),
+        { flag: "a" },
+      );
+      yield* TestClock.adjust("50 millis");
+      assert.equal((yield* Fiber.join(pending))?.message, "new failure");
+    }),
+  );
+
   it.effect("bounds the bytes examined for one prompt outcome", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

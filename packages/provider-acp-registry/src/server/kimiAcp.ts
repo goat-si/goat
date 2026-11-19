@@ -118,12 +118,9 @@ export const makeKimiPromptOutcomeWatch = Effect.fn("KimiTurnOutcome.make")(func
     const canonicalHome = yield* fileSystem.realPath(home).pipe(Effect.option);
     if (Option.isNone(canonicalHome)) return noOutcome;
     const sessionKey = `${canonicalHome.value}\0${sessionId}`;
+    if (!sessions.has(sessionKey) && sessions.size >= MAX_SESSION_CURSORS) return noOutcome;
     const seen = sessions.get(sessionKey) ?? new Set<number>();
-    sessions.delete(sessionKey);
     sessions.set(sessionKey, seen);
-    const oldestSession = sessions.keys().next().value;
-    if (sessions.size > MAX_SESSION_CURSORS && oldestSession !== undefined)
-      sessions.delete(oldestSession);
     const remember = (turnId: number) => {
       seen.delete(turnId);
       seen.add(turnId);
