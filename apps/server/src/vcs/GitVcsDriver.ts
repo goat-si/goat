@@ -6,6 +6,7 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -63,6 +64,7 @@ export interface ExecuteGitInput {
   readonly cwd: string;
   readonly args: ReadonlyArray<string>;
   readonly stdin?: string;
+  readonly onSpawn?: () => void;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number | null;
@@ -557,6 +559,7 @@ const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
     args: ReadonlyArray<string>,
     options?: {
       readonly stdin?: string;
+      readonly onSpawn?: () => void;
       readonly env?: NodeJS.ProcessEnv;
       readonly allowNonZeroExit?: boolean;
       readonly timeoutMs?: number;
@@ -572,6 +575,7 @@ const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
       cwd,
       spawnCwd: globalThis.process.cwd(),
       ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+      ...(options?.onSpawn !== undefined ? { onSpawn: options.onSpawn } : {}),
       ...(options?.env !== undefined ? { env: options.env } : {}),
       ...(options?.allowNonZeroExit !== undefined
         ? { allowNonZeroExit: options.allowNonZeroExit }
@@ -627,6 +631,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
       ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+      ...(input.onSpawn !== undefined ? { onSpawn: input.onSpawn } : {}),
       ...(input.env !== undefined ? { env: input.env } : {}),
       ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -1525,17 +1530,34 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         args: ["ls-files", "--cached", `--with-tree=${commitOid}`, "-z", "--", "."],
       });
+      const recreateWorkspace = recreateCheckpointWorkspace(fileSystem, input.cwd, operation);
+      const resetIndex = recreateWorkspace.pipe(
+        Effect.andThen(
+          execute({
+            operation,
+            cwd: input.cwd,
+            args: [...longPaths, "reset", "--quiet", "--", "."],
+          }),
+        ),
+      );
+      let mutationStarted = false;
+      const onSpawn = () => {
+        mutationStarted = true;
+      };
+      yield* Effect.addFinalizer((exit) =>
+        mutationStarted && Exit.hasInterrupts(exit) ? resetIndex.pipe(Effect.ignore) : Effect.void,
+      );
       // An empty index and checkpoint have nothing for git restore's pathspec to match.
       if (tracked.stdout.length > 0) {
-        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid };
+        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid, onSpawn };
         yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
       }
-      const recreateWorkspace = recreateCheckpointWorkspace(fileSystem, input.cwd, operation);
       yield* recreateWorkspace;
       const cleaned = yield* execute({
         operation,
         cwd: input.cwd,
         args: [...longPaths, "clean", "-fd", "--", "."],
+        onSpawn,
         allowNonZeroExit: true,
       });
       if (cleaned.exitCode !== 0) {
@@ -1557,16 +1579,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
       }
       // On Windows the same clean can remove './' and exit 0.
-      yield* recreateWorkspace;
-
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: [...longPaths, "reset", "--quiet", "--", "."],
-      });
+      yield* resetIndex;
 
       return true;
-    }),
+    }, Effect.scoped),
 
     diffCheckpoints: Effect.fn("GitVcsDriver.checkpoints.diffCheckpoints")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.diffCheckpoints";
