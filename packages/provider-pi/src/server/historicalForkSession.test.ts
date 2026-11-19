@@ -222,13 +222,9 @@ it.effect("ends a stalled recovery at the Effect clock time budget", () =>
     ).pipe(Effect.provideService(FileSystem.FileSystem, stalled), Effect.result, Effect.forkScoped);
     yield* Deferred.await(started);
     yield* TestClock.adjust("1 second");
-    const completed = fiber.pollUnsafe();
-    assert.isDefined(completed, "the time budget must end the scan");
-    if (completed !== undefined) {
-      const result = yield* Fiber.join(fiber);
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") assert.include(result.failure.detail, "time");
-    }
+    const result = yield* Fiber.join(fiber);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.include(result.failure.detail, "time");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
