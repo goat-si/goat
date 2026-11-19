@@ -1,3 +1,11 @@
+import type {
+  PiStreamItemState,
+  ActivePiTurn,
+  PendingPiPrompt,
+  PiPromptSend,
+  PiThreadState,
+  PiWake,
+} from "./turnState.ts";
 import { forkPiSession } from "./forkSession.ts";
 import type { PiProviderRetryState } from "./compactionTitle.ts";
 import { piThreadSnapshot } from "./threadSnapshot.ts";
@@ -32,7 +40,6 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
-  type MessageId,
   type OrchestrationV2ProviderTurnTokenUsage,
 } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
@@ -109,85 +116,8 @@ export interface PiAdapterV2Options {
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-interface PiStreamItemState {
-  readonly nativeItemId: string;
-  readonly kind: "assistant_message" | "reasoning";
-  text: string;
-  completed: boolean;
-  flushScheduled: boolean;
-  readonly startedAt: DateTime.Utc;
-}
-interface ActivePiTurn {
-  readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
-  readonly providerTurn: OrchestrationV2ProviderTurn;
-  readonly startedAt: DateTime.Utc;
-  readonly itemOrdinals: Map<string, number>;
-  nextItemOrdinal: number;
-  messageOrdinal: number;
-  readonly streamItems: Map<string, PiStreamItemState>;
-  readonly toolArgs: Map<string, unknown>;
-  readonly toolStartedAt: Map<string, DateTime.Utc>;
-  readonly commandOutputBytes: Map<string, number>;
-  interrupted: boolean;
-  nativeAborted: boolean;
-  sawAgentActivity: boolean;
-  adoptedWake: boolean;
-  promptMayBeCommandOnly: boolean;
-  latestCompactionAfterTokens: number | null;
-  lastLiveUsedTokens: number | null;
-  settleProbeGeneration: number;
-  /** An extension may start compaction immediately after Pi emits agent_settled. */
-  settleWhenIdle: boolean;
-  sawCompaction: boolean;
-  manualCompactInFlight: boolean;
-  activeCompaction: PiCompactionState | null;
-  activeProviderRetry: PiProviderRetryState | null;
-  failure: ReturnType<typeof makeProviderFailure> | null;
-  rejectedPromptFailure: ReturnType<typeof makeProviderFailure> | null;
-  /** Steers Pi queued in send order; it reads them at a step boundary, after running tools return. */
-  readonly unreadSteers: Array<MessageId>;
-  stopTreeRefs?: PiTurnTreeRefs | null;
-  /** The provider/model Pi reported on its latest assistant message. */
-  reportedModel?: string;
-}
-interface PiTurnTreeRefs {
-  /** Omitted keeps the synthetic ref; null means the turn left nothing on the active branch. */
-  readonly nativeTurnRef: OrchestrationV2ProviderRef | null | undefined;
-  readonly leafId: string | null;
-  readonly retainedNativeTurnIds: ReadonlyArray<string> | undefined;
-}
-
-interface PendingPiPrompt {
-  readonly nativeRequestId: string;
-  readonly method: "select" | "confirm" | "input" | "editor";
-  readonly questionId: string;
-  readonly approvalKey: string;
-  readonly expiresAt: number | null;
-  expirationFiber: Fiber.Fiber<void> | null;
-  runtimeRequest: OrchestrationV2RuntimeRequest;
-  readonly node: OrchestrationV2ExecutionNode;
-  readonly turnItem: OrchestrationV2TurnItem;
-}
-
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
-
-interface PiPromptSend {
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly kind: "turn_start" | "steer";
-  readonly record: PiRpcRecord;
-  readonly messageId?: MessageId;
-}
-
-interface PiThreadState {
-  providerThread: OrchestrationV2ProviderThread;
-  activeTurn: ActivePiTurn | null;
-}
-
-interface PiWake {
-  readonly state: PiThreadState;
-  readonly events: Array<PiRpcRecord>;
-}
 
 export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   options: PiAdapterV2Options,
