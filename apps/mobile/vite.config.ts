@@ -40,6 +40,7 @@ const reactTests = [
   "src/features/threads/GitActionProgressOverlay.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ui/AndroidAnchoredMenu.test.tsx",
+  "src/components/ui/AndroidAnchoredMenu.keyboard.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
