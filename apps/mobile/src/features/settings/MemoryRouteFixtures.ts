@@ -3,6 +3,7 @@ import { act } from "react";
 import { suggestionScenario } from "../../../../web/src/test/memorySuggestionsFixture";
 import {
   MemoryHistoryPage,
+  MemoryFailureCode,
   MemoryItem,
   MemoryMutationReceipt,
   MemoryRpcError,
@@ -33,6 +34,7 @@ export {
 const originalId = "00000000-0000-4000-8000-000000000003";
 const resolutionId = "00000000-0000-4000-8000-000000000006";
 const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
+const isMemoryFailureCode = Schema.is(MemoryFailureCode);
 
 export function revertHistory() {
   if (nativeItem.status !== "active") throw new Error("Expected active fixture");
@@ -185,14 +187,25 @@ export function receipt(input: unknown, rejected = false) {
   });
 }
 
+export const memoryMoveCases = [
+  false,
+  true,
+  "forget",
+  "expiry",
+  "hold",
+  "lost ACK",
+  "older destination",
+  "missing receipt",
+] as const;
+
 export async function exerciseMemoryMove(
   mount: (
     scopes: undefined,
     setup: (harness: NativeMemoryHarness) => void,
-    capabilities: { protocolVersion: 1; scopeMoves: true },
+    capabilities: { protocolVersion: 1; scopeMoves: true; scopeMoveReceipts?: true },
   ) => Promise<void>,
   mounted: () => { h: NativeMemoryHarness; view: ReturnType<typeof renderNative> },
-  batch: boolean | "forget" | "expiry" | "hold" | "lost ACK",
+  batch: (typeof memoryMoveCases)[number],
 ) {
   const active = nativeItem;
   if (active.status !== "active") throw new Error("Expected active fixture");
@@ -213,7 +226,8 @@ export async function exerciseMemoryMove(
   const receiptLookups: MemoryMoveInput[] = [];
   const invalidatedDuringMove = batch === "forget" || batch === "expiry" || batch === "hold";
   let heldMove: ((value: unknown) => Promise<unknown>) | undefined;
-  if (batch === "expiry") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const expires = batch === "expiry" || batch === "missing receipt";
+  if (expires) vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await mount(
       undefined,
@@ -245,7 +259,15 @@ export async function exerciseMemoryMove(
           const ids = attempts.get(input.memoryId) ?? [];
           ids.push(input.operationId);
           attempts.set(input.memoryId, ids);
-          if (input.memoryId === nativeId && ids.length === 1)
+          if ("receiptFor" in request && batch === "missing receipt") {
+            const missing = "move_receipt_missing";
+            return Effect.fail(
+              new MemoryRpcError({
+                code: isMemoryFailureCode(missing) ? missing : "revision_changed",
+              }),
+            );
+          }
+          if (input.memoryId === nativeId && (ids.length === 1 || batch === "missing receipt"))
             return Effect.fail(
               new MemoryRpcError({
                 code: "capacity_exceeded",
@@ -265,7 +287,7 @@ export async function exerciseMemoryMove(
           if (batch && input.memoryId === completedId)
             harness.responses.set(WS_METHODS.memoryList, () => ({
               items:
-                batch === "lost ACK"
+                batch === "lost ACK" || batch === "older destination"
                   ? []
                   : items.filter(({ memoryId }) => memoryId !== completedId),
               nextCursor: null,
@@ -285,7 +307,11 @@ export async function exerciseMemoryMove(
           };
         });
       },
-      { protocolVersion: 1, scopeMoves: true },
+      {
+        protocolVersion: 1,
+        scopeMoves: true,
+        ...(batch === "older destination" ? {} : { scopeMoveReceipts: true }),
+      },
     );
     const { h, view } = mounted();
     if (batch) {
@@ -304,6 +330,37 @@ export async function exerciseMemoryMove(
     await submit();
     const firstNotice = view.container.textContent;
     if (batch) expect.soft(firstNotice).toContain("Memory 00000212 · Moved.");
+    if (batch === "older destination") {
+      const original = attempts.get(uncertainId ?? "")?.[0];
+      expect(firstNotice).not.toContain("Synthetic move item 211");
+      await submit();
+      expect.soft(view.container.textContent).toContain("Move receipt recovery is unavailable");
+      expect(receiptLookups).toEqual([]);
+      expect(attempts.get(uncertainId ?? "")).toEqual([original]);
+      return;
+    }
+    if (batch === "missing receipt") {
+      const original = attempts.get(uncertainId ?? "")?.[0];
+      await act(() => vi.advanceTimersByTimeAsync(61_000));
+      expect(view.container.textContent).not.toContain("Synthetic move item 211");
+      await submit();
+      expect(receiptLookups).toMatchObject([{ memoryId: uncertainId, operationId: original }]);
+      expect(attempts.get(uncertainId ?? "")).toEqual([original, original]);
+      expect.soft(view.container.textContent).toContain("No move receipt was found");
+      await act(async () => {
+        await h.signal({
+          kind: "invalidate",
+          memorySpaceId: nativeSpace,
+          projectionWatermark: 2,
+        });
+      });
+      expect(view.container.textContent).toContain("Synthetic move item 211");
+      await submit();
+      expect(attempts.get(uncertainId ?? "")).toEqual([original, original, original]);
+      expect(receiptLookups).toHaveLength(1);
+      expect(view.container.textContent).toContain("Memory 00000211 · Moved.");
+      return;
+    }
     if (batch === "lost ACK") {
       expect(firstNotice).toContain("Memory 00000211 · Could not confirm");
       expect(firstNotice).not.toContain("Synthetic move item 211");
@@ -380,6 +437,6 @@ export async function exerciseMemoryMove(
       toScope: { kind: "project", projectKey: { kind: "explicit", sharedProjectId: "move-key" } },
     });
   } finally {
-    if (batch === "expiry") vi.useRealTimers();
+    if (expires) vi.useRealTimers();
   }
 }

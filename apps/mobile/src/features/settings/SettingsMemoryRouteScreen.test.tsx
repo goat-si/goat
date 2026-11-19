@@ -7,6 +7,7 @@ import {
   replaySuggestionChange,
   revertHistory,
   exerciseMemoryMove,
+  memoryMoveCases,
   receipt,
   suggestionMemoryCapabilities,
   suggestionScenario,
@@ -39,7 +40,6 @@ import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import { SettingsMemoryRouteScreen, MemoryEnvironmentEntry } from "./SettingsMemoryRouteScreen";
-
 const encodeUpsert = Schema.encodeSync(MemoryUpsertInput);
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -2235,7 +2235,6 @@ it("does not render or request suggestions from the legacy memory destination", 
   );
   expect(h.calls.some(({ method }) => method.startsWith("memory.suggestions."))).toBe(false);
 });
-it.each([false, true, "forget", "expiry", "hold", "lost ACK"] as const)(
-  "retries refused and uncertain moves independently (batch %s)",
-  (batch) => exerciseMemoryMove(mount, () => ({ h, view }), batch),
+it.each(memoryMoveCases)("retries refused and uncertain moves independently (batch %s)", (batch) =>
+  exerciseMemoryMove(mount, () => ({ h, view }), batch),
 );

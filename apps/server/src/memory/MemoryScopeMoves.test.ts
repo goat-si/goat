@@ -64,7 +64,7 @@ describe("negotiated memory scope moves", () => {
       } satisfies M.MemoryMoveInput;
       const lookup = (input: M.MemoryMoveInput) => service.move({ receiptFor: input }, Effect.void);
       assert.isFalse(isLegacyMoveInput({ receiptFor: request }));
-      assert.include(yield* lookup(request).pipe(Effect.flip), { code: "revision_changed" });
+      assert.include(yield* lookup(request).pipe(Effect.flip), { code: "move_receipt_missing" });
       assert.isUndefined(yield* store.readWork(`sync:${space}:${request.operationId}`));
       const moved = yield* hub.push(
         {
