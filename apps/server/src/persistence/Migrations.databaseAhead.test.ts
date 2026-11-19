@@ -139,6 +139,53 @@ describe("runMigrations database ahead of this build", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect(
+    "charges both suggestion counters when linking a staged save and repairs prior drift",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 164 });
+        yield* sql`INSERT INTO memory_thread_lineages(environment_id,thread_id,space,state,count)
+        VALUES ('owner','thread','suggestion-space','tracked',0),
+          ('another-owner','another-thread','another-space','tracked',0)`;
+        const readCounters = Effect.map(
+          sql<{ value: number }>`SELECT value FROM memory_quota_counters
+          WHERE dimension='usage_local_provenance_bytes' AND scope_key=''
+            AND space IN ('suggestion-space','_usage_environment') ORDER BY space`,
+          (rows) => rows.map(({ value }) => value),
+        );
+        const baseline = yield* readCounters;
+        const initial = "[]";
+        const linked =
+          '["00000000-0000-4000-8000-000000000001","00000000-0000-4000-8000-000000000002"]';
+        const stage = (derived: string, operation: string | null) =>
+          sql`INSERT INTO memory_save_suggestions
+          (id,space,origin_environment_id,origin_thread_id,text,scope_json,derived_json,
+            lineage_complete,reason,forget_generation,created_at,expires_at,state,accept_operation_id)
+          VALUES ('suggestion','suggestion-space','owner','thread','synthetic text','{"kind":"user"}',
+            ${derived},1,'hub_upgrade_required',0,0,100,${operation ? "accepting" : "pending"},${operation})
+          ON CONFLICT(id) DO UPDATE SET state=excluded.state,
+            accept_operation_id=excluded.accept_operation_id,derived_json=excluded.derived_json`;
+        const dismiss = sql`DELETE FROM memory_save_suggestions WHERE id='suggestion'`;
+        yield* stage(linked, null);
+        yield* stage(initial, "staged-save");
+        yield* dismiss;
+        yield* runMigrations();
+        const afterUpgrade = yield* readCounters;
+
+        yield* stage(initial, null);
+        const inserted = yield* readCounters;
+        yield* stage(linked, "staged-save");
+        assert.deepStrictEqual(
+          yield* readCounters,
+          inserted.map((value) => value + linked.length - initial.length),
+        );
+        yield* dismiss;
+        assert.deepStrictEqual(yield* readCounters, baseline);
+        assert.deepStrictEqual(afterUpgrade, baseline);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("backfills origin catch-up on a ready database and publishes the next sequence", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
