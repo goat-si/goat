@@ -1,3 +1,4 @@
+import { toPullRequestInfo } from "./gitManagerPrInfo.ts";
 import { makePullRequestWorktreeLifecycle } from "./pullRequestWorktreeLifecycle.ts";
 import {
   isPullRequestWorktreeLocalBranchName,
@@ -93,7 +94,6 @@ import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import type { ChangeRequest } from "@goat/contracts";
 import {
   type CommitAndBranchSuggestion,
   formatCommitMessage,
@@ -270,31 +270,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
-}
-
-function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
-  return {
-    number: summary.number,
-    title: summary.title,
-    url: summary.url,
-    baseRefName: summary.baseRefName,
-    headRefName: summary.headRefName,
-    ...(summary.headSha !== undefined ? { headSha: summary.headSha } : {}),
-    state: summary.state ?? "open",
-    ...(summary.isDraft === true ? { isDraft: true } : {}),
-    closedAt: summary.closedAt ?? null,
-    mergedAt: summary.mergedAt ?? null,
-    updatedAt: summary.updatedAt,
-    ...(summary.isCrossRepository !== undefined
-      ? { isCrossRepository: summary.isCrossRepository }
-      : {}),
-    ...(summary.headRepositoryNameWithOwner !== undefined
-      ? { headRepositoryNameWithOwner: summary.headRepositoryNameWithOwner }
-      : {}),
-    ...(summary.headRepositoryOwnerLogin !== undefined
-      ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
-      : {}),
-  };
 }
 
 function headBranchProbe(
