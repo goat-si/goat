@@ -1,3 +1,4 @@
+import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import { AuthOrchestrationOperateScope, type EnvironmentId } from "@goat/contracts";
@@ -14,7 +15,6 @@ import {
   composerDraftEnvironmentId,
   canUploadComposerAttachment,
   createComposerAttachmentUploadQueue,
-  type ComposerAttachmentUploadState,
 } from "../lib/composerAttachmentUploadQueue";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentServerConfigsAtom } from "./server";
@@ -36,9 +36,8 @@ export {
   composerAttachmentsStillUploading,
 } from "../lib/composerAttachmentUploadQueue";
 
-export const composerAttachmentUploadsAtom = Atom.make<
-  Readonly<Record<string, ComposerAttachmentUploadState>>
->({}).pipe(Atom.keepAlive);
+export { composerAttachmentUploadsAtom };
+
 const uploadStateAtom = Atom.family((key: string) =>
   Atom.map(composerAttachmentUploadsAtom, (states) => states[key]),
 );
