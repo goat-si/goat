@@ -174,6 +174,7 @@ export function useWebMemoryBatch(
   );
   return {
     selecting: allowed && state.selecting,
+    rowState: state,
     row: (item: MemoryItem) =>
       state.selecting && item.status !== "forgotten" && presentSelectable(item) ? (
         <label className="flex items-center gap-2">

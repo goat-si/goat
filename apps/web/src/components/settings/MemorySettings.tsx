@@ -758,6 +758,7 @@ function ScopedMemoryRecords({
         ) : (
           <LegendList
             data={items}
+            extraData={batch.rowState}
             keyExtractor={(item) => item.memoryId}
             estimatedItemSize={72}
             style={{
