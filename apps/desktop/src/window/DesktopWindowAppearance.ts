@@ -44,11 +44,22 @@ export function getWindowTitleBarOptions(
   };
 }
 
+export function materialOptionsWithTitleBar(
+  options: { readonly transparent?: true },
+  platform: NodeJS.Platform,
+) {
+  return {
+    ...options,
+    ...(getWindowTitleBarOptions(false, platform).titleBarOverlay ? { titleBarOverlay: true } : {}),
+  };
+}
+
 export function syncWindowAppearance(
   window: Electron.BrowserWindow,
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
   materialActive = false,
+  hasTitleBarOverlay = false,
 ): Effect.Effect<void> {
   return Effect.sync(() => {
     if (window.isDestroyed()) {
@@ -59,7 +70,7 @@ export function syncWindowAppearance(
       materialActive ? "#00000000" : getInitialWindowBackgroundColor(shouldUseDarkColors),
     );
     const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
-    if (typeof titleBarOverlay === "object") {
+    if (hasTitleBarOverlay && typeof titleBarOverlay === "object") {
       window.setTitleBarOverlay({
         ...titleBarOverlay,
         ...(platform === "win32" && materialActive ? { color: "#00000000" } : {}),
