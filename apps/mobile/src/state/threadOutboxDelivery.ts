@@ -630,6 +630,12 @@ export function createThreadOutboxDelivery(): {
       if (!queuedMessageIds.has(messageId)) clearRetry(messageId);
     }
     const reconnected = new Set<string>();
+    const currentEnvironmentIds = new Set(
+      connectedEnvironments.map((environment) => environment.environmentId),
+    );
+    for (const environmentId of connectionStates.keys()) {
+      if (!currentEnvironmentIds.has(environmentId)) connectionStates.delete(environmentId);
+    }
     for (const environment of connectedEnvironments) {
       const previous = connectionStates.get(environment.environmentId);
       if (
