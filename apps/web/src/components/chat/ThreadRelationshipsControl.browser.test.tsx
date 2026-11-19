@@ -250,6 +250,25 @@ it("shows the full lineage title in its tooltip", async () => {
   );
 });
 
+it("opens a related side chat through its owner when it is absent from the global shell list", async () => {
+  setup();
+  state.relatedShells = [
+    {
+      ...(state.projection as { thread: Record<string, unknown> }).thread,
+      id: ThreadId.make("source"),
+      title: "Related side chat",
+      sideChatOf: ThreadId.make("owner"),
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    },
+  ];
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={threadId} />,
+    { router: "/environment/fork" },
+  );
+  await screen.getByText("Related side chat", { exact: true }).click();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/environment/owner"));
+});
+
 it("hides a verified deleted fork while retaining omitted and archived forks", async () => {
   setup();
   const projection = makeThreadProjectionFixture();

@@ -517,7 +517,10 @@ export function ThreadRelationshipsPanel(props: {
           threadShells.find(
             (shell) =>
               shell.environmentId === threadRef.environmentId && shell.id === threadRef.threadId,
-          ) ?? null,
+          ) ??
+            (threadRef.environmentId === props.environmentId
+              ? (graph.nodes.get(threadRef.threadId)?.thread ?? null)
+              : null),
         ),
       ),
     });
