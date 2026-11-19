@@ -109,3 +109,15 @@ export function makeClaudeAssistantTextProjector() {
     },
   };
 }
+
+// Claude 5.1+ emits at most one pre-tool text block as thinking; treat only a second consecutive thinking block as text.
+export function claudeWritesUpdatesAsThinking(model: string): boolean {
+  const match = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?!\d)/u.exec(model);
+  if (match === null) return false;
+  const major = Number(match[1]);
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) >= 1);
+}
+
+export function normalizeClaudeResultText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}

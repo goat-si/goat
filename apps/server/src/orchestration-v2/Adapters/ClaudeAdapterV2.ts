@@ -85,7 +85,11 @@ import { createClaudeReportedContext } from "../../provider/ClaudeReportedContex
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
-import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
+import {
+  claudeWritesUpdatesAsThinking,
+  normalizeClaudeResultText,
+  makeClaudeAssistantTextProjector,
+} from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
 import {
@@ -853,18 +857,6 @@ function providerSession(input: {
     updatedAt: input.now,
     lastError: null,
   };
-}
-
-// Claude 5.1+ emits at most one pre-tool text block as thinking; treat only a second consecutive thinking block as text.
-function claudeWritesUpdatesAsThinking(model: string): boolean {
-  const match = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?!\d)/u.exec(model);
-  if (match === null) return false;
-  const major = Number(match[1]);
-  return major > 5 || (major === 5 && Number(match[2] ?? 0) >= 1);
-}
-
-function normalizeClaudeResultText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
 }
 
 function assistantTextFromSdkMessage(
