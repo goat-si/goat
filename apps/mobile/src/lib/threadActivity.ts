@@ -1,3 +1,4 @@
+import { liveToolActivitySummary } from "./threadLiveToolSummary";
 import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
 import { itemIcon } from "./threadActivityIcons";
@@ -23,21 +24,17 @@ import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
-import { commandProgramName } from "@goat/client-runtime/work-log/command-label";
 import {
-  commandVerb,
   contextCompactionLabel,
   formatCommandActionsLabel,
   liveThoughtLine,
   toolItemForDisplay,
   workEntryDisplayIndicatesToolFailure,
-  liveActivityToolStatus,
   toolGroupAction,
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
   workEntriesViewedImagePaths,
-  workEntryCommandActions,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
@@ -1589,32 +1586,6 @@ function appendToolGroupRows(
         activity.runId === activeRunId,
     })),
   });
-}
-
-function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boolean): string {
-  const status = liveActivityToolStatus(activity.lifecycleStatus, presentTense);
-  if (activity.workEntry.itemType === "reasoning") {
-    return compactWorkEntryText(
-      activity.workEntry.detail?.trim() || (status === "inProgress" ? "Thinking" : "Thought"),
-    );
-  }
-  const presentation = resolveWorkEntryToolPresentation({
-    ...activity.workEntry,
-    toolLifecycleStatus: status,
-  });
-  if (presentation) return presentation.displayName;
-  const commandActions = workEntryCommandActions(activity.workEntry);
-  if (commandActions) {
-    return formatCommandActionsLabel(commandActions, {
-      active: status === "inProgress",
-      formatPath: compactCommandActionPath,
-    });
-  }
-  const command = activity.workEntry.command?.trim();
-  if (command) {
-    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
-  }
-  return compactWorkEntryText(activity.detail ?? activity.summary);
 }
 
 export function setPendingUserInputCustomAnswer(
