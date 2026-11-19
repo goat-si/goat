@@ -461,6 +461,21 @@ describe("negotiated memory scope moves", () => {
       }).pipe(checkUsage, Effect.provide(live)),
   );
 
+  it("decodes frozen V1 compact receipt failure ordinals", () => {
+    const prefix = "01000301000000000000400080000000000000010100000000000040008000000000000002";
+    const fields = `${"a".repeat(64)}0101000000000000`;
+    for (const [ordinal, failureCode] of [
+      ["1d", "source_invalidated"],
+      ["20", "base_compacted"],
+    ]) {
+      const bytes = Buffer.from(`${prefix}${fields}${ordinal}00`, "hex");
+      assert.include(Store.decodeCompactReceipt(bytes, space, () => hubEnv).receipt, {
+        outcome: "rejected",
+        failureCode,
+      });
+    }
+  });
+
   it("round-trips accepted and refused move receipts and preserves historical kind bytes", () => {
     const record = {
       memorySpaceId: space,
