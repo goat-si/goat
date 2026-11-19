@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   CODEX_APP_SERVER_ISOLATION_DEFAULT,
   type CodexAppServerIsolation,
@@ -6,24 +7,22 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 
-const ISOLATION_LABELS: Record<CodexAppServerIsolation, string> = {
-  thread: "One per thread",
-  shared: "Shared",
-};
-
-const codexAppServerIsolationLabel = (value: CodexAppServerIsolation) =>
-  value === CODEX_APP_SERVER_ISOLATION_DEFAULT
-    ? `${ISOLATION_LABELS[value]} (default)`
-    : ISOLATION_LABELS[value];
-
 export function CodexAppServerIsolationSetting() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
+  const codexAppServerIsolationLabel = (value: CodexAppServerIsolation) => {
+    const label = value === "thread" ? gt("One per thread") : gt("Shared");
+    return value === CODEX_APP_SERVER_ISOLATION_DEFAULT
+      ? gt("{label} (default)", { label })
+      : label;
+  };
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { connectedEnvironments } = useSettingsScope();
@@ -35,13 +34,15 @@ export function CodexAppServerIsolationSetting() {
     );
   return (
     <SettingsRow
-      {...searchableSetting("codex-app-server-isolation")}
+      {...setting("codex-app-server-isolation")}
       serverScoped
       settingKeys={["codexAppServerIsolation"]}
-      description="Give each new Codex thread its own app-server, so a crash or restart of one stops only that thread. Each process uses more memory. Existing threads keep their current process."
+      description={gt(
+        "Give each new Codex thread its own app-server, so a crash or restart of one stops only that thread. Each process uses more memory. Existing threads keep their current process.",
+      )}
       status={
         !supported
-          ? "All selected environments must support separate Codex app-servers."
+          ? gt("All selected environments must support separate Codex app-servers.")
           : undefined
       }
       resetAction={
@@ -49,7 +50,7 @@ export function CodexAppServerIsolationSetting() {
         (mixed ||
           settings.codexAppServerIsolation !== DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation) ? (
           <SettingResetButton
-            label="Codex app-servers"
+            label={gt("Codex app-servers")}
             onClick={() =>
               updateSettings({
                 codexAppServerIsolation: DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation,
@@ -67,10 +68,10 @@ export function CodexAppServerIsolationSetting() {
               updateSettings({ codexAppServerIsolation: value });
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-64" aria-label="Codex app-servers">
+          <SelectTrigger size="sm" className="w-full sm:w-64" aria-label={gt("Codex app-servers")}>
             <SelectValue>
               {(value: CodexAppServerIsolation | null) =>
-                value === null ? "Mixed" : codexAppServerIsolationLabel(value)
+                value === null ? gt("Mixed") : codexAppServerIsolationLabel(value)
               }
             </SelectValue>
           </SelectTrigger>
