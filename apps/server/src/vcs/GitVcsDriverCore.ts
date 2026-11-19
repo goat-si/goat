@@ -2628,8 +2628,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { concurrency: 2 },
     );
     const stagedDeletions = new Set(stagedDeletionsStdout.split("\0").filter(Boolean));
-    const candidates = untrackedPaths.filter(
-      (relativePath) => includeStagedDeletions || !stagedDeletions.has(relativePath),
+    const candidates = yield* Effect.filter(
+      untrackedPaths.filter(
+        (relativePath) => includeStagedDeletions || !stagedDeletions.has(relativePath),
+      ),
+      (relativePath) =>
+        relativePath.endsWith("/")
+          ? executeGit(
+              "GitVcsDriver.readUnifiedWorkingTreeReviewDiff.nestedRepositoryHead",
+              path.resolve(cwd, relativePath),
+              ["rev-parse", "--verify", "--quiet", "HEAD"],
+              { allowNonZeroExit: true },
+            ).pipe(Effect.map((result) => result.exitCode !== 1))
+          : Effect.succeed(true),
+      { concurrency: 16 },
     );
     const { selected: pathsToAdd, omitted } = yield* selectUntrackedWithinLimit(cwd, candidates);
     if (pathsToAdd.length === 0 || (omitted && !allowPartial)) return { env: undefined, omitted };
