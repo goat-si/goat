@@ -1,3 +1,4 @@
+import { guardLostToolEvents } from "./goat/GuardLostToolEvents.ts";
 import { initializeAttemptDelivery, withAttemptDeliveryEvent } from "./AttemptInputDelivery.ts";
 import { makeCommandEventAppender } from "./AtomicLaunchReceipt.ts";
 import { makeEventSinkComparePayloadWrites } from "./EventSinkComparePayload.ts";
@@ -444,10 +445,14 @@ const layerBase: Layer.Layer<
               }
             }
 
-            const normalized = yield* normalizeEvents(
+            const events =
               input.guardPendingUserInputCancellations === true
                 ? yield* guardUserInputCancellations(input.events)
-                : yield* withAttemptDeliveryEvent(sql, input),
+                : yield* withAttemptDeliveryEvent(sql, input);
+            const normalized = yield* normalizeEvents(
+              input.expectedTurnItems === undefined
+                ? events
+                : yield* guardLostToolEvents(sql, events, input.expectedTurnItems),
             );
             const storedEvents = yield* appendStagedEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),

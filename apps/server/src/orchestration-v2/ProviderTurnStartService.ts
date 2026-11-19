@@ -1378,6 +1378,7 @@ export const layer: Layer.Layer<
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
         loadRunInterruptReason: runControls.loadRunInterruptReason,
+        loadUnsettledWork: runControls.loadUnsettledWork,
         message: {
           messageId: message.id,
           text: userText,

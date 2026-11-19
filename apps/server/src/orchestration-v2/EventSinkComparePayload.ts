@@ -8,7 +8,10 @@ import { EventSinkWriteError, type EventSinkV2Shape } from "./EventSinkShape.ts"
 
 type ComparePayloadWrites = Pick<
   EventSinkV2Shape,
-  "writeIfProviderThreadUnchanged" | "writeIfTurnItemUnchanged" | "writeIfReleasedSubagentUnchanged"
+  | "writeIfProviderThreadUnchanged"
+  | "writeIfTurnItemUnchanged"
+  | "writeIfSubagentUnchanged"
+  | "writeIfReleasedSubagentUnchanged"
 >;
 type CompareResult = Effect.Success<
   ReturnType<ComparePayloadWrites["writeIfProviderThreadUnchanged"]>
@@ -63,6 +66,33 @@ export function makeEventSinkComparePayloadWrites(
       expectedJson,
       input.events,
     );
+  });
+
+  const writeIfSubagentUnchangedEffect = Effect.fn(
+    "orchestrationV2.EventSink.writeIfSubagentUnchanged",
+  )(function* (input: Parameters<EventSinkV2Shape["writeIfSubagentUnchanged"]>[0]) {
+    const expectedJson = yield* ProjectionStore.encodeSubagentPayload(input.expected);
+    const matches = Effect.gen(function* () {
+      const owner = yield* sql<{
+        readonly payload_json: string;
+      }>`SELECT payload_json FROM orchestration_v2_projection_subagents WHERE subagent_id = ${input.expected.id} LIMIT 1`;
+      if (owner[0]?.payload_json !== expectedJson) return [];
+      for (const node of input.nodes ?? []) {
+        const rows = yield* sql<{
+          readonly payload_json: string;
+        }>`SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id} LIMIT 1`;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeNodePayload(node))) return [];
+      }
+      for (const item of input.items ?? []) {
+        const rows = yield* sql<{
+          readonly payload_json: string;
+        }>`SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${item.id} LIMIT 1`;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeTurnItemPayload(item)))
+          return [];
+      }
+      return owner;
+    });
+    return yield* writeIfStoredPayloadMatches(matches, expectedJson, input.events);
   });
 
   const writeIfReleasedSubagentUnchanged = Effect.fn(
@@ -121,6 +151,8 @@ export function makeEventSinkComparePayloadWrites(
       writeIfProviderThreadUnchangedEffect(input).pipe(mapWriteError(input.events.length)),
     writeIfTurnItemUnchanged: (input) =>
       writeIfTurnItemUnchangedEffect(input).pipe(mapWriteError(input.events.length)),
+    writeIfSubagentUnchanged: (input) =>
+      writeIfSubagentUnchangedEffect(input).pipe(mapWriteError(input.events.length)),
     writeIfReleasedSubagentUnchanged: (input) =>
       writeIfReleasedSubagentUnchanged(input).pipe(mapWriteError(input.events.length)),
   };

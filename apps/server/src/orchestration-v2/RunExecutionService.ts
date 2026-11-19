@@ -1,3 +1,9 @@
+import {
+  interruptLostToolCalls,
+  makeLostProviderWork,
+  type UnsettledWork,
+} from "./RunLostProviderWork.ts";
+export type { UnsettledWork } from "./RunLostProviderWork.ts";
 import { makeRunInputDelivery, submitProviderInput } from "./RunInputDelivery.ts";
 import { hasNativeGoals } from "./providerTurnStartHelpers.ts";
 import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
@@ -222,6 +228,10 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly hasWorkspaceMoved?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
+  readonly loadUnsettledWork?: (
+    threadId: ThreadId,
+    nodeIds: ReadonlyArray<NodeId>,
+  ) => Effect.Effect<UnsettledWork, ProjectionStoreV2Error>;
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -284,6 +294,7 @@ export const layer: Layer.Layer<
         readonly openRunOwnedSubagentsTerminal?: ProviderTerminalEvent;
         // Root turn snapshot written with the run when GOAT ends the run itself.
         readonly abandonedProviderTurn?: OrchestrationV2ProviderTurn;
+        readonly lostToolCalls?: ReadonlyArray<OrchestrationV2TurnItem>;
         readonly terminal: ProviderTerminalEvent;
         readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
         readonly completedAt?: DateTime.Utc;
@@ -473,6 +484,12 @@ export const layer: Layer.Layer<
           events: [
             ...cloudResultEvents,
             ...cascadedSubagentEvents,
+            ...(yield* interruptLostToolCalls({
+              run: input.run,
+              toolCalls: input.lostToolCalls ?? [],
+              completedAt,
+              allocateEventId,
+            })),
             ...(input.abandonedProviderTurn === undefined
               ? []
               : [
@@ -596,6 +613,9 @@ export const layer: Layer.Layer<
                 }
               : {}),
             events: finalization.events,
+            ...(input.lostToolCalls === undefined
+              ? {}
+              : { expectedTurnItems: input.lostToolCalls }),
             effects: finalization.effects,
           });
           if (!result.committed) {
@@ -808,6 +828,14 @@ export const layer: Layer.Layer<
           ReadonlySet<OrchestrationV2TurnItem["id"]>
         >(new Set(inheritedBackgroundTurnItemsById.keys()));
         const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
+        const openRootToolCalls = activeBackgroundTurnItems;
+        const { loadLostRootToolCalls, endWorkLostAfterRootRun } = makeLostProviderWork(
+          input,
+          openRunOwnedSubagents,
+          openRootToolCalls,
+          eventSink,
+          idAllocator,
+        );
         let rootTurnOwnershipChecked = false;
         const workspaceHandedOff = Effect.suspend(() =>
           input.shouldFinalizeRun === undefined || input.hasWorkspaceMoved === undefined
@@ -1445,6 +1473,7 @@ export const layer: Layer.Layer<
                     cause: new ProviderAdapter.ProviderAdapterEventStreamError({
                       driver: input.providerThread.driver,
                       providerSessionId: input.providerSessionId,
+                      raisedByGoat: true,
                       cause: "Provider event stream ended without a root terminal.",
                     }),
                   });
@@ -1502,7 +1531,15 @@ export const layer: Layer.Layer<
                     runId: input.run.id,
                     cause,
                   });
-                  if (yield* Ref.get(rootRunFinalized)) return;
+                  const runtimeLost =
+                    isRunExecutionIngestError(squashed) &&
+                    isProviderEventStreamError(squashed.cause) &&
+                    squashed.cause.raisedByGoat !== true &&
+                    squashed.cause.detachedThreadId === undefined;
+                  if (yield* Ref.get(rootRunFinalized)) {
+                    if (runtimeLost) yield* endWorkLostAfterRootRun(completedAt);
+                    return;
+                  }
                   const providerThread = yield* Ref.get(latestProviderThread);
                   // Stop background work too; the failed consumer cannot persist terminal events.
                   const abandonedProviderTurn =
@@ -1541,6 +1578,18 @@ export const layer: Layer.Layer<
                       : null;
                   const latestItemOrdinal = yield* Ref.get(latestTurnItemOrdinal);
                   const openSubagents = yield* Ref.get(openRunOwnedSubagents);
+                  const lostToolCalls = runtimeLost
+                    ? yield* loadLostRootToolCalls.pipe(
+                        Effect.catchCauseIf(
+                          (loadCause) => !Cause.hasInterruptsOnly(loadCause),
+                          (loadCause) =>
+                            Effect.logWarning(
+                              "orchestration V2 failed to read tool calls lost with the provider runtime",
+                              { runId: input.run.id, cause: loadCause },
+                            ).pipe(Effect.as([])),
+                        ),
+                      )
+                    : [];
                   let nextRetryWarningAt = completedAt;
                   yield* writeFinalRunEvents({
                     run: input.run,
@@ -1554,6 +1603,7 @@ export const layer: Layer.Layer<
                     },
                     openRunOwnedSubagents: openSubagents,
                     ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
+                    lostToolCalls,
                     completedAt,
                     terminationCause: providerProcessExitCause(Cause.squash(cause))
                       ? "provider_process_exit"

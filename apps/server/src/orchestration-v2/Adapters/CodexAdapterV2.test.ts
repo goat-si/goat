@@ -34,7 +34,7 @@ import {
   TurnItemId,
   type ServerProviderModel,
 } from "@goat/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import { toolOutputImages } from "@goat/shared/toolOutput";
 
 import * as CodexClient from "effect-codex-app-server/client";
@@ -4471,7 +4471,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  it.effect("Stop ends a background command no Codex process tracks any more", () =>
+  it.effect("ends a background command when its Codex process is gone", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -4508,6 +4508,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
+          using dispatchSpy = vi.spyOn(orchestrator, "dispatch");
           const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
           const threadId = ThreadId.make("thread:background-stop-untracked");
           yield* orchestrator.dispatch({
@@ -4547,21 +4548,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* worker.drain();
           yield* Fiber.join(settled);
           yield* worker.drain();
-          const before = yield* orchestrator.getThreadShell(threadId);
-          assert.deepEqual(
-            before?.pendingBackgroundTasks?.map((task) => task.kind),
-            ["command"],
-            "the thread still shows the command the gone process never finished",
-          );
-          const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
-          yield* orchestrator.dispatch({
-            type: "run.interrupt",
-            commandId: CommandId.make("stop-background-untracked"),
-            threadId,
-            runId: run.id,
-            holdQueue: true,
-          });
-          yield* worker.drain();
+          // regression: #37290 the command stayed running, and the thread waiting, until Stop.
           const projection = yield* orchestrator.getThreadProjection(threadId);
           assert.deepEqual(
             projection.turnItems.flatMap((item) =>
@@ -4570,6 +4557,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ["interrupted"],
           );
           assert.equal(projection.runs.at(-1)?.status, "completed");
+          assert.isFalse(
+            dispatchSpy.mock.calls.some(([command]) => command.type === "run.interrupt"),
+          );
           assert.deepEqual(
             (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
             [],
