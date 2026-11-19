@@ -646,9 +646,9 @@ export const layer = Layer.effectContext(
             .pipe(Effect.mapError((cause) => persistenceError("set-connection-routes", cause)));
         },
       ),
-      remove: Effect.fn("Persistence.ConnectionRegistrationStore.remove")(function (id, keep) {
+      remove: Effect.fn("Persistence.ConnectionRegistrationStore.remove")(function (id, options) {
         return catalog
-          .update((document) => removeConnectionFromCatalog(document, id, keep))
+          .update((document) => removeConnectionFromCatalog(document, id, options))
           .pipe(Effect.mapError((cause) => persistenceError("remove-connection", cause)));
       }),
       setEnabled: Effect.fn("Persistence.ConnectionRegistrationStore.setEnabled")(

@@ -59,6 +59,7 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
   const pass = Effect.fn("PenNativeDiscovery.pass")(function* (state: PenMembersInput) {
     if (state.kind === "unavailable" && policy.enabled && Option.isSome(gateway)) return;
     const existing = storedPenRoutes(yield* SubscriptionRef.get(registry.entries));
+    const closed = new Set<string>();
     for (const route of existing) {
       const { pin } = route;
       // Only a member Pen says left loses its route, and only where the viewer runs: removing an
@@ -76,28 +77,17 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           }),
         ),
       );
-      if (Option.isSome(gateway))
-        yield* gateway.value.close(pin).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Could not close Pen native route", {
-              error: redactPenRouteUrl(String(error)),
-            }),
-          ),
-        );
-      openedPins.delete(pinKey(pin));
-      verified.delete(pinKey(pin));
+      yield* closeLink(pin);
+      closed.add(pinKey(pin));
     }
-    for (const [key, pin] of openedPins) {
+    // A member the newest state does not list (or Pen machines switched off) loses its link,
+    // whether discovery or a connection opened it, and is checked again when it returns.
+    const links = new Map(openedPins);
+    for (const { pin } of existing) links.set(pinKey(pin), pin);
+    for (const [key, pin] of links) {
+      if (closed.has(key)) continue;
       if (policy.enabled && Option.isSome(gateway) && penPinIsCurrent(state, pin)) continue;
-      if (Option.isSome(gateway))
-        yield* gateway.value.close(pin).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Could not close Pen native route", {
-              error: redactPenRouteUrl(String(error)),
-            }),
-          ),
-        );
-      openedPins.delete(key);
+      yield* closeLink(pin);
     }
     if (!policy.enabled || Option.isNone(gateway) || state.kind !== "ready") return;
     const activeGateway = gateway.value;

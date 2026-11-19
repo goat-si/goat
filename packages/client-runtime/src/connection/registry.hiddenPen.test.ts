@@ -229,3 +229,33 @@ it.effect("the registry refuses a Pen route while the gate is closed", () =>
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
 );
+
+it.effect("reordering keeps a Pen route another channel saved after this one loaded", () =>
+  Effect.gen(function* () {
+    const second = new BearerConnectionTarget({
+      environmentId,
+      label: "Second",
+      connectionId: "bearer-second",
+    });
+    const secondProfile = new BearerConnectionProfile({
+      ...BEARER_PROFILE,
+      connectionId: second.connectionId,
+      httpBaseUrl: "https://second.example.test",
+      wsBaseUrl: "wss://second.example.test",
+    });
+    const harness = yield* makeHarness([BEARER_TARGET, second], [BEARER_PROFILE, secondProfile]);
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* Ref.update(harness.storedTargets, (current) => [...current, pen]);
+      yield* registry.reorderRoutes(environmentId, [
+        connectionRouteId(second),
+        connectionRouteId(BEARER_TARGET),
+      ]);
+      expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+        second,
+        BEARER_TARGET,
+        pen,
+      ]);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);

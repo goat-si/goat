@@ -6,7 +6,6 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -42,6 +41,7 @@ import {
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "./model.ts";
+import { keepHiddenTargets } from "../platform/storageDocument.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as EnvironmentRegistry from "./registry.ts";
@@ -231,15 +231,15 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
           Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
         ),
       ),
-    remove: (environmentId, keep = []) =>
+    remove: (environmentId, removal) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRemove?.(environmentId) ?? Effect.void;
-        const removed = (yield* Ref.get(storedTargets)).filter(
-          (target) =>
-            target.environmentId === environmentId &&
-            !keep.some((kept) => Equal.equals(kept, target)),
+        const before = yield* Ref.get(storedTargets);
+        const after = replaceRoutes(before, environmentId, [], removal?.keepHidden !== true);
+        const removed = before.filter(
+          (target) => target.environmentId === environmentId && !after.includes(target),
         );
-        yield* Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, keep));
+        yield* Ref.update(storedTargets, () => after);
         for (const target of removed) {
           if (target._tag === "BearerConnectionTarget" || target._tag === "SshConnectionTarget") {
             yield* Ref.update(storedProfiles, (current) => {
@@ -514,11 +514,15 @@ export function hasRoutes(targets: ReadonlyArray<ConnectionTarget>, environmentI
   return routesOf(targets, environmentId).length > 0;
 }
 
+/** As setRoutesInCatalog: a saved route the closed Pen gate holds back stays in its slot. */
 function replaceRoutes(
   current: ReadonlyArray<ConnectionTarget>,
   environmentId: EnvironmentId,
-  routes: ReadonlyArray<ConnectionTarget>,
+  given: ReadonlyArray<ConnectionTarget>,
+  dropHidden = false,
 ): ReadonlyArray<ConnectionTarget> {
+  const saved = current.filter((target) => target.environmentId === environmentId);
+  const routes = dropHidden ? given : keepHiddenTargets(saved, given, connectionRouteId);
   const firstIndex = current.findIndex((target) => target.environmentId === environmentId);
   const others = current.filter((target) => target.environmentId !== environmentId);
   const insertAt =

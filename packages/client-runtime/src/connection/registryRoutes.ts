@@ -7,41 +7,15 @@ import type * as ConnectionProfileStore from "./profileStore.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
 import { connectionRouteId, entryWithRoutes, routeIsShown } from "./routes.ts";
 
-/** A saved route the closed Pen gate hides, and its slot among the environment's saved routes. */
-export interface HiddenRoute {
-  readonly index: number;
-  readonly route: ConnectionRoute;
-}
-
-export function splitHiddenRoutes(routes: ReadonlyArray<ConnectionRoute>) {
-  const shown: Array<ConnectionRoute> = [];
-  const hidden: Array<HiddenRoute> = [];
-  routes.forEach((route, index) =>
-    routeIsShown(route) ? shown.push(route) : hidden.push({ index, route }),
-  );
-  return { shown, hidden };
-}
-
-/** The routes to save: the live ones in their order, each hidden one back in its slot. */
-export function withHiddenRoutes(
-  shown: ReadonlyArray<ConnectionRoute>,
-  hidden: ReadonlyArray<HiddenRoute>,
-): ReadonlyArray<ConnectionRoute> {
-  const routes = [...shown];
-  for (const { index, route } of hidden) routes.splice(Math.min(index, routes.length), 0, route);
-  return routes;
-}
-
 /** A saved environment's live entry holds only the routes the Pen gate shows; none, no entry. */
 export function savedCatalogEntry(loaded: ReadonlyArray<ConnectionRoute>, enabled: boolean) {
   const seen = new Set<string>();
-  const unique = loaded.filter((route) => {
+  const shown = loaded.filter((route) => {
     const id = connectionRouteId(route.target);
     if (seen.has(id)) return false;
     seen.add(id);
-    return true;
+    return routeIsShown(route);
   });
-  const { shown, hidden } = splitHiddenRoutes(unique);
   // As on dev, among the shown routes: none usable keeps the first.
   const usable = shown.filter(
     (route) =>
@@ -49,11 +23,9 @@ export function savedCatalogEntry(loaded: ReadonlyArray<ConnectionRoute>, enable
   );
   const routes = usable.length > 0 ? usable : shown.slice(0, 1);
   const first = routes[0];
-  const entry =
-    first === undefined
-      ? undefined
-      : entryWithRoutes({ target: first.target, profile: first.profile, enabled }, routes);
-  return { entry, hidden };
+  return first === undefined
+    ? undefined
+    : entryWithRoutes({ target: first.target, profile: first.profile, enabled }, routes);
 }
 
 export const loadCatalogRoute = (

@@ -40,15 +40,7 @@ import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
-import {
-  type HiddenRoute,
-  loadCatalogRoute,
-  savedCatalogEntry,
-  splitHiddenRoutes,
-  withHiddenRoutes,
-  withoutKey,
-  withRoutes,
-} from "./registryRoutes.ts";
+import { loadCatalogRoute, savedCatalogEntry, withoutKey, withRoutes } from "./registryRoutes.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -225,16 +217,14 @@ export const make = Effect.gen(function* () {
     routes.push(target);
     persistedRoutesByEnvironment.set(target.environmentId, routes);
   }
-  // Routes the closed Pen gate hides stay saved here, out of every live entry.
-  const hiddenRoutes = new Map<EnvironmentId, ReadonlyArray<HiddenRoute>>();
+  // A route the closed Pen gate holds back stays in the catalog and out of every live entry.
   const initialEntries = new Map(
     (yield* Effect.forEach(
       persistedRoutesByEnvironment,
       Effect.fn("EnvironmentRegistry.loadCatalogEntry")(function* ([environmentId, targets]) {
         const loaded = yield* Effect.forEach(targets, loadRoute, { concurrency: "unbounded" });
         const enabled = !disabledEnvironmentIds.has(environmentId);
-        const { entry, hidden } = savedCatalogEntry(loaded, enabled);
-        if (hidden.length > 0) hiddenRoutes.set(environmentId, hidden);
+        const entry = savedCatalogEntry(loaded, enabled);
         return entry === undefined ? [] : [[environmentId, entry] as const];
       }),
       { concurrency: "unbounded" },
@@ -447,20 +437,9 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  /** Saves the entry's routes with each hidden one back in its slot; slots move once saved. */
-  const saveRoutes = <E>(
-    entry: ConnectionCatalogEntry,
-    write: (routes: ReadonlyArray<PersistedConnectionTarget>) => Effect.Effect<void, E>,
-  ) => {
-    const environmentId = entry.target.environmentId;
-    const routes = withHiddenRoutes(connectionRoutes(entry), hiddenRoutes.get(environmentId) ?? []);
-    const { hidden } = splitHiddenRoutes(routes);
-    return write(routes.map((route) => route.target as PersistedConnectionTarget)).pipe(
-      Effect.tap(() =>
-        Effect.sync(() => hidden.length > 0 && hiddenRoutes.set(environmentId, hidden)),
-      ),
-    );
-  };
+  // The catalog keeps each route the closed Pen gate holds back in its slot (setRoutesInCatalog).
+  const persistedRoutes = (entry: ConnectionCatalogEntry) =>
+    connectionRoutes(entry).map((route) => route.target as PersistedConnectionTarget);
 
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
@@ -508,7 +487,7 @@ export const make = Effect.gen(function* () {
           }
           entry = next.entry;
         }
-        yield* saveRoutes(entry, (routes) => registrations.register(registration, routes));
+        yield* registrations.register(registration, persistedRoutes(entry));
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );
@@ -527,7 +506,7 @@ export const make = Effect.gen(function* () {
     if (next.addressesChanged) {
       yield* forgetRoutingTrust(environmentId, "set-connection-routes");
     }
-    yield* saveRoutes(next.entry, (routes) => registrations.setRoutes(environmentId, routes));
+    yield* registrations.setRoutes(environmentId, persistedRoutes(next.entry));
     yield* installEntryLocked(next.entry);
   });
 
@@ -596,12 +575,11 @@ export const make = Effect.gen(function* () {
 
           if (persisted) {
             const removed = yield* registrations.remove(target.environmentId).pipe(
-              Effect.tap(() => {
-                hiddenRoutes.delete(target.environmentId);
-                return Ref.update(persistedEnvironmentIds, (current) =>
+              Effect.tap(() =>
+                Ref.update(persistedEnvironmentIds, (current) =>
                   withoutKey(current, target.environmentId),
-                );
-              }),
+                ),
+              ),
               Effect.as(true),
               Effect.catch((error) =>
                 Effect.logWarning(
@@ -779,17 +757,10 @@ export const make = Effect.gen(function* () {
     const entry = yield* getEntry(environmentId);
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
-    // The environment goes as on dev; a route the closed Pen gate hides stays saved, alone.
-    const kept = options?.keepHiddenRoutes
-      ? (hiddenRoutes.get(environmentId) ?? []).map(({ route }, index) => ({ index, route }))
-      : [];
-    yield* registrations.remove(
-      environmentId,
-      kept.map(({ route }) => route.target as PersistedConnectionTarget),
-    );
-    hiddenRoutes.delete(environmentId);
-    if (kept.length > 0) hiddenRoutes.set(environmentId, kept);
-    else
+    // The environment goes as on dev; a route the closed Pen gate holds back stays saved, alone.
+    const keepHidden = options?.keepHiddenRoutes === true;
+    yield* registrations.remove(environmentId, { keepHidden });
+    if (!keepHidden)
       yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
@@ -936,7 +907,7 @@ export const make = Effect.gen(function* () {
           }
           yield* profiles.put(profile);
         }
-        yield* saveRoutes(next, (routes) => registrations.setRoutes(input.environmentId, routes));
+        yield* registrations.setRoutes(input.environmentId, persistedRoutes(next));
         const lease = (yield* SubscriptionRef.get(serviceScopes)).get(input.environmentId);
         if (lease !== undefined) {
           yield* SubscriptionRef.update(serviceScopes, (current) =>

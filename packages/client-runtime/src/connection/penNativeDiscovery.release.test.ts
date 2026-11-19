@@ -209,3 +209,14 @@ it.effect("a discovery cut short while the link opens still gives the link back"
     expect(closed).toEqual([pin.nodeId]);
   }),
 );
+
+it.effect("switching Pen machines off closes a saved member's link, whoever opened it", () =>
+  Effect.gen(function* () {
+    const closed = yield* discover((discovery) => discovery.pass({ kind: "disabled" }), {
+      initial: saved,
+      descriptor: "ok",
+      register: "ok",
+    });
+    expect(closed).toEqual([pin.nodeId]);
+  }),
+);

@@ -975,3 +975,21 @@ it("an environment saved with only routes the closed Pen gate hides comes back l
     ENVIRONMENT_ID,
   ]);
 });
+
+it("rewriting an environment's routes keeps the Pen routes the closed gate hides, which another channel may have saved", () => {
+  const pen = new PenConnectionTarget({
+    environmentId: ENVIRONMENT_ID,
+    label: "Pen",
+    connectionId: "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
+  });
+  const document = { ...EMPTY_CONNECTION_CATALOG_DOCUMENT, targets: [pen, BEARER_TARGET] };
+  expect(setRoutesInCatalog(document, ENVIRONMENT_ID, [BEARER_TARGET]).targets).toEqual([
+    pen,
+    BEARER_TARGET,
+  ]);
+  expect(
+    removeConnectionFromCatalog(document, ENVIRONMENT_ID, { keepHidden: true }).targets,
+  ).toEqual([pen]);
+  // Removing the environment itself takes its Pen routes with it.
+  expect(removeConnectionFromCatalog(document, ENVIRONMENT_ID).targets).toEqual([]);
+});

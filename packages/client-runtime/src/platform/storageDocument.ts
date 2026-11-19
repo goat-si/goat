@@ -18,7 +18,7 @@ import {
 } from "../connection/model.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
 import { isPenConnectionId, penProfilePin } from "../connection/penPin.ts";
-import { routeIsShown } from "../connection/routes.ts";
+import { connectionRouteId, routeIsShown } from "../connection/routes.ts";
 import { StoredPullRequestRoutingPermission } from "../connection/pullRequestRoutingPermissions.ts";
 
 export const StoredConnectionCredential = Schema.Struct({
@@ -198,18 +198,38 @@ export function catalogRoutes(
  * position in the catalog. An empty list leaves the environment's other records
  * in place; use `removeConnectionFromCatalog` to forget the environment.
  */
+/**
+ * The routes to save for an environment: the given ones, with each saved route the closed Pen gate
+ * keeps out of the registry back in its slot. Another channel may have saved it since this one read.
+ */
+export function keepHiddenTargets<T extends ConnectionTarget>(
+  saved: ReadonlyArray<T>,
+  routes: ReadonlyArray<T>,
+  id: (target: T) => string,
+): ReadonlyArray<T> {
+  const given = new Set(routes.map(id));
+  const next = [...routes];
+  saved.forEach((target, index) => {
+    if (!routeIsShown({ target }) && !given.has(id(target)))
+      next.splice(Math.min(index, next.length), 0, target);
+  });
+  return next;
+}
+
 export function setRoutesInCatalog(
   document: ConnectionCatalogDocument,
   environmentId: EnvironmentId,
-  routes: ReadonlyArray<PersistedConnectionTarget>,
+  given: ReadonlyArray<PersistedConnectionTarget>,
+  { dropHidden = false }: { readonly dropHidden?: boolean } = {},
 ): ConnectionCatalogDocument {
+  const saved = document.targets.filter((target) => target.environmentId === environmentId);
+  const routes = dropHidden ? given : keepHiddenTargets(saved, given, connectionRouteId);
   const kept = new Set(routes.map(routeKey));
   const dropped = catalogRoutes(document, environmentId).filter(
     (target) => !kept.has(routeKey(target)),
   );
   // Saved with only routes the closed Pen gate hides, it comes back last and switched on, as a
   // new one does.
-  const saved = document.targets.filter((target) => target.environmentId === environmentId);
   const shown = saved.some((target) => routeIsShown({ target }));
   const returning = saved.length > 0 && !shown && routes.some((target) => routeIsShown({ target }));
   const firstIndex = shown
@@ -277,11 +297,11 @@ export function registerConnectionInCatalog(
 export function removeConnectionFromCatalog(
   document: ConnectionCatalogDocument,
   environmentId: EnvironmentId,
-  keep: ReadonlyArray<PersistedConnectionTarget> = [],
+  { keepHidden = false }: { readonly keepHidden?: boolean } = {},
 ): ConnectionCatalogDocument {
   const withoutHub =
     readCatalogHub(document) === environmentId ? setCatalogHub(document, null) : document;
-  const next = setRoutesInCatalog(withoutHub, environmentId, keep);
+  const next = setRoutesInCatalog(withoutHub, environmentId, [], { dropHidden: !keepHidden });
   return {
     ...next,
     remoteDpopTokens: removeCatalogValue(
