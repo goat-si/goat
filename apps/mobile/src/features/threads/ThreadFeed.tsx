@@ -1,3 +1,4 @@
+import { worktreeSetupPresentation } from "./worktree-setup-state";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import type { MarkdownLinkHandlers, MarkdownStyleSet } from "./AssistantMarkdownBlocks";
 import { AssistantMarkdownContent } from "./AssistantMarkdownContent";
@@ -31,6 +32,7 @@ import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestSha
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
+  WorktreePreparingHeader,
   WorktreeWorkingHeader,
   WorktreeSetupCard,
   type WorktreeSetupCardProps,
@@ -308,6 +310,7 @@ export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
+  readonly preparingWorktree?: boolean;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
@@ -2425,6 +2428,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
+    preparingWorktree: props.preparingWorktree,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
     copiedRowId,
@@ -2534,6 +2538,11 @@ export const ThreadFeed = memo(function ThreadFeed({
       expandedTurnIds: new Set(current.expandedTurnIds).add(jumpRunId),
     }));
   }
+  const setupPresentation = worktreeSetupPresentation({
+    hasSetup: !!props.worktreeSetup,
+    working: !!props.setupWorkingStartedAt,
+    preparing: !!props.preparingWorktree,
+  });
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
@@ -3020,6 +3029,8 @@ export const ThreadFeed = memo(function ThreadFeed({
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
             <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
+          ) : setupPresentation === "preparing" && info.index === setupAnchorIndex ? (
+            <WorktreePreparingHeader />
           ) : null}
         </ThreadMediaVisibility>
       </MessageImageGalleryScope>
@@ -3158,6 +3169,9 @@ export const ThreadFeed = memo(function ThreadFeed({
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
                 ) : null}
+                {setupAnchorIndex < 0 && setupPresentation === "preparing" ? (
+                  <WorktreePreparingHeader />
+                ) : null}
                 {props.historyControls ? (
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
@@ -3185,6 +3199,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         </View>
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
+        setupPresentation !== "preparing" &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View

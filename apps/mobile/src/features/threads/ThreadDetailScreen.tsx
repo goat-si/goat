@@ -551,11 +551,8 @@ function ThreadDetailBody(
     }
     if (startHold !== null && contentPresentationKind === "ready") return startHold;
     if (props.creationState?.kind === "preparing") {
-      if (props.worktreeSetup) return null;
-      return {
-        kind: "preparing",
-        label: props.creationState.preparingWorktree ? "Setting up worktree…" : "Starting…",
-      };
+      if (props.worktreeSetup || props.creationState.preparingWorktree) return null;
+      return { kind: "preparing", label: "Starting…" };
     }
     if (props.creationState?.kind === "failed") {
       return null;
@@ -1177,6 +1174,11 @@ function ThreadDetailBody(
                 pendingHandoff={props.pendingHandoff}
                 worktreeSetup={props.worktreeSetup}
                 setupWorkingStartedAt={props.setupWorkingStartedAt}
+                preparingWorktree={
+                  props.creationState?.kind === "preparing" &&
+                  props.creationState.preparingWorktree &&
+                  !props.worktreeSetup
+                }
                 queuedMessages={props.queuedMessages}
                 dispatchingMessageId={props.dispatchingMessageId}
                 onEditPendingMessage={
