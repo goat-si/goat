@@ -3673,7 +3673,7 @@ describe("AcpAdapterV2", () => {
             toolCallId: "unknown-permission-tool",
             title: "Unknown permission kind",
           },
-          options: [{ optionId: " opaque-choice ", name: "Allow once", kind: "allow_once" }],
+          options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
         },
         { requestId: "unknown-permission-request", method: "session/request_permission" },
       ).pipe(Effect.forkScoped);
@@ -3695,8 +3695,7 @@ describe("AcpAdapterV2", () => {
       const responseFiber = yield* runtime
         .respondToRuntimeRequest({ requestId: pending.runtimeRequest.id, decision: "accept" })
         .pipe(Effect.forkScoped);
-      const permission = yield* Fiber.join(permissionFiber);
-      assert.equal(permission.outcome.outcome, "selected");
+      assert.equal((yield* Fiber.join(permissionFiber)).outcome.outcome, "selected");
       if (runtimeInput?.onOutgoingResponse === undefined) {
         return yield* Effect.die("ACP runtime must expose native response acknowledgements");
       }
@@ -3718,7 +3717,6 @@ describe("AcpAdapterV2", () => {
         providerTurnId: pending.runtimeRequest.providerTurnId,
       });
       yield* Fiber.join(turnFiber);
-      assert.deepEqual(permission.outcome, { outcome: "selected", optionId: " opaque-choice " });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

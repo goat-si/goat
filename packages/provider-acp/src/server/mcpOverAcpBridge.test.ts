@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Fiber from "effect/Fiber";
 
 import { makeAcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
@@ -10,14 +11,11 @@ describe("AcpMcpOverAcpBridge", () => {
       const initializeStarted = Promise.withResolvers<void>();
       const initializeResponse = Promise.withResolvers<void>();
       const listQueued = Promise.withResolvers<void>();
-      const deleteStarted = Promise.withResolvers<void>();
-      const deleteResponse = Promise.withResolvers<void>();
       const requests: Array<{
         readonly method: string;
         readonly headers: Headers;
         readonly body: unknown;
       }> = [];
-      let deletes = 0;
       const bridge = yield* makeAcpMcpOverAcpBridge({
         endpoint: "http://127.0.0.1:1/mcp",
         authorization: "Bearer bridge-test",
@@ -27,12 +25,7 @@ describe("AcpMcpOverAcpBridge", () => {
           const headers = new Headers(init?.headers);
           const body = init?.body === undefined ? null : JSON.parse(String(init.body));
           requests.push({ method, headers, body });
-          if (method === "DELETE") {
-            if (++deletes > 1) return new Response(null, { status: 204 });
-            deleteStarted.resolve();
-            await deleteResponse.promise;
-            return new Response(null, { status: 503 });
-          }
+          if (method === "DELETE") return new Response(null, { status: 204 });
           if (body === null || typeof body !== "object") return new Response(null, { status: 202 });
           const request = body as { readonly id?: unknown; readonly method?: unknown };
           if (request.method === "initialize") {
@@ -79,30 +72,63 @@ describe("AcpMcpOverAcpBridge", () => {
         connectionId: connected.connectionId,
         method: "notifications/initialized",
       });
-      // Calls during a close are refused; a rejected close restores the connection for a retry.
-      const rejected = yield* bridge
-        .disconnect({ connectionId: connected.connectionId })
-        .pipe(Effect.flip, Effect.forkChild);
-      yield* Effect.promise(() => deleteStarted.promise);
-      const closing = yield* bridge
-        .message({ connectionId: connected.connectionId, method: "tools/list" })
-        .pipe(Effect.flip);
-      expect(closing.message).toContain("Unknown MCP-over-ACP connection");
-      const duplicate = yield* bridge
-        .disconnect({ connectionId: connected.connectionId })
-        .pipe(Effect.flip);
-      expect(duplicate.message).toContain("Unknown MCP-over-ACP connection");
-      expect(deletes).toBe(1);
-      deleteResponse.resolve();
-      expect((yield* Fiber.join(rejected)).message).toContain("HTTP 503");
       yield* bridge.disconnect({ connectionId: connected.connectionId });
-      expect(deletes).toBe(2);
 
       expect(requests[0]?.headers.get("authorization")).toBe("Bearer bridge-test");
       expect(requests[1]?.headers.get("mcp-session-id")).toBe("session-42");
       expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
       expect(requests.at(-1)?.method).toBe("DELETE");
       expect(requests.at(-1)?.headers.get("mcp-session-id")).toBe("session-42");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("allows one disconnect in flight and retries it after remote failure", () =>
+    Effect.gen(function* () {
+      const deleteStarted = Promise.withResolvers<void>();
+      const deleteResponse = Promise.withResolvers<void>();
+      const deleteHeaders: Headers[] = [];
+      const bridge = yield* makeAcpMcpOverAcpBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        allocateConnectionId: Effect.succeed("connection-1"),
+        fetchImplementation: (_url, init) => {
+          if (init?.method !== "DELETE") {
+            return Promise.resolve(
+              Response.json(
+                { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } },
+                { headers: { "mcp-session-id": "session-42" } },
+              ),
+            );
+          }
+          deleteHeaders.push(new Headers(init.headers));
+          if (deleteHeaders.length > 1) return Promise.resolve(new Response(null, { status: 204 }));
+          deleteStarted.resolve();
+          return deleteResponse.promise.then(() => new Response(null, { status: 503 }));
+        },
+      });
+      const connection = yield* bridge.connect({ serverId: "goat" });
+      yield* bridge.message({ ...connection, method: "initialize" });
+      const first = yield* bridge.disconnect(connection).pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.promise(() => deleteStarted.promise);
+      const duringClose = yield* bridge
+        .message({ ...connection, method: "tools/list" })
+        .pipe(Effect.result);
+      const duplicate = yield* bridge.disconnect(connection).pipe(Effect.result);
+      const inFlight = deleteHeaders.length;
+      deleteResponse.resolve();
+      expect((yield* Fiber.join(first)).message).toContain("HTTP 503");
+      expect(Result.isFailure(duringClose) && duringClose.failure.message).toContain(
+        "Unknown MCP-over-ACP connection",
+      );
+      expect(Result.isFailure(duplicate) && duplicate.failure.message).toContain(
+        "Unknown MCP-over-ACP connection",
+      );
+      expect(inFlight).toBe(1);
+      yield* bridge.disconnect(connection);
+      expect(deleteHeaders.map((headers) => headers.get("mcp-session-id"))).toEqual([
+        "session-42",
+        "session-42",
+      ]);
     }).pipe(Effect.scoped),
   );
 
