@@ -5,33 +5,43 @@ import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { clearThreadComposerErrorsForEnvironment } from "../state/thread-composer-error";
 
+const CLEAR_TIMEOUT_MS = 5_000;
+
 export const layerEnvironmentOwnedDataCleanup = Layer.succeed(
   Persistence.EnvironmentOwnedDataCleanup,
   Persistence.EnvironmentOwnedDataCleanup.of({
-    clear: (environmentId) =>
-      Effect.all(
+    clear: (environmentId) => {
+      const settle = (operation: string, clear: () => void | Promise<void>) =>
+        Effect.tryPromise({
+          try: () => Promise.resolve().then(clear),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.timeout(CLEAR_TIMEOUT_MS),
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not clear mobile environment-owned data.", {
+              environmentId,
+              operation,
+              cause,
+            }),
+          ),
+        );
+      return Effect.all(
         [
-          Effect.promise(() => clearThreadOutboxEnvironment(environmentId)),
-          Effect.promise(() => clearComposerDraftsEnvironment(environmentId)),
-          Effect.promise(async () => {
+          settle("outbox", () => clearThreadOutboxEnvironment(environmentId)),
+          settle("drafts", () => clearComposerDraftsEnvironment(environmentId)),
+          settle("bot", async () => {
             const { disposeMobileGoatBotEnvironment } =
               await import("../features/goat-bot/useMobileGoatBotSession");
             await disposeMobileGoatBotEnvironment(environmentId);
           }),
-          Effect.promise(async () => {
+          settle("new-bot", async () => {
             const { forgetNewBotEnvironment } = await import("@goat/client-runtime/goatBot");
             forgetNewBotEnvironment(environmentId);
           }),
-          Effect.sync(() => clearThreadComposerErrorsForEnvironment(environmentId)),
+          settle("composer-errors", () => clearThreadComposerErrorsForEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },
-      ).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not clear mobile environment-owned data.", {
-            environmentId,
-            cause,
-          }),
-        ),
-      ),
+      );
+    },
   }),
 );
