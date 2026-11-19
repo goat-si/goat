@@ -149,15 +149,9 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
         assert.isTrue(receipts.every(({ outcome }) => outcome === "accepted"));
       }
       yield* sync.syncOnce;
-      yield* writerSql`INSERT INTO memory_origins
-        ${writerSql.insert(
-          backlog.map(({ memoryId }) => ({
-            space,
-            memory_id: memoryId,
-            environment_id: Member.local,
-            thread_id: oversized,
-          })),
-        )}`;
+      for (const { memoryId } of backlog)
+        yield* writerSql`INSERT INTO memory_origins(space,memory_id,environment_id,thread_id)
+          VALUES (${space},${memoryId},${Member.local},${oversized})`;
       yield* service.forget(
         {
           memorySpaceId: space,
