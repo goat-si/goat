@@ -1,3 +1,4 @@
+import { describeRawElement } from "./AnnotationElementLabel.ts";
 import { positionBox } from "./AnnotationPositionBox.ts";
 import {
   createButton,
@@ -254,22 +255,6 @@ function pickFromPoint(clientX: number, clientY: number): Element | null {
     return candidate;
   }
   return null;
-}
-
-function describeRawElement(element: Element): string {
-  const tag = element.tagName.toLowerCase();
-  const id = element.id ? `#${element.id}` : "";
-  const classes =
-    element instanceof HTMLElement && typeof element.className === "string"
-      ? element.className
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 2)
-          .map((name) => `.${name}`)
-          .join("")
-      : "";
-  return `${tag}${id}${classes}`;
 }
 
 function createBox(color: string, fill: string): HTMLDivElement {
