@@ -31,7 +31,7 @@ export function makeBranchTotalsDiffBackoff(capacity: number) {
     const result = yield* read.pipe(
       Effect.tapError((error) =>
         Effect.gen(function* () {
-          if (key === null) return;
+          if (key === null || error.reason !== "timed_out") return;
           const count = previous?.key === key ? Math.min(previous.count + 1, 6) : 1;
           failures.delete(cwd);
           failures.set(cwd, {
