@@ -1,3 +1,5 @@
+import type { ModelSelection } from "@goat/contracts";
+import { modelSelectionsEqual } from "@goat/shared/model";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
 export function codexProviderTurnTokenUsage(
@@ -13,4 +15,15 @@ export function codexProviderTurnTokenUsage(
     reasoningOutputTokens: Math.max(0, tokenUsage.last.reasoningOutputTokens),
     updatedAt,
   };
+}
+
+// Reasoning-effort changes preserve the tokenizer and context window; other changes need fresh telemetry.
+export function canReuseCodexContextUsage(previous: ModelSelection, next: ModelSelection): boolean {
+  return modelSelectionsEqual(
+    {
+      ...previous,
+      options: (previous.options ?? []).filter((option) => option.id !== "reasoningEffort"),
+    },
+    { ...next, options: (next.options ?? []).filter((option) => option.id !== "reasoningEffort") },
+  );
 }

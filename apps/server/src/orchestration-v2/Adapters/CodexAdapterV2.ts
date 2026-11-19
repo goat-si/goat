@@ -253,17 +253,8 @@ type CodexFileChangeKinds = Readonly<
   Record<string, CodexSchema.V2ItemStartedNotification__PatchChangeKind>
 >;
 
-// Reasoning-effort changes preserve the tokenizer and context window; other changes need fresh telemetry.
-export function canReuseCodexContextUsage(previous: ModelSelection, next: ModelSelection): boolean {
-  return modelSelectionsEqual(
-    {
-      ...previous,
-      options: (previous.options ?? []).filter((option) => option.id !== "reasoningEffort"),
-    },
-    { ...next, options: (next.options ?? []).filter((option) => option.id !== "reasoningEffort") },
-  );
-}
-
+import { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
+export { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
 import { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
 export { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
