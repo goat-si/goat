@@ -564,6 +564,7 @@ export const ServerConfig = Schema.Struct({
   /** Send window fields only when advertised. */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
+  speechStreamingV1: Schema.optionalKey(Schema.Boolean),
   threadFind: Schema.optionalKey(Schema.Boolean),
   ...serverCapabilityFields,
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
