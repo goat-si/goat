@@ -129,6 +129,19 @@ export function supersedeForkEvent(
   };
 }
 
+export function queuedFreshForkEvents(
+  projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread">,
+  run: OrchestrationV2Run,
+  message: OrchestrationV2ConversationMessage,
+  now: DateTime.Utc,
+) {
+  const transfer =
+    run.freshContext === true && message.scheduledTaskId === undefined
+      ? pendingForkTransferForThread(projection)
+      : undefined;
+  return transfer === undefined ? [] : [supersedeForkEvent(transfer, run, now)];
+}
+
 export function pendingMergeBackTransfersForThread(
   projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread">,
 ): ReadonlyArray<OrchestrationV2ContextTransfer> {
@@ -199,7 +212,7 @@ export function appendContextHandoffId(
 }
 
 /** A fresh-session schedule run starts a side conversation; the thread's own one continues past it. */
-function isScheduledFreshRun(
+export function isScheduledFreshRun(
   run: Pick<OrchestrationV2Run, "freshContext" | "userMessageId">,
   turnItems: OrchestrationV2ThreadProjection["turnItems"],
 ): boolean {

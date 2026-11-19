@@ -1,4 +1,5 @@
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
+import { prepareSideChatHandoffs as prepareHandoffs } from "./SideChatHandoffSelection.ts";
 import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
 import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
@@ -8,7 +9,7 @@ import {
   isCloudTaskSourceError,
   isProviderAdapterOpenSessionError,
 } from "./goat/ProviderTurnStartErrorChecks.ts";
-import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
+import * as Continuation from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
 import { nativeSessionMissesKeptTurns } from "./goat/NativeSessionKeptTurns.ts";
@@ -29,12 +30,7 @@ import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
-import {
-  hasNativeGoals,
-  isRegisteredAttach,
-  nativeForkTurns,
-  readyHandoffsForRun,
-} from "./providerTurnStartHelpers.ts";
+import { hasNativeGoals, isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import {
@@ -217,7 +213,6 @@ export const layer: Layer.Layer<
             launchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
           }
         | undefined;
-      const handoffs = readyHandoffsForRun(projection, run);
       const nativeForkTransfer = projection.contextTransfers.find(
         (transfer) =>
           transfer.type === "fork" &&
@@ -239,13 +234,17 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
+      const handoffs = yield* prepareHandoffs(projection, run, eventSink, idAllocator.allocate);
+      if (handoffs === undefined) return;
       // A file restore overlapping the folder the turn works in sends this start back to retry.
       const turnFolder = projection.thread.worktreePath ?? checkpointScope?.cwd;
       if (turnFolder != null && !(yield* reserveTurnStart(fileSystem, path, turnFolder)))
         return yield* new ProviderTurnStartError({ runId, cause: new WorkspaceLeaseBusyError({}) });
       const manualResume =
         run.manualContinuationOfRunId !== undefined && attempt.reason !== "steering_restart";
-      const resumeDelivery = manualResume ? manualContinuationDelivery(run, projection) : undefined;
+      const resumeDelivery = manualResume
+        ? Continuation.manualContinuationDelivery(run, projection)
+        : undefined;
       const replaySource = resumeDelivery?.type === "replay" ? resumeDelivery.source : undefined;
       const providerMessage =
         replaySource === undefined
@@ -272,12 +271,12 @@ export const layer: Layer.Layer<
         (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
           ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
           : undefined;
-      const turnMessage =
-        privateBrief !== undefined
-          ? { ...providerMessage, text: privateBrief }
-          : resumeDelivery?.type === "native" && !nativeResume && providerMessage.text.trim() === ""
-            ? { ...providerMessage, text: "Continue where you left off." }
-            : providerMessage;
+      const turnMessage = Continuation.message(
+        providerMessage,
+        privateBrief,
+        resumeDelivery,
+        nativeResume,
+      );
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -506,7 +505,7 @@ export const layer: Layer.Layer<
         yield* settleStartFailure({
           signal: "resume-delivery-uncertain",
           title: "Message delivery could not be confirmed",
-          error: new Error(AMBIGUOUS_RESUME_MESSAGE),
+          error: new Error(Continuation.AMBIGUOUS_RESUME_MESSAGE),
         });
         return;
       }

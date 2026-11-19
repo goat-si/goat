@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { assertFreshFork } from "./testkit/FreshForkAssertion.ts";
+import { assertQueuedFreshFork } from "./testkit/QueuedFreshForkAssertion.ts";
 import {
   CheckpointId,
   CheckpointRef,
@@ -261,6 +262,8 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
     assert.deepEqual(stoppedFork?.pendingBackgroundTasks, []);
     assert.deepEqual(yield* orchestrator.getThreadShell(sourceThreadId), parentBefore);
     yield* assertFreshFork(orchestrator, checkpointChild);
+    yield* assertQueuedFreshFork(orchestrator, eventSink, sourceThreadId, checkpointId, false);
+    yield* assertQueuedFreshFork(orchestrator, eventSink, sourceThreadId, checkpointId, true);
   }).pipe(Effect.provide(forkCases[0]!.layer)),
 );
 

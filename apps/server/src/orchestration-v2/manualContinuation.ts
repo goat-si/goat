@@ -1,6 +1,10 @@
 import { indexRunInputDelivery } from "./inputDeliveryEvidence.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
-import type { OrchestrationV2Run, OrchestrationV2ThreadProjection } from "@goat/contracts";
+import type {
+  OrchestrationV2ConversationMessage,
+  OrchestrationV2Run,
+  OrchestrationV2ThreadProjection,
+} from "@goat/contracts";
 
 type Delivery =
   | { readonly type: "native" | "ambiguous" }
@@ -8,6 +12,18 @@ type Delivery =
 
 type Continuation = Pick<OrchestrationV2Run, "manualContinuationOfRunId">;
 type History = Pick<OrchestrationV2ThreadProjection, "runs" | "attempts">;
+
+export function message(
+  message: OrchestrationV2ConversationMessage,
+  brief: string | undefined,
+  delivery: Delivery | undefined,
+  nativeResume: boolean,
+) {
+  if (brief !== undefined) return { ...message, text: brief };
+  return delivery?.type === "native" && !nativeResume && message.text.trim() === ""
+    ? { ...message, text: "Continue where you left off." }
+    : message;
+}
 
 export function manualContinuationDelivery(
   run: Continuation | undefined,

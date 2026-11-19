@@ -49,6 +49,7 @@ import {
   contextSourcePointForRun,
   pendingForkTransferForThread,
   supersedeForkEvent,
+  queuedFreshForkEvents,
   pendingMergeBackTransfersForThread,
   latestContextTransfer,
   visibleDeltaRunOrdinals,
@@ -1789,6 +1790,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : "Provider or model selection changed.";
       yield* writeSystemEvents(
         [
+          ...queuedFreshForkEvents(projection, queuedRun, queuedMessage, now),
           ...(selectionChanged
             ? [
                 {
@@ -6073,7 +6075,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return;
     }
     const forkTransfer = pendingForkTransferForThread(projection);
-    // A scheduled fresh run is a side conversation, so it must not drop the fork's context.
     const supersedesForkTransfer = freshContext && command.scheduledTaskId === undefined;
     const pendingForkTransfer = supersedesForkTransfer ? undefined : forkTransfer;
     const pendingMergeBackSourceThreadIds = new Set(
