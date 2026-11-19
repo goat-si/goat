@@ -35,7 +35,7 @@ export const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string>
   "double-click": msg("Double press"),
 };
 
-export const IDLE_COMPACTION_LABELS: Record<IdleCompactionMode, string> = {
+const IDLE_COMPACTION_LABELS: Record<IdleCompactionMode, string> = {
   onReturn: msg("When you return"),
   beforeCacheExpires: msg("Before the cache expires (beta)"),
   off: msg("Never"),
