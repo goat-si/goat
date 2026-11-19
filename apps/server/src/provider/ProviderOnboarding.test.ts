@@ -402,7 +402,7 @@ it("derives the provider's own command when sign-in cannot run in the app", () =
   });
 });
 
-it("advertises the complete Oh My Pi local preset to agents", () => {
+it("advertises the local ACP presets to agents", () => {
   const [driver] = Onboarding.buildAddableDrivers(
     [{ driverKind: "acpRegistry", displayName: "ACP Registry" }],
     [],
@@ -416,6 +416,15 @@ it("advertises the complete Oh My Pi local preset to agents", () => {
       iconUrl: expect.stringMatching(/^data:image\/svg\+xml,/),
       installHint: "curl -fsSL https://omp.sh/install | sh",
       docsUrl: "https://github.com/can1357/oh-my-pi",
+    },
+    {
+      id: "minimax-code",
+      label: "MiniMax Code",
+      command: "mcode",
+      args: ["acp"],
+      iconUrl: expect.stringMatching(/^data:image\/svg\+xml,/),
+      installHint: "npm install -g @minimax-ai/code",
+      docsUrl: "https://github.com/MiniMax-AI/minimax-code",
     },
   ]);
 });
