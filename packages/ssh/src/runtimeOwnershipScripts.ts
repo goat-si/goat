@@ -492,6 +492,11 @@ check_retained_runner() {
     fi
   fi
 }
+# An NFS-shared home can link ~/.goat to a directory that does not exist yet, and mkdir -p
+# fails on a dangling symlink, so create its target first.
+if [ -L "$HOME/.goat" ] && [ ! -e "$HOME/.goat" ]; then
+  (cd "$HOME" && mkdir -p "$(readlink .goat)")
+fi
 mkdir -p "$STATE_DIR"
 @@GOAT_REPLACEMENT_LOCK@@
 cleanup_runner_next() {
