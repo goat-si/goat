@@ -1,3 +1,4 @@
+export { loggedClaudeQueryOptions } from "./ClaudeLoggedQueryOptions.ts";
 import { claudeAutoCompactThreshold, claudeMessageInputTokens } from "./ClaudeContextUsage.ts";
 import {
   isClaudeEmptyTaskNotificationSuccess,
@@ -373,7 +374,6 @@ export {
   type ClaudeAgentSdkSessionForkInput,
   type ClaudeAgentSdkSubagentLookupInput,
   claudeQueryMessages,
-  loggedClaudeQueryOptions,
   layerQueryRunner,
 } from "./ClaudeAgentSdkQueryRunner.ts";
 export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
