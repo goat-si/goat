@@ -1,3 +1,4 @@
+import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
 import { hasPendingHandoff, missingProviderSession } from "./goat/ProviderHandoffPending.ts";
 import {
   isProviderTurnStartError,
@@ -509,16 +510,7 @@ export const layer: Layer.Layer<
           });
         }
       }
-      const selectInheritedBackgroundItems = (
-        current: ProjectionStore.ProjectionRuntimeRecoveryState,
-      ): ReturnType<typeof RunExecutionService.selectInheritedBackgroundTurnItems> =>
-        RunExecutionService.selectInheritedBackgroundTurnItems({
-          threadId: current.thread.id,
-          currentProviderThreadId: providerThread.id,
-          currentRunOrdinal: run.ordinal,
-          runs: current.runs,
-          turnItems: current.turnItems,
-        });
+      const selectInheritedBackgroundItems = makeInheritedBackgroundSelection(providerThread, run);
       const recoveryResult = yield* Effect.result(
         projectionStore.getRuntimeRecoveryProjection(projection.thread.id),
       );
