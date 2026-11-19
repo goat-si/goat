@@ -21,4 +21,5 @@ export type DesktopMicrophoneAccess = typeof DesktopMicrophoneAccessSchema.Type;
 export interface DesktopMicrophoneBridge {
   /** Asks macOS for the microphone when it has not asked yet. Older builds lack this. */
   requestMicrophoneAccess?: () => Promise<DesktopMicrophoneAccess>;
+  restartAudioService?: () => Promise<boolean>;
 }

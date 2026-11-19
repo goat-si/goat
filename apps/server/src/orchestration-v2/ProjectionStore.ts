@@ -1,3 +1,4 @@
+import { inheritsForkConversation } from "./ProjectionForkConversation.ts";
 import {
   FORK_HISTORY_TYPES,
   readForkHistoryPage,
@@ -145,7 +146,7 @@ import {
   ProviderInstanceId,
 } from "@goat/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
-import { encodeTurnItemPayload, SENT_MESSAGE_MARKER } from "./turnItemProjectionPayload.ts";
+import { encodeTurnItemPayload, isInlineWorkOutput } from "./turnItemProjectionPayload.ts";
 import {
   activeNativeSubagents,
   deriveBlockedOnThreadWait,
@@ -520,26 +521,6 @@ export interface ProjectionRecordFilter {
     readonly keepMessageId: MessageId;
   };
 }
-
-// A fork inherits its source's history before it has messages of its own,
-// unless a portable handoff's budget left none of that history to deliver.
-const inheritsForkConversation = ({
-  thread,
-  contextTransfers,
-  contextHandoffs,
-}: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers" | "contextHandoffs">) => {
-  if (thread.forkedFrom?.type !== "run") return false;
-  const resolution = contextTransfers.find(
-    (transfer) => transfer.type === "fork" && transfer.targetThreadId === thread.id,
-  )?.resolution;
-  return (
-    resolution?.strategy !== "portable_context" ||
-    contextHandoffs.some(
-      (handoff) =>
-        handoff.id === resolution.contextHandoffId && (handoff.history?.messages.length ?? 0) > 0,
-    )
-  );
-};
 
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
@@ -1087,11 +1068,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const archiveGate = yield* ThreadArchiveGate;
-    // Rendered output and delegated tasks stay inline when a long work group is deferred.
-    const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
-      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`} OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE '%"viewedImagePath"%' OR item.payload_json LIKE '%"toolName":"%delegate_task"%'
-      OR item.payload_json LIKE ${`%${SENT_MESSAGE_MARKER}`})`;
     // Background work cannot outlive this process: provider processes exit with the server. Past
     // that, work that showed no sign of life for STALE_BACKGROUND_WORK_MS was left open by a
     // provider that never closed it, so it no longer holds runtime updates.
@@ -1863,7 +1839,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 type,
                 status,
                 updated_at,
-                payload_json
+                payload_json, inline_work_output
               )
               VALUES (
                 ${event.payload.id},
@@ -1877,7 +1853,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ${event.payload.type},
                 ${event.payload.status},
                 ${updatedAt},
-                ${payloadJson}
+                ${payloadJson}, ${event.payload.type === "dynamic_tool" && isInlineWorkOutput(payloadJson) ? 1 : 0}
               )
               ON CONFLICT(turn_item_id)
               DO UPDATE SET
@@ -1891,7 +1867,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 type = excluded.type,
                 status = excluded.status,
                 updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
+                payload_json = excluded.payload_json, inline_work_output = excluded.inline_work_output
             `;
               break;
             }
@@ -2135,7 +2111,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const eligible = sql`
                 WITH eligible AS NOT MATERIALIZED (
                   SELECT item.rowid AS item_rowid, item.payload_json, item.ordinal, item.turn_item_id,
-                    item.run_id, item.node_id, item.type, item.status, run.status AS run_status,
+                    item.run_id, item.node_id, item.type, item.status, item.inline_work_output, run.status AS run_status,
                     attempt.attempt_id, attempt.status AS attempt_status
                   FROM orchestration_v2_projection_turn_items AS item
                   LEFT JOIN orchestration_v2_projection_runs AS run
@@ -2427,7 +2403,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       OVER (PARTITION BY run_id ORDER BY ordinal) AS segment,
                     CASE WHEN status = 'completed' AND (run_status = 'completed' OR attempt_status = 'superseded')
                       AND type IN ${sql.in(DEFERRED_WORK_ITEM_TYPES)}
-                      AND NOT (${inlineWorkOutput})
+                      AND item.inline_work_output = 0
                       AND run_id NOT IN (SELECT run_id FROM blocked_runs)
                       THEN 1 ELSE 0 END AS can_defer
                   FROM eligible AS item
@@ -3344,7 +3320,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT json_extract(payload_json, '$.messageId') AS message_id, MIN(ordinal) AS ordinal
             FROM orchestration_v2_projection_turn_items
             WHERE thread_id = ${threadId}
-              AND ${userOnly ? sql`type = 'user_message'` : sql`type IN ('user_message', 'assistant_message')`}
+              AND type IN ('user_message', 'assistant_message') AND json_valid(payload_json)
               ${loadedMessageIds === undefined ? sql`` : sql`AND json_extract(payload_json, '$.messageId') IN (SELECT value FROM json_each(${encodeIdList(loadedMessageIds)}))`}
             GROUP BY json_extract(payload_json, '$.messageId')
           `;
@@ -5631,9 +5607,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }>`SELECT item.turn_item_id, item.run_id, item.node_id, item.parent_item_id, item.type, item.status, item.ordinal,
           ${includePersistentOutput ? sql`attempt.attempt_id` : sql`NULL`} AS attempt_id,
           ${includePersistentOutput ? sql`attempt.status` : sql`NULL`} AS attempt_status,
-          ${
-            includePersistentOutput ? sql`CASE WHEN ${inlineWorkOutput} THEN 1 ELSE 0 END` : sql`0`
-          } AS persistent_output,
+          ${includePersistentOutput ? sql`item.inline_work_output` : sql`0`} AS persistent_output,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.inputIntent') END AS input_intent,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.createdBy') END AS created_by,
           CASE WHEN item.type IN ('user_message', 'assistant_message') THEN json_extract(item.payload_json, '$.messageId') END AS message_id
@@ -6187,7 +6161,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           CROSS JOIN orchestration_v2_projection_turn_items AS item
             ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.run_id IS json_extract(wanted.value, '$.id')
-          WHERE item.status = 'completed' AND ${inlineWorkOutput}`;
+          WHERE item.status = 'completed' AND item.inline_work_output = 1`;
                 if (found.length === 0) break;
                 for (const row of found)
                   persistentOutputs.add(`${row.thread_id}:${row.turn_item_id}`);
@@ -6621,7 +6595,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
               WHERE held.run_id = per_run.run_key
                 AND held.type = 'user_message'
-                AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+                AND json_valid(held.payload_json) AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
             )
             ELSE 0
           END AS item_count
@@ -6640,7 +6614,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
                 WHERE held.run_id = counts.run_key
                   AND held.type = 'user_message'
-                  AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+                  AND json_valid(held.payload_json) AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
               )
               ELSE 0
             END
@@ -7134,7 +7108,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       while (pendingSourceIds.length > 0) {
         const sourceId = pendingSourceIds.pop();
         if (sourceId === undefined || rowsByThreadId.has(sourceId)) continue;
-        const source = (yield* selectShellThreadRows(sourceId))[0];
+        const source = (yield* selectShellThreadRows(sourceId, { includeDeleted: true }))[0];
         if (source === undefined) continue;
         rowsByThreadId.set(sourceId, source);
         if (source.forked_from_run_source_thread_id !== null) {
@@ -7375,7 +7349,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               if (nextId === undefined || rowsByThreadId.has(nextId)) {
                 continue;
               }
-              const rows = yield* selectShellThreadRows(nextId);
+              const rows = yield* selectShellThreadRows(nextId, {
+                includeDeleted: nextId !== threadId,
+              });
               const row = rows[0];
               if (row === undefined) {
                 continue;

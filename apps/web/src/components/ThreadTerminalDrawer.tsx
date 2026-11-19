@@ -1,3 +1,5 @@
+import { normalizeComputedColor, readThemeColor } from "./terminal/terminalThemeColors";
+import { terminalFontOptions } from "./terminal/terminalFontOptions";
 import { withLiveVisibility, runtimeEnvSignature } from "./terminal/terminalViewportUtils";
 import { useTerminalLinkValidation } from "./terminal/useTerminalLinkValidation";
 import {
@@ -231,29 +233,6 @@ const TERMINAL_PALETTES = {
     "#e5e5e5",
   ].map(hexToGhosttyColor),
 };
-
-// Read visibility when WASM finishes loading, not when setup starts.
-function normalizeComputedColor(value: string | null | undefined, fallback: string): string {
-  const normalizedValue = value?.trim().toLowerCase();
-  if (
-    !normalizedValue ||
-    normalizedValue === "transparent" ||
-    normalizedValue === "rgba(0, 0, 0, 0)" ||
-    normalizedValue === "rgba(0 0 0 / 0)"
-  ) {
-    return fallback;
-  }
-  return value ?? fallback;
-}
-
-function readThemeColor(styles: CSSStyleDeclaration, variable: string, fallback: string): string {
-  return normalizeComputedColor(styles.getPropertyValue(variable), fallback);
-}
-
-function terminalFontOptions(family: string, size: number): { family?: string; size: number } {
-  const trimmed = family.trim();
-  return trimmed.length > 0 ? { family: trimmed, size } : { size };
-}
 
 export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
   const drawerSurface =
@@ -539,14 +518,31 @@ function TerminalSessionViewport({
       input: { threadId, terminalId, data },
     }),
   );
-  const resizeTerminal = useEffectEvent((cols: number, rows: number) => {
-    if (writableSessionGeneration(readTerminalSession(), hasTerminalWriteAccess()) === null) {
-      return;
-    }
-    return runTerminalResize({
+  // The surface reports a resent grid like any other, so the next report is the retry.
+  const resizeRetryGenerationRef = useRef<number | null>(null);
+  const resizeRequestVersionRef = useRef(0);
+  const resizeTerminal = useEffectEvent(async (cols: number, rows: number) => {
+    const generation = writableSessionGeneration(readTerminalSession(), hasTerminalWriteAccess());
+    const requestVersion = ++resizeRequestVersionRef.current;
+    const retry = generation !== null && generation === resizeRetryGenerationRef.current;
+    resizeRetryGenerationRef.current = null;
+    if (generation === null) return;
+    const result = await runTerminalResize({
       environmentId,
       input: { threadId, terminalId, cols, rows },
     });
+    // Resend the current grid, not this one: a newer resize may already be queued behind it.
+    if (
+      !retry &&
+      result._tag === "Failure" &&
+      !isAtomCommandInterrupted(result) &&
+      requestVersion === resizeRequestVersionRef.current &&
+      terminalRef.current !== null &&
+      writableSessionGeneration(readTerminalSession(), hasTerminalWriteAccess()) === generation
+    ) {
+      resizeRetryGenerationRef.current = generation;
+      terminalRef.current?.resendSize();
+    }
   });
   const outputCursorRef = useRef<TerminalOutputCursor>(INITIAL_TERMINAL_OUTPUT_CURSOR);
   const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
@@ -813,7 +809,10 @@ function TerminalSessionViewport({
       };
 
       const sendTerminalInput = async (data: string, fallbackError: string) => {
-        if (!hasTerminalWriteAccess()) return;
+        // The server rejects input until the shell runs, and each rejection would print an error.
+        if (writableSessionGeneration(readTerminalSession(), hasTerminalWriteAccess()) === null) {
+          return;
+        }
         const activeTerminal = terminalRef.current;
         if (!activeTerminal) return;
         const result = await writeTerminal(data);
@@ -923,16 +922,7 @@ function TerminalSessionViewport({
       }
 
       function handleData(data: string): void {
-        if (!hasTerminalWriteAccess()) return;
-        void (async () => {
-          const result = await writeTerminal(data);
-          if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
-          const error = squashAtomCommandFailure(result);
-          writeSystemMessage(
-            terminal,
-            error instanceof Error ? error.message : "Terminal write failed",
-          );
-        })();
+        void sendTerminalInput(data, "Terminal write failed");
       }
 
       const themeObserver = new MutationObserver(() => {

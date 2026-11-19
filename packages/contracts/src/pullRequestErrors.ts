@@ -21,6 +21,7 @@ export class PullRequestUnavailableError extends Schema.TaggedError<PullRequestU
   "PullRequestUnavailableError",
   {
     reason: PullRequestUnavailableReason,
+    detail: Schema.optional(Schema.Literals(["repository-not-added", "no-project-on-host"])),
     provider: Schema.optional(SourceControlProviderKind),
     listResult: Schema.optional(PullRequestListResult),
     /**
@@ -43,6 +44,10 @@ export class PullRequestUnavailableError extends Schema.TaggedError<PullRequestU
       case "cli-unauthenticated":
         return this.requirement ?? "This host has no working credentials.";
       case "provider-unsupported":
+        if (this.detail === "repository-not-added")
+          return "Add this repository as a project to read its change requests.";
+        if (this.detail === "no-project-on-host")
+          return "Add a project on this host to read its change requests.";
         return "Change requests cannot be browsed for this project's host yet.";
     }
   }

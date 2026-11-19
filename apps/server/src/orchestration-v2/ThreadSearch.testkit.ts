@@ -2,6 +2,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  RunId,
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2DomainEvent,
@@ -111,6 +112,7 @@ export const message = (
     readonly minute?: number;
     readonly streaming?: boolean;
     readonly createdBy?: "user" | "agent";
+    readonly runId?: RunId;
   } = {},
 ): OrchestrationV2DomainEvent => ({
   id: EventId.make(`message:${id}`),
@@ -123,7 +125,7 @@ export const message = (
     creationSource: role === "user" ? "web" : "provider",
     id: MessageId.make(id),
     threadId,
-    runId: null,
+    runId: options.runId ?? null,
     nodeId: null,
     role,
     text,

@@ -838,8 +838,7 @@ export const make = Effect.gen(function* () {
     resolveRemoteWebHost: Effect.fn("GitHubSourceControlProvider.resolveRemoteWebHost")(
       ({ context }) => Effect.succeed(gitHubApiHostForRemote(context.remoteUrl)),
     ),
-    // GitHub matches bare heads; read a full page to disambiguate forks by owner. A default branch
-    // collides with most forks, so its owner-qualified lookup has GitHub filter by owner instead.
+    // GitHub matches bare heads; owner-qualified lookups narrow crowded fork results.
     headBranchProbe: ({ headSelectors, defaultBranchHeadSelector }) => ({
       headSelectors: defaultBranchHeadSelector
         ? [defaultBranchHeadSelector]

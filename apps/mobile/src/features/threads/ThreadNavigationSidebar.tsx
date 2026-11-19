@@ -753,6 +753,7 @@ function ThreadNavigationSidebarPane(
       catalogState={catalogState}
       searchQuery={props.searchQuery}
       searchPending={threadSearch.isPending}
+      searchFailed={threadSearch.failed}
       projectScopeTitle={selectedProjectScope?.title ?? null}
       onOpenEnvironmentSettings={props.onOpenEnvironmentSettings}
     />

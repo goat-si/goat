@@ -55,6 +55,7 @@ vi.mock("~/state/vcs", () => ({
 }));
 vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
+  readThreadShell: () => state.thread,
   useProject: () => ({ workspaceRoot: "/project", repositoryIdentity: null }),
   useThreadCheckpointSummaries: () => state.checkpoints,
   useQuietThreadVisibleTurnItems: () => [],
@@ -62,13 +63,20 @@ vi.mock("~/state/entities", () => ({
 vi.mock("~/state/filesystem", () => ({
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
 }));
-vi.mock("~/hooks/useThreadRouteTarget", () => ({ useThreadRouteRef: () => state.threadRef }));
+vi.mock(import("~/hooks/useThreadRouteTarget"), async (original) => ({
+  ...(await original()),
+  useThreadRouteRef: () => state.threadRef,
+}));
 vi.mock("~/hooks/useSettings", () => ({
   useClientSettings: (select: (settings: ClientSettings) => unknown) =>
     select(DEFAULT_CLIENT_SETTINGS),
   updateClientSettings: async () => {},
+  subscribeClientSettings: () => () => {},
 }));
-vi.mock("~/hooks/useTheme", () => ({ useRenderedAppearance: () => "dark" }));
+vi.mock(import("~/hooks/useTheme"), async (original) => ({
+  ...(await original()),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("~/state/queries", () => ({
   useCheckpointDiff: () => ({ data: state.checkpointDiff, error: null, isPending: false }),
   useTurnItemDetail: () => ({ data: null, error: null, isPending: false }),
@@ -78,8 +86,6 @@ vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => async () => {
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => async () => {} }));
 vi.mock("~/fileContextMenu", () => ({ useFileContextMenuHandler: () => () => {} }));
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => async () => {} }));
-// The test drives comparison controls, without mounting virtualized diff viewers or their workers.
-vi.mock("./diffs/AnnotatableCodeView", () => ({ AnnotatableCodeView: () => null }));
 vi.mock("./diffs/DiffFileTree", () => ({ DiffFileTree: () => null }));
 vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null }));
 
@@ -284,4 +290,37 @@ it("does not call a complete turn diff incomplete", async () => {
     .element(screen.getByRole("group", { name: "1 additions, 0 deletions" }))
     .toBeVisible();
   await expect.element(screen.getByText(SIZE_LIMIT_NOTICE)).not.toBeInTheDocument();
+});
+
+it("keeps an open diff search while expanding and collapsing files", async () => {
+  using context = setup("origin/orphan");
+  selectTurnDiff(context, TURN_PATCH);
+  const container = document.createElement("div");
+  container.style.cssText = "width: 800px; height: 600px; display: flex";
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+    </RegistryContext.Provider>,
+    { container },
+  );
+  await expect.element(screen.getByRole("button", { name: "Expand all files" })).toBeVisible();
+  await vi.waitFor(() => expect(container.querySelector(".diff-render-surface")).not.toBeNull());
+  const viewer = container.querySelector<HTMLElement>(".diff-render-surface");
+  viewer!.focus();
+  viewer!.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "f",
+      metaKey: /mac/i.test(navigator.platform),
+      ctrlKey: !/mac/i.test(navigator.platform),
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  const search = () =>
+    viewer!.querySelector("[data-search-panel]")?.shadowRoot?.querySelector("input");
+  await vi.waitFor(() => expect(search()).not.toBeNull());
+  await userEvent.type(page.elementLocator(search()!), "visible");
+  await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+  await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+  await vi.waitFor(() => expect(search()?.value).toBe("visible"));
 });

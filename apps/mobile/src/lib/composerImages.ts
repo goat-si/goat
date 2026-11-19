@@ -81,12 +81,14 @@ export type DraftComposerAttachment = DraftComposerImageAttachment | DraftCompos
 /** Non-media attachments require chip references; missing references mean lost draft files. */
 export function composerStripAttachments(
   attachments: ReadonlyArray<DraftComposerAttachment>,
+  uploadFailed?: (attachment: DraftComposerAttachment) => boolean,
 ): ReadonlyArray<DraftComposerAttachment> {
   return attachments.filter(
     (attachment) =>
       attachment.type === "image" ||
       imageMimeType(attachment) !== null ||
-      videoMimeType(attachment) !== null,
+      videoMimeType(attachment) !== null ||
+      uploadFailed?.(attachment) === true,
   );
 }
 
@@ -673,13 +675,16 @@ export function isOwnedPastedImageUri(uri: string): boolean {
 
 export async function convertPastedImagesToAttachments(input: {
   readonly uris: ReadonlyArray<string>;
-  readonly existingCount: number;
+  readonly existingCount?: number;
 }): Promise<{
   readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly error: string | null;
 }> {
   const { File } = await import("expo-file-system");
-  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
+  const remainingSlots =
+    input.existingCount === undefined
+      ? Number.POSITIVE_INFINITY
+      : PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
   const attachments: DraftComposerImageAttachment[] = [];
   let error: string | null = null;
 

@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   menu: vi.fn(),
   loads: [] as string[],
+  largeListing: false,
   keybindings: [] as typeof DEFAULT_RESOLVED_KEYBINDINGS,
 }));
 
@@ -71,7 +72,16 @@ vi.mock("./useDirectoryEntries", async () => {
         await Promise.resolve();
         setEntries((current) => [
           ...current,
-          ...(children[path] ?? []).filter((entry) => !current.some((e) => e.path === entry.path)),
+          ...(path === "src" && state.largeListing
+            ? [
+                ...(children[path] ?? []),
+                ...Array.from({ length: 500 }, (_, i): ProjectEntry => ({
+                  path: `src/generated-${i}.ts`,
+                  kind: "file",
+                })),
+              ]
+            : (children[path] ?? [])
+          ).filter((entry) => !current.some((e) => e.path === entry.path)),
         ]);
       });
       return {
@@ -104,6 +114,7 @@ function setup(customRules: KeybindingRule[] = []) {
   state.toast.mockClear();
   state.menu.mockReset();
   state.loads.length = 0;
+  state.largeListing = false;
 }
 
 async function renderPanel(
@@ -150,6 +161,15 @@ async function expectCopied(shortcut: string, text: string) {
   await vi.waitFor(() => expect(state.copy).toHaveBeenCalledTimes(1));
   expect(state.copy.mock.calls[0]?.[0]).toBe(text);
 }
+
+it("keeps the folder expanded when a large listing rebuilds the tree", async () => {
+  setup();
+  state.largeListing = true;
+  await using screen = await renderPanel();
+  await userEvent.click(await row(screen.container, "src/"));
+  await row(screen.container, "src/generated-0.ts");
+  expect((await row(screen.container, "src/")).getAttribute("aria-expanded")).toBe("true");
+});
 
 describe("file tree path copy shortcuts", () => {
   it("copies a file's remote full and workspace-relative path from the clicked row", async () => {

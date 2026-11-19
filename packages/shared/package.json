@@ -11,6 +11,14 @@
       "types": "./src/png.ts",
       "import": "./src/png.ts"
     },
+    "./parseUrl": {
+      "types": "./src/parseUrl.ts",
+      "import": "./src/parseUrl.ts"
+    },
+    "./speechRecommendation": {
+      "types": "./src/speechRecommendation.ts",
+      "import": "./src/speechRecommendation.ts"
+    },
     "./pullRequestAnchor": {
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
@@ -817,6 +825,7 @@
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
     "effect": "catalog:",
+    "get-east-asian-width": "^1.6.0",
     "jose": "catalog:",
     "mdast-util-directive": "catalog:",
     "mdast-util-to-hast": "^13.2.1",

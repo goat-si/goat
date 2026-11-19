@@ -1,3 +1,15 @@
+import { UserMessageVideo } from "./UserMessageVideo";
+import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
+import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
+import {
+  compactionLabel,
+  isFileAttachment,
+  isFreshTimestamp,
+  isImageAttachment,
+} from "./threadFeedPresentationHelpers";
+import { feedHasLanded, feedHeaderHidden } from "./thread-feed-landing";
+import { initialFeedViewportWidth } from "./thread-feed-initial-width";
+import { worktreeSetupPresentation } from "./worktree-setup-state";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import type { MarkdownLinkHandlers, MarkdownStyleSet } from "./AssistantMarkdownBlocks";
 import { AssistantMarkdownContent } from "./AssistantMarkdownContent";
@@ -31,6 +43,7 @@ import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestSha
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
+  WorktreePreparingHeader,
   WorktreeWorkingHeader,
   WorktreeSetupCard,
   type WorktreeSetupCardProps,
@@ -54,7 +67,6 @@ import {
   ThreadId,
   type ChatAttachment,
   type ChatFileAttachment,
-  type ChatImageAttachment,
   type EnvironmentId,
   type MessageId,
   type RunId,
@@ -87,7 +99,6 @@ import {
 } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
-import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { TurnDiffStat } from "./TurnDiffStat";
@@ -271,7 +282,7 @@ import {
   ThreadMarkdownDirectImage,
 } from "./ThreadMarkdownImage";
 import { openSettings } from "../settings/settings-navigation";
-import { formatMessageTimestamp } from "./messageTimestamp";
+import { useMessageTimeFormatter } from "./useMessageTimeFormatter";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // iOS blockquotes and selectable text measure separately; definite bubble width matches UIKit's drawing width.
@@ -292,13 +303,6 @@ const FEED_REFLOW_HOLD_MS = 600;
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
 const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
 
-// Virtualization remounts old rows; only newly created content should replay an entrance.
-const FRESH_ENTRY_WINDOW_MS = 3_000;
-function isFreshTimestamp(input: string): boolean {
-  const timestamp = Date.parse(input);
-  return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
-
 export interface ThreadFeedHandle {
   /** A send re-arms following the end, whatever the reader had scrolled to. */
   readonly resetEndFollow: () => void;
@@ -308,6 +312,7 @@ export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
+  readonly preparingWorktree?: boolean;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
@@ -348,14 +353,6 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-}
-
-function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
-  return attachment.type === "image" || imageMimeType(attachment) !== null;
-}
-
-function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAttachment {
-  return attachment.type === "file";
 }
 
 function MessageAttachmentFile(props: {
@@ -579,17 +576,6 @@ function MessageAttachmentList(props: {
     ) : (
       <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
     ),
-  );
-}
-
-function MessageAttachmentUnknown(props: { readonly name: string }) {
-  return (
-    <View className="flex-row items-center gap-2 py-1">
-      <PierreEntryIcon path={props.name} kind="file" size={16} />
-      <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
-        {props.name}
-      </Text>
-    </View>
   );
 }
 
@@ -829,13 +815,6 @@ function ThreadAutomationMessageRow(props: {
   );
 }
 
-/** Leads with why GOAT compacted, when it did so without being asked. */
-function compactionLabel(label: string, title: string | undefined) {
-  return title !== undefined && label.startsWith("Context compacted")
-    ? title + label.slice("Context compacted".length)
-    : label;
-}
-
 function RunFoldButton({
   entry,
   environmentId,
@@ -936,6 +915,7 @@ function renderFeedEntry(
     | "threadId"
     | "workspaceRoot"
   > & {
+    readonly formatMessageTime: (input: string) => string;
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
@@ -1180,7 +1160,7 @@ function renderFeedEntry(
     const presentation = resolveUserMessagePresentation(message);
     const renderedText = renderAssistantCitationsAsText(presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
-    const timestampLabel = formatMessageTimestamp(isUser ? message.createdAt : message.updatedAt);
+    const timestampLabel = props.formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
     const hasReviewCommentContext = presentation.text.includes("<review_comment");
     // Android does not reposition children after maxWidth clamps bubbles; definite width prevents wide-block overlap.
@@ -1325,7 +1305,7 @@ function renderFeedEntry(
             ) : null}
             {bubbleBodyVisible ? (
               <View className={cn("gap-2 px-3.5 pb-2.5", foldRowId === null && "pt-2.5")}>
-                {entry.pendingMessage?.attachments.map((attachment) =>
+                {entry.pendingMessage?.attachments.map((attachment, index) =>
                   attachment.type === "image" && attachment.uploadedAttachmentId ? (
                     <MessageAttachmentImage
                       key={attachment.id}
@@ -1334,6 +1314,15 @@ function renderFeedEntry(
                       name={attachment.name}
                       mimeType={attachment.mimeType}
                       className="h-[140px] w-[180px] rounded-[14px]"
+                      handoff={sentImageHandoff(
+                        props.environmentId,
+                        message.id,
+                        index,
+                        attachment.id,
+                      )}
+                      onImageLoad={(image) =>
+                        rememberSentImage(props.environmentId, message.id, index, image)
+                      }
                       onPressPreview={props.onPressPreview}
                     />
                   ) : attachment.type === "image" ? (
@@ -1352,9 +1341,25 @@ function renderFeedEntry(
                     >
                       <Image
                         source={{ uri: attachment.previewUri }}
+                        onLoad={({ nativeEvent: { source } }) =>
+                          rememberSentImage(props.environmentId, message.id, index, {
+                            uri: attachment.previewUri,
+                            aspectRatio: source.width / source.height,
+                          })
+                        }
                         style={{ width: 180, height: 140, borderRadius: 14 }}
                       />
                     </Pressable>
+                  ) : videoMimeType(attachment) !== null ? (
+                    <UserMessageVideo
+                      key={attachment.id}
+                      environmentId={props.environmentId}
+                      messageId={message.id}
+                      index={index}
+                      local={attachment}
+                      uploaded={null}
+                      onPlaybackStart={props.onPlaybackStart}
+                    />
                   ) : (
                     <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
                   ),
@@ -1370,12 +1375,27 @@ function renderFeedEntry(
                           attachmentId={attachment.id}
                           name={attachment.name}
                           mimeType={attachment.mimeType}
+                          handoff={sentImageHandoff(
+                            props.environmentId,
+                            message.id,
+                            attachments.indexOf(attachment),
+                          )}
                           className={
                             inlineAttachmentIds.size
                               ? "h-24 w-24 rounded-[14px] bg-user-bubble-foreground/15"
                               : "aspect-[1.3] w-full rounded-[14px] bg-user-bubble-foreground/15"
                           }
                           onPressPreview={props.onPressPreview}
+                        />
+                      ) : isFileAttachment(attachment) && videoMimeType(attachment) !== null ? (
+                        <UserMessageVideo
+                          key={attachment.id}
+                          environmentId={props.environmentId}
+                          messageId={message.id}
+                          index={attachments.indexOf(attachment)}
+                          local={null}
+                          uploaded={attachment}
+                          onPlaybackStart={props.onPlaybackStart}
                         />
                       ) : isFileAttachment(attachment) ? (
                         <MessageAttachmentFile
@@ -1872,6 +1892,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   ref,
   ...props
 }: ThreadFeedProps & { readonly ref?: Ref<ThreadFeedHandle> }) {
+  const formatMessageTime = useMessageTimeFormatter();
   const { listRef, onEndFollowEnabledChange, onHeaderMaterialVisibilityChange } = props;
   const workflowOpening = useWorkflowOpening(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);
@@ -1909,7 +1930,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   });
   const settledPaneWidth = useWorkspaceSettledContentWidth();
   const [measuredViewportWidth, setViewportWidth] = useState(() =>
-    props.layoutVariant === "split" ? 0 : windowWidth,
+    initialFeedViewportWidth(props.layoutVariant === "split", settledPaneWidth, windowWidth),
   );
   const viewportWidth =
     settledPaneWidth !== null ? Math.round(settledPaneWidth) : measuredViewportWidth;
@@ -2416,12 +2437,14 @@ export const ThreadFeed = memo(function ThreadFeed({
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
+    formatMessageTime,
     disclosureLayout,
     // Handoff cards read it through renderItem; a visible card must follow a reconnect.
     offline: props.offline,
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
+    preparingWorktree: props.preparingWorktree,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
     copiedRowId,
@@ -2447,6 +2470,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   };
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
+    reportLanding(loadedListKeyRef.current === listMountKey);
     // Re-arm follow only at the actual end; the broader threshold can reclaim upward drags during streaming.
     const listState = listRef.current?.getState();
     if (listState) {
@@ -2466,6 +2490,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const handleScrollBeginDrag = () => {
     clearUserScrollSettle();
     userScrollSessionRef.current = true;
+    setLandedListKey(listMountKey);
     cancelReflow();
     // Pause before the first scroll event. Otherwise a stream update can run
     // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
@@ -2514,6 +2539,10 @@ export const ThreadFeed = memo(function ThreadFeed({
   // the jump unfolds a run hiding the message and stops following the end, so
   // the committed list holds the target row with end maintenance off.
   const [loadedListKey, setLoadedListKey] = useState<string | null>(null);
+  const [landedListKey, setLandedListKey] = useState<string | null>(null);
+  const landingFallback = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
   const { jumpToMessageId } = props;
   const jumpReady = !!jumpToMessageId && loadedListKey === `${feedThreadKey}:filled`;
   const presentedFeed = appendGuestPendingMessages(
@@ -2531,6 +2560,11 @@ export const ThreadFeed = memo(function ThreadFeed({
       expandedTurnIds: new Set(current.expandedTurnIds).add(jumpRunId),
     }));
   }
+  const setupPresentation = worktreeSetupPresentation({
+    hasSetup: !!props.worktreeSetup,
+    working: !!props.setupWorkingStartedAt,
+    preparing: !!props.preparingWorktree,
+  });
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
@@ -2539,6 +2573,17 @@ export const ThreadFeed = memo(function ThreadFeed({
   // current overlay height before the scroll integration's next reaction;
   // on Android the declarative contentInset floor covers this same window.
   const listMountKey = `${feedThreadKey}:${presentedFeed.some((entry) => entry.type !== "thinking") ? "filled" : "empty"}`;
+  const settling = feedHeaderHidden(presentedFeed.length > 0, landedListKey === listMountKey);
+  // oxlint-disable-next-line goat/react-effect-budget -- A remounted list must cancel its pending reveal fallback.
+  useEffect(
+    () => () => {
+      if (landingFallback.current?.key === listMountKey) {
+        clearTimeout(landingFallback.current.timer);
+        landingFallback.current = null;
+      }
+    },
+    [listMountKey],
+  );
   const { contentInsetEndAdjustment } = props;
   const attachList = (list: LegendListRef | null) => {
     listRef.current = list;
@@ -2549,6 +2594,23 @@ export const ThreadFeed = memo(function ThreadFeed({
     ? presentedFeed.findIndex((entry) => entry.type === "message" && entry.id === jumpToMessageId)
     : null;
   const followsEnd = endFollowEnabled && !jumpReady;
+  const reportLanding = (loaded: boolean) => {
+    const state = listRef.current?.getState();
+    if (
+      state &&
+      feedHasLanded({
+        loaded,
+        measured: state.contentLength > 0 && state.scrollLength > 0,
+        distanceFromEnd: Math.max(0, state.contentLength - state.scrollLength - state.scroll),
+        followsEnd,
+        jumping: !!jumpToMessageId,
+      })
+    ) {
+      setLandedListKey(listMountKey);
+      if (landingFallback.current !== null) clearTimeout(landingFallback.current.timer);
+      landingFallback.current = null;
+    }
+  };
   const landJump = useEffectEvent((index: number) => {
     if (index !== -1) {
       setEndFollow(false);
@@ -2969,6 +3031,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           ) : null}
           <FeedEntryShimmerContext value={info.index}>
             {renderFeedEntry(info, {
+              formatMessageTime,
               environmentId: props.environmentId,
               offline: props.offline,
               dispatchingMessageId: props.dispatchingMessageId,
@@ -3016,6 +3079,8 @@ export const ThreadFeed = memo(function ThreadFeed({
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
             <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
+          ) : setupPresentation === "preparing" && info.index === setupAnchorIndex ? (
+            <WorktreePreparingHeader />
           ) : null}
         </ThreadMediaVisibility>
       </MessageImageGalleryScope>
@@ -3045,7 +3110,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             ref={attachList}
             // LegendList cannot see adjustedContentInset; remount so initial positioning waits for UIKit attachment.
             key={listMountKey}
-            style={{ flex: 1 }}
+            style={settling ? { flex: 1, opacity: 0 } : { flex: 1 }}
             // RN 0.81+ drops inset-area touches (facebook/react-native#54123), making blank post-send space unscrollable.
             applyWorkaroundForContentInsetHitTestBug
             {...(Platform.OS === "ios" ? { ScrollViewComponent: ThreadFeedScrollView } : {})}
@@ -3137,10 +3202,17 @@ export const ThreadFeed = memo(function ThreadFeed({
             onLoad={() => {
               loadedListKeyRef.current = listMountKey;
               setLoadedListKey(listMountKey);
+              if (landingFallback.current !== null) clearTimeout(landingFallback.current.timer);
+              landingFallback.current = {
+                key: listMountKey,
+                timer: setTimeout(() => setLandedListKey(listMountKey), 1000),
+              };
+              reportLanding(true);
             }}
             // Row positions start below the header; the reflow anchor converts between them.
             onMetricsChange={(metrics) => {
               listHeaderSizeRef.current = metrics.headerSize;
+              reportLanding(loadedListKeyRef.current === listMountKey);
             }}
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
@@ -3149,16 +3221,19 @@ export const ThreadFeed = memo(function ThreadFeed({
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             ListHeaderComponent={
-              <>
+              <View style={settling ? { opacity: 0 } : undefined}>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+                ) : null}
+                {setupAnchorIndex < 0 && setupPresentation === "preparing" ? (
+                  <WorktreePreparingHeader />
                 ) : null}
                 {props.historyControls ? (
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
                 <View ref={headerEndRef} collapsable={false} />
-              </>
+              </View>
             }
             ListFooterComponent={
               props.pendingHandoff ? (
@@ -3181,6 +3256,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         </View>
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
+        setupPresentation !== "preparing" &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View

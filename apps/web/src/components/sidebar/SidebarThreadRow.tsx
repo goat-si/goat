@@ -1,3 +1,4 @@
+import { synchronizeSidebarSpinner } from "./sidebarSpinner";
 import { useSidebarBranch, withoutRemovedCheckout } from "./useSidebarBranch";
 import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
@@ -53,7 +54,6 @@ import {
   memo,
   useRef,
   useState,
-  type AnimationEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -85,7 +85,7 @@ import {
   hasUnseenCompletion,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
-  resolveSidebarThreadStatus,
+  resolveSidebarRowStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
   isSidebarThreadWoke,
@@ -140,17 +140,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-
-function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
-  if (event.animationName !== "spin") return;
-
-  // Every running row shares the document timeline phase.
-  for (const animation of event.currentTarget.getAnimations()) {
-    if ("animationName" in animation && animation.animationName === "spin") {
-      animation.startTime = 0;
-    }
-  }
-}
 
 function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
@@ -433,7 +422,7 @@ type SidebarThreadRowProps = {
   // Unlike isActive, never true for the ancestor standing in for an open
   // subagent: drafts and PR clicks care about which composer is on screen.
   isRouteThread: boolean;
-  openPullRequestsInRightPanel: boolean;
+  readOpensPullRequestsInRightPanel: () => boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
   environmentLabel: string | null;
@@ -503,7 +492,7 @@ function ThreadRenameInput(props: {
       }}
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
+      className="-mx-1 min-w-0 flex-1 rounded-sm bg-card px-1 text-sm font-medium text-card-foreground outline-none ring-1 ring-inset ring-input focus:ring-foreground"
     />
   );
 }
@@ -526,7 +515,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     onUnsettle,
     onUnsnooze,
     onUnpin,
-    openPullRequestsInRightPanel,
+    readOpensPullRequestsInRightPanel,
     renamingTitle,
     thread,
     variant,
@@ -589,7 +578,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(withSidebarChildRequest(thread, props.childAttention));
+  const status = resolveSidebarRowStatus({
+    ...withSidebarChildRequest(thread, props.childAttention),
+    lastVisitedAt,
+  });
   // Wake attention is independent of lifecycle and clears at its visited
   // watermark. A malformed visit cannot silently acknowledge a wake.
   const isWoke = isSidebarThreadWoke(props.wokeAt, lastVisitedAt);
@@ -816,7 +808,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const handlePrClick = (event: ReactMouseEvent<HTMLElement>, targetUrl?: string) => {
     const url = targetUrl ?? pr?.url ?? currentLinkedPr?.url;
     if (!url) return;
-    const showInRightPanel = targetUrl !== undefined || openPullRequestsInRightPanel;
+    const showInRightPanel = targetUrl !== undefined || readOpensPullRequestsInRightPanel();
     const openedInRightPanel = openPrLink(event, url, showInRightPanel ? threadRef : undefined);
     if (openedInRightPanel && showInRightPanel && !props.isRouteThread) {
       onThreadActivate(threadRef);
@@ -893,7 +885,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     />
   ) : (
     <span
-      aria-hidden
       className={cn(
         "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
@@ -925,7 +916,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       {thread.title}
     </span>
   );
-  const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
   // A cloud run names the outside agent that launched it; GOAT Bot marks the coding it sent.
   const originLabel = threadOriginLabel(thread.source);
   const externalLauncherBadge = originLabel ? (
@@ -1026,7 +1016,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         {...(fileDropHandlers ?? {})}
         className={cn("list-none", sortable?.isDragging && "relative z-20")}
       >
-        <Tooltip disabled={sortable?.isDragging}>
+        <Tooltip disabled={isRenaming || sortable?.isDragging}>
           <TooltipTrigger
             render={
               <div
@@ -1050,7 +1040,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               />
             }
           >
-            {accessibleTitle}
             <span
               className={cn(
                 "flex shrink-0 items-center transition-opacity",
@@ -1197,7 +1186,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         sortable?.isDragging && "relative z-20",
       )}
     >
-      <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
+      <Tooltip disabled={isRenaming || snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
             <div
@@ -1221,7 +1210,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             />
           }
         >
-          {accessibleTitle}
           <div className="relative z-10 h-[3.375rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {providerEntry ? (
@@ -1574,6 +1562,10 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
               aria-describedby={`${props.resultId}-pr`}
               aria-label={accessibility.label}
               onMouseMove={props.onHighlight}
+              onPointerDown={(event) => {
+                contextDragListeners?.onPointerDown?.(event);
+                event.preventDefault();
+              }}
               onClick={props.onSelect}
               className={cn(
                 "group/sidebar-row group/v2-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none",

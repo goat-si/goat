@@ -89,6 +89,11 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     owed.settle();
   };
   const closeOnCleanup = useEffectEvent(close);
+  // oxlint-disable-next-line goat/react-effect-budget -- The keyboard is external state; dismiss a menu anchored above it when it hides.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The system keyboard changed outside React.
+    if (anchor?.keyboardWasVisible === true && !keyboardVisible) closeOnCleanup();
+  }, [anchor, keyboardVisible]);
   // oxlint-disable-next-line goat/react-effect-budget -- A menu whose row leaves, or whose tab hides it, closes and settles its open with its owner.
   useEffect(() => () => closeOnCleanup(), []);
 

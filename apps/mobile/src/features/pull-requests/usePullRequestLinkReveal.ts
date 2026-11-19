@@ -1,9 +1,8 @@
 import { useNavigation } from "@react-navigation/native";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { parsePullRequestAnchor, pullRequestLinkCommit } from "@goat/shared/pullRequestAnchor";
-import { useEffect, useEffectEvent, useRef, type Dispatch, type SetStateAction } from "react";
-import type { ActivityFilter } from "./pullRequestActivityFilter";
-import { linkedActivityFilter, type PullRequestSection } from "./pullRequestLinkNavigation";
+import { useEffect, useEffectEvent, useRef } from "react";
+import { type PullRequestSection } from "./pullRequestLinkNavigation";
 import type { PullRequestParams } from "./usePullRequestDiff";
 
 /**
@@ -14,7 +13,8 @@ import type { PullRequestParams } from "./usePullRequestDiff";
 export function usePullRequestLinkReveal(input: {
   readonly params: PullRequestParams;
   readonly selectSection: (next: PullRequestSection) => void;
-  readonly setActivityFilter: Dispatch<SetStateAction<ActivityFilter>>;
+  readonly showActivityLink: (kind: "timeline" | "commits") => void;
+  readonly clearActivityLink: () => void;
   readonly list: (section: PullRequestSection) => LegendListRef | null | undefined;
   readonly topInset: number;
   readonly activity: {
@@ -27,6 +27,7 @@ export function usePullRequestLinkReveal(input: {
   const navigation = useNavigation();
   const followLink = useEffectEvent(() => {
     const target = parsePullRequestAnchor(params.navigationUrl);
+    if (target?.kind !== "timeline" && target?.kind !== "commits") input.clearActivityLink();
     if (target?.kind === "diff" || target?.kind === "code") {
       const commit = pullRequestLinkCommit(params.navigationUrl);
       navigation.navigate("PullRequestFile", {
@@ -36,7 +37,7 @@ export function usePullRequestLinkReveal(input: {
       });
     } else if (target?.kind === "timeline" || target?.kind === "commits") {
       input.selectSection("activity");
-      input.setActivityFilter((filter) => linkedActivityFilter(params.navigationUrl, filter));
+      input.showActivityLink(target.kind);
     } else if (target?.kind === "checks") {
       input.selectSection("overview");
       // Checks head Overview, which a reused screen may have scrolled past.

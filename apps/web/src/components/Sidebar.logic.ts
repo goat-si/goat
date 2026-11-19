@@ -5,6 +5,8 @@ import {
 import { arrangeSidebarReorder } from "./sidebar/frozenReorder";
 import {
   hasUnseenCompletion,
+  hasUnseenRunFailure,
+  resolveThreadListRowStatus as resolveSidebarRowStatus,
   holdThreadPriorityRank as holdSidebarPriorityRank,
   isThreadWoke as isSidebarThreadWoke,
   resolveThreadLastVisitedAt,
@@ -23,6 +25,7 @@ export {
   resolveThreadLastVisitedAt,
   resolveSidebarThreadSection,
   resolveSidebarThreadStatus,
+  resolveSidebarRowStatus,
   resolveSidebarPriorityRank,
   selectSidebarMarkReadTargets,
 };
@@ -1143,16 +1146,6 @@ export function resolveSidebarThreadPresentation(input: {
   };
 }
 
-/** Unopened threads' failures still count as unseen, unlike completions. */
-function hasUnseenFailure(thread: ThreadStatusInput): boolean {
-  if (thread.latestRun?.status !== "failed") return false;
-  if (!thread.lastVisitedAt) return true;
-  const completedAt = Date.parse(thread.latestRun.completedAt ?? "");
-  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(completedAt) || Number.isNaN(lastVisitedAt)) return true;
-  return completedAt > lastVisitedAt;
-}
-
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
   if (target === null) return true;
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
@@ -1499,7 +1492,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (hasUnseenFailure(thread)) {
+  if (hasUnseenRunFailure(thread)) {
     return {
       label: "Failed",
       colorClass: "text-destructive-foreground",

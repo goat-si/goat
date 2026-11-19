@@ -71,7 +71,7 @@ export function settlementSweepCacheTests({
           yield* Queue.take(fixture.snapshotReads);
           yield* service.drain;
           expect((yield* Ref.get(fixture.branchCalls)).length).toBe(1);
-          yield* TestClock.adjust("1 minute");
+          yield* TestClock.adjust("24 hours");
           yield* service.drain;
           expect((yield* Ref.get(fixture.branchCalls)).length).toBe(2);
         }).pipe(Effect.provide(fixture.layer));
@@ -105,7 +105,7 @@ export function settlementSweepCacheTests({
           yield* TestClock.adjust("1 minute");
           yield* service.drain;
           expect(yield* Ref.get(fixture.branchCalls)).toHaveLength(1);
-          yield* TestClock.adjust("1 minute");
+          yield* TestClock.adjust("24 hours");
           yield* service.drain;
           expect(yield* Ref.get(fixture.branchCalls)).toHaveLength(2);
         }).pipe(Effect.provide(fixture.layer));

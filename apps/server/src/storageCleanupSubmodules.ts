@@ -32,8 +32,8 @@ export function makeSubmoduleRemoval<E>(deps: {
         return { force: false, reason: "submodule inspection exceeded the limit" };
       const modules = path.join(admin.stdout.replace(/\n$/, ""), "modules");
       const stored = yield* fs.exists(modules);
-      if (!stored && !(yield* fs.exists(path.join(cwd, ".gitmodules"))))
-        return { force: false, reason: null };
+      const manifest = yield* fs.exists(path.join(cwd, ".gitmodules"));
+      if (!stored && !manifest) return { force: false, reason: null, manifestOnly: false };
       const populated = yield* inspect([
         "submodule",
         "foreach",
@@ -46,6 +46,11 @@ export function makeSubmoduleRemoval<E>(deps: {
       const paths = populated.stdout.split("\0").filter(Boolean);
       const pending = [modules];
       for (const submodule of paths) {
+        const common = yield* inspect(["-C", submodule, "rev-parse", "--git-common-dir"]);
+        if (common.stdoutTruncated || common.stderrTruncated || common.stdout.trim() === "")
+          return { force: false, reason: "submodule common directory could not be inspected" };
+        yield* fs.realPath(path.resolve(submodule, common.stdout.trim()));
+        yield* inspect(["-C", submodule, "cat-file", "-e", "HEAD^{commit}"]);
         const directory = yield* inspect(["-C", submodule, "rev-parse", "--absolute-git-dir"]);
         if (directory.stdoutTruncated || directory.stderrTruncated)
           return { force: false, reason: "submodule inspection exceeded the limit" };
@@ -70,6 +75,10 @@ export function makeSubmoduleRemoval<E>(deps: {
             "rev-list",
             "--max-count=1",
             "HEAD",
+            "--exclude=refs/t3/checkpoints/*",
+            "--exclude=refs/goat/checkpoints/*",
+            "--exclude=refs/t3/orchestration-v2/checkpoints/*",
+            "--exclude=refs/goat/orchestration-v2/checkpoints/*",
             "--all",
             "--reflog",
             "--not",
@@ -87,11 +96,17 @@ export function makeSubmoduleRemoval<E>(deps: {
       }
       // Check files after walking stored history to shorten the gap before forced removal.
       for (const submodule of paths) {
-        const changes = yield* localChangesReason(submodule, rules);
+        const changes = yield* localChangesReason(submodule, {
+          ...rules,
+          worktreeKeepWhen:
+            rules.worktreeKeepWhen === "tracked-changes"
+              ? "uncommitted-changes"
+              : rules.worktreeKeepWhen,
+        });
         if (changes !== null) return { force: false, reason: `submodule ${changes}` };
       }
       const force = stored || paths.length > 0;
-      if (force && rules.worktreeKeepWhen !== "tracked-changes") {
+      if (force || manifest) {
         const root = yield* fs.realPath(cwd);
         // Git status and foreach omit files inside deinitialized gitlink directories.
         const populatedPaths = new Set(paths.map(pathKey));
@@ -108,8 +123,9 @@ export function makeSubmoduleRemoval<E>(deps: {
             const submodule = path.resolve(repository, entry.slice(entry.indexOf("\t") + 1));
             if (!inside(root, submodule))
               return { force: false, reason: "submodules could not be inspected" };
-            if (!populatedPaths.has(pathKey(submodule)) && (yield* fs.exists(submodule)))
-              unchecked.push(submodule);
+            if (!(yield* fs.exists(submodule)))
+              return { force: false, reason: "submodule directory is unavailable" };
+            if (!populatedPaths.has(pathKey(submodule))) unchecked.push(submodule);
           }
         }
         let inspected = unchecked.length;
@@ -123,13 +139,12 @@ export function makeSubmoduleRemoval<E>(deps: {
             (yield* fs.stat(target)).type !== "Directory"
           )
             return { force: false, reason: "submodule has local files" };
-          if (path.basename(target) === "node_modules") continue;
           const names = yield* fs.readDirectory(target);
           inspected += names.length;
           for (const name of names) unchecked.push(path.join(target, name));
         }
       }
-      return { force, reason: null };
+      return { force, reason: null, manifestOnly: manifest && !force };
     },
     Effect.orElseSucceed(() => ({ force: false, reason: "submodules could not be inspected" })),
   );

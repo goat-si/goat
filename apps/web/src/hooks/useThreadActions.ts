@@ -1,3 +1,5 @@
+import { usePaletteHiddenParentKeys } from "../components/sidebar/usePaletteVisibility";
+import { topOfPinnedRunOrderKey } from "./threadPinOrder";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
@@ -22,7 +24,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 import { useRouter } from "@tanstack/react-router";
 
-import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
+import { getFallbackThreadIdAfterDelete } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { environmentSession, readEnvironmentScope } from "../state/session";
@@ -49,7 +51,6 @@ import {
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
-  readThreadShells,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -113,15 +114,6 @@ export class ThreadSnoozeBlockedError extends Schema.TaggedError<ThreadSnoozeBlo
   override get message(): string {
     return "This thread is waiting on you. Respond to the pending request before snoozing it.";
   }
-}
-
-function topOfPinnedRunOrderKey(): string | undefined {
-  let firstKey: string | null = null;
-  for (const shell of readThreadShells()) {
-    if (shell.pinnedAt == null || shell.pinOrderKey == null) continue;
-    if (firstKey === null || shell.pinOrderKey < firstKey) firstKey = shell.pinOrderKey;
-  }
-  return pinOrderKeyBetween(null, firstKey) ?? undefined;
 }
 
 export class ThreadAutoSettleOptOutUnsupportedError extends Schema.TaggedError<ThreadAutoSettleOptOutUnsupportedError>()(
@@ -281,6 +273,7 @@ function threadOperationFailure(target: ScopedThreadRef) {
 }
 
 export function useThreadActions() {
+  const hiddenParentKeys = usePaletteHiddenParentKeys();
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
     reportFailure: false,
   });
@@ -565,6 +558,7 @@ export function useThreadActions() {
       threads,
       deletedThreadId: threadRef.threadId,
       deletedThreadIds,
+      hiddenParentKeys,
       sortOrder: sidebarThreadSortOrder,
       now: new Date().toISOString(),
     });

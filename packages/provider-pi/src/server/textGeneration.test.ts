@@ -20,6 +20,7 @@ const makeFakePi = (
   setModelError?: string,
   turnEvents: ReadonlyArray<Record<string, unknown>> = [],
   models?: ReadonlyArray<Record<string, unknown>>,
+  version?: string,
 ) =>
   Effect.gen(function* () {
     const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
@@ -51,24 +52,30 @@ const makeFakePi = (
           }
         }
       });
-    const spawner = ChildProcessSpawner.make(() =>
-      Effect.succeed(
+    const spawner = ChildProcessSpawner.make((command) => {
+      const versionProbe =
+        ChildProcess.isStandardCommand(command) && command.args.includes("--version");
+      return Effect.succeed(
         ChildProcessSpawner.makeHandle({
           // Outside the valid pid range, so PiRpc's process-group kill never lands.
           pid: ChildProcessSpawner.ProcessId(999_999_999),
-          exitCode: Effect.never,
+          exitCode: versionProbe
+            ? Effect.succeed(ChildProcessSpawner.ExitCode(version === "failed" ? 1 : 0))
+            : Effect.never,
           isRunning: Effect.succeed(true),
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.forEach(onStdin),
-          stdout: Stream.fromQueue(stdout),
+          stdout: versionProbe
+            ? Stream.make(new TextEncoder().encode(version ?? "unknown"))
+            : Stream.fromQueue(stdout),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
           getOutputFd: () => Stream.empty,
         }),
-      ),
-    );
+      );
+    });
     return { spawner, received };
   });
 
@@ -221,5 +228,40 @@ it.effect("drops an earlier error once a later attempt succeeds", () =>
     ]).pipe(Effect.flip);
 
     assert.equal(error.detail, "Pi returned empty output.");
+  }),
+);
+
+it.effect.each([
+  { version: "0.84.3", expected: "high" },
+  { version: "0.80.5", expected: undefined },
+  { version: "unknown", expected: undefined },
+  { version: "failed", expected: undefined },
+])("uses request thinking only on confirmed supported Pi $version", ({ version, expected }) =>
+  Effect.gen(function* () {
+    const pi = yield* makeFakePi(
+      encodeJsonLine({ subject: "Update README", body: "" }),
+      undefined,
+      [],
+      undefined,
+      version,
+    );
+    const generator = yield* makePiTextGeneration(
+      { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
+    const result = yield* generator.generateCommitMessage({
+      cwd: process.cwd(),
+      branch: "main",
+      stagedSummary: "M README.md",
+      stagedPatch: "patch",
+      modelSelection: createModelSelection(ProviderInstanceId.make("pi"), "default", [
+        { id: "thinking", value: "high" },
+      ]),
+    });
+    assert.equal(result.subject, "Update README");
+    assert.equal(
+      pi.received.find((record) => record["type"] === "set_thinking_level")?.["level"],
+      expected,
+    );
   }),
 );

@@ -39,65 +39,6 @@ import {
   type PullRequestProviderApi,
 } from "@goat/source-control-core/server/PullRequestProvider";
 
-it.effect("reads maintainer edits and changes them through the update command", () =>
-  Effect.gen(function* () {
-    let enabled = true;
-    const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"), {
-      getChangeRequest: () =>
-        Effect.succeed({ ...hostedChangeRequest("Body"), maintainerCanModify: enabled }),
-      updateChangeRequest: (input) =>
-        Effect.sync(() => {
-          assert.strictEqual(input.title, undefined);
-          assert.strictEqual(input.body, undefined);
-          enabled = input.maintainerCanModify!;
-        }),
-    });
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/w", repository: "acme/web" })],
-      providers: [
-        {
-          ...provider,
-          capabilities: {
-            ...provider.capabilities,
-            edit: { changeRequest: true, comment: true, maintainerEdits: true },
-          },
-        },
-      ],
-    });
-    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-    assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, true);
-    yield* service.update({ ...ref, maintainerCanModify: false });
-    assert.strictEqual((yield* service.detail(ref)).maintainerCanModify, false);
-  }),
-);
-
-it.effect("refuses maintainer edits on a host without the capability", () =>
-  Effect.gen(function* () {
-    let writes = 0;
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/w", repository: "acme/web" })],
-      providers: [
-        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
-          updateChangeRequest: () =>
-            Effect.sync(() => {
-              writes += 1;
-            }),
-        }),
-      ],
-    });
-    const result = yield* service
-      .update({
-        projectId: "p1" as ProjectId,
-        repository: "acme/web",
-        number: 1,
-        maintainerCanModify: false,
-      })
-      .pipe(Effect.flip);
-    assert.strictEqual(result._tag, "PullRequestOperationError");
-    assert.strictEqual(writes, 0);
-  }),
-);
-
 it.effect("does not wait for an in-flight detail read to display a preview", () =>
   Effect.gen(function* () {
     const detailStarted = yield* Deferred.make<void>();
@@ -3000,7 +2941,13 @@ it.effect("carries a slice on without sending the rows it already sent", () =>
       cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|3" },
     });
 
-    assert.deepStrictEqual(cursors, [{ updatedBefore: "2026-07-02T00:00:00Z", delivered: 1 }]);
+    assert.deepStrictEqual(cursors, [
+      {
+        updatedBefore: "2026-07-02T00:00:00Z",
+        delivered: 1,
+        seenAt: [{ repository: "acme/web", number: 3 }],
+      },
+    ]);
     assert.deepStrictEqual(
       result.entries.map((entry) => entry.number),
       [4],
@@ -3492,19 +3439,31 @@ it.effect("deduplicates routed PR reports without dropping draft changes", () =>
   }),
 );
 
-it.effect(
-  "reuses fresh detail checks without extending their refresh interval on detail cache hits",
-  () =>
+it.effect.each(["github", "azure-devops"])(
+  "reuses fresh %s detail checks without extending their refresh interval on detail cache hits",
+  (provider) =>
     Effect.gen(function* () {
       let reads = 0;
-      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const repository = provider === "azure-devops" ? "web" : "acme/web";
+      const reference = { projectId: "p1" as ProjectId, repository, number: 1 };
       const service = yield* makeService({
         projects: [
-          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository,
+            provider,
+            ...(provider === "azure-devops" ? { host: "dev.azure.com" } : {}),
+          }),
         ],
         providers: [
-          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
-            getChangeRequest: () => Effect.succeed(hostedChangeRequest("Description")),
+          fakePullRequestProvider(SourceControlProviderKind.make(provider), {
+            getChangeRequest: () =>
+              Effect.succeed({
+                ...hostedChangeRequest("Description"),
+                checks: [{ name: "build", status: "success", description: null, url: null }],
+              }),
             getChangeRequestChecks: () =>
               Effect.sync(() => {
                 reads += 1;
@@ -3532,6 +3491,37 @@ it.effect(
       expect((yield* service.checks(reference))?.state).toBe("closed");
       expect(reads).toBe(1);
     }),
+);
+
+it.effect("asks Azure for checks when its detail came back with none", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "web", number: 1 };
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "web",
+          provider: "azure-devops",
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("azure-devops"), {
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("Description")),
+          getChangeRequestChecks: () =>
+            Effect.sync(() => {
+              reads += 1;
+              return { state: "open" as const, checks: [] };
+            }),
+        }),
+      ],
+    });
+    yield* service.detail(reference);
+    yield* service.checks(reference);
+    expect(reads).toBe(1);
+  }),
 );
 
 it.effect("preserves check observation time on cache hits and advances it on refresh", () =>

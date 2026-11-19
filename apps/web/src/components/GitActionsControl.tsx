@@ -11,7 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { GitRunStackedActionResult, GitStackedAction, VcsStatusResult } from "@goat/contracts";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   CloudDownloadIcon,
@@ -23,6 +23,10 @@ import { cn } from "~/lib/utils";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { noteDraftWorkspacePick } from "~/lib/draftWorkspacePicks";
 import {
+  GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS,
+  RUNNING_SOURCE_CONTROL_ACTIONS,
+  COMMIT_DIALOG_TITLE,
+  COMMIT_DIALOG_DESCRIPTION,
   buildMenuItems,
   getMenuActionDisabledReason,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
@@ -140,14 +144,6 @@ interface RunGitActionWithToastInput {
   filePaths?: string[];
 }
 
-const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
-
-const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
-
-const COMMIT_DIALOG_TITLE = "Commit changes";
-const COMMIT_DIALOG_DESCRIPTION =
-  "Review and confirm your commit. Leave the message blank to auto-generate one.";
-
 export default function GitActionsControl({
   presentation = "toolbar",
   gitCwd,
@@ -158,6 +154,7 @@ export default function GitActionsControl({
   onOpenChanges,
   workspaceMutationId = null,
 }: GitActionsControlProps) {
+  const progressLabelId = useId();
   const sshFetchBack = useSshWorkspaceFetchBack(draftId === undefined ? activeThreadRef : null);
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
@@ -381,6 +378,7 @@ export default function GitActionsControl({
   // Keep enabled until live status loads; the server rejects stale requests.
   const featureBranchUnavailableReason = pendingDefaultBranchAction
     ? resolveFeatureBranchUnavailableReason({
+        action: pendingDefaultBranchAction.action,
         branchName: pendingDefaultBranchAction.branchName,
         hasWorkingTreeChanges: gitStatus?.hasWorkingTreeChanges ?? true,
       })
@@ -965,11 +963,7 @@ export default function GitActionsControl({
         >
           {gitActionProgress ? (
             <ThreadDetailsControl
-              aria-label={
-                gitActionProgress.output
-                  ? `${gitActionProgress.status} ${gitActionProgress.output}`
-                  : gitActionProgress.status
-              }
+              aria-labelledby={progressLabelId}
               part="primary"
               panel={isPanel}
               multiline
@@ -978,7 +972,11 @@ export default function GitActionsControl({
               size="xs"
               variant={isPanel ? "ghost" : "outline"}
             >
-              <GitActionProgressButtonContent isPanel={isPanel} progress={gitActionProgress} />
+              <GitActionProgressButtonContent
+                id={progressLabelId}
+                isPanel={isPanel}
+                progress={gitActionProgress}
+              />
             </ThreadDetailsControl>
           ) : isPanel && visibleInlineSuccess ? (
             <ThreadDetailsControl part="primary" multiline disabled size="xs" variant="ghost">
@@ -1174,6 +1172,7 @@ export default function GitActionsControl({
                   <div className="flex items-center gap-2">
                     {isEditingFiles && allFiles.length > 0 && (
                       <Checkbox
+                        aria-label="Include all files"
                         checked={allSelected}
                         indeterminate={!allSelected && !noneSelected}
                         onCheckedChange={() => {
@@ -1216,6 +1215,7 @@ export default function GitActionsControl({
                               >
                                 {isEditingFiles && (
                                   <Checkbox
+                                    aria-label={`Include ${file.path}`}
                                     checked={!excludedFiles.has(file.path)}
                                     onCheckedChange={() => {
                                       setExcludedFiles((prev) => {

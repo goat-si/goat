@@ -1,3 +1,8 @@
+import type { FilesystemBrowseResult } from "@goat/contracts";
+
+export const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+export const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
+
 import {
   type ClientSettings,
   type EnvironmentId,
@@ -84,3 +89,5 @@ export function useSortedProjectGroups(environmentLabelById: ReadonlyMap<Environ
     clientSettings.sidebarProjectSortOrder,
   );
 }
+
+export { useProjectOpenThreadShells } from "./sidebar/usePaletteVisibility";

@@ -23,7 +23,7 @@ vi.mock(import("@goat/client-runtime/state/thread-workflows"), async (importOrig
 
 vi.mock(import("../../state/entities"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useThreadProjection: (() => state.projection) as never,
+  useQuietThreadProjection: (() => state.projection) as never,
 }));
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({

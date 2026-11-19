@@ -1,3 +1,4 @@
+import { rememberDraftImage } from "../lib/sentImageHandoff";
 import { FilePreviewGallery, useFilePreviewGallery } from "./FilePreviewGallery";
 import { composerImageGallery } from "../lib/composerImageGallery";
 import { LEGACY_COMPOSER_PREVIEW_DIRECTORY } from "@goat/contracts/legacyT3Names";
@@ -199,6 +200,14 @@ function ComposerImageAttachment(
           style={style}
           className="bg-subtle"
           resizeMode="cover"
+          onLoad={({ nativeEvent: { source } }) => {
+            if (props.environmentId && previewUri !== null) {
+              rememberDraftImage(props.environmentId, attachment.id, {
+                uri: previewUri,
+                aspectRatio: source.width / source.height,
+              });
+            }
+          }}
         />
       </Pressable>
     </PresentationSource>
@@ -238,6 +247,8 @@ function ComposerFileAttachment(
   const canPreview = isPdfFile(attachment) && props.onPressPreview !== undefined;
   const sourceIdentifier = `draft-file:${attachment.id}`;
   const onPressDocument = props.onPressDocument;
+  const upload = useComposerAttachmentUploadState(props.environmentId, attachment.id);
+  const showsUploadBadge = upload !== undefined && upload.status !== "ready";
   return (
     <>
       <PresentationSource identifier={sourceIdentifier}>
@@ -258,7 +269,7 @@ function ComposerFileAttachment(
           className={
             props.compact
               ? "items-center justify-center bg-subtle"
-              : "items-center justify-center gap-1 bg-subtle px-2"
+              : `items-center justify-center gap-1 bg-subtle px-2${showsUploadBadge ? " pb-4" : ""}`
           }
           style={style}
         >

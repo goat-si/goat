@@ -526,6 +526,7 @@ describe("ThreadTitleRegenerationService", () => {
           assistant: "Discarded.",
           status: "rolled_back",
         });
+        yield* TestClock.adjust("1 millis");
         const forkRunId = RunId.make("run:title:fork:1");
         yield* recordRun({
           threadId: sourceThreadId,
@@ -582,6 +583,51 @@ describe("ThreadTitleRegenerationService", () => {
         assert.notInclude(call?.forkSource?.history, "Rolled back attempt");
         const fork = yield* threads.getThreadProjection(forkThreadId);
         assert.equal(fork.thread.title, "Generated title");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("regenerates a fresh fork title from its inherited conversation", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const sourceThreadId = yield* createThread({
+          command: "command:title:fresh-source",
+          thread: "thread:title:fresh-source",
+        });
+        const runId = RunId.make("run:title:fresh-source");
+        yield* recordRun({
+          threadId: sourceThreadId,
+          runId,
+          ordinal: 1,
+          user: "Inherited subject",
+          assistant: "Inherited answer",
+        });
+        const threadId = ThreadId.make("thread:title:fresh-fork");
+        yield* threads.dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make("command:title:fresh-fork"),
+          sourceThreadId,
+          targetThreadId: threadId,
+          sourcePoint: { type: "run", runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const requestId = yield* armRegeneration({
+          command: "command:title:fresh-regenerate",
+          threadId,
+        });
+        yield* service.execute({ threadId, requestId, kind: { type: "regenerate" } });
+        assert.include(
+          harness.generateThreadTitle.mock.calls[0]?.[0]?.forkSource?.history,
+          "Inherited subject",
+        );
+        assert.equal(
+          (yield* threads.getThreadProjection(threadId)).thread.title,
+          "Generated title",
+        );
       }).pipe(Effect.provide(harness.layer));
     }),
   );

@@ -372,7 +372,12 @@ function rowPresentation(
   entry: ConnectionCatalogEntry = sshEntry,
 ) {
   return savedConnectionPresentation({
-    environment: { entry: { ...entry, enabled }, connection, serverConfig: null },
+    environment: {
+      entry: { ...entry, enabled },
+      connection,
+      serverConfig: null,
+      refusedRouteIds: [],
+    },
     runtimeStatus,
   });
 }
@@ -450,6 +455,7 @@ describe("saved SSH row semantic status", () => {
       const selected = savedConnectionSshRoute({
         entry: entryWithAlternate,
         serverConfig: null,
+        refusedRouteIds: [],
         connection: {
           ...withoutEvidence,
           ...(evidence === "ready" ? { sshRuntimeReady } : {}),

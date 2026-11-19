@@ -365,6 +365,7 @@ const threadSubscribers = new Map<string, Queue.Queue<OrchestrationV2ThreadStrea
 let terminalMetadataSubscriber: Queue.Queue<TerminalMetadataStreamEvent> | null = null;
 let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
 let threads: ReadonlyArray<FakeThread> = [];
+let projects: ReadonlyArray<OrchestrationProjectShell> = [project];
 let sequence = 1;
 let commandHandler: ((command: OrchestrationV2Command) => Promise<{ sequence: number }>) | null =
   null;
@@ -416,7 +417,7 @@ const handlers: Record<string, (input: never) => unknown> = {
         snapshot: {
           schemaVersion: 1,
           snapshotSequence: sequence,
-          projects: [project],
+          projects,
           threads: threads.filter((thread) => !thread.olderSettled).map(shellOf),
           archivedThreads: [],
         },
@@ -507,6 +508,7 @@ export const fakeDriver = {
       },
       session,
       openProbeSocket: Effect.never,
+      refusedRouteIds: [],
     }),
   checkRoute: () => Effect.succeed<RouteCheck>("answered"),
   checkHost: () => Effect.succeed<RouteCheck>("unchecked"),
@@ -523,6 +525,8 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
   options?: {
+    extraProjects?: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "title">>;
+    keybindings?: ServerConfig["keybindings"];
     providers?: ReadonlyArray<unknown>;
     capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
     onCommand?: (command: OrchestrationV2Command) => Promise<{ sequence: number }>;
@@ -532,11 +536,20 @@ export function installFakeEnvironment(
   },
 ): Disposable {
   threads = fixtures;
+  projects = [
+    project,
+    ...(options?.extraProjects ?? []).map((extra) => ({
+      ...project,
+      ...extra,
+      workspaceRoot: `/workspace/${extra.title}`,
+    })),
+  ];
   commandHandler = options?.onCommand ?? null;
   rpcOverrides = options?.rpc ?? {};
   requests = [];
   currentServerConfig = {
     ...serverConfig,
+    keybindings: options?.keybindings ?? serverConfig.keybindings,
     ...(threads.some((thread) => thread.olderSettled) ? { shellThreadFamilies: true } : {}),
     providers: options?.providers
       ? options.providers.map((provider) => decodeServerProvider(provider))
@@ -572,6 +585,7 @@ export function installFakeEnvironment(
     [Symbol.dispose]: () => {
       globalThis.fetch = realFetch;
       threads = [];
+      projects = [project];
       commandHandler = null;
       rpcOverrides = {};
       requests = [];

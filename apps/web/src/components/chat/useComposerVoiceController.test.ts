@@ -349,3 +349,32 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+it("keeps a completed transcript unattached when the originating draft changes", async () => {
+  using session = setup();
+  await session.controller.start();
+  session.editDraft({ text: "replacement", revision: 2 });
+  expect(await session.controller.confirm()).toBe(false);
+  expect(session.readDraft().text).toBe("replacement");
+  expect(session.controller.getSnapshot()).toMatchObject({ unattachedTranscript: "world" });
+});
+
+it("retains a transcript if writing the original draft fails", async () => {
+  using session = setup();
+  session.commitDraft.mockImplementationOnce(() => {
+    throw new Error("draft unavailable");
+  });
+  await session.controller.start();
+  expect(await session.controller.confirm()).toBe(false);
+  expect(session.controller.getSnapshot()).toMatchObject({ unattachedTranscript: "world" });
+});
+
+it("sends from the reattached owner after committing and releasing the recording", async () => {
+  using session = setup();
+  const reattachedSubmit = vi.fn(() => expect(session.controller.blocksSubmission()).toBe(false));
+  await session.controller.start();
+  session.controller.setSubmitHandler(reattachedSubmit);
+  expect(await session.controller.send()).toBe(true);
+  expect(reattachedSubmit).toHaveBeenCalledExactlyOnceWith("hello world");
+  expect(session.onSubmit).not.toHaveBeenCalled();
+});

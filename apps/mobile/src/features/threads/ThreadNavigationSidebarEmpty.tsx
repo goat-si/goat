@@ -9,6 +9,7 @@ export function ThreadNavigationSidebarEmpty(props: {
   readonly catalogState: WorkspaceConnectionState;
   readonly searchQuery: string;
   readonly searchPending: boolean;
+  readonly searchFailed: boolean;
   readonly projectScopeTitle: string | null;
   readonly onOpenEnvironmentSettings: () => void;
 }) {
@@ -33,7 +34,9 @@ export function ThreadNavigationSidebarEmpty(props: {
             : props.searchQuery.trim().length > 0
               ? props.searchPending
                 ? "Searching thread messages…"
-                : "No matching threads"
+                : props.searchFailed
+                  ? "Couldn't search thread messages"
+                  : "No matching threads"
               : props.projectScopeTitle !== null
                 ? `No threads in ${props.projectScopeTitle}`
                 : "No threads yet"}

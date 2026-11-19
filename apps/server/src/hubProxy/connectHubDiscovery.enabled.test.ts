@@ -301,6 +301,7 @@ it.effect.each(["managed", "learned direct"] as const)(
                       socketUrl: endpoint.wsBaseUrl,
                       httpAuthorization: first.httpAuthorization,
                     },
+                    refusedRouteIds: [],
                   }),
             checkRoute: () => Effect.succeed("answered"),
             checkHost: () => Effect.succeed("answered"),
