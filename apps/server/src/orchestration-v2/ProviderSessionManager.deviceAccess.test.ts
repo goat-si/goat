@@ -9,7 +9,7 @@ it.effect("advertises device access only while the device hub is enabled", () =>
         enableAgentBrowserAccess: false,
         projectOverride: false,
         enableAgentDeviceAccess: true,
-        deviceOverride,
+        ...(deviceOverride === undefined ? {} : { deviceOverride }),
       };
       const off = yield* runBrowserAccessScenario({ ...options, enableDeviceSupport: false });
       assert.isFalse(off?.capabilities?.has("device"));
