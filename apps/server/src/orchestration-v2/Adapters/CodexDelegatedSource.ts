@@ -21,8 +21,9 @@ export const startCodexThread = Effect.fn("CodexDelegatedSource.startThread")(
         Effect.catchTags({
           CodexAppServerRequestError: (error) =>
             IdAllocator.isDelegatedTaskThread(threadId) &&
-            error.code === -32602 &&
-            /thread.?source/i.test(error.errorMessage)
+            (error.code === -32602 || error.code === -32600) &&
+            /thread.?source/i.test(error.errorMessage) &&
+            /unknown field|unrecognized|unsupported/i.test(error.errorMessage)
               ? client.request("thread/start", params)
               : Effect.fail(error),
         }),

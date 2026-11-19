@@ -84,78 +84,80 @@ it.effect("marks allocator-issued delegated threads without marking ordinary thr
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect("retries the old launch only when Codex explicitly rejects threadSource", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const preamble = codexReplayPreamble({
-        nativeThreadId: "parent",
-        nativeTurnId: "unused",
-        prompt: "unused",
-      }).slice(0, 5);
-      const child = codexReplayPreamble({
-        nativeThreadId: "child",
-        nativeTurnId: "unused",
-        prompt: "unused",
-      })
-        .slice(3, 5)
-        .map((entry) => withReplayRequestId(entry, 3));
-      const first = child[0];
-      if (
-        !first ||
-        first.type !== "expect_outbound" ||
-        !Predicate.isObject(first.frame) ||
-        !Predicate.isObject(first.frame.params)
-      )
-        return yield* Effect.die("bad replay fixture");
-      const retry = child
-        .map((entry) => withReplayRequestId(entry, 4))
-        .map((entry) =>
-          entry.type === "expect_outbound" &&
-          Predicate.isObject(entry.frame) &&
-          Predicate.isObject(entry.frame.params)
-            ? {
-                ...entry,
+it.effect.each([-32602, -32600])(
+  "retries an old launch when Codex rejects threadSource with %s",
+  (errorCode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const preamble = codexReplayPreamble({
+          nativeThreadId: "parent",
+          nativeTurnId: "unused",
+          prompt: "unused",
+        }).slice(0, 5);
+        const child = codexReplayPreamble({
+          nativeThreadId: "child",
+          nativeTurnId: "unused",
+          prompt: "unused",
+        })
+          .slice(3, 5)
+          .map((entry) => withReplayRequestId(entry, 3));
+        const first = child[0];
+        if (
+          !first ||
+          first.type !== "expect_outbound" ||
+          !Predicate.isObject(first.frame) ||
+          !Predicate.isObject(first.frame.params)
+        )
+          return yield* Effect.die("bad replay fixture");
+        const retry = child
+          .map((entry) => withReplayRequestId(entry, 4))
+          .map((entry) =>
+            entry.type === "expect_outbound" &&
+            Predicate.isObject(entry.frame) &&
+            Predicate.isObject(entry.frame.params)
+              ? {
+                  ...entry,
+                  frame: {
+                    ...entry.frame,
+                    params: { ...entry.frame.params, cwd: "/workspace", model: "gpt-5.4" },
+                  },
+                }
+              : entry,
+          );
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: "delegated-old-codex",
+            entries: [
+              ...preamble,
+              {
+                ...first,
                 frame: {
-                  ...entry.frame,
-                  params: { ...entry.frame.params, cwd: "/workspace", model: "gpt-5.4" },
-                },
-              }
-            : entry,
-        );
-      const harness = yield* makeCodexReplayHarness(
-        makeCodexReplayTranscript({
-          scenario: "delegated-old-codex",
-          entries: [
-            ...preamble,
-            {
-              ...first,
-              frame: {
-                ...first.frame,
-                params: {
-                  ...first.frame.params,
-                  cwd: "/workspace",
-                  model: "gpt-5.4",
-                  threadSource: "subagent",
+                  ...first.frame,
+                  params: {
+                    ...first.frame.params,
+                    cwd: "/workspace",
+                    model: "gpt-5.4",
+                    threadSource: "subagent",
+                  },
                 },
               },
-            },
-            {
-              type: "emit_inbound",
-              frame: { id: 3, error: { code: -32602, message: "unknown field threadSource" } },
-            },
-            ...retry,
-          ],
-        }),
-      );
-      const threadId = (yield* IdAllocator.IdAllocatorV2).derive.delegatedTaskThread({
-        commandId: CommandId.make("delegate:old"),
-      });
-      const thread = yield* harness.runtime.ensureThread({
-        threadId,
-        modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-      });
-      assert.equal(thread.appThreadId, threadId);
-    }),
-  ).pipe(Effect.provide(layer)),
+              {
+                type: "emit_inbound",
+                frame: { id: 3, error: { code: errorCode, message: "unknown field threadSource" } },
+              },
+              ...retry,
+            ],
+          }),
+        );
+        const threadId = (yield* IdAllocator.IdAllocatorV2).derive.delegatedTaskThread({
+          commandId: CommandId.make("delegate:old"),
+        });
+        const thread = yield* harness.runtime.ensureThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        });
+        assert.equal(thread.appThreadId, threadId);
+      }),
+    ).pipe(Effect.provide(layer)),
 );
