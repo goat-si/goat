@@ -3,13 +3,12 @@ import { resolvePastedPath } from "@goat/shared/path";
 import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
 import { RestartContinuationSettings } from "./RestartContinuationSettings";
-import { SettingsGroup } from "./SettingsGroup";
 import { NotificationSettings } from "./NotificationSettings";
+import { LegacyFeaturesSection } from "./LegacyFeaturesSection";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
-import { ChevronRightIcon } from "~/components/solar";
 import { T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import {
   IDLE_COMPACTION_MODES,
   globalIdleCompaction,
@@ -63,7 +62,6 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { useEnvironmentProviders } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -85,8 +83,6 @@ import {
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
-  useSettingsSearchTarget,
-  useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { ScreenReaderAnnouncementsRow, ScreenReaderWindowTitleRow } from "./ActivitySettingsRows";
@@ -100,10 +96,7 @@ import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
 import { ComposerSettingsSection } from "./ComposerSettingsSection";
 import { DiffSettingsSection } from "./DiffSettingsSection";
-import {
-  LEGACY_FEATURE_TARGET_IDS,
-  supportsAutomaticServerUpdates as connectedEnvironmentsSupportAutomaticServerUpdates,
-} from "./SettingsPanels.logic";
+import { supportsAutomaticServerUpdates as connectedEnvironmentsSupportAutomaticServerUpdates } from "./SettingsPanels.logic";
 import { AboutVersionSection } from "./AboutVersionSection";
 import {
   RESPONSE_STREAMING_MODE_LABELS,
@@ -455,69 +448,6 @@ export function useSettingsRestore(onRestored?: () => void) {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
-
-function LegacyFeaturesSection() {
-  const setting = useTranslatedSearchableSetting();
-  const gt = useGT();
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
-  const [open, setOpen] = useState(false);
-  const searchTargetId = useSettingsSearchTargetId();
-  const targetRef = useSettingsSearchTarget<HTMLElement>("legacy-features");
-  // A search jump to a legacy setting opens the fold before its row mounts.
-  const [seenSearchTargetId, setSeenSearchTargetId] = useState<string | null>(null);
-  if (seenSearchTargetId !== searchTargetId) {
-    setSeenSearchTargetId(searchTargetId);
-    if (searchTargetId !== null && LEGACY_FEATURE_TARGET_IDS.has(searchTargetId)) setOpen(true);
-  }
-
-  return (
-    <section id="legacy-features" ref={targetRef} tabIndex={-1} className="space-y-2.5">
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 px-3 sm:px-4">
-          <h2 className="text-sm font-normal text-foreground/70 transition-colors group-hover:text-foreground">
-            {gt("Legacy features")}
-          </h2>
-          <ChevronRightIcon className="size-4 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90" />
-        </CollapsibleTrigger>
-        <CollapsiblePanel>
-          <SettingsGroup>
-            <SettingsRow
-              {...setting("legacy-plan-mode")}
-              description={gt(
-                "Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode.",
-              )}
-              control={
-                <Switch
-                  checked={settings.planModeEnabled}
-                  onCheckedChange={(checked) => {
-                    updateSettings({ planModeEnabled: Boolean(checked) });
-                  }}
-                  aria-label={gt("Plan mode (legacy)")}
-                />
-              }
-            />
-            <SettingsRow
-              {...setting("legacy-context-window-indicator")}
-              description={gt(
-                "Shows context window usage as a circular indicator in the composer.",
-              )}
-              control={
-                <Switch
-                  checked={!settings.contextWindowMeterHidden}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ contextWindowMeterHidden: !checked })
-                  }
-                  aria-label={gt("Context window indicator (legacy)")}
-                />
-              }
-            />
-          </SettingsGroup>
-        </CollapsiblePanel>
-      </Collapsible>
-    </section>
-  );
-}
 
 export function GeneralSettingsPanel() {
   const gt = useGT();
