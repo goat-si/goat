@@ -12,6 +12,7 @@ import type { makeProviderFailure } from "@goat/provider-core/server/failure";
 import type * as DateTime from "effect/DateTime";
 import type * as Fiber from "effect/Fiber";
 import type { PiCompactionState, PiProviderRetryState } from "./compactionTitle.ts";
+import type { PiCustomAnswerRoute } from "./extensionDialog.ts";
 import type { PiRpcRecord } from "./rpc.ts";
 
 export interface PiStreamItemState {
@@ -20,6 +21,7 @@ export interface PiStreamItemState {
   text: string;
   completed: boolean;
   flushScheduled: boolean;
+  published: boolean;
   readonly startedAt: DateTime.Utc;
 }
 export interface ActivePiTurn {
@@ -30,7 +32,10 @@ export interface ActivePiTurn {
   nextItemOrdinal: number;
   messageOrdinal: number;
   readonly streamItems: Map<string, PiStreamItemState>;
-  readonly toolArgs: Map<string, unknown>;
+  readonly toolArgs: Map<
+    string,
+    { readonly args: unknown; readonly name: string | undefined; active: boolean }
+  >;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
   readonly commandOutputBytes: Map<string, number>;
   interrupted: boolean;
@@ -64,6 +69,7 @@ export interface PiTurnTreeRefs {
 
 export interface PendingPiPrompt {
   readonly nativeRequestId: string;
+  readonly customAnswerRoute: PiCustomAnswerRoute | undefined;
   readonly method: "select" | "confirm" | "input" | "editor";
   readonly questionId: string;
   readonly approvalKey: string;

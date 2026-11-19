@@ -1,3 +1,4 @@
+import { makeLegacySessionFixture } from "./test/legacySessionFixture.ts";
 import { registerPiToolChecks } from "./test/toolChecks.ts";
 import { registerPiExtensionStatusChecks } from "./extensionStatusChecks.testkit.ts";
 import { registerPiPromptAckChecks } from "./test/promptAckChecks.ts";
@@ -1836,13 +1837,16 @@ describe("PiAdapterV2", () => {
       const fake = yield* makeFakePi;
       const forkFake = yield* makeFakePi;
       const forkFile = "/fake/forked.jsonl";
+      const legacyFileSystem = yield* makeLegacySessionFixture(
+        historical ? UNCAPTURED_TURN_TREE.entries : TURN_ONE_ENTRIES,
+      );
       const { runtime, takeEvent } = yield* openRuntime(
         fake,
         "default",
         THREAD_ID,
         SESSION_ID,
         forkFake,
-      );
+      ).pipe(Effect.provideService(FileSystem.FileSystem, legacyFileSystem));
       const source = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
@@ -1911,7 +1915,10 @@ describe("PiAdapterV2", () => {
       const fake = yield* makeFakePi;
       const forkFake = yield* makeFakePi;
       const forkFile = "/fake/forked.jsonl";
-      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const legacyFileSystem = yield* makeLegacySessionFixture(UNCAPTURED_TURN_TREE.entries);
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake).pipe(
+        Effect.provideService(FileSystem.FileSystem, legacyFileSystem),
+      );
       const source = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
@@ -1955,7 +1962,10 @@ describe("PiAdapterV2", () => {
       const fake = yield* makeFakePi;
       const forkFake = yield* makeFakePi;
       const forkFile = "/fake/forked.jsonl";
-      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const legacyFileSystem = yield* makeLegacySessionFixture(UNCAPTURED_TURN_TREE.entries);
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake).pipe(
+        Effect.provideService(FileSystem.FileSystem, legacyFileSystem),
+      );
       const source = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),

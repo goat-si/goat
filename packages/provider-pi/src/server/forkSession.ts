@@ -2,6 +2,8 @@ import type { ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { PiAdapterV2Options } from "./adapter.ts";
@@ -13,9 +15,10 @@ import {
   piRecordString as recordString,
 } from "./rpc.ts";
 import { readPiEntries } from "./entries.ts";
+import { findHistoricalForkSession, makeHistoricalScanBudget } from "./historicalForkSession.ts";
 import { piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 
-export const forkPiSession = Effect.fnUntraced(function* ({
+export const forkPiSessionOnce = Effect.fnUntraced(function* ({
   sourceFile,
   boundary,
   createdAt,
@@ -87,4 +90,86 @@ export const forkPiSession = Effect.fnUntraced(function* ({
       return file;
     }),
   ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+});
+
+export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
+  input: Parameters<typeof forkPiSessionOnce>[0],
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+) {
+  const boundary = input.boundary;
+  const target = boundary.target;
+  if (target != null && target.nativeThreadRef == null) {
+    const id = target.nativeTurnRef?.strength === "strong" ? target.nativeTurnRef.nativeId : null;
+    if (id == null)
+      return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+        driver: input.driver,
+        detail: "Cannot recover Pi fork session: missing captured target entry",
+      });
+    const targetProof = { type: "entry" as const, entryId: id, turn: target, target };
+    const scanBudget = makeHistoricalScanBudget();
+    const provideFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
+      effect.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+    const sourceFile = yield* provideFs(
+      findHistoricalForkSession(
+        input.sourceFile,
+        targetProof,
+        input.driver,
+        true,
+        true,
+        boundary.type !== "nothing",
+        undefined,
+        undefined,
+        scanBudget,
+      ),
+    );
+    if (boundary.type === "entry") {
+      const narrowed = yield* provideFs(
+        findHistoricalForkSession(
+          input.sourceFile,
+          boundary,
+          input.driver,
+          true,
+          false,
+          false,
+          sourceFile,
+          undefined,
+          scanBudget,
+        ),
+      ).pipe(
+        Effect.map(() => boundary),
+        Effect.catchIf(
+          (error) =>
+            error.detail.startsWith("Cannot recover Pi fork session: no verified sibling session"),
+          () =>
+            provideFs(
+              findHistoricalForkSession(
+                input.sourceFile,
+                targetProof,
+                input.driver,
+                true,
+                true,
+                false,
+                sourceFile,
+                undefined,
+                scanBudget,
+              ),
+            ).pipe(Effect.as({ type: "nothing" as const })),
+        ),
+      );
+      return yield* forkPiSessionOnce({ ...input, sourceFile, boundary: narrowed });
+    }
+    return yield* forkPiSessionOnce({ ...input, sourceFile, boundary });
+  }
+
+  const sourceFile =
+    input.boundary.type === "nothing"
+      ? input.sourceFile
+      : (input.boundary.target?.nativeThreadRef?.nativeId ??
+        input.boundary.turn.nativeThreadRef?.nativeId ??
+        input.sourceFile);
+  return yield* forkPiSessionOnce({ ...input, sourceFile });
 });

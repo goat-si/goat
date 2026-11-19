@@ -1,3 +1,4 @@
+import { makePiProtocolError } from "./adapterErrors.ts";
 import * as PiConstants from "./adapterConstants.ts";
 import { recheckPiSelection } from "./selectionDrift.ts";
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
@@ -37,8 +38,13 @@ import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
-import { piQuestion, piUiResponse } from "./extensionDialog.ts";
-import * as HostProcess from "@goat/shared/HostProcess";
+import {
+  piQuestion,
+  piUiResponse,
+  piAskUserSingleSelectQuestion,
+  PiCustomAnswers,
+  piToolCallArguments,
+} from "./extensionDialog.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import {
@@ -67,7 +73,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -78,15 +83,9 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
 import { parsePiCompactCommand } from "./commands.ts";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-  type ProviderAdapterDriverCreateInput,
-} from "@goat/provider-core/server/adapterDriver";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import {
@@ -111,6 +110,7 @@ export interface PiAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
+
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
@@ -133,12 +133,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
 
-  const protocolError = (detail: string, payload?: unknown) =>
-    new ProviderAdapter.ProviderAdapterProtocolError({
-      driver,
-      detail,
-      ...(payload === undefined ? {} : { payload }),
-    });
+  const protocolError = makePiProtocolError(driver);
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
@@ -228,6 +223,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const customAnswers = new PiCustomAnswers();
       const awaitPromptAck = (
         drained: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>,
       ) =>
@@ -272,6 +268,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           closed = true;
+          customAnswers.clear();
           sessionEntity = { ...sessionEntity, extensionStatuses: [] };
           pendingWake = null;
           if (pendingPromptResponsesDrained !== null)
@@ -733,6 +730,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           item: PiStreamItemState,
           streaming: boolean,
         ) {
+          item.published = true;
           const emittedAt = yield* DateTime.now;
           const base = baseItemFields(turn, item.nativeItemId, item.startedAt, emittedAt);
           yield* emitItemNode(
@@ -816,12 +814,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           );
         });
 
+      const streamItemId = (turn: ActivePiTurn, contentIndex: number) =>
+        `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`;
+
       const streamItemFor = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
         kind: PiStreamItemState["kind"],
         contentIndex: number,
       ) {
-        const nativeItemId = `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`;
+        const nativeItemId = streamItemId(turn, contentIndex);
         const existing = turn.streamItems.get(nativeItemId);
         if (existing !== undefined) return existing;
         const startedAt = yield* DateTime.now;
@@ -831,6 +832,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           text: "",
           completed: false,
           flushScheduled: false,
+          published: false,
           startedAt,
         };
         turn.streamItems.set(nativeItemId, item);
@@ -843,7 +845,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           if (item.completed) return Effect.void;
           item.completed = true;
           if (text !== undefined && text.length > 0) item.text = text;
-          return item.text.length === 0 ? Effect.void : emitStreamItem(turn, item, false);
+          return item.text.length === 0 && !item.published
+            ? Effect.void
+            : emitStreamItem(turn, item, false);
         });
 
       const completeOpenStreamItems = (turn: ActivePiTurn) =>
@@ -882,10 +886,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             });
           return;
         }
-        if (phase === "start") {
-          turn.toolArgs.set(toolCallId, event["args"]);
-        }
-        const args = event["args"] ?? turn.toolArgs.get(toolCallId);
+        const args = piToolCallArguments(turn.toolArgs, phase, toolCallId, toolName, event);
         const emittedAt = yield* DateTime.now;
         const startedAt = turn.toolStartedAt.get(toolCallId) ?? emittedAt;
         turn.toolStartedAt.set(toolCallId, startedAt);
@@ -1153,6 +1154,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       ) {
         const pending = Array.from(pendingPrompts.values());
         pendingPrompts.clear();
+        customAnswers.clear();
         yield* Effect.forEach(pending, (prompt) => cancelPrompt(prompt, resolvedAt), {
           discard: true,
         });
@@ -1248,6 +1250,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return;
         }
         if (nativeRequestId === undefined) return;
+        const followUp = customAnswers.take(method, event);
+        if (followUp !== undefined) {
+          yield* connection.send({
+            type: "extension_ui_response",
+            id: nativeRequestId,
+            value: followUp,
+          });
+          return;
+        }
         const approvalTitle = recordString(event, "title") ?? "";
         const approvalKey = `${approvalTitle.length}:${approvalTitle}${recordString(event, "message") ?? ""}`;
         if (method === "confirm" && sessionApprovals.has(approvalKey)) {
@@ -1322,6 +1333,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           completedAt: null,
           updatedAt: createdAt,
         };
+        const askUser =
+          method === "select" && turn !== null
+            ? piAskUserSingleSelectQuestion(nativeRequestId, title, event, turn.toolArgs)
+            : undefined;
         const turnItem: OrchestrationV2TurnItem =
           method === "confirm"
             ? {
@@ -1335,10 +1350,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 ...itemBase,
                 type: "user_input_request",
                 requestId,
-                questions: [piQuestion(nativeRequestId, method, title, event)],
+                questions: [askUser?.question ?? piQuestion(nativeRequestId, method, title, event)],
               };
         const pending: PendingPiPrompt = {
           nativeRequestId,
+          customAnswerRoute: askUser?.customAnswerRoute,
           method,
           questionId: nativeRequestId,
           approvalKey,
@@ -1514,6 +1530,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(treeRefs === null || treeRefs.nativeTurnRef === undefined
               ? {}
               : { nativeTurnRef: treeRefs.nativeTurnRef }),
+            ...(state.providerThread.nativeThreadRef === null
+              ? {}
+              : { nativeThreadRef: state.providerThread.nativeThreadRef }),
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
@@ -1766,6 +1785,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const delta = event["assistantMessageEvent"];
             const deltaType = recordString(delta, "type");
             const contentIndex = recordNumber(delta, "contentIndex") ?? 0;
+            if (deltaType === "text_start" || deltaType === "thinking_start") {
+              const restarted = turn.streamItems.get(streamItemId(turn, contentIndex));
+              if (restarted !== undefined && !restarted.completed) restarted.text = "";
+              return;
+            }
             if (deltaType === "text_delta" || deltaType === "thinking_delta") {
               const item = yield* streamItemFor(
                 turn,
@@ -2541,7 +2565,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             contextWindow = rememberModelContextWindow(restoredModel);
             appliedModel = null;
             const updatedAt = yield* DateTime.now;
-            sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
+            sessionEntity = {
+              ...sessionEntity,
+              model: PI_INHERIT_MODEL_SLUG,
+              updatedAt,
+            };
             yield* emit({
               type: "provider_session.updated",
               driver,
@@ -2760,6 +2788,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               nodeId: turnInput.rootNodeId,
               runAttemptId: turnInput.attemptId,
               nativeTurnRef: providerRef(syntheticNativeTurnId, "weak"),
+              ...(state.providerThread.nativeThreadRef === null
+                ? {}
+                : { nativeThreadRef: state.providerThread.nativeThreadRef }),
               ordinal: turnInput.providerTurnOrdinal,
               status: "running",
               startedAt,
@@ -3039,7 +3070,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 `Pi extension request ${requestInput.requestId} has expired`,
               );
             }
-            const response = piUiResponse(pending, requestInput.decision, requestInput.answers);
+            const response = customAnswers.route(
+              pending.customAnswerRoute,
+              piUiResponse(pending, requestInput.decision, requestInput.answers),
+            );
+            if (response === null) return yield* protocolError("Too many Pi custom answers");
             yield* connection.send({
               type: "extension_ui_response",
               id: pending.nativeRequestId,
@@ -3338,24 +3373,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (forkInput.providerTurnId !== undefined && target === undefined) {
               return yield* protocolError("Pi fork target turn is missing");
             }
+            const targetFile = target?.nativeThreadRef?.nativeId ?? undefined;
             const boundary: PiForkBoundary =
               target === undefined
                 ? { type: "nothing" }
                 : piForkBoundary({
                     target: { type: "provider_turn", providerTurn: target },
                     providerThreadTurns: sourceTurns,
+                    sessionFile: targetFile,
                   });
-            const nativeId = yield* forkPiSession({
-              sourceFile,
-              boundary,
-              createdAt: source.createdAt,
-              cwd,
-              driver,
-              profile,
-              options,
-              launchArgs: resolvedLaunchArgs.args,
-              spawner,
-            });
+            const nativeId = yield* forkPiSession(
+              {
+                sourceFile: targetFile ?? sourceFile,
+                boundary,
+                createdAt: source.createdAt,
+                cwd,
+                driver,
+                profile,
+                options,
+                launchArgs: resolvedLaunchArgs.args,
+                spawner,
+              },
+              fileSystem,
+              path,
+            );
             const now = yield* DateTime.now;
             return yield* registerThread(
               {
@@ -3409,50 +3450,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   });
 });
 
-export type PiAdapterV2DriverEnv =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
-  | Path.Path
-  | IdAllocator.IdAllocatorV2
-  | McpProviderSessions.McpProviderSessions
-  | ProviderHost.ProviderHost;
-
-export const makePiAdapterV2Driver = (
-  profile: PiRuntimeProfile,
-  settingsSchema: Schema.Codec<PiSettings, unknown>,
-): ProviderAdapterDriver<PiSettings, PiAdapterV2DriverEnv> => ({
-  driverKind: ProviderDriverKind.make(profile.driver),
-  configSchema: settingsSchema,
-  defaultConfig: (): PiSettings => Schema.decodeSync(settingsSchema)({}),
-  create: Effect.fn("PiAdapterV2Driver.create")(
-    function* (input: ProviderAdapterDriverCreateInput<PiSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const home = yield* HostProcess.HomeDirectory;
-      const currentEnvironment = Effect.suspend(() =>
-        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
-      return yield* makePiAdapterV2({
-        instanceId: input.instanceId,
-        profile,
-        settings: { ...input.config, enabled: input.enabled },
-        environment: yield* currentEnvironment,
-        currentEnvironment,
-        continuationRequests,
-      });
-    },
-    (effect, input) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterDriverCreateError({
-              driver: ProviderDriverKind.make(profile.driver),
-              instanceId: input.instanceId,
-              detail: `Failed to create ${profile.displayName} adapter.`,
-              cause,
-            }),
-        ),
-      ),
-  ),
-});
-export const PiAdapterV2Driver = makePiAdapterV2Driver(PI_PROFILE, PiSettings);
+export {
+  makePiAdapterV2Driver,
+  PiAdapterV2Driver,
+  type PiAdapterV2DriverEnv,
+} from "./adapterDriver.ts";
