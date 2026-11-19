@@ -37,7 +37,12 @@ import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
-import { piQuestion, piUiResponse } from "./extensionDialog.ts";
+import {
+  piQuestion,
+  piUiResponse,
+  piAskUserSingleSelectQuestion,
+  PiCustomAnswers,
+} from "./extensionDialog.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import {
@@ -220,6 +225,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const customAnswers = new PiCustomAnswers();
       const awaitPromptAck = (
         drained: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>,
       ) =>
@@ -1145,6 +1151,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       ) {
         const pending = Array.from(pendingPrompts.values());
         pendingPrompts.clear();
+        customAnswers.clear();
         yield* Effect.forEach(pending, (prompt) => cancelPrompt(prompt, resolvedAt), {
           discard: true,
         });
@@ -1240,6 +1247,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return;
         }
         if (nativeRequestId === undefined) return;
+        const followUp = customAnswers.take(method, event);
+        if (followUp !== undefined) {
+          yield* connection.send({
+            type: "extension_ui_response",
+            id: nativeRequestId,
+            value: followUp,
+          });
+          return;
+        }
         const approvalTitle = recordString(event, "title") ?? "";
         const approvalKey = `${approvalTitle.length}:${approvalTitle}${recordString(event, "message") ?? ""}`;
         if (method === "confirm" && sessionApprovals.has(approvalKey)) {
@@ -1314,6 +1330,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           completedAt: null,
           updatedAt: createdAt,
         };
+        const askUser =
+          method === "select" && turn !== null
+            ? piAskUserSingleSelectQuestion(nativeRequestId, title, event, turn.toolArgs)
+            : undefined;
         const turnItem: OrchestrationV2TurnItem =
           method === "confirm"
             ? {
@@ -1327,10 +1347,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 ...itemBase,
                 type: "user_input_request",
                 requestId,
-                questions: [piQuestion(nativeRequestId, method, title, event)],
+                questions: [askUser?.question ?? piQuestion(nativeRequestId, method, title, event)],
               };
         const pending: PendingPiPrompt = {
           nativeRequestId,
+          customAnswerRoute: askUser?.customAnswerRoute,
           method,
           questionId: nativeRequestId,
           approvalKey,
@@ -3031,7 +3052,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 `Pi extension request ${requestInput.requestId} has expired`,
               );
             }
-            const response = piUiResponse(pending, requestInput.decision, requestInput.answers);
+            const response = customAnswers.route(
+              pending.customAnswerRoute,
+              piUiResponse(pending, requestInput.decision, requestInput.answers),
+            );
             yield* connection.send({
               type: "extension_ui_response",
               id: pending.nativeRequestId,

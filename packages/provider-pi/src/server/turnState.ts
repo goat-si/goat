@@ -12,6 +12,7 @@ import type { makeProviderFailure } from "@goat/provider-core/server/failure";
 import type * as DateTime from "effect/DateTime";
 import type * as Fiber from "effect/Fiber";
 import type { PiCompactionState, PiProviderRetryState } from "./compactionTitle.ts";
+import type { PiCustomAnswerRoute } from "./extensionDialog.ts";
 import type { PiRpcRecord } from "./rpc.ts";
 
 export interface PiStreamItemState {
@@ -64,6 +65,7 @@ export interface PiTurnTreeRefs {
 
 export interface PendingPiPrompt {
   readonly nativeRequestId: string;
+  readonly customAnswerRoute: PiCustomAnswerRoute | undefined;
   readonly method: "select" | "confirm" | "input" | "editor";
   readonly questionId: string;
   readonly approvalKey: string;
