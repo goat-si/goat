@@ -1,3 +1,4 @@
+import { collectGitHubPages } from "./gitHubPullRequestPageCollector.ts";
 import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
 import {
   decodeWith,
@@ -1531,48 +1532,12 @@ export const make = Effect.gen(function* () {
         endCursor: page.endCursor,
         pageInfo: { hasNextPage: page.endCursor !== null, endCursor: page.endCursor },
       });
-      /**
-       * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
-       * for only the rows still missing, so the last one does not overshoot.
-       */
-      const collect = Effect.fn("GitHubPullRequestApi.collect")(function* (
-        rows: number,
-        page: (
-          after: string | null,
-          rows: number,
-        ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError>,
-      ) {
-        const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage>) =>
-          pages.reduce((total, read) => total + read.rawCount, 0);
-        const pages: GitHubPullRequestListPage[] = [];
-        const seen = new Set<string>();
-        let after: string | null = null;
-        let truncated = false;
-        while (true) {
-          const read: GitHubPullRequestListPage = yield* page(after, rows - countRows(pages));
-          pages.push(read);
-          const next = read.endCursor;
-          if (next === null) break;
-          // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
-          if (seen.has(next) || countRows(pages) >= rows) {
-            truncated = true;
-            break;
-          }
-          seen.add(next);
-          after = next;
-        }
-        return {
-          items: pages.flatMap((read) => read.items),
-          rawCount: countRows(pages),
-          truncated,
-        };
-      });
       const stacks = input.host.toLowerCase() === "github.com";
       const read = (
         continues: boolean,
         requestedRows = input.limit + 1,
       ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> =>
-        collect(requestedRows, (after, rows) =>
+        collectGitHubPages(requestedRows, (after, rows) =>
           (continues
             ? client
                 .PullRequestSearch({
