@@ -4,7 +4,7 @@ import { expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import { DeviceHostError } from "./DeviceHost.ts";
 import { sshProbeFailureMessage } from "./DeviceHostDiagnostics.ts";
-import { SshWindowsHostError } from "./SshDeviceHost.ts";
+import { isSshProbeFailure, SshWindowsHostError } from "./SshDeviceHost.ts";
 
 const encodeDeviceError = Schema.encodeSync(Schema.fromJsonString(DeviceError));
 
@@ -45,3 +45,27 @@ it("preserves missing Node guidance and hides arbitrary SSH output", () => {
     "private SSH diagnostics",
   );
 });
+
+it.each([
+  ["Host key verification failed.\n", "host key"],
+  ["WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n", "changed host key"],
+  ["fixture@example.invalid: Permission denied (publickey).\n", "login failed"],
+  ["ssh: Could not resolve hostname example.invalid: Name or service not known\n", "resolve"],
+  ["ssh: connect to host example.invalid port 22: Connection refused\n", "reach"],
+])(
+  "explains recognized SSH transport failures without exposing diagnostics",
+  (stderr, expected) => {
+    const cause = new SshCommandError({
+      message: "private",
+      command: [],
+      exitCode: 255,
+      stderr: `${stderr}token=secret-value`,
+    });
+    const failure = new DeviceHostError({ hostId: "fixture", step: "probe", cause });
+    expect(isSshProbeFailure(cause)).toBe(true);
+    const reason = sshProbeFailureMessage(failure);
+    expect(reason.toLowerCase()).toContain(expected);
+    expect(reason).not.toContain("secret-value");
+    expect(reason).not.toContain("example.invalid");
+  },
+);

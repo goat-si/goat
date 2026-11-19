@@ -871,7 +871,7 @@ export const make = Effect.gen(function* () {
         return yield* SshDeviceHost.probe(host).pipe(Effect.provide(probeContext));
       }).pipe(
         Effect.mapError((error) =>
-          error._tag === "DeviceHostError" && SshDeviceHost.isSshWindowsHostError(error.cause)
+          error._tag === "DeviceHostError" && SshDeviceHost.isSshProbeFailure(error.cause)
             ? new DeviceHostUnavailableError({
                 hostId: host.id,
                 hostLabel: host.label,
