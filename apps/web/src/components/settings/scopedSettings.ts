@@ -30,7 +30,7 @@ import type { ResolvedSettingsScope } from "./settingsScope";
 
 export type ScopedSettingsPatch = ServerSettingsPatch & ClientSettingsPatch;
 
-interface ScopedSettingsEnvironment {
+export interface ScopedSettingsEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
@@ -465,7 +465,7 @@ function droppedSettingKeys(write: ScopedServerWrite, saved: ServerSettings | un
   );
 }
 
-type ScopedSettingsPlan = ReturnType<typeof planScopedSettingsPatch>;
+export type ScopedSettingsPlan = ReturnType<typeof planScopedSettingsPatch>;
 type ScopedSettingsPersistServer = (input: {
   environmentId: EnvironmentId;
   input: { patch: ServerSettingsPatch };
@@ -570,9 +570,7 @@ export function createScopedSettingsWriter(
 
 async function persistScopedSettingsPlan(
   plan: ScopedSettingsPlan,
-  persistWrite: (
-    write: ScopedServerWrite,
-  ) => Promise<{
+  persistWrite: (write: ScopedServerWrite) => Promise<{
     readonly write: ScopedServerWrite;
     readonly result: Awaited<ReturnType<ScopedSettingsPersistServer>>;
   }>,

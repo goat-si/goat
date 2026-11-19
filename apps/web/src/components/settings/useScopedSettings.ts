@@ -15,6 +15,7 @@ import {
 } from "@goat/contracts";
 
 import { persistClientSettingsPatch, useMergedSettings } from "../../hooks/useSettings";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironment } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -30,10 +31,57 @@ import {
   type ProjectOverrideEntry,
   type ScopedSettingsPatch,
 } from "./scopedSettings";
+import { pendingScopedWritesAtom, settlePendingScopedWrite } from "./scopedSettingsOptimistic";
 
-export const writeScopedSettings = createScopedSettingsWriter(
+const writeScopedSettingsRaw = createScopedSettingsWriter(
   (environmentId) => readEnvironment(environmentId)?.serverConfig?.settings ?? null,
 );
+
+export function writeScopedSettings(
+  environments: Parameters<typeof writeScopedSettingsRaw>[0],
+  plan: Parameters<typeof writeScopedSettingsRaw>[1],
+  persistServer: Parameters<typeof writeScopedSettingsRaw>[2],
+  persistClient: Parameters<typeof writeScopedSettingsRaw>[3],
+) {
+  const save = {};
+  const initial = plan(environments);
+  if (initial.serverWrites.length > 0) {
+    appAtomRegistry.update(pendingScopedWritesAtom, (writes) => [
+      ...writes,
+      ...initial.serverWrites.map(({ environmentId }) => ({
+        save,
+        environmentId,
+        environments,
+        plan,
+      })),
+    ]);
+  }
+  const settle = (
+    environmentId: (typeof initial.serverWrites)[number]["environmentId"],
+    saved?: ServerSettings,
+  ) =>
+    appAtomRegistry.update(pendingScopedWritesAtom, (writes) =>
+      settlePendingScopedWrite(writes, save, environmentId, saved),
+    );
+  return writeScopedSettingsRaw(
+    environments,
+    plan,
+    async (request) => {
+      try {
+        const result = await persistServer(request);
+        settle(request.environmentId, result._tag === "Success" ? result.value : undefined);
+        return result;
+      } catch (error) {
+        settle(request.environmentId);
+        throw error;
+      }
+    },
+    persistClient,
+  ).then((result) => {
+    for (const failure of result.failedEnvironments) settle(failure.environmentId);
+    return result;
+  });
+}
 
 export function useScopedSettings<T = UnifiedSettings>(
   selector?: (settings: UnifiedSettings) => T,
