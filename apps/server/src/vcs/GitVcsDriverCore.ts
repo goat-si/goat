@@ -1,3 +1,4 @@
+import { makeResolvePublishBranchName } from "./gitPublishBranchName.ts";
 import { makeRemoteRefContainsHead, pushesOnlyToFetchUrl } from "./gitPushDestinationChecks.ts";
 import { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 export { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
@@ -1240,14 +1241,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map(parseRemoteNamesInGitOrder),
     );
 
-  const resolvePublishBranchName = Effect.fn("resolvePublishBranchName")(function* (
-    cwd: string,
-    branchName: string,
-  ) {
-    const remoteNames = yield* listRemoteNames(cwd).pipe(Effect.orElseSucceed(() => []));
-    const parsedRemoteRef = parseRemoteRefWithRemoteNames(branchName, remoteNames);
-    return parsedRemoteRef?.branchName ?? branchName;
-  });
+  const resolvePublishBranchName = makeResolvePublishBranchName(listRemoteNames);
 
   const findPrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
     if (yield* originRemoteExists(cwd)) {
