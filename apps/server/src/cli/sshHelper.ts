@@ -193,6 +193,14 @@ const homeOwned = Command.make("home-owned", {
   ),
 );
 
+const launcherCapabilities = Command.make("launcher-capabilities").pipe(
+  Command.withHandler(() =>
+    Effect.sync(() => {
+      process.stdout.write("script-launcher\n");
+    }),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
   Command.withSubcommands([
@@ -200,6 +208,7 @@ export const sshHelperCommand = Command.make("__ssh-helper").pipe(
     waitReady,
     runtimePort,
     homeOwned,
+    launcherCapabilities,
     ...sshRuntimeHelperCommands,
   ]),
 );

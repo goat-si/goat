@@ -49,6 +49,7 @@ import {
 import { stateDirOwner } from "./serviceLauncherOwner.ts";
 import { acquireServiceServingLock } from "./serviceServingLock.ts";
 import { removeServiceUpdateHandoff, SERVICE_PREPARED_TIMEOUT_MS } from "./serviceUpdateHandoff.ts";
+import { repointRegisteredPosixLaunchers } from "./cloud/posixLauncher.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
@@ -909,6 +910,12 @@ export class Launcher {
     }
     this.#snapshot = undefined;
     try {
+      // oxlint-disable-next-line goat/no-global-process-runtime -- The standalone launcher has no Effect runtime.
+      if (process.platform !== "win32")
+        await repointRegisteredPosixLaunchers(
+          this.#baseDir,
+          runtimePaths(this.#baseDir, next.activeVersion).entryPath,
+        );
       await this.#startChild(next.activeVersion, "active", outcome);
     } finally {
       await this.#repointServiceUnit(next.activeVersion);

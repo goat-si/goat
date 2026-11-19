@@ -26,6 +26,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { bootServiceRuntimeReferences } from "./bootServiceRuntimeReferences.ts";
+import { readPosixLauncherTarget } from "./posixLauncher.ts";
 import { isExactServiceVersion, parseServiceState, SERVICE_STATE_FILE } from "./serviceProtocol.ts";
 
 const PINNED_RUNTIME_DIR = "runtime";
@@ -527,7 +528,7 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   const unrecorded: Array<string> = [];
   const targets: Array<string> = [];
   for (const launcher of [...recorded, ...found]) {
-    const target =
+    const resolved =
       platform === "win32"
         ? yield* fs.readFileString(launcher).pipe(
             Effect.map(windowsShimTarget),
@@ -535,7 +536,20 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
           )
         : // Fully resolved, through chained links and a symlinked GOAT home alike.
           yield* fs.realPath(launcher).pipe(Effect.orElseSucceed(() => undefined));
-    if (target === undefined) continue;
+    if (resolved === undefined) continue;
+    const inspected =
+      platform === "win32"
+        ? Option.some(undefined)
+        : yield* Effect.tryPromise({
+            try: () => readPosixLauncherTarget(resolved, recorded.includes(launcher)),
+            catch: () => "launcher-inspection-failed" as const,
+          }).pipe(Effect.option);
+    if (Option.isNone(inspected)) return undefined;
+    const scriptTarget = inspected.value;
+    const target =
+      scriptTarget === undefined
+        ? resolved
+        : yield* fs.realPath(scriptTarget).pipe(Effect.orElseSucceed(() => scriptTarget));
     const entryDir = path.dirname(path.resolve(launcher));
     const parent = path.dirname(entryDir);
     if (
@@ -683,11 +697,9 @@ const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(functio
   const platform = yield* HostProcess.Platform;
   // Windows paths are case-insensitive, and shims and process lists need not agree on case.
   const foldCase = (value: string) => (platform === "win32" ? value.toLowerCase() : value);
-  const references = [
-    executables.value,
-    ...(yield* shellLauncherTargets(input.baseDir)),
-    ...input.references,
-  ].map(foldCase);
+  const launcherTargets = yield* shellLauncherTargets(input.baseDir);
+  if (launcherTargets === undefined) return undecided;
+  const references = [executables.value, ...launcherTargets, ...input.references].map(foldCase);
   // Process executables are resolved, so they name the real path of a symlinked GOAT home.
   const realVersionsDir = yield* fs
     .realPath(versionsDir)
