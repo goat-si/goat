@@ -257,7 +257,7 @@ const make = Effect.gen(function* () {
             .createWorktree(
               {
                 cwd: projectCwd,
-                refName: worktreeBaseRef,
+                refName: expectedHead,
                 newRefName: input.branch,
                 baseRefName,
                 path: null,

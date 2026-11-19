@@ -587,6 +587,23 @@ describe("goat_worktree_handoff", () => {
     });
   });
 
+  it.effect("creates a handoff from the accepted SHA and keeps the named base", () => {
+    const harness = makeHarness({
+      git: { resolveCommit: () => Effect.succeed({ commitSha: "pinned-local-head" }) },
+    });
+    return Effect.gen(function* () {
+      yield* runHandoff(harness, {
+        branch: "feature/pinned-handoff",
+        baseRef: "dev",
+        startFromOrigin: false,
+      });
+      expect(harness.createWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({ refName: "pinned-local-head", baseRefName: "dev" }),
+        expect.anything(),
+      );
+    });
+  });
+
   it.effect("refuses local HEAD drift before binding or setup", () => {
     const harness = makeHarness({
       git: {

@@ -13,6 +13,7 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
     startRef: string;
     baseRefName: string;
     pinnedHead: string | undefined;
+    checkoutBranch: string | undefined;
     commandId: CommandId;
     threadId: ThreadId;
     runId: RunId | null;
@@ -39,7 +40,11 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
               : cause,
           ),
         )).commitSha;
-    const pin = { commitSha, baseRefName: input.baseRefName };
+    const pin = {
+      commitSha,
+      baseRefName: input.baseRefName,
+      ...(input.checkoutBranch === undefined ? {} : { checkoutBranch: input.checkoutBranch }),
+    };
     if (runId !== null) {
       const identity = {
         commandId: CommandId.make(`${input.commandId}:progress:worktree`),

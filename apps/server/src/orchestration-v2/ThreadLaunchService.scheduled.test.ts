@@ -1,3 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as ServerConfig from "../config.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { verifyManagedCheckout } from "./goat/restoreSnapshot.ts";
 import * as Stream from "effect/Stream";
 import { GitCommandError } from "@goat/contracts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -443,4 +448,102 @@ it.effect.each(["first checkout", "retry"] as const)(
       assert.equal(harness.runSetup.mock.calls.length, retry ? 1 : 0);
     }).pipe(Effect.provide(harness.layer));
   },
+);
+
+it.effect(
+  "checks out the accepted SHA even if the named base moves before add, then retries there",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-launch-pinned-base-" });
+      const cwd = `${root}/repo`;
+      const worktreePath = `${root}/checkout`;
+      const seenHead = `${root}/hook-head`;
+      const git = (cwd: string, args: string[]) =>
+        driver.execute({ operation: "pin-fixture", cwd, args });
+      yield* fs.makeDirectory(cwd);
+      yield* git(cwd, ["init", "-b", "main"]);
+      yield* git(cwd, ["config", "user.name", "Test"]);
+      yield* git(cwd, ["config", "user.email", "test@example.invalid"]);
+      yield* git(cwd, ["commit", "--allow-empty", "-m", "pinned"]);
+      const pin = (yield* git(cwd, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* fs.makeDirectory(`${cwd}/.git/hooks`, { recursive: true });
+      const hook = `${cwd}/.git/hooks/post-checkout`;
+      yield* fs.writeFileString(hook, `#!/bin/sh\ngit rev-parse HEAD > '${seenHead}'\nexit 1\n`);
+      yield* fs.chmod(hook, 0o755);
+      const harness = makeHarness({
+        git: {
+          resolveCommit: (input) => driver.resolveCommit({ ...input, cwd }),
+          verifyManagedCheckout: (input) =>
+            verifyManagedCheckout({ ...input, projectCwd: cwd }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    cwd,
+                    operation: "verifyManagedCheckout",
+                    command: "git",
+                    detail: cause.detail,
+                    cause,
+                  }),
+              ),
+            ),
+        },
+        createWorktree: (input, options) =>
+          Effect.gen(function* () {
+            if (!(yield* fs.exists(worktreePath)))
+              yield* git(cwd, ["commit", "--allow-empty", "-m", "base advanced"]);
+            return yield* driver.createWorktree({ ...input, cwd, path: worktreePath }, options);
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const thread = yield* launches.launch(
+          launchInput({
+            command: "launch:pin-add",
+            thread: "thread:pin-add",
+            message: "Start",
+            workspace: {
+              type: "worktree",
+              baseRef: "main",
+              startFromOrigin: false,
+            },
+          }),
+        );
+        const initial = yield* preparationSettled(thread.threadId);
+        assert.equal(initial.runs[0]?.status, "failed");
+        assert.equal((yield* fs.readFileString(seenHead)).trim(), pin);
+        yield* fs.remove(hook);
+        const run = initial.runs[0];
+        if (run === undefined) return assert.fail("Expected prepared run");
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("launch:pin-add:retry"),
+          threadId: thread.threadId,
+          runId: run.id,
+        });
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* threads.streamStoredEventsFrom({ threadId: thread.threadId }).pipe(
+          Stream.filter(
+            (event) =>
+              event.event.type === "run.updated" &&
+              (event.commandId === "launch:pin-add:retry:fail" ||
+                event.commandId === "launch:pin-add:retry:release"),
+          ),
+          Stream.runHead,
+        );
+        const retried = yield* threads.getThreadProjection(thread.threadId);
+        assert.equal(retried.runs[0]?.status, "starting");
+        assert.equal(retried.thread.worktreePath, worktreePath);
+        assert.equal((yield* git(worktreePath, ["rev-parse", "HEAD"])).stdout.trim(), pin);
+      }).pipe(Effect.provide(harness.layer));
+    }).pipe(
+      Effect.provide(
+        GitVcsDriver.layer.pipe(
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "goat-launch-pinned-fixture-" }),
+          ),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
 );

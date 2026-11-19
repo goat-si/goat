@@ -380,7 +380,9 @@ const make = Effect.gen(function* () {
       const generatedTemporaryBranch =
         input.workspaceStrategy.type === "worktree" && requestedBranch === undefined;
       let branch: string | null;
-      if (generatedTemporaryBranch) {
+      if (generatedTemporaryBranch && input.basePin?.checkoutBranch !== undefined) {
+        branch = input.basePin.checkoutBranch;
+      } else if (generatedTemporaryBranch) {
         const uuid = yield* randomUuidV4;
         branch = buildTemporaryWorktreeBranchName(() => uuid.replaceAll("-", ""));
         const settings = resolveProjectSettings(
@@ -477,20 +479,11 @@ const make = Effect.gen(function* () {
         } else if (shouldFetch) {
           yield* setupTracker.stageStatus(threadId, "fetch", "done");
         }
-        const base = yield* acceptWorktreeBase({
-          git,
-          threads,
-          project,
-          requestedBaseRef,
-          startRef,
-          baseRefName,
-          pinnedHead,
-          commandId: input.commandId,
-          threadId,
-          runId,
-          alreadyPinned: input.basePin !== undefined,
-        }).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-        if (branch !== null && (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))) {
+        if (
+          input.basePin?.checkoutBranch === undefined &&
+          branch !== null &&
+          (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
+        ) {
           const parts = branch.split("/");
           for (let depth = 1; depth < parts.length; depth++) {
             if (
@@ -508,8 +501,22 @@ const make = Effect.gen(function* () {
             }
           }
         }
+        const base = yield* acceptWorktreeBase({
+          git,
+          threads,
+          project,
+          requestedBaseRef,
+          startRef,
+          baseRefName,
+          pinnedHead,
+          checkoutBranch: generatedTemporaryBranch ? (branch ?? undefined) : undefined,
+          commandId: input.commandId,
+          threadId,
+          runId,
+          alreadyPinned: input.basePin !== undefined,
+        }).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
-        yield* note(`Creating a worktree on branch ${branch} from ${startRef}.`);
+        yield* note(`Creating a worktree on branch ${branch} from ${base.commitSha}.`);
         // Set from the fallback callback; the cast keeps TS from narrowing it to null.
         let worktreesDirectoryNotice = null as string | null;
         let existingBranch = null as {
@@ -522,9 +529,9 @@ const make = Effect.gen(function* () {
           .createWorktree(
             {
               cwd: project.workspaceRoot,
-              refName: startRef,
+              refName: base.commitSha,
               newRefName: branch!,
-              baseRefName,
+              baseRefName: base.baseRefName,
               path: null,
             },
             {
@@ -618,7 +625,6 @@ const make = Effect.gen(function* () {
             )
           : setupTracker.stageStatus(threadId, "checkout", "warning", checkoutWarning);
       }
-
       // Do not rewrite reused worktrees; that could undo the original branch rename.
       if (reused === undefined) {
         yield* threads
@@ -724,7 +730,6 @@ const make = Effect.gen(function* () {
           Effect.forkIn(preparationScope),
         );
       }
-
       if (runId !== null && worktreePath !== null) {
         yield* threads
           .dispatch({

@@ -24,5 +24,6 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 export const WorktreePreparationBasePin = Schema.Struct({
   commitSha: Schema.String,
   baseRefName: Schema.String,
+  checkoutBranch: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type WorktreePreparationBasePin = typeof WorktreePreparationBasePin.Type;
