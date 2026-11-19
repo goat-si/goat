@@ -1,6 +1,8 @@
 import {
   hasAcpDeferredBackgroundWork,
   idleReportedSubagents,
+  makeAcpAwaitBackgroundTasks,
+  takeAcpSessionPlans,
   acpTiming,
 } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
@@ -450,16 +452,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         );
         const nativeBuildConfigurationBySessionId = new Map<string, AcpNativeBuildConfiguration>();
         const plansBySessionId = new Map<string, ActiveAcpTurn["plans"]>();
-        const sessionPlans = (sessionId: string): ActiveAcpTurn["plans"] => {
-          const plans = plansBySessionId.get(sessionId) ?? new Map();
-          plansBySessionId.delete(sessionId);
-          plansBySessionId.set(sessionId, plans);
-          if (plansBySessionId.size > 8) {
-            const oldest = plansBySessionId.keys().next();
-            if (!oldest.done) plansBySessionId.delete(oldest.value);
-          }
-          return plans;
-        };
+        const sessionPlans = (sessionId: string) =>
+          takeAcpSessionPlans(plansBySessionId, sessionId);
         const initialSessionActivationFailure = yield* Ref.make<{
           readonly sessionId: string;
           readonly error: EffectAcpErrors.AcpError;
@@ -7884,6 +7878,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 providerThreadId: turnInput.providerThread.id,
               }),
             ),
+          ...(flavor.toolOutlivesPrompt === undefined
+            ? {}
+            : { awaitBackgroundTasks: makeAcpAwaitBackgroundTasks(flavor, activeTurn) }),
           interruptTurn: Effect.fn("AcpAdapterV2.interruptTurn")(
             function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
               return yield* Effect.uninterruptibleMask((restore) =>

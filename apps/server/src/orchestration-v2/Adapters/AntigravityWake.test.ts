@@ -310,6 +310,23 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
 
   // Frames as agy 1.5.11 sent them for `run_command` with `WaitMsBeforeAsync`: the prompt returns
   // end_turn while the command runs, and the agent replies when the command finishes.
+  it.effect("accepts goat_background_wait for a command it already tracks", () =>
+    Effect.gen(function* () {
+      const { session, providerThread, startTurn, throughPromptSettled } =
+        yield* openSessionWithRunningCommand({ WaitMsBeforeAsync: 10000 });
+      yield* startTurn(1, false);
+      yield* throughPromptSettled;
+      const taskIds = ["mock-session-1/task-2"];
+      assert.isDefined(session.awaitBackgroundTasks);
+      const result = yield* session.awaitBackgroundTasks!({
+        providerThread,
+        taskIds,
+        awaited: true,
+      });
+      assert.deepEqual(result.matched, taskIds);
+    }).pipe(Effect.provide(layerSession)),
+  );
+
   it.effect("keeps the run open while a command the agent waits for still runs", () =>
     Effect.gen(function* () {
       const { command, usage, offers, send, startTurn, until, throughPromptSettled } =
