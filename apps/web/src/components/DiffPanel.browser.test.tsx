@@ -70,8 +70,12 @@ vi.mock("~/hooks/useSettings", () => ({
   useClientSettings: (select: (settings: ClientSettings) => unknown) =>
     select(DEFAULT_CLIENT_SETTINGS),
   updateClientSettings: async () => {},
+  subscribeClientSettings: () => () => {},
 }));
-vi.mock("~/hooks/useTheme", () => ({ useRenderedAppearance: () => "dark" }));
+vi.mock(import("~/hooks/useTheme"), async (original) => ({
+  ...(await original()),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("~/state/queries", () => ({
   useCheckpointDiff: () => ({ data: state.checkpointDiff, error: null, isPending: false }),
   useTurnItemDetail: () => ({ data: null, error: null, isPending: false }),
@@ -81,10 +85,6 @@ vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => async () => {
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => async () => {} }));
 vi.mock("~/fileContextMenu", () => ({ useFileContextMenuHandler: () => () => {} }));
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => async () => {} }));
-// Replace the virtualized renderer while keeping the real annotation wrapper and its keyed lifecycle.
-vi.mock("./diffs/StyledDiffCodeView", () => ({
-  StyledDiffCodeView: () => <input aria-label="Diff search" />,
-}));
 vi.mock("./diffs/DiffFileTree", () => ({ DiffFileTree: () => null }));
 vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null }));
 
@@ -291,17 +291,35 @@ it("does not call a complete turn diff incomplete", async () => {
   await expect.element(screen.getByText(SIZE_LIMIT_NOTICE)).not.toBeInTheDocument();
 });
 
-it("keeps diff search input while collapsing and expanding files", async () => {
+it("keeps an open diff search while expanding and collapsing files", async () => {
   using context = setup("origin/orphan");
   selectTurnDiff(context, TURN_PATCH);
+  const container = document.createElement("div");
+  container.style.cssText = "width: 800px; height: 600px; display: flex";
   await using screen = await render(
     <RegistryContext.Provider value={context.registry}>
       <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
     </RegistryContext.Provider>,
+    { container },
   );
-  const search = screen.getByRole("textbox", { name: "Diff search" });
-  await userEvent.fill(search, "visible");
-  await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+  await expect.element(screen.getByRole("button", { name: "Expand all files" })).toBeVisible();
+  await vi.waitFor(() => expect(container.querySelector(".diff-render-surface")).not.toBeNull());
+  const viewer = container.querySelector<HTMLElement>(".diff-render-surface");
+  viewer!.focus();
+  viewer!.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "f",
+      metaKey: /mac/i.test(navigator.platform),
+      ctrlKey: !/mac/i.test(navigator.platform),
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  const search = () =>
+    viewer!.querySelector("[data-search-panel]")?.shadowRoot?.querySelector("input");
+  await vi.waitFor(() => expect(search()).not.toBeNull());
+  await userEvent.type(page.elementLocator(search()!), "visible");
   await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
-  await expect.element(search).toHaveValue("visible");
+  await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+  await vi.waitFor(() => expect(search()?.value).toBe("visible"));
 });
