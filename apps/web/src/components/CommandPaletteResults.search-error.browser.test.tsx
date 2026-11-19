@@ -11,7 +11,22 @@ function Results() {
   return (
     <Command>
       <CommandPaletteVirtualizedResults
-        rows={[{ kind: "label", key: "recent", label: "Recent threads", first: true }]}
+        rows={[
+          { kind: "label", key: "recent", label: "Recent threads", first: true },
+          {
+            kind: "item",
+            key: "thread",
+            itemIndex: 0,
+            item: {
+              kind: "action",
+              value: "thread",
+              title: "Retained thread",
+              searchTerms: [],
+              icon: null,
+              run: async () => {},
+            },
+          },
+        ]}
         listRef={list}
         isActionsOnly={false}
         keybindings={{} as ResolvedKeybindingsConfig}
@@ -24,5 +39,6 @@ function Results() {
 it("shows the search error beside retained results", async () => {
   await using screen = await render(<Results />);
   await expect.element(screen.getByText("Recent threads")).toBeInTheDocument();
+  await expect.element(screen.getByText("Retained thread")).toBeInTheDocument();
   await expect.element(screen.getByText("Couldn't search thread messages.")).toBeInTheDocument();
 });
