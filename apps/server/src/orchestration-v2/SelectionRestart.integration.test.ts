@@ -8,6 +8,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
+  TurnItemId,
   type RunId,
   ThreadId,
 } from "@goat/contracts";
@@ -16,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as EffectWorker from "./EffectWorker.ts";
@@ -239,18 +242,52 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
         // without asking it to.
         const capabilities = handoffCapabilities[mode];
         const base = makeRestartAdapter(state, capabilities);
+        const handoffToolId = TurnItemId.make(`turn-item:workspace-handoff:${mode}:tool`);
         const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = capabilities.sessions
           .supportsMultipleProviderThreadsPerSession
           ? base
           : {
               ...base,
               openSession: (input) =>
-                base.openSession(input).pipe(
-                  Effect.map((session) => ({
+                Effect.gen(function* () {
+                  const session = yield* base.openSession(input);
+                  const toolEvents =
+                    yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+                  return {
                     ...session,
+                    events: Stream.merge(session.events, Stream.fromQueue(toolEvents)),
+                    startTurn: (turn) =>
+                      Effect.gen(function* () {
+                        yield* session.startTurn(turn);
+                        const now = yield* DateTime.now;
+                        yield* Queue.offer(toolEvents, {
+                          type: "turn_item.updated",
+                          driver,
+                          turnItem: {
+                            id: handoffToolId,
+                            type: "dynamic_tool",
+                            threadId: turn.threadId,
+                            runId: turn.runId,
+                            nodeId: turn.rootNodeId,
+                            providerThreadId: turn.providerThread.id,
+                            providerTurnId: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
+                            nativeItemRef: null,
+                            parentItemId: null,
+                            ordinal: 1,
+                            status: "running",
+                            title: "goat_worktree_handoff",
+                            toolName: "goat.goat_worktree_handoff",
+                            input: {},
+                            output: null,
+                            startedAt: now,
+                            completedAt: null,
+                            updatedAt: now,
+                          },
+                        });
+                      }),
                     interruptTurn: () => Effect.die("an exclusive handoff must not interrupt"),
-                  })),
-                ),
+                  };
+                }),
             };
         const layerRegistry = ProviderAdapterRegistry.layerSingle(adapter);
 
@@ -356,6 +393,12 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
           ),
         );
 
+        if (!capabilities.sessions.supportsMultipleProviderThreadsPerSession) {
+          assert.equal(
+            projection.turnItems.find((item) => item.id === handoffToolId)?.status,
+            "interrupted",
+          );
+        }
         assert.equal(projection.thread.worktreePath, handoffCwd);
         assert.equal(projection.runs[0]?.status, "completed");
         assert.isNotNull(projection.runs[0]?.checkpointId ?? null);

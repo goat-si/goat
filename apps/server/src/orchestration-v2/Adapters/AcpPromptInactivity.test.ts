@@ -32,6 +32,8 @@ import * as Latch from "effect/Latch";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -61,6 +63,7 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   readonly cancelled?: Deferred.Deferred<void>;
   readonly followAgentWorkState?: boolean;
   readonly recognizedBackground?: boolean;
+  readonly sessionScope?: Scope.Scope;
 }) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const natives: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
@@ -112,12 +115,15 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
     cwd: process.cwd(),
   });
   const modelSelection = { instanceId, model: "default" } as const;
-  const runtime = yield* adapter.openSession({
+  const opened = adapter.openSession({
     threadId,
     providerSessionId: ProviderSessionId.make("provider-session-acp-prompt-inactivity"),
     modelSelection,
     runtimePolicy,
   });
+  const runtime = yield* input.sessionScope === undefined
+    ? opened
+    : opened.pipe(Effect.provideService(Scope.Scope, input.sessionScope));
   const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
   const startTurn = (ordinal: number) =>
     DateTime.now.pipe(
@@ -337,6 +343,33 @@ describe("ACP prompt inactivity", () => {
         const terminal = events.at(-1);
         assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
       }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("ends a running tool when its session closes mid-prompt", () =>
+    Effect.gen(function* () {
+      const sessionScope = yield* Scope.make();
+      const harness = yield* makePromptInactivityHarness({
+        sessionScope,
+        environment: () => ({ GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "other" }),
+      });
+      const tracked = (event: ProviderAdapter.ProviderAdapterV2Event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call";
+      yield* harness.startTurn(1);
+      yield* harness.runtime.events.pipe(Stream.filter(tracked), Stream.runHead);
+      yield* Scope.close(sessionScope, Exit.void);
+      const ended = yield* harness.runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            tracked(event) &&
+            event.type === "turn_item.updated" &&
+            event.turnItem.status !== "pending" &&
+            event.turnItem.status !== "running",
+        ),
+        Stream.runHead,
+      );
+      assert.isTrue(Option.isSome(ended));
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("fails a prompt its agent leaves silent past the inactivity timeout", () =>
