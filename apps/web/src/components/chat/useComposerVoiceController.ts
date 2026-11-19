@@ -30,6 +30,8 @@ import { composerTargetKey, useComposerDraftStore } from "../../composerDraftSto
 import { readThreadShell } from "../../state/entities";
 import { MAX_UNATTACHED_VOICE_TRANSCRIPTS, voiceSession } from "../../speech/voiceSession";
 import { captureBackgroundVoiceDraft } from "../../speech/backgroundVoiceDraft";
+import { startLiveSpeechSession } from "../../speech/liveSpeechSession";
+import { createLiveSpeechTransport } from "../../rpc/liveSpeechTransport";
 import { LiveSpeechFramePump, type LiveSpeechFrameSession } from "../../speech/liveSpeechFramePump";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
@@ -210,7 +212,7 @@ export class ComposerVoiceController {
     this.sequence = 0;
     this.appliedSequence = 0;
     this.publish({ ...IDLE, phase: "preparing" });
-    if (target.localModelGrant && target.liveEnabled && this.dependencies.startLive) {
+    if (target.localModelGrant && target.liveEnabled !== false && this.dependencies.startLive) {
       const startLive = this.dependencies.startLive;
       this.livePump = new LiveSpeechFramePump(
         (signal, onFailure) =>
@@ -464,6 +466,23 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
           const context = await resolveContext(request.environmentId);
           if (!context || signal.aborted) return;
           return prewarmEnvironmentVoice(context, request.routing, { signal });
+        },
+        startLive: async (target, onPreview, onFailure, signal) => {
+          const grant = target.localModelGrant;
+          const request = voiceTranscriptionRequest(target.route, target);
+          if (!grant || !request) return null;
+          const canSend = () =>
+            isEnvironmentSpeechGrantCurrent(grant) &&
+            readEnvironmentScope(request.environmentId, AuthOrchestrationOperateScope) &&
+            !readEnvironmentProxiedByHub(request.environmentId);
+          return startLiveSpeechSession({
+            transport: createLiveSpeechTransport(request.environmentId, canSend),
+            locale: target.locale,
+            canSend,
+            onPreview,
+            onFailure,
+            signal,
+          });
         },
         transcribe: async (target, payload, signal) => {
           const request = voiceTranscriptionRequest(target.route, target);

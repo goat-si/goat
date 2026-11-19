@@ -98,6 +98,20 @@ describe("composer voice controller", () => {
     await session.controller.start();
     expect(session.startRecording.mock.calls[0]?.[0].onPcmFrame).toBeUndefined();
   });
+
+  it("silently records in batch mode when live speech is unavailable", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const startLive = vi.fn(async () => null);
+    using session = setup({ localModelGrant: grant }, { startLive });
+    await session.controller.start();
+    expect(startLive).toHaveBeenCalledOnce();
+    expect(session.controller.getSnapshot()).toMatchObject({ phase: "recording", error: null });
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.readDraft().text).toBe("hello world");
+    chooseEnvironmentSpeech(null);
+  });
   it("keeps a live preview and commits the full batch transcript after live failure", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();
