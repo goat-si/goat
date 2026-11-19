@@ -116,6 +116,7 @@ import {
 import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
   claudeCompactionOutcome,
+  stoppedClaudeCompaction,
   readToolSearchSetting,
   resolveAutoCompactWindow,
 } from "./ClaudeCompactSettings.ts";
@@ -7082,6 +7083,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (message.type === "conversation_reset") {
             appContextDelivery.clear(context.nativeThreadId);
             context.appContextOffered = undefined;
+            if (context.compaction?.status === "running")
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CLAUDE_PROVIDER,
+                turnItem: stoppedClaudeCompaction(context.compaction, yield* DateTime.now),
+              });
+            context.compaction = null;
+            context.compactionFailure = null;
+            const budget = pdfBudgets.get(context.nativeThreadId);
+            if (budget !== undefined) budget.compacting = null;
             if (context.streamUsage !== null) context.streamUsage.usage = null;
             lastContextUsage.delete(context);
             yield* emitContextUsage(context, 0);
