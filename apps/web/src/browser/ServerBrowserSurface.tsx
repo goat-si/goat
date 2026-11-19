@@ -1,4 +1,11 @@
 import {
+  buttonOf,
+  pressedButtonOf,
+  historyDeltaOf,
+  copyPageText,
+  NoFramesMessage,
+} from "./serverBrowserSurfaceHelpers";
+import {
   createPreviewFramePainter,
   createPreviewStreamClient,
   previewStreamControlLabel,
@@ -81,6 +88,7 @@ const TAP_SLOP_PX = 8;
 const MULTI_CLICK_MS = 500;
 const MULTI_CLICK_SLOP_PX = 4;
 const WHEEL_LINE_PX = 16;
+const NO_FRAME_TIMEOUT_MS = 10_000;
 
 type MouseInput = Extract<PreviewStreamInput, { type: "mouse" }>;
 type WheelInput = Extract<PreviewStreamInput, { type: "wheel" }>;
@@ -108,35 +116,6 @@ interface TouchProbe {
   tapped: boolean;
 }
 
-const buttonOf = (button: number): PreviewStreamMouseButton =>
-  button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "none";
-
-const pressedButtonOf = (buttons: number): PreviewStreamMouseButton =>
-  buttons & 1 ? "left" : buttons & 2 ? "right" : buttons & 4 ? "middle" : "none";
-
-// Mouse thumb buttons: `button === 3` is Back, `button === 4` is Forward.
-const historyDeltaOf = (button: number): -1 | 1 | null =>
-  button === 3 ? -1 : button === 4 ? 1 : null;
-
-/** Browsers may refuse a write that arrives after the key press; a toast button is a fresh gesture. */
-async function copyPageText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const id = toastManager.add({
-      type: "info",
-      title: "The page copied text",
-      actionProps: {
-        children: "Copy",
-        onClick: () => {
-          toastManager.close(id);
-          void navigator.clipboard.writeText(text).catch(() => undefined);
-        },
-      },
-    });
-  }
-}
-
 export function ServerBrowserSurface(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: string;
@@ -151,6 +130,7 @@ export function ServerBrowserSurface(props: {
    */
   readonly thumbnail?: { readonly frameIntervalMs: number; readonly maxWidth: number };
   readonly onFirstFrame?: () => void;
+  readonly onNoFrames?: () => void;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPopup?: (tabId: string) => void;
@@ -167,6 +147,7 @@ export function ServerBrowserSurface(props: {
     controlPosition = "top",
     thumbnail,
     onFirstFrame,
+    onNoFrames,
     onViewport,
     onControl,
     onPopup,
@@ -256,6 +237,8 @@ export function ServerBrowserSurface(props: {
       ),
     );
   });
+  const noFrames = useEffectEvent(() => onNoFrames?.());
+  const [framesStalled, setFramesStalled] = useState(false);
   const viewportChanged = useEffectEvent((viewport: PreviewStreamViewport) =>
     onViewport?.(viewport),
   );
@@ -413,6 +396,11 @@ export function ServerBrowserSurface(props: {
     const canvas = canvasRef.current;
     if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let noFrameTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearNoFrameTimer = () => {
+      if (noFrameTimer !== null) clearTimeout(noFrameTimer);
+      noFrameTimer = null;
+    };
     const painter = createPreviewFramePainter(canvas, () => {
       const drawn = agentPointerRef.current;
       // A new viewport moves the cursor with the first frame painted after it, not before.
@@ -426,6 +414,8 @@ export function ServerBrowserSurface(props: {
       }
       if (hasFrameRef.current) return;
       hasFrameRef.current = true;
+      clearNoFrameTimer();
+      setFramesStalled(false);
       firstFrame();
     });
     painter.setSuppressed(privateRef.current);
@@ -510,7 +500,15 @@ export function ServerBrowserSurface(props: {
           }
         },
         onConnectedChange: (connected) => {
-          if (connected) return;
+          clearNoFrameTimer();
+          if (connected) {
+            if (!hasFrameRef.current)
+              noFrameTimer = setTimeout(() => {
+                setFramesStalled(true);
+                noFrames();
+              }, NO_FRAME_TIMEOUT_MS);
+            return;
+          }
           setFileChooser(null);
           controlRef.current = null;
           setControl(null);
@@ -535,6 +533,7 @@ export function ServerBrowserSurface(props: {
     clientRef.current = client;
     return () => {
       painter.stop();
+      clearNoFrameTimer();
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
@@ -913,6 +912,7 @@ export function ServerBrowserSurface(props: {
             if (text) send({ type: "text", text });
           }}
         />
+        {visible && framesStalled && !pdfUrl ? <NoFramesMessage /> : null}
         {fileChooser && control?.controller === "you" ? (
           <BrowserPagePrompt label="Choose files for the page" answering>
             <p className="text-sm">

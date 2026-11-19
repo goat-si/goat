@@ -186,8 +186,7 @@ export function PreviewView({
   }, [serverToolbarShown]);
   const [serverControlledTabId, setServerControlledTabId] = useState<string | null>(null);
   const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
-  const [serverFrameTabId, setServerFrameTabId] = useState<string | null>(null);
-  // A desktop page that mounted before its tab became server rendered leaves stale state here.
+  const [serverStreamSettledTabId, setServerStreamSettledTabId] = useState<string | null>(null);
   const desktopOverlay =
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const layoutZoomFactor = useBrowserLayoutZoomFactor(desktopOverlay?.zoomFactor ?? 1);
@@ -200,7 +199,7 @@ export function PreviewView({
   const isUnreachable = navStatus._tag === "LoadFailed";
   const showEmptyState = navStatus._tag === "Idle";
   const serverStreamPending =
-    isServerTab && !showEmptyState && !isUnreachable && serverFrameTabId !== runtimeTabId;
+    isServerTab && !showEmptyState && !isUnreachable && serverStreamSettledTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const browserDefaults = useBrowserDefaults();
@@ -1015,7 +1014,8 @@ export function PreviewView({
                     : null
                 }
                 visible={visible}
-                onFirstFrame={() => setServerFrameTabId(runtimeTabId)}
+                onFirstFrame={() => setServerStreamSettledTabId(runtimeTabId)}
+                onNoFrames={() => setServerStreamSettledTabId(runtimeTabId)}
                 onControl={(control) =>
                   setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
                 }
