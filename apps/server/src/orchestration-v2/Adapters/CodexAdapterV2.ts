@@ -131,6 +131,7 @@ import type {
 import * as NodePath from "@effect/platform-node/NodePath";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { startCodexThread } from "./CodexDelegatedSource.ts";
+import { makeCodexLiveTier } from "./CodexLiveTier.ts";
 import { makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import {
@@ -392,6 +393,7 @@ function codexErrorInfoCode(value: unknown): string | null {
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
 
 export interface ActiveCodexTurnContext {
+  liveTierSelection?: ModelSelection;
   hookStopReason?: string;
   hasOutput?: boolean;
   preOutputRetryAttempt?: number;
@@ -1173,6 +1175,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
         );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
+        const applyLiveTier = makeCodexLiveTier(
+          client,
+          activeTurns,
+          adapterOptions.resolveRuntime === undefined,
+        );
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
@@ -5862,6 +5869,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       return yield* startNativeTurn(
                         {
                           ...input.context.input,
+                          modelSelection:
+                            input.context.liveTierSelection ?? input.context.input.modelSelection,
                           providerTurnOrdinal: input.context.providerTurnOrdinal + 1,
                         },
                         codexInput,
@@ -7325,6 +7334,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 );
               }
               yield* turnStartGuard.awaitSteerable(activeTurn);
+              yield* applyLiveTier(threadId, turnInput.modelSelection);
 
               const codexInput = yield* toCodexInput(turnInput);
               yield* client.request("turn/steer", {
@@ -7346,6 +7356,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
+          applyModelSelection: Effect.fn("CodexAdapterV2.applyModelSelection")(function* ({
+            providerThread,
+            modelSelection,
+          }) {
+            const threadId = providerThread.nativeThreadRef?.nativeId;
+            if (threadId != null) yield* applyLiveTier(threadId, modelSelection);
+          }),
           // Unsubscribing lets the shared app-server shut down the idle thread and its MCP servers.
           unloadThread: Effect.fn("CodexAdapterV2.unloadThread")(
             function* (unloadInput) {

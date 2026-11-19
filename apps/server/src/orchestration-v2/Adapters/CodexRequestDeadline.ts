@@ -37,6 +37,7 @@ export const withCodexRequestDeadlines = Effect.fn("CodexRequestDeadline.wrap")(
         case "thread/unsubscribe":
         case "thread/goal/set":
         case "thread/goal/clear":
+        case "thread/settings/update":
         case "thread/compact/start":
           return "30 seconds";
         default:
