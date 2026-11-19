@@ -2879,6 +2879,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (!(yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => true)))) return null;
     const repository = yield* resolveRepositoryPaths(cwd);
     if (!repository?.worktreeRoot) return null;
+    if (
+      !(yield* fileSystem
+        .exists(path.join(repository.worktreeRoot, ".git"))
+        .pipe(Effect.orElseSucceed(() => true)))
+    )
+      return null;
     const currentBranch = needsCurrentBranch
       ? yield* readCurrentBranch("GitVcsDriver.review.currentBranch", cwd)
       : null;
