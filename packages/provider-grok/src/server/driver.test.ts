@@ -441,6 +441,41 @@ it.layer(layerTest)("GrokDriver", (it) => {
     });
   }
 
+  it.effect("keeps a script install off the npm updater under npx", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-" }));
+      const binaryPath = path.join(home, ".grok", "bin", windowsHost ? "grok.exe" : "grok");
+      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+      yield* fs.chmod(binaryPath, 0o755);
+
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-script"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [
+          {
+            name: "npm_config_user_agent",
+            value: "npm/11.6.2 node/v24.11.0 linux x64 workspaces/false",
+            sensitive: false,
+          },
+        ],
+        config: { ...GrokDriver.defaultConfig(), binaryPath },
+      });
+      const updateEnv = (yield* instance.snapshot.resolveMaintenance()).update?.env ?? {};
+      // The maintenance runner spawns with extendEnv, layering this over the server's process.env.
+      const env: NodeJS.ProcessEnv = {
+        npm_config_user_agent: "npm/11.6.2 node/v24.11.0",
+        ...updateEnv,
+      };
+      expect(env.GROK_INSTALLER === "internal" || env.npm_config_user_agent === undefined).toBe(
+        true,
+      );
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner)),
+  );
+
   it.effect("stays manual-only when the configured executable does not exist", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
