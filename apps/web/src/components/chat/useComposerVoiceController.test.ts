@@ -1,4 +1,9 @@
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  VoiceTranscriptionUpstreamError,
+} from "@goat/contracts";
 import type { VoiceDraftSnapshot } from "@goat/client-runtime/voice-input";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -94,6 +99,37 @@ function setup(
 }
 
 describe("composer voice controller", () => {
+  it.each([true, false])(
+    "retries one busy batch fallback and returns its final result (succeeds: %s)",
+    async (succeeds) => {
+      vi.useFakeTimers();
+      chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+      const grant = readEnvironmentSpeechGrant();
+      if (!grant) throw new Error("Grant was not stored");
+      const busy = new VoiceTranscriptionUpstreamError({
+        code: "voice-backend-unavailable",
+        retryable: true,
+        message: "Speech is busy.",
+      });
+      const transcribe = vi.fn().mockRejectedValueOnce(busy);
+      if (succeeds) transcribe.mockResolvedValueOnce({ text: "world" });
+      else transcribe.mockRejectedValueOnce(busy);
+      using session = setup(
+        { localModelGrant: grant },
+        { startLive: async () => null, transcribe },
+      );
+      await session.controller.start();
+      const confirmation = session.controller.confirm();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(await confirmation).toBe(succeeds);
+      expect(transcribe).toHaveBeenCalledTimes(2);
+      expect(succeeds ? session.readDraft().text : session.controller.getSnapshot().error).toBe(
+        succeeds ? "hello world" : "Speech is busy.",
+      );
+      chooseEnvironmentSpeech(null);
+      vi.useRealTimers();
+    },
+  );
   it("does not encode batch preview chunks while using an environment model", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();

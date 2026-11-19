@@ -129,8 +129,8 @@ it("abandons live streaming when its bounded backlog fills", async () => {
   const pump = new LiveSpeechFramePump(() => opened.promise, failed);
   for (let index = 0; index < 16; index++) pump.push(new Uint8Array(32_000));
   expect(failed).toHaveBeenCalledOnce();
-  expect(await pump.finish()).toBeNull();
   opened.resolve(null);
+  expect(await pump.finish()).toBeNull();
 });
 
 it("uses batch fallback when stopped during model startup and cancels a late stream", async () => {
@@ -148,18 +148,91 @@ it("uses batch fallback when stopped during model startup and cancels a late str
     () => {},
   );
   pump.push(new Uint8Array([1, 0]));
-  expect(await pump.finish()).toBeNull();
+  const finishing = pump.finish();
   expect(signal?.aborted).toBe(true);
   const cancelled = deferred<void>();
+  const release = deferred<void>();
   const session = {
     feed: vi.fn(async () => {}),
     finish: vi.fn(async () => "late"),
-    cancel: vi.fn(() => cancelled.resolve()),
+    cancel: vi.fn(async () => {
+      cancelled.resolve();
+      await release.promise;
+    }),
   };
   opened.resolve(session);
   await cancelled.promise;
+  let settled = false;
+  void finishing.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  release.resolve();
+  expect(await finishing).toBeNull();
   expect(session.feed).not.toHaveBeenCalled();
   expect(session.cancel).toHaveBeenCalledOnce();
+});
+
+it("waits for a stream that completes after startup failure to release before fallback", async () => {
+  const opened = deferred<{
+    feed: () => Promise<void>;
+    finish: () => Promise<string | null>;
+    cancel: () => Promise<void>;
+  } | null>();
+  const released = deferred<void>();
+  const cancelling = deferred<void>();
+  const pump = new LiveSpeechFramePump(
+    () => opened.promise,
+    () => {},
+  );
+  pump.stopStreaming();
+  const finishing = pump.finish();
+  opened.resolve({
+    feed: async () => {},
+    finish: async () => null,
+    cancel: async () => {
+      cancelling.resolve();
+      await released.promise;
+    },
+  });
+  await cancelling.promise;
+  let settled = false;
+  void finishing.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  released.resolve();
+  expect(await finishing).toBeNull();
+});
+
+it("waits for server release when cancelling an established stream", async () => {
+  const started = deferred<void>();
+  const released = deferred<void>();
+  const pump = new LiveSpeechFramePump(
+    async () => ({
+      feed: async () => {
+        started.resolve();
+      },
+      finish: async () => null,
+      cancel: async () => {
+        await released.promise;
+      },
+    }),
+    () => {},
+  );
+  pump.push(new Uint8Array([0, 0]));
+  await started.promise;
+  const cancelling = pump.cancel();
+  let settled = false;
+  void cancelling.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  released.resolve();
+  await cancelling;
 });
 
 it("falls back when finishing a live stream rejects", async () => {

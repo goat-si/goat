@@ -9,6 +9,47 @@ function deferred() {
   return { promise, resolve };
 }
 
+it("waits for cancellation when the start reply arrives after stop", async () => {
+  const reply = deferred();
+  const cancelling = deferred();
+  const released = deferred();
+  const controller = new AbortController();
+  const transport: LiveSpeechTransport = {
+    start: async () => {
+      await reply.promise;
+      return { streamId: "fixture" };
+    },
+    subscribe: async () => {
+      throw new Error("unexpected subscription");
+    },
+    feed: async () => {},
+    finish: async () => {},
+    cancel: async () => {
+      cancelling.resolve();
+      await released.promise;
+    },
+  };
+  const starting = startLiveSpeechSession({
+    transport,
+    locale: "en",
+    canSend: () => true,
+    onPreview: () => {},
+    onFailure: () => {},
+    signal: controller.signal,
+  });
+  controller.abort();
+  reply.resolve();
+  await cancelling.promise;
+  let settled = false;
+  void starting.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  released.resolve();
+  expect(await starting).toBeNull();
+});
+
 it("keeps the latest live preview and falls back after a feed failure", async () => {
   let event: Parameters<LiveSpeechTransport["subscribe"]>[1] | undefined;
   const transport: LiveSpeechTransport = {

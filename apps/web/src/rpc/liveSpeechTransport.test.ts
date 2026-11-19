@@ -59,12 +59,16 @@ it.effect("falls back for an old server and never sends audio on a replaced conn
       let supported = false;
       let starts = 0;
       let feeds = 0;
+      let pendingStart: Promise<void> | undefined;
+      let startBegan: (() => void) | undefined;
       const session = {
         initialConfig: Effect.sync(() => ({ speechStreamingV1: supported })),
         client: {
           [SPEECH_STREAM_WS_METHODS.start]: () =>
-            Effect.sync(() => {
+            Effect.promise(async () => {
               starts++;
+              startBegan?.();
+              await pendingStart;
               return { streamId: "fixture" };
             }),
           [SPEECH_STREAM_WS_METHODS.feed]: () =>
@@ -100,6 +104,25 @@ it.effect("falls back for an old server and never sends audio on a replaced conn
         expect(starts).toBe(0);
         supported = true;
         expect(yield* Effect.promise(() => transport.start("en"))).toEqual({ streamId: "fixture" });
+        yield* Effect.promise(async () => {
+          let release = () => {};
+          let began = () => {};
+          pendingStart = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const started = new Promise<void>((resolve) => {
+            began = resolve;
+          });
+          startBegan = began;
+          const abort = new AbortController();
+          const pending = transport.start("en", abort.signal);
+          await started;
+          abort.abort();
+          release();
+          expect(await pending).toEqual({ streamId: "fixture" });
+          pendingStart = undefined;
+          startBegan = undefined;
+        });
         yield* SubscriptionRef.set(sessionRef, Option.some({ ...session } as RpcSession));
         yield* Effect.promise(() =>
           expect(

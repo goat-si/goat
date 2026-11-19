@@ -27,6 +27,7 @@ import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-run
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { liveSpeechAvailable } from "../../speech/liveSpeechPreference";
+import { retryBusyTranscription } from "../../speech/retryBusyTranscription";
 import { toastManager } from "../ui/toast";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
 import { readThreadShell } from "../../state/entities";
@@ -358,6 +359,7 @@ export class ComposerVoiceController {
       if (!isCurrent()) return false;
       if (deferredCapture === null || payload === null)
         throw new Error("No audio was captured. Check your microphone and try again.");
+      const attemptedLive = this.livePump !== null;
       const liveText = await this.livePump?.finish();
       this.livePump = null;
       if (!isCurrent()) return false;
@@ -367,7 +369,10 @@ export class ComposerVoiceController {
         const fullPayload = deferredCapture?.encode() ?? payload;
         if (!fullPayload)
           throw new Error("No audio was captured. Check your microphone and try again.");
-        result = await this.dependencies.transcribe(target, fullPayload, signal);
+        const transcribe = () => this.dependencies.transcribe(target, fullPayload, signal);
+        result = attemptedLive
+          ? await retryBusyTranscription(transcribe, signal)
+          : await transcribe();
       }
       if (!isCurrent()) return false;
       unattachedTranscript = result.text;

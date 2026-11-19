@@ -85,14 +85,10 @@ const start = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "speech:start-stream",
   tag: SPEECH_STREAM_WS_METHODS.start,
   execute: (input: Pinned<{ readonly locale: string }>, _registry, environmentId) =>
-    abortable(
-      authorizeSession(input.session, input.canSend, environmentId).pipe(
-        Effect.andThen(
-          requestInSession(input.session, SPEECH_STREAM_WS_METHODS.start, { locale: input.locale }),
-        ),
+    authorizeSession(input.session, input.canSend, environmentId).pipe(
+      Effect.andThen(
+        requestInSession(input.session, SPEECH_STREAM_WS_METHODS.start, { locale: input.locale }),
       ),
-      input.signal,
-      environmentId,
     ),
 });
 const feed = createEnvironmentRpcCommand(connectionAtomRuntime, {

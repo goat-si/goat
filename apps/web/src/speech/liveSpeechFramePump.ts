@@ -1,5 +1,6 @@
 import { VOICE_STREAM_MAX_CHUNK_BYTES } from "@goat/contracts";
 import { StreamingPcmEncoder } from "./streamingPcmEncoder";
+import { LIVE_SPEECH_CANCEL_WAIT_MS } from "./liveSpeechSession";
 
 const MAX_PENDING_AUDIO_BYTES = 15 * 32_000;
 const MAX_PENDING_AUDIO_FRAMES = 15;
@@ -10,7 +11,7 @@ const CAPTURE_SLICE_SAMPLES = 2_048;
 export interface LiveSpeechFrameSession {
   readonly feed: (bytes: Uint8Array) => Promise<void>;
   readonly finish: () => Promise<string | null>;
-  readonly cancel: () => void;
+  readonly cancel: () => void | Promise<void>;
 }
 
 export class LiveSpeechFramePump {
@@ -24,6 +25,8 @@ export class LiveSpeechFramePump {
   private encoderFinished = false;
   private session: LiveSpeechFrameSession | null = null;
   private draining: Promise<void> | null = null;
+  private readonly starting: Promise<void>;
+  private cleanup: Promise<void> = Promise.resolve();
   private state: "starting" | "ready" | "failed" | "cancelled" | "finishing" = "starting";
 
   get active() {
@@ -38,10 +41,10 @@ export class LiveSpeechFramePump {
     start: (signal: AbortSignal, onFailure: () => void) => Promise<LiveSpeechFrameSession | null>,
     private readonly onFailure: () => void,
   ) {
-    void start(this.abort.signal, () => this.fail()).then(
-      (session) => {
+    this.starting = start(this.abort.signal, () => this.fail()).then(
+      async (session) => {
         if (this.state !== "starting") {
-          session?.cancel();
+          await session?.cancel();
           return;
         }
         if (!session) return this.fail();
@@ -142,7 +145,7 @@ export class LiveSpeechFramePump {
     if (this.state === "failed" || this.state === "cancelled") return;
     this.state = "failed";
     this.abort.abort();
-    this.session?.cancel();
+    this.cleanup = Promise.resolve(this.session?.cancel()).catch(() => {});
     this.queued.length = 0;
     this.queuedBytes = 0;
     this.capture.length = 0;
@@ -153,9 +156,10 @@ export class LiveSpeechFramePump {
 
   async finish() {
     if (this.state === "starting") {
-      this.cancel();
+      await this.cancel();
       return null;
     }
+    if (this.state === "failed") await this.waitForCleanup();
     if (this.state === "failed" && this.session) {
       try {
         await this.session.finish();
@@ -173,6 +177,7 @@ export class LiveSpeechFramePump {
           await pending;
         } catch {
           this.fail();
+          await this.waitForCleanup();
           return null;
         }
         if (this.draining === pending) this.draining = null;
@@ -180,6 +185,7 @@ export class LiveSpeechFramePump {
       }
       if (this.capture.length > 0) {
         this.fail();
+        await this.waitForCleanup();
         return null;
       }
       if (this.encoder && !this.encoderFinished) {
@@ -188,15 +194,20 @@ export class LiveSpeechFramePump {
           this.encoder.finish();
         } catch {
           this.fail();
+          await this.waitForCleanup();
           return null;
         }
         continue;
       }
       break;
     }
-    if (this.state !== "ready") return null;
+    if (this.state !== "ready") {
+      await this.waitForCleanup();
+      return null;
+    }
     if (this.queued.length > 0) {
       this.fail();
+      await this.waitForCleanup();
       return null;
     }
     this.state = "finishing";
@@ -204,19 +215,32 @@ export class LiveSpeechFramePump {
       return await this.session.finish();
     } catch {
       this.fail();
+      await this.waitForCleanup();
       return null;
     }
   }
 
   cancel() {
-    if (this.state === "cancelled" || this.state === "failed") return;
+    if (this.state === "cancelled" || this.state === "failed") return this.waitForCleanup();
     this.state = "cancelled";
     this.abort.abort();
-    this.session?.cancel();
+    this.cleanup = Promise.resolve(this.session?.cancel()).catch(() => {});
     this.queued.length = 0;
     this.queuedBytes = 0;
     this.capture.length = 0;
     this.captureSamples = 0;
     this.encoder = null;
+    return this.waitForCleanup();
+  }
+
+  private async waitForCleanup() {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all([this.starting.catch(() => {}), this.cleanup]).then(() => {}),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, LIVE_SPEECH_CANCEL_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 }

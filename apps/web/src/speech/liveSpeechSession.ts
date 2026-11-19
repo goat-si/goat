@@ -74,11 +74,12 @@ export async function startLiveSpeechSession(options: {
     options.onFailure();
   }
   function cancel() {
-    if (!active) return;
+    if (!active) return cleanup;
     active = false;
     cleanup = cancelRemote();
     resolveFinal(null);
     dispose();
+    return cleanup;
   }
   const onEvent = (event: SpeechStreamEvent) => {
     if (!active) return;
@@ -96,7 +97,7 @@ export async function startLiveSpeechSession(options: {
     options.onPreview(event.committed + event.tentative);
   };
   if (!options.canSend() || options.signal?.aborted) {
-    cancel();
+    await cancel();
     return null;
   }
   options.signal?.addEventListener("abort", cancel, { once: true });
@@ -104,10 +105,12 @@ export async function startLiveSpeechSession(options: {
     unsubscribe = await options.transport.subscribe(streamId, onEvent, fail, options.signal);
   } catch {
     fail();
+    await cleanup;
     return null;
   }
   if (!active) {
     unsubscribe();
+    await cleanup;
     return null;
   }
   return {
