@@ -1,3 +1,4 @@
+import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
 import { useAtomValue } from "@effect/atom-react";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./modelPickPending";
 import { sameDrafts } from "./draftEquality";
@@ -1079,16 +1080,6 @@ export async function archiveCloudComposerDrafts(
   });
   schedulePersistComposerState();
   await flushComposerDrafts();
-}
-
-function sameDraftAttachmentIds(
-  left: ReadonlyArray<DraftComposerAttachment>,
-  right: ReadonlyArray<DraftComposerAttachment>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((attachment, index) => attachment.id === right[index]?.id)
-  );
 }
 
 /** An in-flight delivery can finish after sign-out took its snapshot. */
