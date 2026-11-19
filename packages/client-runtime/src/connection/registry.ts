@@ -30,6 +30,7 @@ import type {
   ConnectionAttemptError,
   ConnectionTarget,
   NetworkStatus,
+  PenConnectionTarget,
   PersistedConnectionTarget,
   SupervisorConnectionState,
 } from "./model.ts";
@@ -237,8 +238,9 @@ export const make = Effect.gen(function* () {
     ReadonlyMap<EnvironmentId, EnvironmentServiceScope>
   >(new Map());
   const platformEnvironmentIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(new Set());
+  // The saved environments this channel lists; one it holds only hidden Pen routes for is not.
   const persistedEnvironmentIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(
-    new Set(persistedRoutesByEnvironment.keys()),
+    new Set(initialEntries.keys()),
   );
   const started = yield* Ref.make(false);
   const withLeaseLock = yield* makeLeaseLock;
@@ -443,6 +445,19 @@ export const make = Effect.gen(function* () {
 
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
+  const savedElsewhere = (target: PenConnectionTarget) =>
+    storage.list.pipe(
+      Effect.map((saved) =>
+        saved.some(
+          (other) =>
+            other._tag === "PenConnectionTarget" &&
+            other.connectionId === target.connectionId &&
+            other.environmentId !== target.environmentId,
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
     options?: { readonly knownAddressOnly?: boolean; readonly unlessSameAddress?: boolean },
@@ -453,8 +468,11 @@ export const make = Effect.gen(function* () {
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
-        // A Pen route the closed gate holds back is never saved or shown through here.
+        // A Pen route the closed gate holds back is never saved or shown through here, and one
+        // another environment saved (perhaps from another channel) is not taken over.
         if (!routeIsShown(route)) return false;
+        if (route.target._tag === "PenConnectionTarget" && (yield* savedElsewhere(route.target)))
+          return false;
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return false;
         }
@@ -534,11 +552,7 @@ export const make = Effect.gen(function* () {
               pullRequestRoutingConnectionKey(registered)
               ? { ...registered, ...unsupportedState(previous) }
               : registered;
-          // Only a registration this channel lists is its to remove: an id it holds only hidden
-          // Pen routes for may meanwhile have been paired again by another channel.
-          const persisted =
-            previous !== undefined &&
-            (yield* Ref.get(persistedEnvironmentIds)).has(target.environmentId);
+          const persisted = (yield* Ref.get(persistedEnvironmentIds)).has(target.environmentId);
           if (
             persisted ||
             (previous !== undefined &&
@@ -764,15 +778,7 @@ export const make = Effect.gen(function* () {
     // The environment goes as on dev; a route the closed Pen gate holds back stays saved, alone.
     const keepHidden = options?.keepHiddenRoutes === true;
     yield* registrations.remove(environmentId, { keepHidden });
-    // Still saved only if the catalog really kept a hidden route for it.
-    const kept =
-      keepHidden &&
-      (yield* storage.list.pipe(
-        Effect.map((targets) => targets.some((target) => target.environmentId === environmentId)),
-        Effect.orElseSucceed(() => false),
-      ));
-    if (!kept)
-      yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
+    yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
     yield* Effect.all(

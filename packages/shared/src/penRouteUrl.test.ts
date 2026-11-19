@@ -22,13 +22,14 @@ describe("Pen route URLs", () => {
   it("is no URL at all while the viewer is closed, so a local service with that path works as before", () => {
     expect(isPenRouteUrl(url, { enabled: false })).toBe(false);
     expect(isPenRouteUrl(url)).toBe(false);
+    expect(redactPenRouteUrl("failed " + url)).toBe("failed " + url);
   });
   it("redacts capabilities in embedded URLs without changing other text", () => {
-    expect(redactPenRouteUrl(`failed ${url}: error`)).toBe(
+    expect(redactPenRouteUrl(`failed ${url}: error`, open)).toBe(
       `failed http://127.0.0.1:1234/pen-route/redacted/api: error`,
     );
-    expect(redactPenRouteUrl("not a URL")).toBe("not a URL");
-    expect(redactPenRouteUrl(`http://localhost/pen-route/${capability}a/`)).toBe(
+    expect(redactPenRouteUrl("not a URL", open)).toBe("not a URL");
+    expect(redactPenRouteUrl(`http://localhost/pen-route/${capability}a/`, open)).toBe(
       `http://localhost/pen-route/${capability}a/`,
     );
   });

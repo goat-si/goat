@@ -28,5 +28,10 @@ export const isPenRouteUrl = (
 };
 
 /** Replaces the capability of every Pen route path in the text, so it can be logged or stored. */
-export const redactPenRouteUrl = (input: string): string =>
-  input.replace(/(\/pen-route\/)[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gu, "$1redacted");
+export const redactPenRouteUrl = (
+  input: string,
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
+): string =>
+  policy.enabled
+    ? input.replace(/(\/pen-route\/)[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gu, "$1redacted")
+    : input;

@@ -298,16 +298,18 @@ it.effect(
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
         // Another desktop channel pairs the environment while this one holds only its Pen route.
         yield* Ref.update(harness.storedTargets, (current) => [...current, BEARER_TARGET]);
-        yield* registry.registerPlatform(
-          new PrimaryConnectionRegistration({
-            target: new PrimaryConnectionTarget({
-              environmentId,
-              label: "Local",
-              httpBaseUrl: "http://127.0.0.1:3773",
-              wsBaseUrl: "ws://127.0.0.1:3773",
+        // The local backend registers, then again on a new port.
+        for (const port of [3773, 3774])
+          yield* registry.registerPlatform(
+            new PrimaryConnectionRegistration({
+              target: new PrimaryConnectionTarget({
+                environmentId,
+                label: "Local",
+                httpBaseUrl: "http://127.0.0.1:" + port,
+                wsBaseUrl: "ws://127.0.0.1:" + port,
+              }),
             }),
-          }),
-        );
+          );
         expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
           pen,
           BEARER_TARGET,

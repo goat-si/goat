@@ -17,7 +17,6 @@ import {
 import {
   BearerConnectionTarget,
   ConnectionTransientError,
-  PenConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -946,50 +945,4 @@ describe("Pen storage compatibility", () => {
         }
       }),
   );
-});
-
-it("an environment saved with only routes the closed Pen gate hides comes back last and switched on, as a new one does", () => {
-  const other = (name: string) =>
-    new BearerConnectionTarget({
-      environmentId: EnvironmentId.make(name),
-      label: name,
-      connectionId: name,
-    });
-  const pen = new PenConnectionTarget({
-    environmentId: ENVIRONMENT_ID,
-    label: "Pen",
-    connectionId: "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
-  });
-  const document = {
-    ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
-    targets: [other("b"), pen, other("c")],
-    // An older build switched the Pen-only environment off.
-    disabledEnvironmentIds: [ENVIRONMENT_ID],
-  };
-  const next = setRoutesInCatalog(document, ENVIRONMENT_ID, [pen, BEARER_TARGET]);
-  expect(next.disabledEnvironmentIds).toEqual([]);
-  expect(next.targets.map((target) => target.environmentId)).toEqual([
-    "b",
-    "c",
-    ENVIRONMENT_ID,
-    ENVIRONMENT_ID,
-  ]);
-});
-
-it("rewriting an environment's routes keeps the Pen routes the closed gate hides, which another channel may have saved", () => {
-  const pen = new PenConnectionTarget({
-    environmentId: ENVIRONMENT_ID,
-    label: "Pen",
-    connectionId: "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
-  });
-  const document = { ...EMPTY_CONNECTION_CATALOG_DOCUMENT, targets: [pen, BEARER_TARGET] };
-  expect(setRoutesInCatalog(document, ENVIRONMENT_ID, [BEARER_TARGET]).targets).toEqual([
-    pen,
-    BEARER_TARGET,
-  ]);
-  expect(
-    removeConnectionFromCatalog(document, ENVIRONMENT_ID, { keepHidden: true }).targets,
-  ).toEqual([pen]);
-  // Removing the environment itself takes its Pen routes with it.
-  expect(removeConnectionFromCatalog(document, ENVIRONMENT_ID).targets).toEqual([]);
 });

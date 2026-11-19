@@ -262,6 +262,18 @@ export function registerConnectionInCatalog(
   registration: ConnectionRegistration,
   routes: ReadonlyArray<PersistedConnectionTarget> = [registration.target],
 ): ConnectionCatalogDocument {
+  // A Pen member's route belongs to the environment that saved it; another one that answers
+  // for the member (a channel that did not know the saved one) does not take it over.
+  if (
+    registration._tag === "PenConnectionRegistration" &&
+    document.targets.some(
+      (target) =>
+        target._tag === "PenConnectionTarget" &&
+        target.connectionId === registration.target.connectionId &&
+        target.environmentId !== registration.target.environmentId,
+    )
+  )
+    return document;
   const next = setRoutesInCatalog(document, registration.target.environmentId, routes);
 
   switch (registration._tag) {
