@@ -135,13 +135,8 @@ export interface GitRemoteStatusOptions extends GitVcsDriver.GitRemoteStatusOpti
   readonly refreshMissingPullRequest?: boolean;
 }
 
-export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
-  readonly repositoryKey: string | null;
-  readonly updatedAt: string | null;
-  readonly closedAt?: string | null;
-  readonly mergedAt?: string | null;
-  readonly headSha?: string | null;
-};
+import type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
+export type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
 
 interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
