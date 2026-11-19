@@ -1,3 +1,4 @@
+import type * as EffectAcpSchema from "effect-acp/compat";
 import type {
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
@@ -218,3 +219,10 @@ export const ACP_PROMPT_ACTIVITY_UPDATES: ReadonlySet<string> = new Set([
   "compaction_update",
   "compaction_summary_chunk",
 ]);
+
+export function acpCanSwitchModelInSession(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  models: EffectAcpSchema.SessionModelState | null | undefined,
+): boolean {
+  return findModelConfigOption(configOptions) !== undefined || models != null;
+}
