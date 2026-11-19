@@ -1,3 +1,4 @@
+import * as PiConstants from "./adapterConstants.ts";
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
 import { adoptLivePiSession, isLivePiSession } from "./sessionIdentity.ts";
 import { piViewedImagePath } from "./viewedImagePath.ts";
@@ -101,15 +102,6 @@ import { PI_STANDARD_SERVICE_TIER } from "./serviceTierCapabilities.ts";
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 // Inherit Pi's configured defaultProvider/defaultModel without calling set_model.
 const PI_INHERIT_MODEL_SLUG = "default";
-const STREAM_FLUSH_MS = 50;
-const PI_REQUEST_TIMEOUT_MS = 15_000;
-const PI_SESSION_TIMEOUT_MS = 60_000;
-const MAX_EXTENSION_STATUSES = 32;
-const MAX_EXTENSION_STATUS_KEY_LENGTH = 256;
-const MAX_EXTENSION_STATUS_TEXT_LENGTH = 4096;
-const PI_UNSOLICITED_ACTIVITY_ERROR =
-  "Pi started agent work outside an active GOAT turn. The session was stopped to prevent invisible tool execution.";
-const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 export interface PiAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
@@ -402,18 +394,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (
           key === undefined ||
           key.trim().length === 0 ||
-          key.length > MAX_EXTENSION_STATUS_KEY_LENGTH ||
+          key.length > PiConstants.MAX_EXTENSION_STATUS_KEY_LENGTH ||
           (rawText !== undefined && typeof rawText !== "string")
         )
           return;
         const text =
           typeof rawText === "string"
             ? NodeUtil.stripVTControlCharacters(
-                rawText.slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH * 4),
+                rawText.slice(0, PiConstants.MAX_EXTENSION_STATUS_TEXT_LENGTH * 4),
               )
                 .replaceAll(/\p{Cc}/gu, " ")
                 .trim()
-                .slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH)
+                .slice(0, PiConstants.MAX_EXTENSION_STATUS_TEXT_LENGTH)
             : "";
         const statuses = sessionEntity.extensionStatuses ?? [];
         if (extensionStatusReset?.previous.some((status) => status.key === key)) {
@@ -422,7 +414,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const index = statuses.findIndex((status) => status.key === key);
         if (
           index < 0
-            ? text.length === 0 || statuses.length >= MAX_EXTENSION_STATUSES
+            ? text.length === 0 || statuses.length >= PiConstants.MAX_EXTENSION_STATUSES
             : statuses[index]?.text === text
         )
           return;
@@ -471,7 +463,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           connection = replacement.connection;
         },
       });
-      const request = (record: PiRpcRecord, timeoutMs = PI_REQUEST_TIMEOUT_MS) =>
+      const request = (record: PiRpcRecord, timeoutMs = PiConstants.PI_REQUEST_TIMEOUT_MS) =>
         activation.request(record, timeoutMs);
 
       const rememberModelContextWindow = (model: unknown) =>
@@ -497,7 +489,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             )
               return yield* protocolError("Pi transport closed during status reset");
             yield* Deferred.await(reset.ready);
-            const result = yield* request(record, PI_SESSION_TIMEOUT_MS);
+            const result = yield* request(record, PiConstants.PI_SESSION_TIMEOUT_MS);
             if (recordField(result, "cancelled") === true) {
               yield* sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
@@ -514,7 +506,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       (status) => !reset.previous.some((previous) => previous.key === status.key),
                     ),
                   );
-                  const statuses = restored.slice(0, MAX_EXTENSION_STATUSES);
+                  const statuses = restored.slice(0, PiConstants.MAX_EXTENSION_STATUSES);
                   if (
                     statuses.length === current.length &&
                     statuses.every(
@@ -813,7 +805,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         Effect.fnUntraced(function* (turn: ActivePiTurn, item: PiStreamItemState) {
           if (item.flushScheduled || item.completed) return;
           item.flushScheduled = true;
-          yield* Effect.sleep(Duration.millis(STREAM_FLUSH_MS)).pipe(
+          yield* Effect.sleep(Duration.millis(PiConstants.STREAM_FLUSH_MS)).pipe(
             Effect.andThen(
               Effect.suspend(() => {
                 item.flushScheduled = false;
@@ -1433,7 +1425,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       };
 
       // get_entries includes abandoned branches in append order; follow leaf parentId ancestry instead.
-      const captureTurnTreeRefs = Effect.fnUntraced(function* (timeoutMs = PI_REQUEST_TIMEOUT_MS) {
+      const captureTurnTreeRefs = Effect.fnUntraced(function* (
+        timeoutMs = PiConstants.PI_REQUEST_TIMEOUT_MS,
+      ) {
         const cursorWasStale = leafCursorStale;
         const previousLeaf = lastKnownLeaf;
         const fullListing = cursorWasStale || previousLeaf === null;
@@ -1738,7 +1732,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }
             if (turn === null) {
               unsolicitedActivityDetected = true;
-              yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+              yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
               yield* connection.terminate;
               return;
             }
@@ -2200,7 +2194,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 if (state !== null) yield* finalizeTurn(state);
                 return;
               }
-              if (attempt < SETTLE_PROBE_MAX_ATTEMPTS) {
+              if (attempt < PiConstants.SETTLE_PROBE_MAX_ATTEMPTS) {
                 yield* Effect.sleep(SETTLE_PROBE_RETRY_DELAY).pipe(
                   Effect.andThen(scheduleSettleProbe(turn, true, attempt + 1)),
                   Effect.forkIn(scope),
@@ -2300,7 +2294,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 yield* cancelPendingPrompts(yield* DateTime.now);
               }
               if (unsolicitedActivityDetected) {
-                yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+                yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
               } else if (stopRequested) {
                 yield* updateProviderSession("stopped", null);
@@ -2367,7 +2361,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           registrationAttempted = true;
           let stateData =
             resumeId != null || activation.isPending()
-              ? yield* request({ type: "get_state" }, PI_SESSION_TIMEOUT_MS)
+              ? yield* request({ type: "get_state" }, PiConstants.PI_SESSION_TIMEOUT_MS)
               : undefined;
           const liveFile = recordString(stateData, "sessionFile");
           const alreadyAttached =
@@ -2416,7 +2410,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             stateData = undefined;
           }
           if (profile.driver === "omo") {
-            yield* request({ type: "prompt", message: "/computer off" }, PI_SESSION_TIMEOUT_MS);
+            yield* request(
+              { type: "prompt", message: "/computer off" },
+              PiConstants.PI_SESSION_TIMEOUT_MS,
+            );
           }
           stateData ??= yield* request({ type: "get_state" });
           if (discoveredModels === null) yield* discoverModels();
@@ -3227,7 +3224,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     // The fork already moved the native session; never keep the old binding on failure.
                     yield* request(
                       { type: "prompt", message: "/computer off" },
-                      PI_SESSION_TIMEOUT_MS,
+                      PiConstants.PI_SESSION_TIMEOUT_MS,
                     ).pipe(
                       Effect.onError(() =>
                         Effect.sync(() => {
