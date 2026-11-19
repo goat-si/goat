@@ -1,3 +1,4 @@
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -22,6 +23,8 @@ export const scanSessionJsonl = Effect.fnUntraced(function* (
   fs: FileSystem.FileSystem,
   file: string,
   visit: (entry: Entry) => void,
+  account: (bytes: number) => Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
+  onSkip: () => void,
 ) {
   const line = new Uint8Array(MAX_LINE_BYTES);
   const decoder = new TextDecoder();
@@ -29,11 +32,12 @@ export const scanSessionJsonl = Effect.fnUntraced(function* (
   let overflow = false;
   let skipped = 0;
   const finishLine = () => {
-    if (overflow) skipped++;
-    else if (size > 0) {
+    if (!overflow && size > 0) {
       const decoded = decodeLine(decoder.decode(line.subarray(0, size)));
-      if (Option.isNone(decoded)) skipped++;
-      else {
+      if (Option.isNone(decoded)) {
+        skipped++;
+        onSkip();
+      } else {
         const record = decoded.value;
         const id = piRecordString(record, "id");
         const parentId = piRecordField(record, "parentId");
@@ -64,24 +68,31 @@ export const scanSessionJsonl = Effect.fnUntraced(function* (
   };
   yield* fs.stream(file, { chunkSize: 16 * 1024 }).pipe(
     Stream.runForEach((chunk) =>
-      Effect.sync(() => {
-        let offset = 0;
-        while (offset < chunk.length) {
-          const newline = chunk.indexOf(10, offset);
-          const end = newline < 0 ? chunk.length : newline;
-          const count = end - offset;
-          if (!overflow) {
-            if (size + count > MAX_LINE_BYTES) overflow = true;
-            else {
-              line.set(chunk.subarray(offset, end), size);
-              size += count;
+      account(chunk.length).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            let offset = 0;
+            while (offset < chunk.length) {
+              const newline = chunk.indexOf(10, offset);
+              const end = newline < 0 ? chunk.length : newline;
+              const count = end - offset;
+              if (!overflow) {
+                if (size + count > MAX_LINE_BYTES) {
+                  overflow = true;
+                  skipped++;
+                  onSkip();
+                } else {
+                  line.set(chunk.subarray(offset, end), size);
+                  size += count;
+                }
+              }
+              if (newline < 0) break;
+              finishLine();
+              offset = newline + 1;
             }
-          }
-          if (newline < 0) break;
-          finishLine();
-          offset = newline + 1;
-        }
-      }),
+          }),
+        ),
+      ),
     ),
   );
   if (size > 0 || overflow) finishLine();
@@ -93,6 +104,8 @@ export const inspectSessionJsonl = Effect.fnUntraced(function* (
   file: string,
   targetId: string,
   boundaryId: string,
+  account: (bytes: number) => Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
+  onSkip: () => void,
 ) {
   const cache = new Map<string, Entry>();
   let leaf: Entry | undefined;
@@ -101,34 +114,46 @@ export const inspectSessionJsonl = Effect.fnUntraced(function* (
   let targetCount = 0;
   let boundaryCount = 0;
   let count = 0;
-  const skipped = yield* scanSessionJsonl(fs, file, (entry) => {
-    count++;
-    leaf = entry;
-    if (entry.id === targetId) {
-      target = entry;
-      targetCount++;
-    }
-    if (entry.id === boundaryId) {
-      boundary = entry;
-      boundaryCount++;
-    }
-    if (cache.size >= MAX_CACHED_ENTRIES && !cache.has(entry.id)) {
-      const oldest = cache.keys().next().value;
-      if (oldest !== undefined) cache.delete(oldest);
-    }
-    cache.set(entry.id, entry);
-  });
+  const skipped = yield* scanSessionJsonl(
+    fs,
+    file,
+    (entry) => {
+      count++;
+      leaf = entry;
+      if (entry.id === targetId) {
+        target = entry;
+        targetCount++;
+      }
+      if (entry.id === boundaryId) {
+        boundary = entry;
+        boundaryCount++;
+      }
+      if (cache.size >= MAX_CACHED_ENTRIES && !cache.has(entry.id)) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+      cache.set(entry.id, entry);
+    },
+    account,
+    onSkip,
+  );
   const lookup = Effect.fnUntraced(function* (id: string) {
     const cached = cache.get(id);
     if (cached !== undefined) return cached;
     let result: Entry | undefined;
     let hits = 0;
-    yield* scanSessionJsonl(fs, file, (entry) => {
-      if (entry.id === id) {
-        result = entry;
-        hits++;
-      }
-    });
+    yield* scanSessionJsonl(
+      fs,
+      file,
+      (entry) => {
+        if (entry.id === id) {
+          result = entry;
+          hits++;
+        }
+      },
+      account,
+      onSkip,
+    );
     return hits === 1 ? result : undefined;
   });
   const walk = Effect.fnUntraced(function* (

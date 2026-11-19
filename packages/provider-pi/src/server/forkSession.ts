@@ -15,7 +15,7 @@ import {
   piRecordString as recordString,
 } from "./rpc.ts";
 import { readPiEntries } from "./entries.ts";
-import { findHistoricalForkSession } from "./historicalForkSession.ts";
+import { findHistoricalForkSession, makeHistoricalScanBudget } from "./historicalForkSession.ts";
 import { piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 
 export const forkPiSessionOnce = Effect.fnUntraced(function* ({
@@ -107,6 +107,7 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
         detail: "Cannot recover Pi fork session: missing captured target entry",
       });
     const targetProof = { type: "entry" as const, entryId: id, turn: target, target };
+    const scanBudget = makeHistoricalScanBudget();
     const provideFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
       effect.pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -120,6 +121,9 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
         true,
         true,
         boundary.type !== "nothing",
+        undefined,
+        undefined,
+        scanBudget,
       ),
     );
     if (boundary.type === "entry") {
@@ -132,21 +136,28 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
           false,
           false,
           sourceFile,
+          undefined,
+          scanBudget,
         ),
       ).pipe(
         Effect.map(() => boundary),
-        Effect.catch(() =>
-          provideFs(
-            findHistoricalForkSession(
-              input.sourceFile,
-              targetProof,
-              input.driver,
-              true,
-              true,
-              false,
-              sourceFile,
-            ),
-          ).pipe(Effect.as({ type: "nothing" as const })),
+        Effect.catchIf(
+          (error) =>
+            error.detail.startsWith("Cannot recover Pi fork session: no verified sibling session"),
+          () =>
+            provideFs(
+              findHistoricalForkSession(
+                input.sourceFile,
+                targetProof,
+                input.driver,
+                true,
+                true,
+                false,
+                sourceFile,
+                undefined,
+                scanBudget,
+              ),
+            ).pipe(Effect.as({ type: "nothing" as const })),
         ),
       );
       return yield* forkPiSessionOnce({ ...input, sourceFile, boundary: narrowed });

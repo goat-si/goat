@@ -3,11 +3,49 @@ import * as NodeFSP from "node:fs/promises";
 import type { ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { PiForkBoundary } from "./forkBoundary.ts";
 import { inspectSessionJsonl } from "./sessionJsonlScan.ts";
+
+const MAX_SCANNED_FILES = 2048;
+const MAX_SCANNED_BYTES = 512 * 1024 * 1024;
+const MAX_SCAN_DURATION_MS = 10_000;
+
+interface ScanLimits {
+  readonly maxFiles: number;
+  readonly maxBytes: number;
+  readonly maxDurationMs: number;
+}
+
+interface ScanBudget {
+  readonly limits: ScanLimits;
+  readonly stats: { files: number; bytes: number; unreadable: number; skipped: number };
+  startedAt: number | undefined;
+}
+
+export const makeHistoricalScanBudget = (
+  limits: ScanLimits = {
+    maxFiles: MAX_SCANNED_FILES,
+    maxBytes: MAX_SCANNED_BYTES,
+    maxDurationMs: MAX_SCAN_DURATION_MS,
+  },
+): ScanBudget => ({
+  limits,
+  stats: { files: 0, bytes: 0, unreadable: 0, skipped: 0 },
+  startedAt: undefined,
+});
+
+const filenameTimestamp = (name: string) => {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z/u.exec(name);
+  if (match === null) return undefined;
+  const parsed = DateTime.make(`${match[1]}:${match[2]}:${match[3]}.${match[4]}Z`);
+  return Option.isSome(parsed) ? DateTime.toEpochMillis(parsed.value) : undefined;
+};
 
 export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalForkSession")(
   function* (
@@ -18,6 +56,8 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
     singleTarget = false,
     allowLater = false,
     onlyFile?: string,
+    limits?: ScanLimits,
+    sharedBudget?: ScanBudget,
   ) {
     const fail = (detail: string) =>
       new ProviderAdapter.ProviderAdapterProtocolError({
@@ -38,11 +78,26 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const directory = path.dirname(currentFile);
-    const realDirectory = yield* fs
-      .realPath(directory)
-      .pipe(Effect.mapError(() => fail("session directory is unreadable")));
-    return yield* Effect.scoped(
+    const budget = sharedBudget ?? makeHistoricalScanBudget(limits);
+    const stats = budget.stats;
+    const now = yield* Clock.currentTimeMillis;
+    budget.startedAt ??= now;
+    const remainingMs = budget.limits.maxDurationMs - (now - budget.startedAt);
+    const limit = (kind: string) =>
+      fail(
+        `Couldn't verify which session this turn belongs to within the ${kind} scan limit; fork from a newer turn or open the session file (${stats.files} files, ${stats.bytes} bytes, ${stats.unreadable} unreadable files, ${stats.skipped} skipped lines)`,
+      );
+    const account = (bytes: number) =>
+      Effect.suspend(() => {
+        stats.bytes += bytes;
+        return stats.bytes > budget.limits.maxBytes ? Effect.fail(limit("bytes")) : Effect.void;
+      });
+    if (remainingMs <= 0) return yield* limit("time");
+    const scan = Effect.scoped(
       Effect.gen(function* () {
+        const realDirectory = yield* fs
+          .realPath(directory)
+          .pipe(Effect.mapError(() => fail("session directory is unreadable")));
         const handle = yield* Effect.acquireRelease(
           Effect.tryPromise({
             try: () => NodeFSP.opendir(realDirectory),
@@ -55,8 +110,7 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
             }).pipe(Effect.ignore),
         );
         let match: string | undefined;
-        let unreadable = 0;
-        let skipped = 0;
+        const files: string[] = [];
         while (true) {
           const entry = yield* Effect.tryPromise({
             try: () => handle.read(),
@@ -65,20 +119,38 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
           if (entry === null) break;
           if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
           const file = path.join(directory, entry.name);
+          stats.files++;
+          if (stats.files > budget.limits.maxFiles) return yield* limit("files");
           if (
             (!includeCurrent && file === currentFile) ||
             (onlyFile !== undefined && file !== onlyFile)
           )
             continue;
+          files.push(file);
+        }
+        files.sort((a, b) => {
+          const targetTime = from ?? between;
+          const ta = filenameTimestamp(path.basename(a));
+          const tb = filenameTimestamp(path.basename(b));
+          const da =
+            targetTime === undefined || ta === undefined ? Infinity : Math.abs(ta - targetTime);
+          const db =
+            targetTime === undefined || tb === undefined ? Infinity : Math.abs(tb - targetTime);
+          return da === db ? (a < b ? -1 : a > b ? 1 : 0) : da - db;
+        });
+        for (const file of files) {
           const result = yield* Effect.result(
-            inspectSessionJsonl(fs, file, targetId, boundary.entryId),
+            inspectSessionJsonl(fs, file, targetId, boundary.entryId, account, () => {
+              stats.skipped++;
+            }),
           );
           if (result._tag === "Failure") {
-            unreadable++;
+            if (result.failure._tag === "ProviderAdapterProtocolError")
+              return yield* result.failure;
+            stats.unreadable++;
             continue;
           }
           const listing = result.success;
-          skipped += listing.skipped;
           const inWindow = (
             item: typeof listing.target,
             low: number | undefined,
@@ -105,7 +177,8 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
             ),
           );
           if (tail._tag === "Failure") {
-            unreadable++;
+            if (tail.failure._tag === "ProviderAdapterProtocolError") return yield* tail.failure;
+            stats.unreadable++;
             continue;
           }
           if (!tail.success) continue;
@@ -113,7 +186,9 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
             listing.walk(listing.boundary, targetId, () => true),
           );
           if (ancestors._tag === "Failure") {
-            unreadable++;
+            if (ancestors.failure._tag === "ProviderAdapterProtocolError")
+              return yield* ancestors.failure;
+            stats.unreadable++;
             continue;
           }
           if (!ancestors.success) continue;
@@ -122,10 +197,13 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
         }
         if (match === undefined)
           return yield* fail(
-            `no verified sibling session (${unreadable} unreadable files, ${skipped} skipped lines)`,
+            `no verified sibling session (${stats.unreadable} unreadable files, ${stats.skipped} skipped lines)`,
           );
         return match;
       }),
     );
+    const result = yield* scan.pipe(Effect.timeoutOption(Duration.millis(remainingMs)));
+    if (Option.isNone(result)) return yield* limit("time");
+    return result.value;
   },
 );
