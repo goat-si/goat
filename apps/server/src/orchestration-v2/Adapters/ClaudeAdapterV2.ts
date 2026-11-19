@@ -1,3 +1,4 @@
+import { claudeWakeBufferDetail } from "./ClaudeWakeBufferDetail.ts";
 import {
   nextClaudeGoal,
   isClaudeGoalAcknowledgement,
@@ -1854,21 +1855,6 @@ function claudeSettledSubagentToolUseIds(messages: ReadonlyArray<SDKMessage>): R
           )
         : [],
     ),
-  );
-}
-
-function claudeWakeBufferDetail(messages: ReadonlyArray<SDKMessage>): string | null {
-  return (
-    messages
-      .flatMap((entry) =>
-        entry.type === "system" &&
-        entry.subtype === "task_notification" &&
-        typeof entry.summary === "string" &&
-        entry.summary.length > 0
-          ? [entry.summary]
-          : [],
-      )
-      .at(-1) ?? null
   );
 }
 
