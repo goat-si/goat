@@ -31,7 +31,7 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     threadId: ThreadId,
     operation: Schema.Literals(["interrupt", "restart", "steer"]),
     providerTurnId: ProviderTurnId,
-    turnCompleted: Schema.optional(Schema.Boolean),
+    missedBeforeSubmit: Schema.optional(Schema.Boolean),
     reason: Schema.optional(Schema.Literal("tracking-unavailable")),
     steerDeclined: Schema.optional(Schema.Boolean),
     /** The provider never confirmed the stop; Force stop is the way out. */
@@ -142,7 +142,7 @@ export const layer: Layer.Layer<
             threadId: input.threadId,
             operation: "steer",
             providerTurnId: input.providerTurnId,
-            turnCompleted: providerTurn.status === "completed",
+            missedBeforeSubmit: providerTurn.status === "completed",
             cause: "The provider turn ended before the steering message was delivered.",
           });
         }
@@ -508,23 +508,6 @@ export const layer: Layer.Layer<
                     }),
                   ),
               }),
-              Effect.catch((cause) =>
-                Effect.gen(function* () {
-                  if (isProviderTurnControlError(cause)) return yield* cause;
-                  const current = yield* projections.getProviderControlContext(
-                    input.threadId,
-                    input,
-                  );
-                  const status = current.providerTurn?.status;
-                  return yield* new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "steer",
-                    providerTurnId: input.providerTurnId,
-                    turnCompleted: status === "completed",
-                    cause,
-                  });
-                }),
-              ),
             );
         },
         (effect, input) =>

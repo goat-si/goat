@@ -433,6 +433,7 @@ export const adoptSurvivor = Effect.fn("CodexSurvivorContinuation.adopt")(functi
     return false;
   const binding = yield* input.survivors.value.get(input.instanceId, input.turnInput.threadId);
   if (binding === undefined) return false;
+  yield* input.turnInput.inputDelivery?.inherited() ?? Effect.void;
   const entry: NonNullable<ReturnType<SurvivorWaiting["get"]>> = input.waiting.waiting.get(
     binding.nativeThreadId,
   ) ?? {

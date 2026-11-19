@@ -683,6 +683,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                   }),
                 ),
               );
+              yield* input.inputDelivery?.submitted() ?? Effect.void;
               const turn: OrchestrationV2ProviderTurn = {
                 id: ids.derive.providerTurn({
                   driver: DRIVER,

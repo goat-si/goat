@@ -44,6 +44,8 @@ import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
   skillMentions,
+  availableSkillMentions,
+  listDirectorySkills,
   formQuestions,
   formAnswer,
   approves,
@@ -3331,26 +3333,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     });
 
-    const listSkills = (location: { readonly directory: string }) =>
-      client.skill.list({ location }).pipe(
-        Effect.timeout(INVENTORY_TIMEOUT),
-        Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),
-        Effect.orElseSucceed(() => new Set<string>()),
-      );
-
-    // OpenCode answers model inventory after its directory scan completes.
-    const skillsMentioned = Effect.fnUntraced(function* (
-      location: { readonly directory: string },
-      mentions: ReadonlyArray<string>,
-    ) {
-      const known = yield* listSkills(location);
-      if (mentions.some((name) => !known.has(name))) {
-        yield* readModels(location.directory);
-        for (const name of yield* listSkills(location)) known.add(name);
-      }
-      return mentions.filter((name) => known.has(name));
-    });
-
     const submit = Effect.fnUntraced(function* (
       sessionId: string,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -3358,11 +3340,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
     ) {
       const sessionID = Session.ID.make(sessionId);
-      const sending = () => {
+      const sending = Effect.fnUntraced(function* () {
+        if (state.active !== turn || turn.interrupted) return false;
+        if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return false;
         if (state.active !== turn || turn.interrupted) return false;
         turn.unsent = false;
         return true;
-      };
+      });
       const finishControl = lock.withPermit(
         Effect.suspend(() =>
           state.active === turn ? finishTurn(state, { status: "completed" }) : Effect.void,
@@ -3373,12 +3357,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const id = turnPromptId(sessionId, turnInput.attemptId);
       const goalCommand = supportsNativeGoals() ? parseGoalCommand(turnInput.message) : null;
       if (goalCommand?.type === "show") {
-        if (!sending()) return;
+        if (!(yield* sending())) return;
         yield* readGoal(state);
         return yield* finishControl;
       }
       if (bare && text === "/compact") {
-        if (!sending()) return;
+        if (!(yield* sending())) return;
         return yield* client.session.compact({ sessionID, id }).pipe(Effect.asVoid);
       }
       const location = { directory: turnInput.runtimePolicy.cwd ?? host.paths.cwd };
@@ -3395,23 +3379,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           yield* markBefore(sessionId, newest.data[0]?.id ?? null);
           if (state.active !== turn || turn.interrupted) return;
           yield* prepareMemory(sessionId, state, turnInput);
-          if (!sending()) return;
+          if (!(yield* sending())) return;
           if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
             yield* client.session
               .command({ sessionID, ...command })
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          return yield* client.session.command({ sessionID, ...command }).pipe(Effect.asVoid);
+          return yield* client.session
+            .command({ sessionID, ...command })
+            .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
         }
       }
       const mentions = skillMentions(text);
-      const skills = mentions.length === 0 ? [] : yield* skillsMentioned(location, mentions);
+      const skills =
+        mentions.length === 0
+          ? []
+          : yield* availableSkillMentions(
+              mentions,
+              listDirectorySkills(client, location),
+              readModels(location.directory),
+            );
       if (state.active !== turn || turn.interrupted) return;
       yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
-      const messageText = yield* promptText(turnInput);
-      if (!sending()) return;
+      const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
+      if (!(yield* sending())) return;
       return yield* client.session
         .prompt({
           sessionID,
@@ -3422,10 +3415,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ? {}
             : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
         })
-        .pipe(Effect.asVoid);
+        .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
     });
 
     const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+      tracksInputDelivery: true,
       instanceId,
       driver,
       providerSessionId: input.providerSessionId,
@@ -3577,6 +3571,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ),
           ),
       ),
+      resumeInterruptedTurn: (input) => runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
       compactThread: (turnInput) =>
         runtime.startTurn({ ...turnInput, message: { ...turnInput.message, text: "/compact" } }),
       startTurn: Effect.fn("OpenCode2Adapter.startTurn")(
@@ -3691,6 +3686,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (started === undefined) return;
           const { state, sessionId, turn } = started;
           yield* submit(sessionId, turnInput, state, turn).pipe(
+            Effect.tap(() =>
+              turn.unsent
+                ? (turnInput.inputDelivery?.skipped() ?? Effect.void)
+                : (turnInput.inputDelivery?.accepted() ?? Effect.void),
+            ),
             // Forget externally deleted sessions so the next turn recreates them with handoff.
             Effect.catchTags({
               SessionNotFoundError: () =>

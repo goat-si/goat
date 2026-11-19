@@ -1,3 +1,7 @@
+import { makeRunInputDelivery, submitProviderInput } from "./RunInputDelivery.ts";
+import { hasNativeGoals } from "./providerTurnStartHelpers.ts";
+import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
+import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
 export { selectInheritedBackgroundTurnItems } from "./InheritedBackgroundTurnItems.ts";
 import { isTerminalProviderTurnStatus, isSettledTurnItemStatus } from "./providerTurnStatus.ts";
@@ -28,6 +32,7 @@ import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
+  parseGoalCommand,
   isGoatBotSessionThreadId,
   CommandId,
   RunId,
@@ -340,6 +345,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];
   readonly cloudSource?: import("@goat/contracts").OrchestrationV2CloudTask["source"];
   readonly reattach?: boolean;
+  readonly resume?: boolean;
   readonly cloudLaunchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
   readonly commandId: CommandId;
   readonly appThread: OrchestrationV2AppThread;
@@ -348,6 +354,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly checkpointScope: OrchestrationV2CheckpointScope | null;
+  readonly baseline?: Effect.Effect<void>;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly attempt: OrchestrationV2RunAttempt;
   readonly attemptId: RunAttemptId;
@@ -370,6 +377,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
 }
 
 export interface RunExecutionServiceV2Shape {
+  readonly forkBaseline: (input: RunBaselineInput) => Effect.Effect<Effect.Effect<void>>;
   readonly startRootRun: (
     input: RunExecutionServiceV2StartRootRunInput,
   ) => Effect.Effect<void, RunExecutionServiceV2Error>;
@@ -751,6 +759,11 @@ export const layer: Layer.Layer<
     );
 
     return RunExecutionServiceV2.of({
+      forkBaseline: (input) =>
+        captureRunBaseline(checkpointService, input).pipe(
+          Effect.forkChild({ startImmediately: true }),
+          Effect.map(Fiber.join),
+        ),
       startRootRun: Effect.fn("RunExecutionService.startRootRun")(function* (input) {
         const cloud =
           input.cloudSource !== undefined || input.providerThread.cloudTask !== undefined;
@@ -804,23 +817,7 @@ export const layer: Layer.Layer<
                   .responseStreamingMode,
             ),
           );
-          if (input.checkpointScope !== null) {
-            yield* checkpointService
-              .captureBaseline({
-                scope: input.checkpointScope,
-                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-              })
-              .pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
-                    : Effect.logWarning(
-                        "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                        { runId: input.run.id },
-                      ),
-                ),
-              );
-          }
+          yield* input.baseline ?? captureRunBaseline(checkpointService, input);
           if (
             input.shouldStartProviderTurn !== undefined &&
             !(yield* input.shouldStartProviderTurn())
@@ -1753,8 +1750,14 @@ export const layer: Layer.Layer<
           key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
           text: entry.text,
         }));
+        const compact =
+          input.message.attachments.length === 0 &&
+          input.message.text.trim().toLowerCase() === "/compact";
         const inbox =
-          input.reattach === true
+          input.reattach === true ||
+          input.resume === true ||
+          compact ||
+          (parseGoalCommand(input.message) !== null && hasNativeGoals(input.session))
             ? { texts: [], reports: [], throughId: null }
             : yield* remoteReportInbox
                 .pending(input.run.threadId)
@@ -1765,10 +1768,24 @@ export const layer: Layer.Layer<
                     ),
                   ),
                 );
-        const compact =
-          input.message.attachments.length === 0 &&
-          input.message.text.trim().toLowerCase() === "/compact";
+        const consumeReports =
+          inbox.throughId === null
+            ? Effect.void
+            : remoteReportInbox
+                .consume(input.run.threadId, inbox.throughId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to consume remote report inbox.", { cause }),
+                  ),
+                );
+        const inputDelivery = yield* makeRunInputDelivery(
+          eventSink,
+          idAllocator,
+          input,
+          consumeReports,
+        );
         const turnInput = {
+          ...(inputDelivery === undefined ? {} : { inputDelivery }),
           ...(input.reattach === true || input.refreshMemoryContext === undefined
             ? {}
             : { refreshMemoryContext: input.refreshMemoryContext }),
@@ -1903,57 +1920,15 @@ export const layer: Layer.Layer<
           return;
         }
 
-        const {
-          message: _savedPrompt,
-          cloudLaunchSource: _launchCheckout,
-          ...attachInput
-        } = turnInput;
-        const startTurn =
-          input.reattach === true
-            ? (input.session.resumeTurn?.({
-                ...attachInput,
-                cloudTask: input.providerThread.cloudTask!,
-              }) ??
-              Effect.fail(
-                new ProviderAdapter.ProviderAdapterTurnStartError({
-                  driver: input.session.driver,
-                  threadId: input.run.threadId,
-                  providerThreadId: input.providerThread.id,
-                  runId: input.run.id,
-                  cause:
-                    "This cloud provider cannot reattach observation. Open the saved task link.",
-                }),
-              ))
-            : compact
-              ? (input.session.compactThread?.(turnInput) ??
-                Effect.fail(
-                  new ProviderAdapter.ProviderAdapterTurnStartError({
-                    driver: input.session.driver,
-                    threadId: input.run.threadId,
-                    providerThreadId: input.providerThread.id,
-                    runId: input.run.id,
-                    cause: new ProviderAdapter.ProviderCompactionUnsupportedError({
-                      driver: input.session.driver,
-                      providerThreadId: input.providerThread.id,
-                    }),
-                  }),
-                ))
-              : input.session.startTurn(turnInput);
+        const startTurn = providerTurnOperation(
+          input,
+          turnInput,
+          compact,
+          input.reattach === true ? { cloudTask: input.providerThread.cloudTask! } : null,
+        );
         yield* Effect.andThen(
           shouldStart,
-          startTurn.pipe(
-            Effect.tap(() =>
-              input.reattach === true || compact || inbox.throughId === null
-                ? Effect.void
-                : remoteReportInbox
-                    .consume(input.run.threadId, inbox.throughId)
-                    .pipe(
-                      Effect.catch((cause) =>
-                        Effect.logWarning("Failed to consume remote report inbox.", { cause }),
-                      ),
-                    ),
-            ),
-          ),
+          submitProviderInput(input.session, inputDelivery, startTurn),
         ).pipe(
           // Wait for acceptance so abandoned startup cannot leave a refresher
           // on the already-detached ingestion fiber.

@@ -289,6 +289,62 @@ describe("formatThreadTitleContext", () => {
 });
 
 describe("ThreadTitleRegenerationService", () => {
+  it.effect("keeps a title set before the first message unless it is a placeholder", () =>
+    Effect.gen(function* () {
+      const seed = "work on this and pr to dev";
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        // An MCP launch names the thread, or leaves a placeholder, and sends no message.
+        for (const [key, title, expectedTitle, generates] of [
+          ["preset", "[API] #4821 — retry webhook deliveries after a timeout", undefined, false],
+          ["placeholder", "Parent thread 1", seed, true],
+        ] as const) {
+          const threadId = ThreadId.make(`thread:title:${key}`);
+          yield* threads.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`command:title:${key}:create`),
+            threadId,
+            projectId,
+            title,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const requestId = CommandId.make(`command:title:${key}:message`);
+          yield* threads.dispatch({
+            type: "message.dispatch",
+            commandId: requestId,
+            threadId,
+            messageId: MessageId.make(`command:title:${key}:message:message`),
+            text: seed,
+            titleSeed: seed,
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: "defer_start" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+
+          const settled = yield* threads.getThreadProjection(threadId);
+          assert.equal(settled.thread.title, expectedTitle ?? title, key);
+          assert.equal(
+            (yield* outbox.listByCommandId(requestId)).some(
+              (effect) => effect.request.type === "thread-title.generate",
+            ),
+            generates,
+            key,
+          );
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect(
     "titles an image-only first message without sending bootstrap text to the title model",
     () =>

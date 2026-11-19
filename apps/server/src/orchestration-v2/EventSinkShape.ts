@@ -23,6 +23,8 @@ import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
 import type * as EventSinkBatch from "./EventSinkBatch.ts";
+import type { AttemptDeliveryUpdate } from "./AttemptInputDelivery.ts";
+import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
 import type { CommitGuardRefused } from "./goat/CommitGuard.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
 import type * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -106,6 +108,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly unlessInterruptRequested?: { readonly requestId: string; readonly resultId: string };
+    readonly attemptDelivery?: AttemptDeliveryUpdate;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<
@@ -177,6 +180,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly initialMessageReceipt?: AtomicLaunchReceipt;
     /** Queue runtime work without changing projections; requires at least one effect. */
     readonly allowEffectOnly?: boolean;
     readonly cancelUnsettledEffects?: Omit<

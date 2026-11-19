@@ -1,5 +1,12 @@
 import { preparationSettled } from "./testkit/preparationSettled.ts";
-import { otherProjectId, project, adapter, makeHarness } from "./testkit/ThreadLaunchHarness.ts";
+import {
+  otherProjectId,
+  project,
+  adapter,
+  claudeAdapter,
+  claudeModelSelection,
+  makeHarness,
+} from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput, projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import { makeObservedSetup } from "../project/testkit/ProjectScriptRunnerHarness.ts";
 import { fakeCloudCapabilities, fakeCloudDriver } from "./testkit/FakeCloudAdapter.ts";
@@ -194,7 +201,7 @@ it.effect.each([" /COMPACT ", "/logout"])(
         );
         assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.lastVisitedAt);
         assert.isFalse(
-          (yield* outbox.listByCommandId(CommandId.make("compact-title:initial-message"))).some(
+          (yield* outbox.listByCommandId(CommandId.make("compact-title"))).some(
             (effect) => effect.request.type === "thread-title.generate",
           ),
         );
@@ -337,7 +344,7 @@ it.effect("arms durable title generation after accepting the first message", () 
         generateTitle: true,
       };
       const launched = yield* launches.launch(input);
-      const generationCommandId = CommandId.make("command:launch:title-generation:initial-message");
+      const generationCommandId = input.commandId;
 
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.thread.title, "Generate my title");
@@ -407,6 +414,59 @@ it.effect("arms durable title generation after accepting the first message", () 
         DateTime.toEpochMillis(afterStaleCompletion.thread.updatedAt),
         DateTime.toEpochMillis(renamed.thread.updatedAt),
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("rejects a first message and its new thread together", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ adapters: [adapter, claudeAdapter] });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:rejected-new-thread",
+        thread: "thread:launch:rejected-new-thread",
+        message: "/goal pause",
+      });
+      yield* launches.launch({ ...input, modelSelection: claudeModelSelection }).pipe(Effect.flip);
+      assert.isNull(yield* threads.getThreadShell(input.threadId));
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("removes a forged first prompt from the client create command", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const threadId = ThreadId.make("thread:launch:forged-message");
+      const command = ThreadManagement.withCreationProvenance(
+        {
+          type: "thread.create",
+          commandId: CommandId.make("command:launch:forged-message"),
+          threadId,
+          projectId,
+          title: "An empty thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          initialMessage: {
+            messageId: MessageId.make("message:forged"),
+            text: "Forged",
+            attachments: [],
+          },
+        },
+        { createdBy: "user", creationSource: "web" },
+      );
+      yield* threads.dispatch(command);
+      const projection = yield* threads.getThreadProjection(threadId);
+      assert.isEmpty(projection.runs);
+      assert.isEmpty(projection.messages);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -979,6 +1039,17 @@ it.effect("replays a server-allocated launch", () =>
         workspace: { type: "worktree", baseRef: "main" },
       });
       const first = yield* launches.launch(rest);
+      const created = yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
+        Stream.filter(
+          ({ event }) => event.type === "thread.created" || event.type === "run.created",
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      assert.deepEqual(
+        Array.from(created, (event) => event.commandId),
+        [rest.commandId, CommandId.make(`${rest.commandId}:initial-message`)],
+      );
       yield* Deferred.await(setupEntered);
       const retry = yield* launches.launch(rest);
       assert.equal(first.threadId, retry.threadId);
@@ -992,6 +1063,25 @@ it.effect("replays a server-allocated launch", () =>
       assert.equal(retry.projection.runs.length, 1);
       assert.equal(retry.projection.messages[0]?.id, first.projection.messages[0]?.id);
       assert.equal(retry.projection.runs[0]?.id, first.projection.runs[0]?.id);
+      const legacyRetry = yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${rest.commandId}:initial-message`),
+        threadId: first.threadId,
+        messageId: MessageId.make("allocated-after-downgrade"),
+        text: "Only once",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "defer_start", workspaceStrategy: rest.workspaceStrategy },
+        createdBy: rest.createdBy,
+        creationSource: rest.creationSource,
+      });
+      assert.isTrue(legacyRetry.replayed);
+      assert.equal(legacyRetry.sequence, first.sequence);
+      assert.equal(
+        legacyRetry.storedEvents.find(({ event }) => event.type === "run.created")?.event.runId,
+        first.projection.runs[0]?.id,
+      );
+      assert.lengthOf((yield* threads.getThreadProjection(first.threadId)).runs, 1);
       yield* Deferred.succeed(allowSetup, undefined);
       yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
         Stream.filter(
@@ -1982,110 +2072,6 @@ it.effect.each([
   }),
 );
 
-const existingBranch = (
-  state: Partial<GitVcsDriver.ExistingBranchState>,
-): GitVcsDriver.ExistingBranchState => ({
-  tip: "tip",
-  baseSha: "base",
-  uniqueCommits: 0,
-  worktreePath: null,
-  dirty: false,
-  ...state,
-});
-
-it.effect.each([
-  {
-    name: "has commits its base lacks in another worktree",
-    state: { uniqueCommits: 2, worktreePath: "/worktrees/lane" },
-    message:
-      'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project" and has 2 commits that origin/lane/fix does not, so a new worktree cannot reuse it.',
-  },
-  {
-    name: "has a commit its base lacks and no worktree",
-    state: { uniqueCommits: 1 },
-    message:
-      'Branch "lane/fix" already exists in project "Project" (/repo) and has 1 commit that origin/lane/fix does not, so a new worktree cannot reuse it.',
-  },
-  {
-    name: "has uncommitted changes in its worktree",
-    state: { worktreePath: "/worktrees/lane", dirty: true },
-    message:
-      'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project" and has uncommitted changes there, so a new worktree cannot reuse it.',
-  },
-  {
-    name: "is the project's main checkout",
-    state: { worktreePath: "/repo" },
-    message:
-      'Branch "lane/fix" is already checked out at /repo in project "Project" and is the project\'s main checkout, so a new worktree cannot reuse it.',
-  },
-])("refuses a new worktree whose branch $name", (testCase) =>
-  Effect.gen(function* () {
-    const harness = makeHarness({
-      hasCommit: () => Effect.succeed(true),
-      git: {
-        inspectExistingBranch: ({ branch }) =>
-          Effect.succeed(branch === "lane/fix" ? existingBranch(testCase.state) : null),
-      },
-    });
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const error = yield* launches
-        .checkWorktreeBase({
-          projectId,
-          workspaceStrategy: {
-            type: "worktree",
-            baseRef: "origin/lane/fix",
-            branch: "lane/fix",
-            startFromOrigin: true,
-          },
-        })
-        .pipe(Effect.flip);
-      assert.deepInclude(error, {
-        _tag: "ThreadLaunchBranchError",
-        projectId,
-        branch: "lane/fix",
-        worktreePath: testCase.state.worktreePath ?? null,
-      });
-      assert.equal(error.message, testCase.message);
-    }).pipe(Effect.provide(harness.layer));
-  }),
-);
-
-it.effect.each([
-  { name: "a clean worktree", state: { worktreePath: "/worktrees/lane" } },
-  { name: "no worktree", state: {} },
-])("lets a launch reuse an existing branch with no commits of its own and $name", (testCase) =>
-  Effect.gen(function* () {
-    const harness = makeHarness({
-      hasCommit: () => Effect.succeed(true),
-      git: { inspectExistingBranch: () => Effect.succeed(existingBranch(testCase.state)) },
-    });
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      yield* launches.checkWorktreeBase({
-        projectId,
-        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "lane/fix" },
-      });
-    }).pipe(Effect.provide(harness.layer));
-  }),
-);
-
-it.effect("leaves a new branch name to the launch", () =>
-  Effect.gen(function* () {
-    const harness = makeHarness({
-      hasCommit: ({ refName }) => Effect.succeed(!refName.startsWith("refs/heads/")),
-      git: { inspectExistingBranch: () => Effect.succeed(null) },
-    });
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      yield* launches.checkWorktreeBase({
-        projectId,
-        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "lane/new" },
-      });
-    }).pipe(Effect.provide(harness.layer));
-  }),
-);
-
 it.effect("records launcher before preparation and preserves it on receipt replay", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
@@ -2392,7 +2378,7 @@ it.effect.each([" /COMPACT "])(
         );
         assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.lastVisitedAt);
         assert.isFalse(
-          (yield* outbox.listByCommandId(CommandId.make("compact-title:initial-message"))).some(
+          (yield* outbox.listByCommandId(CommandId.make("compact-title"))).some(
             (effect) => effect.request.type === "thread-title.generate",
           ),
         );

@@ -1,3 +1,5 @@
+import { initializeAttemptDelivery, withAttemptDeliveryEvent } from "./AttemptInputDelivery.ts";
+import { makeCommandEventAppender } from "./AtomicLaunchReceipt.ts";
 import { makeEventSinkComparePayloadWrites } from "./EventSinkComparePayload.ts";
 import { makeEventJournalCatchUp, makeEventJournalTail } from "./eventJournalTail.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
@@ -198,7 +200,7 @@ const layerBase: Layer.Layer<
                         : runOrdinals.get(event.payload.runId),
                     )
                     .pipe(Effect.map((payload) => ({ ...event, payload })))
-                : Effect.succeed(event),
+                : Effect.succeed(initializeAttemptDelivery(event)),
             { concurrency: 1 },
           ),
         ),
@@ -206,6 +208,7 @@ const layerBase: Layer.Layer<
     };
 
     const appendStagedEvents = makeTaskAppender(sql, eventStore, projectionStore, scheduledRuns);
+    const appendCommandEvents = makeCommandEventAppender(appendStagedEvents, commandReceipts);
 
     const applyStoredEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -444,7 +447,7 @@ const layerBase: Layer.Layer<
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
                 ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                : yield* withAttemptDeliveryEvent(sql, input),
             );
             const storedEvents = yield* appendStagedEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
@@ -599,10 +602,7 @@ const layerBase: Layer.Layer<
               ? input.events
               : yield* updateDelegatedCompletionOnly(input.events, (id) => id === runId),
           );
-          const storedEvents = yield* appendStagedEvents({
-            commandId: input.commandId,
-            events: normalized,
-          });
+          const storedEvents = yield* appendCommandEvents(input, normalized);
           let sequence = storedEvents.at(-1)?.sequence;
           if (
             sequence === undefined &&

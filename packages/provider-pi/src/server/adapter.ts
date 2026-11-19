@@ -2760,7 +2760,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               rejectedPromptFailure: null,
               unreadSteers: [],
             };
-            // Lock only install/send/start events; correlated setup must leave the pump free for dialogs.
             while (true) {
               const pendingAck = yield* Effect.gen(function* () {
                 if (
@@ -2800,6 +2799,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       ...(payload.images.length === 0 ? {} : { images: payload.images }),
                     },
                   });
+                  yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
                 }
                 yield* emit({
                   type: "provider_turn.updated",

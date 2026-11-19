@@ -1,7 +1,7 @@
+import * as Fiber from "effect/Fiber";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { rootAppThread } from "./RunExecutionService.compactCases.ts";
 import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
-import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
 import { registerAgentOomRunCases } from "./RunExecutionService.oomCases.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -19,7 +19,6 @@ import {
   CommandId,
   MessageId,
   NodeId,
-  ScheduledTaskId,
   type OrchestrationV2CheckpointScope,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
@@ -1134,126 +1133,151 @@ it.effect(
     }).pipe(Effect.provide(layerRunExecutionTest)),
 );
 
-it.effect("starts the provider when checkpoint baseline capture fails", () =>
-  Effect.gen(function* () {
-    const threadId = ThreadId.make("thread:run-execution-baseline-failure");
-    const runId = RunId.make("run:run-execution-baseline-failure");
-    const attemptId = RunAttemptId.make("attempt:run-execution-baseline-failure");
-    const providerThreadId = ProviderThreadId.make(
-      "provider-thread:run-execution-baseline-failure",
-    );
-    const providerInstanceId = ProviderInstanceId.make("codex");
-    const providerSessionId = ProviderSessionId.make("session:run-execution-baseline-failure");
-    const rootNodeId = NodeId.make("node:run-execution-baseline-failure");
-    const checkpointScope = {
-      id: CheckpointScopeId.make("checkpoint-scope:run-execution-baseline-failure"),
-    } as OrchestrationV2CheckpointScope;
-    const providerStarts = yield* Ref.make(0);
-    const writes = yield* Ref.make<
-      ReadonlyArray<{
-        events: ReadonlyArray<OrchestrationV2DomainEvent>;
-        effects: ReadonlyArray<PendingOrchestrationEffectV2>;
-      }>
-    >([]);
-    const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          McpAppModelContext.layerEmpty,
-          RemoteReportInbox.layerEmpty,
-          PreviewAgentActivity.layer,
-          Layer.mock(CheckpointService.CheckpointServiceV2)({
-            captureBaseline: () =>
-              Effect.fail(
-                new CheckpointService.CheckpointBaselineCaptureError({
-                  scopeId: checkpointScope.id,
-                  ordinalWithinScope: 0,
-                  cause: new Error("VCS process timed out"),
-                }),
-              ),
-          }),
-          layerTurnItemPositionsTest,
-          mockEventSink({
-            writeWithEffects: (input) =>
-              Ref.update(writes, (current) => [
-                ...current,
-                { events: input.events, effects: input.effects },
-              ]).pipe(Effect.as([])),
-          }),
-          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
-            ingestNormalized: () => Effect.succeed([]),
-          }),
-          ServerSettings.layerTest(),
+it.effect.each(["fails", "completes after opening the session"] as const)(
+  "starts the provider after baseline capture %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:run-execution-baseline-failure");
+      const runId = RunId.make("run:run-execution-baseline-failure");
+      const attemptId = RunAttemptId.make("attempt:run-execution-baseline-failure");
+      const providerThreadId = ProviderThreadId.make(
+        "provider-thread:run-execution-baseline-failure",
+      );
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const providerSessionId = ProviderSessionId.make("session:run-execution-baseline-failure");
+      const rootNodeId = NodeId.make("node:run-execution-baseline-failure");
+      const checkpointScope = {
+        id: CheckpointScopeId.make("checkpoint-scope:run-execution-baseline-failure"),
+      } as OrchestrationV2CheckpointScope;
+      const providerStarts = yield* Ref.make(0);
+      const capturing = yield* Deferred.make<void>();
+      const sessionOpened = yield* Deferred.make<void>();
+      const captured = yield* Deferred.make<void>();
+      const writes = yield* Ref.make<
+        ReadonlyArray<{
+          events: ReadonlyArray<OrchestrationV2DomainEvent>;
+          effects: ReadonlyArray<PendingOrchestrationEffectV2>;
+        }>
+      >([]);
+      const layerTest = RunExecutionService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            McpAppModelContext.layerEmpty,
+            RemoteReportInbox.layerEmpty,
+            PreviewAgentActivity.layer,
+            Layer.mock(CheckpointService.CheckpointServiceV2)({
+              captureBaseline: () =>
+                scenario !== "fails"
+                  ? Deferred.succeed(capturing, undefined).pipe(
+                      Effect.andThen(Deferred.await(sessionOpened)),
+                      Effect.andThen(Deferred.succeed(captured, undefined)),
+                    )
+                  : Effect.fail(
+                      new CheckpointService.CheckpointBaselineCaptureError({
+                        scopeId: checkpointScope.id,
+                        ordinalWithinScope: 0,
+                        cause: new Error("VCS process timed out"),
+                      }),
+                    ),
+            }),
+            layerTurnItemPositionsTest,
+            mockEventSink({
+              writeWithEffects: (input) =>
+                Ref.update(writes, (current) => [
+                  ...current,
+                  { events: input.events, effects: input.effects },
+                ]).pipe(Effect.as([])),
+            }),
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
+            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ingestNormalized: () => Effect.succeed([]),
+            }),
+            ServerSettings.layerTest(),
+          ),
         ),
-      ),
-    );
+      );
 
-    yield* Effect.gen(function* () {
-      const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
-      yield* runExecution.startRootRun({
-        commandId: CommandId.make("command:run-execution-baseline-failure"),
-        appThread: rootAppThread(threadId),
-        providerSessionId,
-        session: {
-          events: Stream.never,
-          startTurn: () => Ref.update(providerStarts, (count) => count + 1),
-        } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
-        run: {
-          id: runId,
-          threadId,
-          ordinal: 1,
-          providerInstanceId,
-        } as OrchestrationV2Run,
-        rootNode: { id: rootNodeId } as OrchestrationV2ExecutionNode,
-        checkpointScope,
-        providerThread: {
-          id: providerThreadId,
-          driver,
-        } as OrchestrationV2ProviderThread,
-        attempt: {
-          id: attemptId,
-          providerTurnId: null,
-        } as OrchestrationV2RunAttempt,
-        attemptId,
-        providerTurnOrdinal: 1,
-        message: {
-          messageId: MessageId.make("message:run-execution-baseline-failure"),
-          text: "Start the provider without a baseline.",
-          attachments: [],
-          createdBy: "user",
-          creationSource: "web",
-        },
-        modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: process.cwd(),
-          approvalPolicy: "never",
-          sandboxPolicy: {
-            type: "readOnly",
-            access: { type: "fullAccess" },
-            networkAccess: false,
+      yield* Effect.gen(function* () {
+        const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
+        const run = { id: runId, threadId, ordinal: 1, providerInstanceId } as OrchestrationV2Run;
+        const baseline =
+          scenario === "fails"
+            ? undefined
+            : yield* runExecution.forkBaseline({ run, checkpointScope });
+        if (baseline !== undefined) {
+          yield* Deferred.await(capturing);
+          assert.equal(yield* Ref.get(providerStarts), 0);
+        }
+        const started = runExecution.startRootRun({
+          ...(baseline === undefined ? {} : { baseline }),
+          commandId: CommandId.make("command:run-execution-baseline-failure"),
+          appThread: rootAppThread(threadId),
+          providerSessionId,
+          session: {
+            events: Stream.never,
+            startTurn: () =>
+              Effect.gen(function* () {
+                if (scenario !== "fails") assert.isTrue(yield* Deferred.isDone(captured));
+                yield* Ref.update(providerStarts, (count) => count + 1);
+              }),
+          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
+          run,
+          rootNode: { id: rootNodeId } as OrchestrationV2ExecutionNode,
+          checkpointScope,
+          providerThread: {
+            id: providerThreadId,
+            driver,
+          } as OrchestrationV2ProviderThread,
+          attempt: {
+            id: attemptId,
+            providerTurnId: null,
+          } as OrchestrationV2RunAttempt,
+          attemptId,
+          providerTurnOrdinal: 1,
+          message: {
+            messageId: MessageId.make("message:run-execution-baseline-failure"),
+            text: "Start the provider without a baseline.",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
           },
-        },
-      });
-    }).pipe(Effect.provide(layerTest));
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: process.cwd(),
+            approvalPolicy: "never",
+            sandboxPolicy: {
+              type: "readOnly",
+              access: { type: "fullAccess" },
+              networkAccess: false,
+            },
+          },
+        });
+        if (baseline === undefined) yield* started;
+        else {
+          const prompting = yield* Effect.forkChild(started, { startImmediately: true });
+          yield* Deferred.succeed(sessionOpened, undefined);
+          yield* Fiber.join(prompting);
+        }
+      }).pipe(Effect.provide(layerTest));
 
-    assert.equal(yield* Ref.get(providerStarts), 1);
+      assert.equal(yield* Ref.get(providerStarts), 1);
 
-    const events = (yield* Ref.get(writes)).flatMap((write) => [...write.events]);
-    const failedEvent = events.find(
-      (event) =>
-        (event.type === "run.updated" ||
-          event.type === "run-attempt.updated" ||
-          event.type === "node.updated") &&
-        event.payload.status === "failed",
-    );
-    assert.isUndefined(failedEvent);
-    const errorItem = events.find(
-      (event) => event.type === "turn-item.updated" && event.payload.type === "error",
-    );
-    assert.isUndefined(errorItem);
-  }),
+      const events = (yield* Ref.get(writes)).flatMap((write) => [...write.events]);
+      const failedEvent = events.find(
+        (event) =>
+          (event.type === "run.updated" ||
+            event.type === "run-attempt.updated" ||
+            event.type === "node.updated") &&
+          event.payload.status === "failed",
+      );
+      assert.isUndefined(failedEvent);
+      const errorItem = events.find(
+        (event) => event.type === "turn-item.updated" && event.payload.type === "error",
+      );
+      assert.isUndefined(errorItem);
+    }),
 );
 
 it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as const)(
@@ -3718,245 +3742,156 @@ it.effect.each([null, "run:nested-sdk"] as const)(
     }),
 );
 
-it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
-  "remote inbox survives %s correctly",
-  (scenario) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      for (const migration of [Migration0063, Migration0065, Migration0101]) yield* migration;
-      const ids = backgroundScenarioIds(`remote-inbox-${scenario}`);
-      const instanceId = ProviderInstanceId.make("codex");
-      const seen = yield* Ref.make<ReadonlyArray<string>>([]);
-      const started = yield* Deferred.make<void>();
-      const closed = yield* Deferred.make<void>();
-      yield* sql`INSERT INTO remote_report_inbox
+it.effect.each([
+  "accepted",
+  "rejected",
+  "skipped",
+  "compact",
+  "untracked-fence",
+  "tracked-fence",
+  "post-fence-stop",
+] as const)("remote inbox survives %s correctly", (scenario) =>
+  Effect.gen(function* () {
+    const stoppedAtFence = scenario.endsWith("-fence");
+    const sql = yield* SqlClient.SqlClient;
+    for (const migration of [Migration0063, Migration0065, Migration0101]) yield* migration;
+    const ids = backgroundScenarioIds(`remote-inbox-${scenario}`);
+    const instanceId = ProviderInstanceId.make("codex");
+    const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+    const started = yield* Deferred.make<void>();
+    const closed = yield* Deferred.make<void>();
+    yield* sql`INSERT INTO remote_report_inbox
         (origin_thread_id,correlation_id,kind,text,created_at)
         VALUES (${ids.threadId},'fixture','completed','quoted remote facts','2026-10-12')`;
-      const testLayer = RunExecutionService.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            RemoteReportInbox.layer,
-            McpAppModelContext.layerEmpty,
-            PreviewAgentActivity.layer,
-            layerTurnItemPositionsTest,
-            Layer.mock(CheckpointService.CheckpointServiceV2)({
-              captureBaseline: () => Effect.void,
-            }),
-            mockEventSink({
-              write: () => Effect.succeed([]),
-              writeWithEffects: () => Effect.succeed([]),
-              writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
-            }),
-            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
-              ingestNormalized: () => Effect.succeed([]),
-            }),
-            ServerSettings.layerTest(),
-          ),
+    const testLayer = RunExecutionService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          RemoteReportInbox.layer,
+          McpAppModelContext.layerEmpty,
+          PreviewAgentActivity.layer,
+          layerTurnItemPositionsTest,
+          Layer.mock(CheckpointService.CheckpointServiceV2)({
+            captureBaseline: () => Effect.void,
+          }),
+          mockEventSink({
+            write: () => Effect.succeed([]),
+            writeWithEffects: () => Effect.succeed([]),
+            writeIfRunCurrent: ({ attemptDelivery }) =>
+              Effect.succeed({
+                committed: !stoppedAtFence || attemptDelivery === undefined,
+                storedEvents: [],
+              }),
+          }),
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
+          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ingestNormalized: () => Effect.succeed([]),
+          }),
+          ServerSettings.layerTest(),
         ),
-      );
-      yield* Effect.gen(function* () {
-        const service = yield* RunExecutionService.RunExecutionServiceV2;
-        const inbox = yield* RemoteReportInbox.RemoteReportInbox;
-        const accept = (text: string) =>
-          Ref.update(seen, (values) => [...values, text]).pipe(
-            Effect.andThen(
-              scenario === "rejected"
-                ? Effect.fail(
-                    new ProviderAdapter.ProviderAdapterTurnStartError({
-                      driver,
-                      threadId: ids.threadId,
-                      providerThreadId: ids.providerThreadId,
-                      runId: ids.runId,
-                      cause: "fixture refusal",
-                    }),
-                  )
-                : Deferred.succeed(started, undefined),
-            ),
-            Effect.asVoid,
-          );
-        yield* service.startRootRun({
-          commandId: CommandId.make("remote-inbox"),
-          appThread: rootAppThread(ids.threadId),
-          providerSessionId: ProviderSessionId.make("remote-inbox"),
-          session: {
-            events: Stream.empty,
-            subscribeEvents: Effect.succeed({
-              events: Stream.fromEffect(Deferred.await(started)).pipe(
-                Stream.flatMap(() => Stream.succeed(rootTerminalEvent(ids, "completed"))),
-              ),
-              close: Deferred.succeed(closed, undefined),
-            }),
-            startTurn: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-              accept(input.message.text),
-            compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-              accept(input.message.text),
-          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
-          run: {
-            id: ids.runId,
-            threadId: ids.threadId,
-            ordinal: 1,
-            providerInstanceId: instanceId,
-          } as OrchestrationV2Run,
-          rootNode: { id: ids.rootNodeId } as OrchestrationV2ExecutionNode,
-          checkpointScope: {
-            id: CheckpointScopeId.make("remote-inbox"),
-          } as OrchestrationV2CheckpointScope,
-          providerThread: { id: ids.providerThreadId, driver } as OrchestrationV2ProviderThread,
-          attempt: {
-            id: ids.attemptId,
-            providerTurnId: ids.rootProviderTurnId,
-          } as OrchestrationV2RunAttempt,
-          attemptId: ids.attemptId,
-          providerTurnOrdinal: 1,
-          shouldStartProviderTurn: () => Effect.succeed(scenario !== "skipped"),
-          message: {
-            messageId: MessageId.make("remote-inbox"),
-            text: scenario === "compact" ? "/compact" : "human request",
-            attachments: [],
-            createdBy: "user",
-            creationSource: "web",
-          },
-          modelSelection: { instanceId, model: "gpt-5.4" },
-          runtimePolicy: {
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/fixture",
-            approvalPolicy: "never",
-            sandboxPolicy: {
-              type: "readOnly",
-              access: { type: "fullAccess" },
-              networkAccess: false,
-            },
-          },
-        });
-        if (scenario === "accepted" || scenario === "compact") yield* Deferred.await(closed);
-        const pending = yield* inbox.pending(ids.threadId);
-        assert.equal(pending.texts.length, scenario === "accepted" ? 0 : 1);
-        const inputs = yield* Ref.get(seen);
-        assert.deepEqual(
-          inputs,
-          scenario === "skipped"
-            ? []
-            : [
-                scenario === "compact"
-                  ? "/compact"
-                  : `${framePendingReports(["quoted remote facts"])}\n\nhuman request`,
-              ],
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* RunExecutionService.RunExecutionServiceV2;
+      const inbox = yield* RemoteReportInbox.RemoteReportInbox;
+      const accept = (text: string) =>
+        Ref.update(seen, (values) => [...values, text]).pipe(
+          Effect.andThen(
+            scenario === "rejected"
+              ? Effect.fail(
+                  new ProviderAdapter.ProviderAdapterTurnStartError({
+                    driver,
+                    threadId: ids.threadId,
+                    providerThreadId: ids.providerThreadId,
+                    runId: ids.runId,
+                    cause: "fixture refusal",
+                  }),
+                )
+              : Deferred.succeed(started, undefined),
+          ),
+          Effect.asVoid,
         );
-      }).pipe(Effect.provide(Layer.merge(testLayer, RemoteReportInbox.layer)));
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-);
-
-it.each([
-  { name: "web user", source: "web", expected: null },
-  { name: "mobile user", source: "mobile", expected: null },
-  ...(["server", "mcp", "provider"] as const).flatMap((source) => [
-    { name: `${source} user without ceiling`, source, expected: "none" },
-    {
-      name: `${source} user with read ceiling`,
-      source,
-      ceiling: "read",
-      expected: "read",
-    } as const,
-  ]),
-  { name: "agent", source: "web", author: "agent", expected: "none" },
-  { name: "system", source: "web", author: "system", expected: "none" },
-  { name: "scheduled", source: "web", scheduled: true, ceiling: "read", expected: "read" },
-  { name: "delegated", source: "mobile", delegated: true, ceiling: "read", expected: "read" },
-  { name: "legacy task", source: "server", delegated: true, expected: "none" },
-] as const)("memory prepare classification: $name", (testCase) => {
-  const run = memoryRun(1, {
-    ...("ceiling" in testCase ? { memoryGrantCeiling: testCase.ceiling } : {}),
-    ...("delegated" in testCase ? { delegatedTaskId: NodeId.make("memory-task") } : {}),
-  });
-  const message = memoryMessage(run, {
-    creationSource: testCase.source,
-    createdBy: "author" in testCase ? testCase.author : "user",
-    ...("scheduled" in testCase
-      ? { scheduledTaskId: ScheduledTaskId.make("memory-schedule") }
-      : {}),
-  });
-  assert.deepEqual(
-    RunExecutionService.runMemoryPrepareInput({
-      run,
-      message,
-      projection: { runs: [run], messages: [message] },
-    }),
-    { memoryGrantCeiling: testCase.expected },
-  );
-});
-it.each(["usageLimitContinuationOfRunId", "restartContinuationOfRunId"] as const)(
-  "memory prepare ancestry: %s",
-  (field) => {
-    for (const delegated of [false, true]) {
-      const source = memoryRun(
-        1,
-        delegated
-          ? { delegatedTaskId: NodeId.make("memory-task"), memoryGrantCeiling: "read" }
-          : {},
-      );
-      const sourceMessage = memoryMessage(source);
-      const run = memoryRun(2, { [field]: source.id, memoryGrantCeiling: "read_write" });
-      const message = memoryMessage(run, { creationSource: "server" });
-      const projection = { runs: [source, run], messages: [sourceMessage, message] };
-      assert.deepEqual(RunExecutionService.runMemoryPrepareInput({ run, message, projection }), {
-        memoryGrantCeiling: delegated ? "read" : null,
+      yield* service.startRootRun({
+        commandId: CommandId.make("remote-inbox"),
+        appThread: rootAppThread(ids.threadId),
+        providerSessionId: ProviderSessionId.make("remote-inbox"),
+        session: {
+          events: Stream.empty,
+          subscribeEvents: Effect.succeed({
+            events: Stream.fromEffect(Deferred.await(started)).pipe(
+              Stream.flatMap(() => Stream.succeed(rootTerminalEvent(ids, "completed"))),
+            ),
+            close: Deferred.succeed(closed, undefined),
+          }),
+          tracksInputDelivery: scenario === "tracked-fence" || scenario === "post-fence-stop",
+          startTurn: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+            Effect.gen(function* () {
+              if (
+                (scenario === "tracked-fence" || scenario === "post-fence-stop") &&
+                !(yield* input.inputDelivery!.begin())
+              )
+                return;
+              if (scenario === "post-fence-stop") return yield* input.inputDelivery!.skipped();
+              yield* accept(input.message.text);
+              yield* input.inputDelivery?.submitted() ?? Effect.void;
+            }),
+          compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+            accept(input.message.text),
+        } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
+        run: {
+          id: ids.runId,
+          threadId: ids.threadId,
+          ordinal: 1,
+          providerInstanceId: instanceId,
+        } as OrchestrationV2Run,
+        rootNode: { id: ids.rootNodeId } as OrchestrationV2ExecutionNode,
+        checkpointScope: {
+          id: CheckpointScopeId.make("remote-inbox"),
+        } as OrchestrationV2CheckpointScope,
+        providerThread: { id: ids.providerThreadId, driver } as OrchestrationV2ProviderThread,
+        attempt: {
+          id: ids.attemptId,
+          providerTurnId: ids.rootProviderTurnId,
+          ...(stoppedAtFence || scenario === "post-fence-stop" ? { inputDelivery: "unsent" } : {}),
+        } as OrchestrationV2RunAttempt,
+        attemptId: ids.attemptId,
+        providerTurnOrdinal: 1,
+        shouldStartProviderTurn: () => Effect.succeed(scenario !== "skipped"),
+        message: {
+          messageId: MessageId.make("remote-inbox"),
+          text: scenario === "compact" ? "/compact" : "human request",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection: { instanceId, model: "gpt-5.4" },
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/fixture",
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "readOnly",
+            access: { type: "fullAccess" },
+            networkAccess: false,
+          },
+        },
       });
+      if (scenario === "accepted" || scenario === "compact") yield* Deferred.await(closed);
+      const pending = yield* inbox.pending(ids.threadId);
+      assert.equal(pending.texts.length, scenario === "accepted" ? 0 : 1);
+      const inputs = yield* Ref.get(seen);
       assert.deepEqual(
-        RunExecutionService.runMemoryPrepareInput({
-          run,
-          message,
-          projection: { ...projection, runs: [run] },
-        }),
-        { memoryGrantCeiling: "none" },
+        inputs,
+        scenario === "skipped" || stoppedAtFence || scenario === "post-fence-stop"
+          ? []
+          : [
+              scenario === "compact"
+                ? "/compact"
+                : `${framePendingReports(["quoted remote facts"])}\n\nhuman request`,
+            ],
       );
-      assert.deepEqual(
-        RunExecutionService.runMemoryPrepareInput({
-          run,
-          message,
-          projection: { ...projection, messages: [message] },
-        }),
-        { memoryGrantCeiling: "none" },
-      );
-    }
-    const runs = [memoryRun(1)];
-    for (let index = 2; index <= 5; index++)
-      runs.push(
-        memoryRun(index, {
-          [index % 2 ? "restartContinuationOfRunId" : "usageLimitContinuationOfRunId"]:
-            runs.at(-1)!.id,
-        }),
-      );
-    const messages = runs.map((run) =>
-      memoryMessage(run, { creationSource: run.ordinal === 1 ? "web" : "server" }),
-    );
-    assert.deepEqual(
-      RunExecutionService.runMemoryPrepareInput({
-        run: runs[3]!,
-        message: messages[3]!,
-        projection: { runs, messages },
-      }),
-      { memoryGrantCeiling: null },
-    );
-    assert.deepEqual(
-      RunExecutionService.runMemoryPrepareInput({
-        run: runs[4]!,
-        message: messages[4]!,
-        projection: { runs, messages },
-      }),
-      { memoryGrantCeiling: "none" },
-    );
-    const cyclic = memoryRun(1, { [field]: runs[0]!.id });
-    assert.deepEqual(
-      RunExecutionService.runMemoryPrepareInput({
-        run: cyclic,
-        message: messages[0]!,
-        projection: { runs: [cyclic], messages },
-      }),
-      { memoryGrantCeiling: "none" },
-    );
-  },
+    }).pipe(Effect.provide(Layer.merge(testLayer, RemoteReportInbox.layer)));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 registerAgentOomRunCases(captureRootRunTermination, driver);

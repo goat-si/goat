@@ -1,4 +1,11 @@
 import {
+  FORK_HISTORY_TYPES,
+  readForkHistoryPage,
+  selectMemoryHistory,
+  type ForkHistoryPage,
+} from "./ForkHistoryPage.ts";
+import { preserveAttemptDeliveryJson } from "./AttemptInputDelivery.ts";
+import {
   attributePendingBackgroundTasks,
   upsertProviderThreadProjection,
 } from "./projectionProviderThread.ts";
@@ -62,7 +69,7 @@ import {
 } from "./ProjectionShellThreadRows.ts";
 import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { turnStartMessageIds } from "./manualContinuation.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   applyOrchestrationV2ThreadVisit,
@@ -798,6 +805,7 @@ export interface ProjectionStoreV2Shape
   readonly getTurnStartHistory: (
     threadId: ThreadId,
     runIds?: ReadonlyArray<RunId>,
+    page?: ForkHistoryPage,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2TurnItem>, ProjectionStoreV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
@@ -1414,7 +1422,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 provider_thread_id = excluded.provider_thread_id,
                 provider_turn_id = excluded.provider_turn_id,
                 status = excluded.status,
-                payload_json = excluded.payload_json
+                payload_json = ${preserveAttemptDeliveryJson(sql)}
             `;
               break;
             }
@@ -4124,27 +4132,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE bindings.thread_id = ${threadId}
               ORDER BY sessions.updated_at ASC, sessions.provider_session_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeProviderSessionPayload, threadId)));
-            // Read only the current prompt and its bounded automatic-continuation ancestry.
-            const memoryMessageIds = [];
-            let memoryRun = runs.find((candidate) => candidate.id === runId);
-            for (
-              let depth = 0;
-              memoryRun !== undefined && depth <= MAX_CONTINUATION_CHAIN;
-              depth++
-            ) {
-              memoryMessageIds.push(memoryRun.userMessageId);
-              const sourceId =
-                memoryRun.restartContinuationOfRunId ?? memoryRun.usageLimitContinuationOfRunId;
-              memoryRun =
-                sourceId === undefined
-                  ? undefined
-                  : runs.find((candidate) => candidate.id === sourceId);
-            }
+            const memoryMessageIds = turnStartMessageIds(
+              runs.find((run) => run.id === runId),
+              { runs, attempts },
+            );
             const messages = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_messages
               WHERE thread_id = ${threadId} AND (
                 message_id IN ${sql.in(memoryMessageIds)} OR message_id IN (SELECT json_extract(r.payload_json, '$.userMessageId') FROM orchestration_v2_projection_runs r JOIN orchestration_v2_projection_context_handoffs h ON h.target_run_id = r.run_id WHERE r.thread_id = ${threadId} AND h.thread_id = ${threadId} AND h.status = 'ready' AND json_extract(h.payload_json, '$.delivery') IS NULL)
                 OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
+                OR (role = 'user' AND trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace}) GLOB '/goal*')
               ) ORDER BY created_at ASC, message_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeMessagePayload, threadId)));
             const conversation = yield* sql<{ present: number }>`
@@ -4186,12 +4183,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getTurnStartHistory: ProjectionStoreV2Shape["getTurnStartHistory"] = Effect.fn(
       "ProjectionStore.getTurnStartHistory",
     )(
-      function* (threadId, runIds) {
+      function* (threadId, runIds, page) {
+        if (page !== undefined)
+          return yield* readForkHistoryPage(sql, threadId, runIds, page).pipe(
+            Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)),
+          );
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_turn_items
           WHERE thread_id = ${threadId}
-            AND type IN ('user_message','assistant_message','command_execution','error',
-              'run_interrupt_result','file_change','proposed_plan')
+            AND type IN ${sql.in(FORK_HISTORY_TYPES)}
             AND ${runIds === undefined ? sql`1` : sql`run_id IN ${sql.in(runIds)}`}
           ORDER BY ordinal ASC, turn_item_id ASC
         `;
@@ -8665,26 +8665,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
           })),
         ),
-      getTurnStartHistory: (threadId, runIds) =>
+      getTurnStartHistory: (threadId, runIds, page) =>
         service
           .getThreadProjection(threadId)
-          .pipe(
-            Effect.map((projection) =>
-              projection.turnItems.filter(
-                (item) =>
-                  [
-                    "user_message",
-                    "assistant_message",
-                    "command_execution",
-                    "error",
-                    "run_interrupt_result",
-                    "file_change",
-                    "proposed_plan",
-                  ].includes(item.type) &&
-                  (runIds === undefined || (item.runId !== null && runIds.includes(item.runId))),
-              ),
-            ),
-          ),
+          .pipe(Effect.map((projection) => selectMemoryHistory(projection, runIds, page))),
       getRuntimeRecoveryProjection: (threadId) => service.getThreadProjection(threadId),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(

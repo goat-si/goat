@@ -1,7 +1,13 @@
+import { addRolledBackRecoveryCandidate } from "./ProjectionStore.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  NodeId,
+  ProviderThreadId,
+  ProviderTurnId,
+  TurnItemId,
+  type OrchestrationV2RunAttempt,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -495,4 +501,101 @@ it.effect(
         }).pipe(Effect.scoped),
       { runStatus: "queued" },
     ),
+);
+
+it.effect("Stop after turn registration and before submit leaves delivery confirmed unsent", () =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink.EventSinkV2;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = yield* addRolledBackRecoveryCandidate("stop-before-submit");
+    const source = (yield* store.getThreadProjection(threadId)).runs[0]!;
+    const now = yield* DateTime.now;
+    const attempt: OrchestrationV2RunAttempt = {
+      id: RunAttemptId.make("attempt:stop-before-submit"),
+      runId: source.id,
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("node:stop-before-submit"),
+      providerInstanceId: source.providerInstanceId,
+      providerThreadId: ProviderThreadId.make("provider-thread:stop-before-submit"),
+      providerTurnId: ProviderTurnId.make("turn:stop-before-submit"),
+      reason: "initial",
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+    };
+    const requestId = TurnItemId.make("stop-before-submit:interrupt-request");
+    const resultId = TurnItemId.make("stop-before-submit:interrupt-result");
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("run:running"),
+          type: "run.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...source, status: "running", activeAttemptId: attempt.id, completedAt: null },
+        },
+        {
+          id: EventId.make("attempt:pending"),
+          type: "run-attempt.created",
+          threadId,
+          occurredAt: now,
+          payload: attempt,
+        },
+        {
+          id: EventId.make("turn:registered"),
+          type: "provider-turn.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: attempt.providerTurnId!,
+            runAttemptId: attempt.id,
+            nodeId: attempt.rootNodeId,
+            ordinal: 1,
+            providerThreadId: attempt.providerThreadId,
+            nativeTurnRef: null,
+            status: "running",
+            startedAt: now,
+            completedAt: null,
+          },
+        },
+        {
+          id: EventId.make("turn:stop"),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: requestId,
+            threadId,
+            runId: source.id,
+            nodeId: attempt.rootNodeId,
+            providerThreadId: attempt.providerThreadId,
+            providerTurnId: attempt.providerTurnId,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "completed",
+            title: "Stop",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "run_interrupt_request",
+            message: "Stop",
+          },
+        },
+      ],
+    });
+    const admission = yield* sink.writeIfRunCurrent({
+      threadId,
+      runId: source.id,
+      activeAttemptId: attempt.id,
+      expectedStatus: "running",
+      unlessInterruptRequested: { requestId, resultId },
+      attemptDelivery: { id: EventId.make("attempt:send"), occurredAt: now, delivery: "ambiguous" },
+      events: [],
+    });
+    assert.isFalse(admission.committed);
+    const projection = yield* store.getThreadProjection(threadId);
+    assert.equal(projection.providerTurns[0]?.runAttemptId, attempt.id);
+    assert.equal(projection.attempts[0]?.inputDelivery, "unsent");
+  }).pipe(Effect.provide(layerTest)),
 );

@@ -145,6 +145,7 @@ const makeCodexAdapter = (capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>) =
                   text: turnInput.message.text,
                 },
               ]);
+              yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
               const eventTime = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,

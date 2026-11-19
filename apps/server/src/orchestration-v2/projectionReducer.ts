@@ -1,3 +1,4 @@
+import { preserveAttemptDelivery } from "./AttemptInputDelivery.ts";
 import { attributePendingBackgroundTasks } from "./projectionProviderThread.ts";
 import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
@@ -238,7 +239,7 @@ function applyToProjectionEvent(
     case "run-attempt.updated":
       return withLocalVisibleTurnItems({
         ...base,
-        attempts: upsertById(base.attempts, event.payload),
+        attempts: upsertById(base.attempts, preserveAttemptDelivery(base.attempts, event.payload)),
       });
     case "node.updated":
       return {

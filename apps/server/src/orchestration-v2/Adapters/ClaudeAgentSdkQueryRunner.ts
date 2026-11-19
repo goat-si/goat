@@ -1,3 +1,4 @@
+import { interruptedResumeOptions } from "./ClaudeInterruptedResume.ts";
 import {
   forkSession as forkClaudeSession,
   type ForkSessionOptions,
@@ -113,6 +114,7 @@ export type ClaudeAgentSdkQueryOptions = Omit<
 } & ClaudeAgentSdkThreadIdentity;
 
 export interface ClaudeAgentSdkQueryOpenInput {
+  readonly interruptedResume?: true;
   readonly options: ClaudeAgentSdkQueryOptions;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
@@ -416,7 +418,7 @@ const claudeConfigDirOf = (
 // The SDK reads CLAUDE_CONFIG_DIR from process.env. Isolate custom homes in a
 // worker so concurrent providers keep the server's environment.
 const runClaudeWorker = Effect.fn("runClaudeWorker")(function* (input: {
-  readonly method: "forkSession";
+  readonly method: "forkSession" | "getSessionMessages";
   readonly sessionId: string;
   readonly options?: ForkSessionOptions;
   readonly environment: NodeJS.ProcessEnv;
@@ -489,6 +491,7 @@ export const layerQueryRunner: Layer.Layer<
       interval: CLAUDE_DESCENDANT_POLL,
     });
 
+    const hostEnvironment = yield* HostProcess.Environment;
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random
         .uuidV4()
@@ -511,7 +514,22 @@ export const layerQueryRunner: Layer.Layer<
             Stream.toAsyncIterable,
           );
           // Send MCP credentials over stdin to keep them out of SDK argv and inherited command environments.
-          const { mcpServers, ...queryOptions } = input.options;
+          const { mcpServers, ...sdkOptions } = input.options;
+          const queryOptions = input.interruptedResume
+            ? yield* interruptedResumeOptions(
+                { ...sdkOptions, env: sdkOptions.env ?? hostEnvironment },
+                (sessionId) =>
+                  runClaudeWorker({
+                    method: "getSessionMessages",
+                    sessionId,
+                    options: sdkOptions.cwd === undefined ? {} : { dir: sdkOptions.cwd },
+                    environment: sdkOptions.env ?? hostEnvironment,
+                  }).pipe(
+                    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                    Effect.provideService(Path.Path, path),
+                  ),
+              ).pipe(Effect.mapError((cause) => queryRunnerError(cause, "getSessionMessages")))
+            : sdkOptions;
           // The SDK can prepend a scope wrapper to native binaries; script entries run through node.
           const binaryPath = queryOptions.pathToClaudeCodeExecutable;
           const launch =
