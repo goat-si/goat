@@ -5252,7 +5252,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           return Effect.void;
                         })
                       : Effect.void,
-                  flavor.onSessionEvent?.(event) ?? Effect.void,
+                  flavor.onSessionEvent?.(event, input.runtimePolicy.cwd ?? process.cwd()) ??
+                    Effect.void,
                 ),
               ).pipe(Effect.asVoid);
             }),
