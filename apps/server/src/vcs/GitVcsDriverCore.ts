@@ -28,6 +28,7 @@ import { makeReviewDiffHash } from "./reviewDiffHash.ts";
 import { statusUpstreamRefreshFailureCooldown } from "./statusRefreshCooldown.ts";
 import { availableWorktreePath } from "./availableWorktreePath.ts";
 import { selectUntrackedWithinLimit } from "./untrackedSize.ts";
+import { gitSupportsPathspecFromFile } from "./gitVersion.ts";
 import {
   parseReviewNumstat,
   REVIEW_DIFF_ARGS,
@@ -250,13 +251,6 @@ interface ExecuteGitOptions {
   writesSharedConfig?: boolean | undefined;
   retryConfigLock?: boolean | undefined;
 }
-
-const gitSupportsPathspecFromFile = (versionOutput: string): boolean => {
-  const match = /^git version (\d+)\.(\d+)/.exec(versionOutput);
-  if (match === null) return false;
-  const major = Number(match[1]);
-  return major > 2 || (major === 2 && Number(match[2]) >= 25);
-};
 
 // Checkout/worktree add parse leading dashes as options; pre-2.44 Git cannot guard with --end-of-options.
 // A lone - still means previous checkout.
