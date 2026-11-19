@@ -80,3 +80,26 @@ The normal merge fast-forwarded `chase/t3-261114-next3` from the pinned integrat
 - `generateMemorySummary times out and cleans up ACP and its workspace (ignoreCancel=true)`
 
 NOT RUN: `vp run check:changed`, live-client QA, independent review, PR CI.
+
+## CI follow-up for run 44466526585
+
+Fix-forward head `1cddb69df8b7f3477ee609fbaf7f1a33317909c3` fast-forwarded both integration refs from `99f19e3b4eac2a806329e4c8015a59ef38260370`.
+
+### Coordinator rulings
+```text
+3. Behaviour: under my standing ruling, dev #3756 is authoritative for memory and review-guide routing (Pi/OmO compatibility fallbacks). These integration-side expectations contradict it and are APPROVED to align with dev (Rule 3, record verbatim; titles may stay, assertions change to dev's behaviour, and keep any assertion that still holds):
+   - apps/web/src/components/settings/SourceControlWritingSettings.browser.test.tsx "shows the eligible guide route and excludes Pi from the guide picker"
+   - apps/server/src/pullRequest/PullRequestReviewGuideService.test.ts "guide generation agrees with Settings for explicit Pi ..." (both variants): Settings and generation must still AGREE; update the expected route to dev's.
+   - apps/server/src/provider/providerMemoryCapabilities.test.ts "pi with {} refuses both memory operations" and "omo with {} ...": align with dev's capability declaration.
+   BUT first check each against dev's own tests on origin/dev: if dev has an equivalent test with a different expectation, mirror dev exactly. If any of these reveals that Settings shows one route while generation dispatches another, fix production code so they agree (that is a real bug), do not paper over it.
+4. apps/server/src/mcp/agentSurface.test.ts "gives every entry a unique path...": registry length 309 -> 310 because dev added one tool; APPROVED (exact count only). Confirm the new tool's listing tier is correct and the agent-surface audit is regenerated.
+```
+
+1. Both shared route resolvers require a caller-supplied timestamp. Production callers already use Effect clocks or the browser settings clock. The tests use fixture time or `Clock.currentTimeMillis`.
+2. Made `isReviewGuideDriver` private to the shared resolver module and removed its re-export. The standalone-generator fallback still uses it.
+3. Compared the guide picker, review-guide service, and provider wrapper cases against dev `cf2481614584caa6a139000698be912f6099ea2a`. Dev's shared routing tests accept a usable legacy Pi selection and OmO's legacy fallback. The three integration-only cases had no direct equivalent on dev. The browser now expects Pi and still verifies the Codex option. Both service cases assert the same Pi selection in Settings and generation dispatch. Pi's provider runner rejects read-only investigation through dev's `withoutInvestigation` path. The wrapper cases accept legacy snapshots for Pi and OmO while checking the current wrappers' explicit false flags and operation refusal.
+4. Updated the registry assertion from 309 to 310. `memory.suggestions` appears as read-only `goat_memory_suggestions` in the full listing and is discoverable through `goat_describe`. The regenerated audit reports 309 discoverable entries because one registry entry is prompt-only.
+
+Guarded Node 26.12.1 runs passed 182 server tests in 11 files, 54 shared settings tests in four files, and seven Chromium tests in one file. The five requested package typechecks and the shared-package typecheck passed uncached. `vp run knip:check`, `vp run agent-surface:check`, scratch code-budget measurement, and `git diff --check` passed.
+
+NOT RUN: full CI on the follow-up head, live-client QA, and independent review.
