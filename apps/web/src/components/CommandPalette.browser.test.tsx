@@ -114,3 +114,27 @@ describe("CommandPalette open intents", () => {
     await expect.element(input).toHaveValue("example");
   });
 });
+
+it("omits a launched task nested under a visible parent from thread results", async () => {
+  const parent = makeThreadFixture({ id: ThreadId.make("parent"), title: "Task parent" });
+  const base = makeThreadFixture({ id: ThreadId.make("child"), title: "Task child" });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  setup({ threads: [parent, child] });
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+  await act(() => openCommandPalette({ query: "Task" }));
+  await expect.element(page.getByRole("option", { name: /Task parent/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /Task child/ })).not.toBeInTheDocument();
+});

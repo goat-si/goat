@@ -1,3 +1,4 @@
+import { paletteListedThreads } from "@goat/client-runtime/state/launch-fold";
 import { useAtomValue } from "@effect/atom-react";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -448,37 +449,35 @@ export function CommandPalette(props: {
           },
         }),
     }));
-    const threadItems: CommandPaletteItem[] = threads
-      .filter(
-        (thread) =>
-          thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
-      )
-      .map((thread) => {
-        const project = projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId));
-        const environment =
-          savedConnectionsById[thread.environmentId]?.environmentLabel ?? thread.environmentId;
-        return {
-          key: scopedThreadKey(thread.environmentId, thread.id),
-          kind: "thread",
-          title: thread.title || "Untitled thread",
-          detail: [project?.title, environment].filter(Boolean).join(" · "),
-          searchTerms: [],
-          threadSearch: threadSearchSubject(
-            thread,
-            project?.title,
-            environments.length > 1 ? environment : null,
-          ),
-          // Last among threads: picking the thread already open does nothing.
-          ...(thread.environmentId === activeThread?.environmentId && thread.id === activeThread.id
-            ? { secondary: true }
-            : {}),
-          run: () =>
-            selectDetail({
-              name: "Thread",
-              params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
-            }),
-        };
-      });
+    const threadItems: CommandPaletteItem[] = paletteListedThreads(
+      threads,
+      new Date(now).toISOString(),
+    ).map((thread) => {
+      const project = projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId));
+      const environment =
+        savedConnectionsById[thread.environmentId]?.environmentLabel ?? thread.environmentId;
+      return {
+        key: scopedThreadKey(thread.environmentId, thread.id),
+        kind: "thread",
+        title: thread.title || "Untitled thread",
+        detail: [project?.title, environment].filter(Boolean).join(" · "),
+        searchTerms: [],
+        threadSearch: threadSearchSubject(
+          thread,
+          project?.title,
+          environments.length > 1 ? environment : null,
+        ),
+        // Last among threads: picking the thread already open does nothing.
+        ...(thread.environmentId === activeThread?.environmentId && thread.id === activeThread.id
+          ? { secondary: true }
+          : {}),
+        run: () =>
+          selectDetail({
+            name: "Thread",
+            params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
+          }),
+      };
+    });
     // Recent means used recently: written in or opened, whichever is later.
     threadItems.sort(
       (left, right) =>
@@ -493,6 +492,7 @@ export function CommandPalette(props: {
     activeThreadRef,
     environments.length,
     navigation,
+    now,
     projects,
     runCommand,
     savedConnectionsById,

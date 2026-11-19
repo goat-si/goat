@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@goat/contracts";
+import { isSideChatThread, type EnvironmentId } from "@goat/contracts";
 import {
   foldsUnderLauncher,
   isRemoteDelegatedChild,
@@ -13,7 +13,8 @@ import {
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
-import { effectiveSnoozed } from "./threadSettled.ts";
+import { effectiveSnoozed, threadWokeAt } from "./threadSettled.ts";
+import { hasUnseenCompletion, isThreadWoke } from "./threadListPriority.ts";
 import { threadLastPromptAt } from "./threadSort.ts";
 
 export type { LaunchAttention, LaunchChildState, LaunchLift };
@@ -398,3 +399,32 @@ export const foldedKeysIn = (
   sections: ReadonlyMap<string, FoldedSection>,
   section: FoldedSection,
 ) => [...sections].flatMap(([key, value]) => (value === section ? [key] : []));
+
+/** The same launch grouping as the sidebar, before palette ranking and message matching. */
+export function paletteListedThreads<T extends EnvironmentThreadShell>(
+  threads: readonly T[],
+  now: string,
+): readonly T[] {
+  const visible = threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.deletedAt === null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      !isSideChatThread(thread),
+  );
+  const delegated = new Map<string, LaunchAttention>();
+  for (const thread of visible) {
+    if (thread.pendingSubagentRequest === "approval") delegated.set(keyOf(thread), "approval");
+    else if (thread.pendingSubagentRequest === "user_input") delegated.set(keyOf(thread), "input");
+  }
+  return foldLaunchedThreads({
+    visible,
+    all: threads,
+    now,
+    delegatedAttentionByKey: delegated,
+    unseen: (thread) =>
+      !effectiveSnoozed(thread, { now }) &&
+      (hasUnseenCompletion(thread) ||
+        isThreadWoke(threadWokeAt(thread, { now }), thread.lastVisitedAt ?? undefined)),
+  }).roots;
+}
