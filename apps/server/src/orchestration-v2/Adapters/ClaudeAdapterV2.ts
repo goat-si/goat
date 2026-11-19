@@ -1,3 +1,4 @@
+import { absorbHeldResult, dropUnreadSteer, holdSuccessfulResult } from "./ClaudeSteerLifecycle.ts";
 import {
   claudeProgramReader,
   claudeProgramWasReplaced,
@@ -1608,7 +1609,7 @@ function isClaudeResultForOtherTurn(input: {
 
 const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryContextSnapshot));
 
-interface ActiveClaudeTurnContext {
+export interface ActiveClaudeTurnContext {
   nativeSessionTitle?: string | undefined;
   retryBudgetFailure?: OrchestrationV2ProviderFailure;
   unansweredRequestSince?: DateTime.Utc | undefined;
@@ -1627,6 +1628,7 @@ interface ActiveClaudeTurnContext {
   readonly textProjector: ReturnType<typeof makeClaudeAssistantTextProjector>;
   readonly assistant: {
     fallbackText: string;
+    earlierFallbackText: string;
     fallbackNativeItemId: string;
     emittedNativeItemIds: Set<string>;
     // The root reply the latest assistant frame carried; a steer's aborted_streaming cuts it off.
@@ -1693,10 +1695,14 @@ interface ActiveClaudeTurnContext {
       readonly messageId: MessageId;
       readonly text: string;
       readonly liveQuery: ClaudeLiveQueryContext;
+      readonly pdfReservation: Effect.Success<ReturnType<typeof reserveClaudePdfBudget>>;
+      readonly appContextOffered: ReadonlyMap<string, string> | undefined;
+      readonly appContextBefore: ReadonlyMap<string, string> | undefined;
     }
   >;
   // Claude may settle a turn with a result that echoes only a steer's uuid.
   readonly steerUuids: Set<string>;
+  heldResult: SDKResultMessage | undefined;
   executedModel: string | undefined;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
@@ -5281,8 +5287,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const steer = context.pendingSteers.get(uuid);
             if (steer === undefined) continue;
             context.pendingSteers.delete(uuid);
+            absorbHeldResult(context);
             yield* emitSteerStatus(context, steer.messageId, "completed");
           }
+          const dropped = dropUnreadSteer(context, lifecycle);
+          if (dropped?.refund) yield* persistAttachmentBudget(context.nativeThreadId);
+          if (dropped?.result !== undefined)
+            yield* finalizeActiveTurn({
+              context,
+              status: "completed",
+              completedAt: yield* DateTime.now,
+              result: dropped.result,
+            });
         });
 
         const finalizeActiveTurn = Effect.fnUntraced(function* (requested: {
@@ -5311,10 +5327,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
           input.context.steersClosed = true;
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
-          // A turn that completes has taken in every steer; one that stops drops them unread.
+          const currentQuery = yield* Ref.get(queryContext);
           const droppedSteers = [...input.context.pendingSteers];
           input.context.pendingSteers.clear();
-          for (const [, { messageId }] of droppedSteers) {
+          for (const [, { messageId, liveQuery }] of droppedSteers) {
+            if (input.status !== "interrupted" && liveQuery !== currentQuery) continue;
             yield* emitSteerStatus(
               input.context,
               messageId,
@@ -5388,10 +5405,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             subagentToolCalls.delete(toolCall.nativeItemId);
           }
 
-          if (
-            input.context.assistant.emittedNativeItemIds.size === 0 &&
-            input.context.assistant.fallbackText.length > 0
-          ) {
+          const fallbackText = [
+            input.context.assistant.earlierFallbackText,
+            input.context.assistant.fallbackText,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+          if (input.context.assistant.emittedNativeItemIds.size === 0 && fallbackText.length > 0) {
             const ordinal = yield* resolveItemOrdinal(
               input.context,
               input.context.assistant.fallbackNativeItemId,
@@ -5401,7 +5421,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               turnInput: input.context.input,
               providerTurnId: input.context.providerTurnId,
               nativeItemId: input.context.assistant.fallbackNativeItemId,
-              text: input.context.assistant.fallbackText,
+              text: fallbackText,
               ordinal,
               startedAt: input.context.startedAt,
               completedAt: input.completedAt,
@@ -7875,6 +7895,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const completedAt = yield* DateTime.now;
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
+            absorbHeldResult(context);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
               const cutOffReply = context.assistant.lastReply;
               context.assistant.lastReply = null;
@@ -7983,13 +8004,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resultFailure?.class === "usage_limit"
                 ? { ...resultFailure, resetAt }
                 : resultFailure;
+            const status = interrupted
+              ? "interrupted"
+              : limitedCompaction !== null
+                ? "failed"
+                : terminalStatusFromResult(message, failureHint);
+            if (holdSuccessfulResult(context, status, terminalFailure, message)) return;
             yield* finalizeActiveTurn({
               context,
-              status: interrupted
-                ? "interrupted"
-                : limitedCompaction !== null
-                  ? "failed"
-                  : terminalStatusFromResult(message, failureHint),
+              status,
               completedAt,
               result: message,
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
@@ -9429,6 +9452,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               textProjector: makeClaudeAssistantTextProjector(),
               assistant: {
                 fallbackText: "",
+                earlierFallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,
                 emittedNativeItemIds: new Set(),
                 lastReply: null,
@@ -9471,6 +9495,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               steersClosed: false,
               pendingSteers: new Map(),
               steerUuids: new Set(),
+              heldResult: undefined,
             };
             const attachTurn = Effect.gen(function* () {
               querySession.reportedModel = undefined;
@@ -9940,7 +9965,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ).promptEffort,
               ),
               attachments: turnInput.message.attachments,
-              priority: "now",
+              priority: "next",
               uuid: steerUuid,
               attachmentsDir,
               fileSystem,
@@ -10007,7 +10032,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // No yield between the steersClosed check above and this set.
             const messageId = turnInput.message.messageId;
             currentTurn.steerUuids.add(steerUuid);
+            const appContextBefore = currentTurn.appContextOffered;
             currentTurn.pendingSteers.set(steerUuid, {
+              pdfReservation,
+              appContextOffered: appContext?.snapshot,
+              appContextBefore,
               messageId,
               text: turnInput.message.text,
               liveQuery: existing,

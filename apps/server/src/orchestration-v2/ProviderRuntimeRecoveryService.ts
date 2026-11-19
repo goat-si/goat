@@ -470,6 +470,12 @@ export const make = Effect.gen(function* () {
             candidate.runId === run.id &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate, delegatedTaskNodeIds) &&
+            !(
+              candidate.type === "user_message" &&
+              candidate.status === "pending" &&
+              (candidate.inputIntent === "steer" ||
+                candidate.inputIntent === "promoted_queued_to_steer")
+            ) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),

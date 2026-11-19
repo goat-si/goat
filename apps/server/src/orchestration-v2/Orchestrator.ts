@@ -1,3 +1,11 @@
+import { recoverTerminalSubagents } from "./goat/RecoverTerminalSubagents.ts";
+import {
+  makeUnreadSteerRecovery,
+  recoverUnreadSteerThreads,
+  prepareUnreadSteerDispatch,
+  requeueEndedSteers,
+  startQueuedAfterUnreadSteer,
+} from "./UnreadSteerRecovery.ts";
 import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
@@ -849,6 +857,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       yield* eventSink.writeWithEffects({ events: withIds, effects, ...options });
     });
+
+  const requeueUnreadSteers = makeUnreadSteerRecovery({
+    projectionStore,
+    effectOutbox,
+    idAllocator,
+    isBlockingRun,
+    writeSystemEvents,
+    dispatch: (command) => dispatchWithReceiptEffect(command),
+  });
 
   const offerDelegatedCompletionDelivery =
     /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -5669,14 +5686,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately")
         ? latestFailedWorktreeRun(projection)
         : undefined;
+    const steerFollowUpSource =
+      command.steerFollowUpOfRunId === undefined
+        ? undefined
+        : projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
     const queueBehindRun =
       activeRun && survivorQueued.has(activeRun.id)
         ? undefined
-        : (activeRun ??
-          worktreeMissingRun ??
-          (steerFollowUpAfterStop
-            ? projection.runs.find((run) => run.id === command.steerFollowUpOfRunId)
-            : undefined));
+        : (activeRun ?? worktreeMissingRun ?? steerFollowUpSource);
     const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
     const startsOrQueuesRun =
       dispatchMode.type === "defer_start" ||
@@ -5690,6 +5707,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const incomingMessage = { ...command, delegatedCompletion, followsThreadSelection };
     if (
       shouldQueue &&
+      queueBehindRun !== steerFollowUpSource &&
       command.modelSelection === undefined &&
       queuedRunStop === undefined &&
       !followsCurrentConversation(incomingMessage) &&
@@ -12613,6 +12631,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* replayCommandReceipt(command, existingReceipt.value);
     }
 
+    yield* mapDispatchError(command)(
+      prepareUnreadSteerDispatch(command, requeueUnreadSteers, startNextQueuedRun),
+    );
+
     // Recheck under the lock; the user may have raised modes since sender preflight.
     const limit = yield* DispatchModeLimit;
     if (limit !== undefined) {
@@ -12833,6 +12855,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
 
+    yield* mapDispatchError(command)(
+      startQueuedAfterUnreadSteer(command, projectionStore, startNextQueuedRun),
+    );
+
     return {
       sequence: committed.receipt.resultSequence,
       storedEvents: committed.storedEvents,
@@ -12918,6 +12944,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ? releaseUnattendedHolds(threadId, run.id)
               : Effect.void
             ).pipe(
+              Effect.andThen(requeueEndedSteers(requeueUnreadSteers, threadId, run.id)),
               Effect.andThen(
                 startNextQueuedRun(threadId, {
                   endedRunId: run.id,
@@ -12979,37 +13006,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   }).pipe(Effect.forkScoped);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
-    yield* projectionStore.getRecoveryThreadIds("subagent-results").pipe(
-      Effect.tap((threadIds) =>
-        Effect.annotateCurrentSpan("recovery.subagentResultThreads", threadIds.length),
-      ),
-      Effect.flatMap((threadIds) =>
-        Effect.forEach(
-          threadIds,
-          (threadId) =>
-            Effect.gen(function* () {
-              const thread = yield* projectionStore.getThreadShell(threadId);
-              const parentThreadId = thread?.lineage.parentThreadId;
-              if (parentThreadId === undefined || parentThreadId === null) return;
-              yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("Failed to recover terminal app-owned subagent", {
-                  childThreadId: threadId,
-                  cause,
-                }),
-              ),
-            ),
-          { concurrency: 8, discard: true },
-        ),
-      ),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Failed to inspect app-owned subagents during recovery", {
-          cause,
-        }),
-      ),
-    );
+    yield* recoverTerminalSubagents(projectionStore, threadDispatch, finalizeAppOwnedSubagent);
     yield* recoverDelegatedCompletions;
+    yield* recoverUnreadSteerThreads(projectionStore, threadDispatch, requeueUnreadSteers);
   });
   // A full wake mailbox leaves delivery ownership in the parent run's persisted cohort.
   const recoverDelegatedCompletions = projectionStore
