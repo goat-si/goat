@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import type { PullRequestCheck, PullRequestCheckStatus } from "@goat/contracts";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
@@ -39,6 +40,7 @@ const PULL_REQUEST = {
   body: "",
   reviewRequestLogins: [],
   reviewers: [],
+  labels: [],
   location: { project: "acme", repository: "web" },
   autoMergeEnabled: false,
 };
@@ -138,6 +140,7 @@ describe("getChangeRequest", () => {
           Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
             listPolicyChecks: () => Effect.succeed([]),
+            listLabels: () => Effect.succeed([]),
             listIterations: () =>
               Effect.succeed([ITERATION, { ...ITERATION, id: 4, headCommit: "new-head" }]),
             listIterationChanges: () =>
@@ -173,6 +176,7 @@ describe("getChangeRequest", () => {
             Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
               getPullRequest: () => Effect.succeed(PULL_REQUEST),
               listPolicyChecks: () => Effect.succeed([]),
+              listLabels: () => Effect.succeed([]),
               listIterations: () =>
                 state === "missing"
                   ? Effect.succeed([])
@@ -218,6 +222,7 @@ describe("getChangeRequest", () => {
                 Effect.succeed({ contents: side("new", 2, 4), isBinary: false }),
               ...NO_BLOBS,
               listPolicyChecks: () => Effect.succeed([]),
+              listLabels: () => Effect.succeed([]),
               listThreads: () => Effect.succeed([]),
             }),
           ),
@@ -252,6 +257,7 @@ describe("getChangeRequest", () => {
               }),
             listIterations: () => Effect.succeed([]),
             listPolicyChecks: () => Effect.succeed([]),
+            listLabels: () => Effect.succeed([]),
             listThreads: () => Effect.succeed([]),
           }),
         ),
@@ -338,6 +344,7 @@ describe("policy checks", () => {
           listIterations: () => Effect.succeed([ITERATION]),
           listIterationChanges: () => Effect.succeed({ changes: [], truncated: false }),
           listPolicyChecks,
+          listLabels: () => Effect.succeed([]),
         }),
       ),
     );
@@ -703,3 +710,49 @@ describe("what one diff slice spends", () => {
     }),
   );
 });
+
+it.effect("retains known labels when the ancillary Azure label read fails", () =>
+  Effect.gen(function* () {
+    const logs: unknown[] = [];
+    const provider = yield* make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          getPullRequest: () =>
+            Effect.succeed({ ...PULL_REQUEST, labels: [{ name: "known", color: null }] }),
+          listIterations: () => Effect.succeed([]),
+          listPolicyChecks: () => Effect.succeed([]),
+          listLabels: () =>
+            Effect.fail(
+              new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
+                command: "az",
+                cwd: "/w",
+                operation: "listLabels",
+                cause: "refused",
+              }),
+            ),
+        }),
+      ),
+    );
+    const detail = yield* provider
+      .getChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "dev.azure.com",
+        number: 7,
+      })
+      .pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message, logLevel }) => logs.push({ message, logLevel }))], {
+            mergeWithExisting: false,
+          }),
+        ),
+      );
+    expect(logs).toEqual([
+      {
+        message: ["Azure pull request label read failed", { repository: "acme/web", number: 7 }],
+        logLevel: "Warn",
+      },
+    ]);
+    expect(detail.labels).toEqual([{ name: "known", color: null }]);
+  }),
+);

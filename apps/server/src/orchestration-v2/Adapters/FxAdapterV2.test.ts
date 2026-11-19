@@ -151,6 +151,7 @@ const openFxSession = Effect.fn("openFxSession")(function* (input: {
   readonly frames: ReadonlyArray<Frame>;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
+  readonly modeOptions?: ReadonlyArray<{ readonly id: string; readonly value: string }>;
   /** Loads this fx session instead of creating one. */
   readonly loadSessionId?: string;
   /** Then starts a turn on this model. */
@@ -195,7 +196,7 @@ const openFxSession = Effect.fn("openFxSession")(function* (input: {
   const selectionOn = (model: string) => ({
     instanceId,
     model,
-    options: [{ id: "effort", value: "xhigh" }],
+    options: [{ id: "effort", value: "xhigh" }, ...(input.modeOptions ?? [])],
   });
   const modelSelection = selectionOn(input.model ?? "default");
   const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -265,6 +266,43 @@ const openFxSession = Effect.fn("openFxSession")(function* (input: {
 });
 
 describe("FxAdapterV2", () => {
+  it.effect("does not let a native synthetic-named mode option override supervision", () =>
+    openFxSession({
+      scenario: "native-synthetic-mode",
+      runtimeMode: "approval-required",
+      modeOptions: [{ id: "_t3/session-mode", value: "auto" }],
+      frames: [
+        ...initialize,
+        outbound("session/new"),
+        answer("session/new", {
+          ...fxSession({ model: FX_DEFAULT_MODEL, modes: FX_MAIN_MODES }),
+          configOptions: [
+            ...fxConfig({ model: FX_DEFAULT_MODEL, modes: FX_MAIN_MODES }),
+            select("_t3/session-mode", "mode", "ask", FX_MAIN_MODES),
+          ],
+        }),
+        ...setConfig("mode", "ask", fxConfig({ model: FX_DEFAULT_MODEL, modes: FX_MAIN_MODES })),
+      ],
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("keeps supervised sessions in the mode set by their runtime policy", () =>
+    openFxSession({
+      scenario: "supervised-mode-policy",
+      runtimeMode: "approval-required",
+      modeOptions: [
+        { id: "_t3/session-mode", value: "auto" },
+        { id: "mode", value: "auto" },
+      ],
+      frames: [
+        ...initialize,
+        outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
+        answer("session/new", fxSession({ model: FX_DEFAULT_MODEL, modes: FX_MAIN_MODES })),
+        ...setConfig("mode", "ask", fxConfig({ model: FX_DEFAULT_MODEL, modes: FX_MAIN_MODES })),
+      ],
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("runs Auto as fx's `code` mode on 0.0.13 and as `auto` where fx advertises it", () =>
     Effect.forEach(
       [

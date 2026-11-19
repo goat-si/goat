@@ -29,6 +29,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -65,6 +66,63 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
       });
     }),
   );
+  it.effect.each(["downloaded", "existing", "concurrent"] as const)(
+    "reports a verification timeout for a %s runtime without changing the active release",
+    (source) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const asset = yield* releaseAsset();
+        const entered = yield* Deferred.make<void>();
+        let verificationCount = 0;
+        const { installation, stagingReleased, requests, validations } = yield* makeHarness({
+          previous: true,
+          asset,
+          fileSystem: FileSystem.FileSystem.of({
+            ...fs,
+            rename: (from, to) =>
+              source === "concurrent" && path.basename(path.dirname(to)) === "versions"
+                ? writeRelease(path.dirname(path.dirname(to)), asset, false).pipe(
+                    Effect.provideService(FileSystem.FileSystem, fs),
+                    Effect.provideService(Path.Path, path),
+                    Effect.andThen(
+                      Effect.fail(
+                        PlatformError.systemError({
+                          _tag: "AlreadyExists",
+                          module: "FileSystem",
+                          method: "rename",
+                          pathOrDescriptor: to,
+                        }),
+                      ),
+                    ),
+                  )
+                : fs.rename(from, to),
+          }),
+          validate: () =>
+            Effect.suspend(() =>
+              source === "concurrent" && verificationCount++ === 0
+                ? Effect.void
+                : Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+            ),
+        });
+        if (source === "existing") {
+          yield* writeRelease(installation.managedDirectory, asset, false);
+        }
+        yield* installation.start;
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("90 seconds");
+        expect(yield* terminalState(installation)).toMatchObject({
+          phase: "failed",
+          message:
+            "Antigravity runtime verification timed out after 90 seconds. Check this environment's server logs for startup errors, then retry installation.",
+        });
+        if (source !== "existing") yield* Deferred.await(stagingReleased);
+        yield* expectPreviousRelease(installation);
+        expect(requests).toHaveLength(source === "existing" ? 0 : 1);
+        expect(validations).toHaveLength(source === "concurrent" ? 2 : 1);
+      }),
+  );
+
   it.effect("falls back to runtime 1.4.5 when Google's CLI manifest offers no release", () =>
     Effect.gen(function* () {
       const { installation, requests } = yield* makeHarness({ useBundledRelease: true });

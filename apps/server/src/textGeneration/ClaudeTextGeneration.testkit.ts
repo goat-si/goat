@@ -79,6 +79,7 @@ export function withFakeClaudeEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     argsMustContain?: string;
+    expectedTools?: string;
     settingsMustContain?: string;
     expectPrivateSettings?: boolean;
     settingsTempRoot?: string;
@@ -92,11 +93,18 @@ export function withFakeClaudeEnv<A, E, R>(
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-text-" });
     const binDir = yield* makeFakeClaudeBinary(tempDir);
     const pathDelimiter = (yield* HostProcess.isWindows) ? ";" : ":";
     const updates = {
-      PATH: `${binDir}${pathDelimiter}${process.env.PATH ?? ""}`,
+      PATH: [
+        binDir,
+        path.dirname(process.execPath),
+        ...(pathDelimiter === ";" ? ["C:\\Windows\\System32"] : ["/usr/bin", "/bin"]),
+      ].join(pathDelimiter),
+      HOME: tempDir,
+      SystemRoot: "C:\\Windows",
       GOAT_FAKE_CLAUDE_REJECTS_NO_SESSION_PERSISTENCE: input.rejectsNoSessionPersistence
         ? "1"
         : undefined,
@@ -110,47 +118,38 @@ export function withFakeClaudeEnv<A, E, R>(
       GOAT_FAKE_CLAUDE_CHECK_SETTINGS_MODE:
         input.expectPrivateSettings && pathDelimiter !== ";" ? "1" : undefined,
       GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN: input.argsMustContain,
+      GOAT_FAKE_CLAUDE_EXPECTED_TOOLS: input.expectedTools,
       GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN: input.argsMustNotContain,
       GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN: input.stdinMustContain,
       GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,
       GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE: input.configDirMustBe,
     };
-    const previous = Object.fromEntries(Object.keys(updates).map((key) => [key, process.env[key]]));
-    const apply = (values: Readonly<Record<string, string | undefined>>) => {
-      for (const [key, value] of Object.entries(values)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    };
-    yield* Effect.acquireRelease(
-      Effect.sync(() => apply(updates)),
-      () => Effect.sync(() => apply(previous)),
-    );
-
     const config = decodeClaudeSettings({
       ...(input.memoryRunnerContext ? { homePath: tempDir } : {}),
       ...input.claudeConfig,
     });
     const textGeneration = yield* makeClaudeTextGeneration(
       config,
-      input.memoryRunnerContext === undefined
-        ? undefined
-        : {
-            ...process.env,
-            ANTHROPIC_API_KEY: input.subscription ? "" : "synthetic-api-key",
-            ANTHROPIC_AUTH_TOKEN: "",
-            ANTHROPIC_BASE_URL: input.defaultEndpoint
-              ? undefined
-              : input.directApi
-                ? "https://api.anthropic.com"
-                : "https://synthetic-provider.invalid",
-            GOAT_FAKE_CLAUDE_SPAWN_MARKER: `${tempDir}/spawned`,
-            CLAUDE_CODE_OAUTH_TOKEN: input.oauthToken ? "synthetic-oauth-token" : "",
-            CLAUDE_CODE_USE_BEDROCK: "",
-            CLAUDE_CODE_USE_VERTEX: "",
-            CLAUDE_CODE_USE_FOUNDRY: "",
-            WSL_DISTRO_NAME: input.wsl ? "synthetic-wsl" : "",
-          },
+      {
+        ...updates,
+        ...(input.memoryRunnerContext === undefined
+          ? {}
+          : {
+              ANTHROPIC_API_KEY: input.subscription ? "" : "synthetic-api-key",
+              ANTHROPIC_AUTH_TOKEN: "",
+              ANTHROPIC_BASE_URL: input.defaultEndpoint
+                ? undefined
+                : input.directApi
+                  ? "https://api.anthropic.com"
+                  : "https://synthetic-provider.invalid",
+              GOAT_FAKE_CLAUDE_SPAWN_MARKER: `${tempDir}/spawned`,
+              CLAUDE_CODE_OAUTH_TOKEN: input.oauthToken ? "synthetic-oauth-token" : "",
+              CLAUDE_CODE_USE_BEDROCK: "",
+              CLAUDE_CODE_USE_VERTEX: "",
+              CLAUDE_CODE_USE_FOUNDRY: "",
+              WSL_DISTRO_NAME: input.wsl ? "synthetic-wsl" : "",
+            }),
+      },
       Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
       input.memoryRunnerContext,
     ).pipe(

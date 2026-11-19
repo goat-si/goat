@@ -650,3 +650,10 @@ describe("decodePolicyChecksJson", () => {
     expect(Result.isFailure(decodePolicyChecksJson(rows, { isDraft: false }))).toBe(true);
   });
 });
+
+it("preserves labels on Azure pull request list rows", () => {
+  const batch = expectSuccess(
+    decodePullRequestListJson(asJson([pullRequest({ labels: [{ name: "release-1.0" }] })])),
+  );
+  expect(batch.items[0]).toMatchObject({ labels: [{ name: "release-1.0" }] });
+});

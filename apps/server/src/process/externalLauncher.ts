@@ -34,6 +34,8 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
+import { readGraphicalSessionOutput } from "./graphicalSessionOutput.ts";
+import { resolveWslFileManagerPath } from "./wslFileManagerPath.ts";
 import { makeStaleWhileRevalidate } from "../environment/staleWhileRevalidate.ts";
 export {
   ExternalLauncherError,
@@ -373,11 +375,6 @@ const fileManagerRevealKindForPlatform = Effect.fn(
   return hasGraphicalLinuxSession(env) ? "files" : undefined;
 });
 
-function resolveWslFileManagerPath(target: string, distroName: string): string {
-  const relativePath = target.replace(/^\/+/, "").replaceAll("/", "\\");
-  return `\\\\wsl.localhost\\${distroName}${relativePath.length > 0 ? `\\${relativePath}` : ""}`;
-}
-
 export function buildBrowserLaunch(
   target: string,
   platform: NodeJS.Platform,
@@ -445,16 +442,23 @@ const resolveBrowserLaunch = Effect.fn("externalLauncher.resolveBrowserLaunch")(
   return buildBrowserLaunch(target, platform, env);
 });
 
+// Editors and the file manager open on the desktop session, so a boot-started
+// server discovers and launches them with that session's display.
+const readEditorEnv = Effect.fn("externalLauncher.readEditorEnv")(function* () {
+  const env = { ...(yield* readBrowserLaunchEnv), ...(yield* readCommandLookupEnv) };
+  return hasGraphicalLinuxSession(env) ? env : { ...env, ...(yield* readGraphicalSessionEnv()) };
+});
+
 const resolveAvailableEditors = Effect.fn("externalLauncher.resolveAvailableEditors")(function* () {
   const platform = yield* HostProcess.Platform;
-  const env = { ...(yield* readBrowserLaunchEnv), ...(yield* readCommandLookupEnv) };
+  const env = yield* readEditorEnv();
   return yield* buildAvailableEditors(platform, env).pipe(withPathDirectoryListings);
 });
 
 const resolveFileManagerRevealKind = Effect.fn("externalLauncher.resolveFileManagerRevealKind")(
   function* () {
     const platform = yield* HostProcess.Platform;
-    const env = { ...(yield* readBrowserLaunchEnv), ...(yield* readCommandLookupEnv) };
+    const env = yield* readEditorEnv();
     return yield* fileManagerRevealKindForPlatform(platform, env);
   },
 );
@@ -480,7 +484,7 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   const platform = yield* HostProcess.Platform;
-  const env = { ...(yield* readBrowserLaunchEnv), ...(yield* readCommandLookupEnv) };
+  const env = yield* readEditorEnv();
   yield* Effect.annotateCurrentSpan({
     "externalLauncher.editor": input.editor,
     "externalLauncher.cwd": input.cwd,
@@ -531,7 +535,7 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
   }
 
-  let target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
+  let target = input.cwd;
   if (input.reveal === true) {
     return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
   }
@@ -568,7 +572,7 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     command,
     args:
       command === "explorer.exe" && env.WSL_DISTRO_NAME !== undefined
-        ? [resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
+        ? [yield* resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
         : [target],
   };
 });
@@ -632,13 +636,13 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
     shouldUseWindowsHostFromWsl(platform, env) &&
     env.WSL_DISTRO_NAME !== undefined
   ) {
-    const explorerTarget = resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME);
+    const explorerTarget = yield* resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME);
     if (yield* isCommandAvailable(WSL_POWERSHELL_COMMAND, { env })) {
       // WSL names may contain quotes that Explorer's /select cannot encode.
       // Open the parent through the shell so replacement managers still apply.
       const path = yield* Path.Path;
       // .NET path parsing rejects characters that are legal in WSL filenames.
-      const parent = resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME);
+      const parent = yield* resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME);
       const source = explorerTarget.includes('"')
         ? `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(parent)}`
         : buildFileManagerRevealPowerShellSource(explorerTarget, parent);
@@ -653,7 +657,7 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
       editor: "file-manager",
       target,
       command: "explorer.exe",
-      args: [resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME)],
+      args: [yield* resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME)],
     };
   }
 
@@ -779,7 +783,11 @@ const tryRevealWindowsItem = Effect.fn("externalLauncher.tryRevealWindowsItem")(
 const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
   input: LaunchEditorInput,
 ) {
-  const launch = yield* resolveEditorLaunch(input);
+  const home = yield* HostProcess.HomeDirectory;
+  const cwd = expandHomePath(input.cwd, home);
+  const projectRoot =
+    input.projectRoot === undefined ? undefined : expandHomePath(input.projectRoot, home);
+  const launch = yield* resolveEditorLaunch({ ...input, cwd, projectRoot });
   if (
     input.editor === "file-manager" &&
     input.reveal === true &&
@@ -819,22 +827,7 @@ const readGraphicalSessionEnv = Effect.fn("externalLauncher.readGraphicalSession
     if ((yield* HostProcess.Platform) !== "linux" || hasGraphicalLinuxSession(hostEnv)) {
       return {};
     }
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const output = yield* spawner.string(
-      ChildProcess.make(
-        "busctl",
-        [
-          "--user",
-          "--json=short",
-          "get-property",
-          "org.freedesktop.systemd1",
-          "/org/freedesktop/systemd1",
-          "org.freedesktop.systemd1.Manager",
-          "Environment",
-        ],
-        { stdin: "ignore", stderr: "ignore" },
-      ),
-    );
+    const output = yield* readGraphicalSessionOutput();
     const { data } = yield* decodeManagerEnvironment(output);
     return Object.fromEntries(
       data.flatMap((line) => {

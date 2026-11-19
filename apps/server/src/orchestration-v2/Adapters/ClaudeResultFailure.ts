@@ -1,4 +1,10 @@
-import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeScopedLimitNames } from "../../provider/claudeUsageLimits.ts";
+import * as Schema from "effect/Schema";
+import type {
+  SDKAPIRetryMessage,
+  SDKResultMessage,
+  SDKRateLimitInfo,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { OrchestrationV2ProviderFailure, OrchestrationV2ProviderTurn } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as DateTime from "effect/DateTime";
@@ -90,6 +96,8 @@ export function terminalStatusFromResult(
 const PROXY_COOLDOWN_PREFIX = "API Error: Request rejected (429) · All credentials for model ";
 const PROXY_COOLDOWN =
   /^API Error: Request rejected \(429\) · All credentials for model [^\s()]+ are cooling down \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/;
+const PROXY_COOLDOWN_AFTER_ERROR =
+  /^API Error: Request rejected \(429\) · All credentials for model [^\s()]+ are cooling down \(last error: [\s\S]*\) \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)$/;
 const GATEWAY_COOLDOWN = /\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/;
 
 function gatewayCooldownResetAt(
@@ -164,10 +172,10 @@ export function providerFailureFromResult(
   const resetAt =
     apiErrorStatus === 429 && message.result.startsWith("API Error:")
       ? gatewayCooldownResetAt(
-          (message.result.startsWith(PROXY_COOLDOWN_PREFIX)
-            ? PROXY_COOLDOWN
-            : GATEWAY_COOLDOWN
-          ).exec(message.result),
+          message.result.startsWith(PROXY_COOLDOWN_PREFIX)
+            ? (PROXY_COOLDOWN.exec(message.result) ??
+                PROXY_COOLDOWN_AFTER_ERROR.exec(message.result))
+            : GATEWAY_COOLDOWN.exec(message.result),
           completedAt,
         )
       : undefined;
@@ -181,4 +189,90 @@ export function providerFailureFromResult(
     retryable: apiErrorStatus === 429 || apiErrorStatus === 529 ? true : null,
     resetAt: resetAt ?? null,
   });
+}
+
+// The CLI throttles unchanged rate_limit_event frames, but repeats this
+// undeclared payload on each blocked assistant response.
+export const isClaudeBlockedAssistantRateLimit = Schema.is(
+  Schema.Struct({
+    api_error_params: Schema.Struct({
+      rate_limit_info: Schema.Struct({
+        status: Schema.Literal("rejected"),
+        rateLimitType: Schema.optionalKey(Schema.Unknown),
+        resetsAt: Schema.optionalKey(Schema.Unknown),
+        overageStatus: Schema.optionalKey(Schema.String),
+        isUsingOverage: Schema.optionalKey(Schema.Boolean),
+        overageInUse: Schema.optionalKey(Schema.Boolean),
+      }),
+    }),
+  }),
+);
+
+export function claudeUsageLimitResetAt(resetsAt: unknown): string | null {
+  const resetMs = typeof resetsAt === "number" ? resetsAt * 1000 : NaN;
+  return Number.isFinite(resetMs) && resetMs > 0 && resetMs < 8.64e15
+    ? DateTime.formatIso(DateTime.makeUnsafe(resetMs))
+    : null;
+}
+
+export function providerFailureFromApiRetry(
+  message: SDKAPIRetryMessage,
+): OrchestrationV2ProviderFailure {
+  const errorName = message.error.replaceAll("_", " ");
+  return makeProviderFailure({
+    message: `Claude API ${errorName}.`,
+    code:
+      message.error_status === null
+        ? message.error
+        : `api_error_${Math.trunc(message.error_status)}`,
+    class:
+      message.error_status === 429
+        ? "usage_limit"
+        : message.error_status === null
+          ? "transport_error"
+          : "provider_error",
+    retryable: true,
+  });
+}
+
+const CLAUDE_USAGE_LIMIT_WINDOWS = {
+  five_hour: "5-hour",
+  seven_day: "7-day",
+  seven_day_opus: "7-day Opus",
+  seven_day_sonnet: "7-day Sonnet",
+  seven_day_overage_included: "7-day model",
+  overage: "overage",
+} satisfies Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, string>;
+
+const CLAUDE_USAGE_LIMIT_MAX_WAIT_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function describeClaudeUsageLimit(
+  info: SDKRateLimitInfo,
+  nowMs: number,
+  names: ClaudeScopedLimitNames,
+): string {
+  const label =
+    info.rateLimitType === "seven_day_overage_included" && names.overageIncluded
+      ? `7-day ${names.overageIncluded}`
+      : info.rateLimitType
+        ? CLAUDE_USAGE_LIMIT_WINDOWS[info.rateLimitType]
+        : undefined;
+  const resetsAtMs = info.resetsAt === undefined ? undefined : info.resetsAt * 1000;
+  const waitMs =
+    resetsAtMs === undefined || !Number.isFinite(nowMs) ? undefined : resetsAtMs - nowMs;
+  const wait =
+    waitMs !== undefined && waitMs > 0 && waitMs <= CLAUDE_USAGE_LIMIT_MAX_WAIT_MS
+      ? formatClaudeUsageLimitWait(waitMs)
+      : undefined;
+  return `Claude usage limit reached. This turn is paused until the ${
+    label ? `${label} ` : ""
+  }limit resets${wait ? ` in ${wait}` : ""}.`;
+}
+
+function formatClaudeUsageLimitWait(waitMs: number): string {
+  const totalMinutes = Math.ceil(waitMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${totalMinutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }

@@ -1,3 +1,12 @@
+import { discoverOtherHomes } from "./AgentSessionOtherDiscovery.ts";
+import { discoverClaudeHomes } from "./AgentSessionClaudeDiscovery.ts";
+import type { AgentSessionRecentThread, AgentSessionSource } from "./AgentSessionScannerTypes.ts";
+export type {
+  AgentSessionThreadMessage,
+  AgentSessionThread,
+  AgentSessionRecentThread,
+  AgentSessionSource,
+} from "./AgentSessionScannerTypes.ts";
 import {
   MAX_IMPORT_RECORDS,
   emptyClaudeFields,
@@ -33,10 +42,7 @@ import {
   isCompressedTranscript,
   makeTranscriptChunkReader,
 } from "./AgentSessionTranscriptChunks.ts";
-import {
-  makeTranscriptDiscovery,
-  type TranscriptCandidate,
-} from "./AgentSessionTranscriptDiscovery.ts";
+import type { TranscriptCandidate } from "./AgentSessionTranscriptDiscovery.ts";
 import * as NodeOS from "node:os";
 
 import {
@@ -106,40 +112,6 @@ const MAX_IMPORT_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORT_TRANSCRIPTS = 100;
 
-export interface AgentSessionThreadMessage {
-  readonly role: "user" | "assistant";
-  readonly text: string;
-  readonly createdAt: string;
-}
-
-export interface AgentSessionThread {
-  readonly source: AgentSessionSource;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly providerSessionId: string;
-  readonly title: string;
-  readonly model: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
-  readonly omittedMessageCount: number;
-}
-
-export type AgentSessionRecentThread =
-  | {
-      readonly _tag: "Importable";
-      readonly thread: AgentSessionThread;
-      readonly source: AgentSessionImportSource;
-      /** The root's linked worktree the session ran in, or null when it ran in the root. */
-      readonly worktree: { readonly path: string; readonly branch: string | null } | null;
-    }
-  | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
-  | {
-      readonly _tag: "Duplicate";
-      readonly source: AgentSessionImportSource;
-      readonly messages: AgentSessionThread["messages"];
-    }
-  | { readonly _tag: "Skipped" };
-
 export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
@@ -147,8 +119,6 @@ export class AgentSessionScanner extends Context.Service<
     readonly recentThreads: ScanCompatibility.RecentAgentSessions<AgentSessionRecentThread>;
   }
 >()("goat/project/AgentSessionScanner") {}
-
-export type AgentSessionSource = AgentSessionProjectCandidate["sources"][number];
 
 interface RawCandidate {
   readonly cwd: string;
@@ -521,8 +491,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const { discoverClaudeTranscripts, discoverCodexTranscripts, discoverPiTranscripts } =
-    makeTranscriptDiscovery({ fileSystem, path });
   const transcriptChunkReader = makeTranscriptChunkReader(fileSystem);
 
   const groupTranscriptsByCwd = Effect.fn("AgentSessionScanner.groupTranscriptsByCwd")(function* (
@@ -715,23 +683,23 @@ export const make = Effect.gen(function* () {
       if (source === "codex") collectedCodexCwdByThread = codexState?.cwdByThread ?? null;
 
       const transcriptCandidates: Array<TranscriptCandidate> = [];
-      const baseOperationBudget = Math.floor(
-        MAX_DISCOVERY_OPERATIONS_PER_SOURCE / Math.max(1, homes.length),
-      );
-      const extraOperationBudgets = MAX_DISCOVERY_OPERATIONS_PER_SOURCE % Math.max(1, homes.length);
-      for (const [index, home] of homes.entries()) {
-        const operationBudget = baseOperationBudget + (index < extraOperationBudgets ? 1 : 0);
-        if (operationBudget === 0) {
-          truncated = true;
-          continue;
-        }
-        const discover =
-          source === "claudeAgent"
-            ? discoverClaudeTranscripts
-            : source === "codex"
-              ? discoverCodexTranscripts
-              : discoverPiTranscripts;
-        const discovered = yield* discover(home.homePath, home.providerInstanceId, operationBudget);
+      if (source === "claudeAgent") {
+        const discovered = yield* discoverClaudeHomes({
+          fileSystem,
+          path,
+          homes,
+          operationBudget: MAX_DISCOVERY_OPERATIONS_PER_SOURCE,
+        });
+        truncated ||= discovered.truncated;
+        transcriptCandidates.push(...discovered.transcripts);
+      } else {
+        const discovered = yield* discoverOtherHomes({
+          source,
+          fileSystem,
+          path,
+          homes,
+          operationBudget: MAX_DISCOVERY_OPERATIONS_PER_SOURCE,
+        });
         truncated ||= discovered.truncated;
         transcriptCandidates.push(...discovered.transcripts);
       }
