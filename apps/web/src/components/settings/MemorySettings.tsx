@@ -42,6 +42,7 @@ import {
 import {
   memoryBrowseInput,
   memoryMoveCandidate,
+  memoryMoveCandidateCurrent,
   memorySearchInput,
   memoryProjectScope,
   memoryPreview,
@@ -875,19 +876,21 @@ export function MemoryDetails({
   scopeMoves?: boolean;
   memoryEnabled: boolean;
 }) {
+  const registry = useContext(RegistryContext);
   const { environments } = useEnvironments();
   const deviceName = (id: EnvironmentId) =>
     environments.find((e) => e.environmentId === id)?.label ?? "Unknown device";
   const memoryId = target.memoryId!;
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
-  const read = useEnvironmentQuery(
-    memoryEnvironment.read({
-      environmentId,
-      input: { memorySpaceId, memoryId, ...(scopeMoves ? { includeScopeVersion: true } : {}) },
-    }),
-  );
+  const moveAllowed = useAtomValue(memoryEnvironment.move.permissionAtom(environmentId));
+  const readAtom = memoryEnvironment.read({
+    environmentId,
+    input: { memorySpaceId, memoryId, ...(scopeMoves ? { includeScopeVersion: true } : {}) },
+  });
+  const read = useEnvironmentQuery(readAtom);
   const [cursor, setCursor] = useState<string | undefined>();
+  const [moved, setMoved] = useState(false);
   const history = useEnvironmentQuery(
     memoryEnvironment.history({
       environmentId,
@@ -895,7 +898,8 @@ export function MemoryDetails({
     }),
   );
   const item = read.data ? Option.getOrNull(read.data) : null;
-  const move = memoryEnabled && scopeMoves && item ? memoryMoveCandidate(item) : null;
+  const canMove = memoryEnabled && scopeMoves && moveAllowed;
+  const move = canMove && item ? memoryMoveCandidate(item) : null;
   const edit = useMemoryEditSession({
     environmentId,
     memorySpaceId,
@@ -943,12 +947,18 @@ export function MemoryDetails({
                 Edit
               </Button>
             ) : null}
-            {move && !edit.start ? (
+            {canMove && !edit.start ? (
               <MemoryMoveControl
                 environmentId={environmentId}
                 memorySpaceId={memorySpaceId}
-                candidates={[move]}
-                onMoved={() => {
+                candidates={move ? [move] : []}
+                isCurrent={(candidate) => {
+                  const current = registry.get(readAtom);
+                  const live = current._tag === "Success" ? Option.getOrNull(current.value) : null;
+                  return live !== null && memoryMoveCandidateCurrent(candidate, [live]);
+                }}
+                onMoved={(allMoved) => {
+                  if (allMoved) setMoved(true);
                   read.refresh();
                   history.refresh();
                   onMoved?.();
@@ -987,6 +997,7 @@ export function MemoryDetails({
       >
         <div ref={detailsRef} tabIndex={-1} aria-label="Memory details" className="space-y-3">
           {read.error || history.error ? <p role="alert">{read.error ?? history.error}</p> : null}
+          {moved ? <p role="status">Memory moved.</p> : null}
           {edit.notice ? <p role="status">{edit.notice}</p> : null}
           {!edit.start && edit.saveMessage ? <p role="status">{edit.saveMessage}</p> : null}
           {!edit.start && edit.needsReview && canWrite ? (
@@ -1012,6 +1023,7 @@ export function MemoryDetails({
               {item.status === "active" ? (
                 <>
                   <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
+                  <p>Scope: {memoryScopeLabel(item.scope)}</p>
                   {edit.reviewing && edit.ownRequest !== "pending" ? (
                     <p>Current revision: {item.revision.revisionId}</p>
                   ) : null}
@@ -1019,7 +1031,12 @@ export function MemoryDetails({
               ) : null}
             </>
           ) : (
-            <MemoryBodyGapNotice session={edit} />
+            <>
+              <MemoryBodyGapNotice session={edit} />
+              {canMove && edit.gap === "unchanged" ? (
+                <p>Show the memory again to move it.</p>
+              ) : null}
+            </>
           )}
           {edit.start && canWrite ? (
             <MemoryEditor

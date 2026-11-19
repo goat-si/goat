@@ -50,6 +50,7 @@ import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
   memoryMoveCandidate,
+  memoryMoveCandidateCurrent,
   memorySearchInput,
   memoryProjectScope,
   memoryPreview,
@@ -726,6 +727,7 @@ function ScopedMemoryBrowser({
         onClose={() => setSelected(undefined)}
         scopeMoves={capabilities?.scopeMoves === true}
         onMoved={() => {
+          setNotice("Memory moved.");
           setSelected(undefined);
           registry.refresh(atom);
         }}
@@ -1020,7 +1022,9 @@ function MemoryDetails({
   });
   const result = useAtomValue(readAtom);
   const item = AsyncResult.isSuccess(result) ? Option.getOrNull(result.value) : null;
-  const move = memoryEnabled && scopeMoves && item ? memoryMoveCandidate(item) : null;
+  const moveAllowed = useAtomValue(memory.move.permissionAtom(params.environmentId));
+  const canMove = memoryEnabled && scopeMoves && moveAllowed;
+  const move = canMove && item ? memoryMoveCandidate(item) : null;
   const [cursor, setCursor] = useState<string | undefined>();
   const historyAtom = memory.history({
     ...target,
@@ -1179,27 +1183,6 @@ function MemoryDetails({
               )}
             </>
           ) : null}
-          {move && !session.start ? (
-            <MobileMemoryMoveControl
-              environmentId={params.environmentId}
-              memorySpaceId={memorySpaceId}
-              candidates={[move]}
-              onMoved={(allMoved) => {
-                if (allMoved) onMoved();
-                else {
-                  registry.refresh(readAtom);
-                  registry.refresh(historyAtom);
-                }
-              }}
-            />
-          ) : null}
-          {!retry ? (
-            <Action
-              label="Forget"
-              disabled={!canForget || !presentMemoryItem(item).canForget || pending}
-              onPress={() => setConfirmForget(true)}
-            />
-          ) : null}
         </>
       ) : (
         <>
@@ -1213,8 +1196,37 @@ function MemoryDetails({
             <Copy>{gapNotice.line}</Copy>
           ) : null}
           {gapNotice?.showAgain ? <Action label="Show again" onPress={session.showAgain} /> : null}
+          {canMove && session.gap === "unchanged" ? (
+            <Copy>Show the memory again to move it.</Copy>
+          ) : null}
         </>
       )}
+      {canMove ? (
+        <MobileMemoryMoveControl
+          environmentId={params.environmentId}
+          memorySpaceId={memorySpaceId}
+          candidates={move ? [move] : []}
+          isCurrent={(candidate) => {
+            const current = registry.get(readAtom);
+            const live = AsyncResult.isSuccess(current) ? Option.getOrNull(current.value) : null;
+            return live !== null && memoryMoveCandidateCurrent(candidate, [live]);
+          }}
+          onMoved={(allMoved) => {
+            if (allMoved) onMoved();
+            else {
+              registry.refresh(readAtom);
+              registry.refresh(historyAtom);
+            }
+          }}
+        />
+      ) : null}
+      {item && !retry ? (
+        <Action
+          label="Forget"
+          disabled={!canForget || !presentMemoryItem(item).canForget || pending}
+          onPress={() => setConfirmForget(true)}
+        />
+      ) : null}
       {pending ? <Copy>Forget request pending.</Copy> : null}
       {retry ? (
         <Action

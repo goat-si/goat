@@ -736,7 +736,7 @@ async function supportedScreen(
   const get = registry.get.bind(registry);
   vi.spyOn(registry, "get").mockImplementation((atom) => {
     const label = (atom as unknown as { label?: string }).label;
-    if (label === "list" || label === "search")
+    if (label === "list" || label === "search" || label === "read")
       return success(state.queries.get(label) ?? Option.none()) as never;
     if (label)
       return (

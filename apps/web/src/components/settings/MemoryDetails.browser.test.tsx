@@ -10,7 +10,7 @@ import { emptyMemoryExposure } from "@goat/client-runtime/state/memory";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { AtomRegistry } from "effect/reactivity";
+import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render, type Screen } from "../../../test/render";
@@ -41,6 +41,7 @@ function useFixtureVersion() {
   );
 }
 function fixtureValue(label: string) {
+  if (label === "read") return AsyncResult.success(state.queries.get("read") ?? Option.none());
   if (label === "readReply")
     return state.readPending ? null : (state.queries.get("read") ?? Option.none());
   return label === "exposure" ? state.exposure : label === "upsert" ? state.write : true;
