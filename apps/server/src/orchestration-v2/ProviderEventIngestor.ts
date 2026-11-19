@@ -827,6 +827,20 @@ export const layer: Layer.Layer<
         /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
         Effect.fnUntraced(
           function* (input) {
+            if (
+              input.event.type === "app_thread.created" &&
+              input.event.onlyIfDefaultTitle === true
+            ) {
+              const current = yield* projections.getThread(input.event.appThread.id).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+              );
+              if (current !== null && current.title !== "New thread") {
+                yield* Effect.logDebug("Skipped an automatic provider title for a named thread.");
+                return [];
+              }
+            }
             const events = yield* normalize(input);
             if (events.length === 0) {
               return [];

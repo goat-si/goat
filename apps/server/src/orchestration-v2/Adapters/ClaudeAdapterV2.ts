@@ -1799,6 +1799,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 };
 
 interface ActiveClaudeTurnContext {
+  nativeSessionTitle?: string | undefined;
   retryBudgetFailure?: OrchestrationV2ProviderFailure;
   unansweredRequestSince?: DateTime.Utc | undefined;
   readonly autoCompactWindow: string;
@@ -6725,10 +6726,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           const message = input.message;
           if (
-            claudeReportedSessionTitle(message) === liveQuery.titleState.pendingTitle &&
-            liveQuery.titleState.pendingTitle !== undefined
-          )
+            message.type === "system" &&
+            Reflect.get(message, "subtype") === "session_title_changed"
+          ) {
+            const title = claudeReportedSessionTitle(message);
+            if (title === undefined) {
+              yield* Effect.logDebug("Ignored malformed Claude session title.");
+              return;
+            }
+            if (liveQuery.titleState.pendingTitle === title) return;
+            const active = yield* Ref.get(activeTurn);
+            if (active !== null) active.nativeSessionTitle = title;
+            if (active?.input.appThread.title === "New thread") {
+              yield* emitProviderEvent({
+                type: "app_thread.created",
+                driver: CLAUDE_PROVIDER,
+                appThread: { ...active.input.appThread, title },
+                onlyIfDefaultTitle: true,
+              });
+            }
             return;
+          }
           // Track before routing: idle-wake Monitors report tasks before replaying their tool calls.
           yield* trackClaudeMonitorCalls(message);
           yield* trackClaudeScheduledWakeup(liveQuery.nativeThreadId, message);
@@ -6909,6 +6927,37 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               context.unansweredRequestSince = undefined;
               yield* unansweredTimers.cancel(context.providerTurnId);
             }
+          }
+          if (
+            message.type === "result" &&
+            message.subtype === "success" &&
+            !message.is_error &&
+            message.local_command === "rename" &&
+            context.nativeSessionTitle !== undefined
+          ) {
+            const title = context.nativeSessionTitle;
+            context.nativeSessionTitle = undefined;
+            liveQuery.titleState.appliedTitle = title;
+            const previous = (yield* Ref.get(lastProviderThreadByNativeThread)).get(
+              liveQuery.nativeThreadId,
+            );
+            if (previous !== undefined) {
+              const updated = {
+                ...previous,
+                nativeMetadata: { ...previous.nativeMetadata, title },
+              };
+              yield* rememberProviderThread(updated);
+              yield* emitProviderEvent({
+                type: "provider_thread.updated",
+                driver: CLAUDE_PROVIDER,
+                providerThread: updated,
+              });
+            }
+            yield* emitProviderEvent({
+              type: "app_thread.created",
+              driver: CLAUDE_PROVIDER,
+              appThread: { ...context.input.appThread, title },
+            });
           }
           const focusedPlugin = claudeFocusRequestedPanePlugin(message);
           if (focusedPlugin !== null && context === (yield* Ref.get(activeTurn))) {
@@ -9128,7 +9177,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             titleState: {
               appliedTitle: turnInput.providerThread.nativeMetadata?.title ?? undefined,
               pendingTitle: undefined,
-              reportedTitle: undefined,
             },
             environment: launch.environment,
             queryPolicy,

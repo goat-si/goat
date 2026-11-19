@@ -6,7 +6,6 @@ const CLAUDE_RENAME_TIMEOUT = "10 seconds";
 export interface ClaudeSessionTitleState {
   appliedTitle: string | undefined;
   pendingTitle: string | undefined;
-  reportedTitle: string | undefined;
 }
 
 export const applyClaudeSessionTitle = Effect.fn("ClaudeSessionTitles.apply")(function* (
