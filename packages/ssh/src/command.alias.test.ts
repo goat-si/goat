@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+// @effect-diagnostics nodeBuiltinImport:off -- Exercises the real ssh argument vector in a subprocess.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

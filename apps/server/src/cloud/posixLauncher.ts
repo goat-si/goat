@@ -12,7 +12,7 @@ const LAUNCHER_CANDIDATE_LIMIT = 256;
 const LAUNCHER_RECORDS_MAX_BYTES = 65_536;
 const LAUNCHER_PATH_MAX_CHARS = 65_536;
 
-export const posixLauncherScript = (executable: string) =>
+const posixLauncherScript = (executable: string) =>
   `#!/bin/sh\nexec '${executable.replaceAll("'", "'\\''")}' "$@"\n`;
 
 async function readBounded(file: string, limit: number): Promise<string | undefined> {
