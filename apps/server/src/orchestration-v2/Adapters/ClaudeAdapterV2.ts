@@ -6879,21 +6879,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 context.providerTurnId,
                 failUnansweredRequest(context, since),
               );
-            } else if (
-              answersClaudeRequest(message, context.promptUuid) &&
-              !(
-                message.type === "result" &&
-                context.promptUuid !== null &&
-                isClaudeResultForOtherTurn({
-                  message,
-                  promptUuid: context.promptUuid,
-                  steerUuids: context.steerUuids,
-                  promptEchoMode: liveQuery.promptEchoMode,
-                })
-              )
-            ) {
-              context.unansweredRequestSince = undefined;
-              yield* unansweredTimers.cancel(context.providerTurnId);
             }
           }
           if (
@@ -8174,6 +8159,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const message = input.message;
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
+          if (
+            context !== null &&
+            liveQuery?.query === input.query &&
+            context.unansweredRequestSince !== undefined &&
+            answersClaudeRequest(message, context.promptUuid, context.steerUuids) &&
+            !(
+              message.type === "result" &&
+              context.promptUuid !== null &&
+              isClaudeResultForOtherTurn({
+                message,
+                promptUuid: context.promptUuid,
+                steerUuids: context.steerUuids,
+                promptEchoMode: liveQuery.promptEchoMode,
+              })
+            )
+          ) {
+            context.unansweredRequestSince = undefined;
+            yield* unansweredTimers.cancel(context.providerTurnId);
+          }
           // The API answering again is recovery; a long text or tool input block emits nothing
           // else. Judged here, in arrival order: held and buffered frames are handled later.
           if (
@@ -8353,6 +8357,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolUseID: callbackOptions.toolUseID,
             } satisfies PermissionResult;
           }
+          context.unansweredRequestSince = undefined;
+          yield* unansweredTimers.cancel(context.providerTurnId);
 
           // A process opened before the driver was attached lacks its
           // preapproval; the live session decides instead.
@@ -8627,10 +8633,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           request: ElicitationRequest,
           callbackOptions: Parameters<NonNullable<ClaudeQueryOptions["onElicitation"]>>[1],
         ) {
+          const context = yield* Ref.get(activeTurn);
+          if (context !== null) {
+            context.unansweredRequestSince = undefined;
+            yield* unansweredTimers.cancel(context.providerTurnId);
+          }
           if (callbackOptions.signal.aborted)
             return { action: "cancel" } satisfies ElicitationResult;
           const acceptance = claudeMcpElicitationAcceptance(request);
-          const context = yield* Ref.get(activeTurn);
           if (acceptance === undefined || context === null) {
             yield* Effect.logWarning(
               "Cancelled an MCP elicitation the approval card cannot answer.",

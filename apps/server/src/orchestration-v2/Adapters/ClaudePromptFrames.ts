@@ -48,10 +48,17 @@ export function claudePromptLifecycle(
   return typeof uuid === "string" && typeof state === "string" ? { uuid, state } : null;
 }
 
-export function answersClaudeRequest(message: SDKMessage, promptUuid: string | null): boolean {
+export function answersClaudeRequest(
+  message: SDKMessage,
+  promptUuid: string | null,
+  steerUuids: ReadonlySet<string>,
+): boolean {
   const lifecycle = claudePromptLifecycle(message);
   if (lifecycle !== null) return lifecycle.uuid === promptUuid && lifecycle.state !== "started";
   if (Reflect.get(message, "parent_tool_use_id") != null) return false;
+  const echoed = claudeEchoedPromptUuids(message);
+  if (echoed.length > 0 && !echoed.some((uuid) => uuid === promptUuid || steerUuids.has(uuid)))
+    return false;
   if (message.type === "system") {
     return message.subtype === "task_started" && (message.spawn_depth ?? 1) <= 1;
   }
@@ -62,10 +69,11 @@ export function answersClaudeRequest(message: SDKMessage, promptUuid: string | n
     message.type !== "result"
   )
     return false;
-  const echoed = claudeEchoedPromptUuids(message);
-  if (echoed.length > 0) return promptUuid !== null && echoed.includes(promptUuid);
+  if (echoed.length > 0) return true;
   if (message.type === "user" && typeof message.message.content === "string") {
-    return message.uuid === undefined || message.uuid === promptUuid;
+    return (
+      message.uuid === undefined || message.uuid === promptUuid || steerUuids.has(message.uuid)
+    );
   }
   return true;
 }
