@@ -127,6 +127,52 @@ it.effect("identifies a busy model slot without opening a stream", () =>
   ),
 );
 
+it.effect("rejects a second stream on the same connection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.succeed({
+            feed: () => Effect.succeed({ revision: 0, text: null }),
+            finish: Effect.succeed(""),
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const first = yield* connection.start();
+        expect(yield* Effect.result(connection.start())).toMatchObject({
+          _tag: "Failure",
+          failure: { code: "busy" },
+        });
+        yield* connection.cancel(first.streamId);
+        expect(yield* Effect.result(connection.start())).toMatchObject({ _tag: "Success" });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
+it.effect("rejects malformed audio and releases the stream", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.succeed({
+            feed: () => Effect.succeed({ revision: 0, text: null }),
+            finish: Effect.succeed(""),
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        expect(
+          yield* Effect.result(connection.feed({ streamId, sequence: 0, audioBase64: "!" })),
+        ).toMatchObject({ _tag: "Failure", failure: { code: "invalid-audio" } });
+        expect(yield* Effect.result(connection.start())).toMatchObject({ _tag: "Success" });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
 it.effect("identifies an unsupported model without opening a stream", () =>
   Effect.scoped(
     Effect.gen(function* () {
