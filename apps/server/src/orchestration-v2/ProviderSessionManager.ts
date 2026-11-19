@@ -1,3 +1,4 @@
+import { busyTurnPrefix, busyTurnKey } from "./ProviderSessionBusyKeys.ts";
 import {
   makeProviderSessionEventSubscription,
   type ProviderSessionEventSignal,
@@ -113,9 +114,6 @@ const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
 
-const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
-const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
-  `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
 const UNLOAD_THREAD_TIMEOUT_MS = 10 * 1000;
 
 import { WORKING_RUN_STATUSES } from "./ProviderSessionWorkingRuns.ts";
