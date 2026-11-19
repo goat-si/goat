@@ -1,3 +1,4 @@
+import { hasAcpDeferredBackgroundWork, acpTiming } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
 import { prepareAcpAppContext, observeLateAcpCompaction } from "./acpAppContextEffect.ts";
@@ -222,14 +223,6 @@ import { acpPerTurnPromptUsage } from "./promptUsage.ts";
 export { acpPerTurnPromptUsage } from "./promptUsage.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
-
-// Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
-const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
-const ACP_OPEN_REPLY_QUIET_LIMIT: Duration.Input = "2 minutes";
-const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
-const ACP_LOADED_COMMANDS_WAIT: Duration.Input = "2 seconds";
-const ACP_PROMPT_INACTIVITY_SLICE_MILLIS = 60_000;
-const ACP_HOST_SLEEP_TOLERANCE_MILLIS = 10_000;
 
 /**
  * Emit first chunks and segment-close events immediately; coalesce later chunks into full-text snapshots.
@@ -906,7 +899,28 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimeGeneration,
             Effect.gen(function* () {
               yield* Ref.set(runtimeRestartRequired, true);
-              if (!followsAgentWorkState) return;
+              if (!followsAgentWorkState) {
+                const held = yield* Ref.get(activeTurn);
+                if (
+                  flavor.toolOutlivesPrompt === undefined ||
+                  held === null ||
+                  !held.promptSettled ||
+                  held.finalized ||
+                  !hasDeferredBackgroundWork(held)
+                )
+                  return;
+                for (const tool of held.tools.values()) {
+                  const status = toolStatus(tool.status);
+                  if (status === "pending" || status === "running" || status === "waiting")
+                    yield* emitTool(held, tool, "failed");
+                }
+                yield* finalizeTurn(
+                  held,
+                  "failed",
+                  makeProviderFailure({ class: "transport_error" }),
+                );
+                return;
+              }
               agentWork = { sessionUpdate: "state_update", state: "idle", stopReason: "error" };
               for (const child of nativeChildren.values()) {
                 if (child.status !== "running") continue;
@@ -2400,25 +2414,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const isMonitorEndNoticeText = (text: string): boolean =>
           /Monitor\s+["']?[0-9a-f-]{8,}/i.test(text) && /ended/i.test(text);
 
-        const hasDeferredBackgroundWork = (context: ActiveAcpTurn): boolean => {
-          if (flavor.wakeOnDetachedRequest && agentRequests.size > 0) return true;
-          if (context.awaitingBackgroundHydration.size > 0) return true;
-          if (context.pendingInjectedReport.size > 0) return true;
-          for (const [taskId, toolCallId] of context.toolCallIdsByBackgroundTaskId) {
-            if (context.persistentBackgroundTaskIds.has(taskId)) continue;
-            const tool = context.tools.get(toolCallId);
-            if (tool === undefined) continue;
-            const status = toolStatus(tool.status);
-            if (status === "pending" || status === "running") return true;
-          }
-          if (flavor.subagentsIdleOnTurnCompletion === true) return false;
-          for (const subagent of context.subagents.values()) {
-            if (acpSubagentStatusBlocksTurnSettlement(subagent.task.status)) {
-              return true;
-            }
-          }
-          return false;
-        };
+        const hasDeferredBackgroundWork = (context: ActiveAcpTurn) =>
+          hasAcpDeferredBackgroundWork(context, flavor, agentRequests.size);
 
         const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
           [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
@@ -6732,8 +6729,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context.backgroundFinalizeGeneration += 1;
           const generation = context.backgroundFinalizeGeneration;
           const debounce = context.replyOpen
-            ? ACP_OPEN_REPLY_QUIET_LIMIT
-            : ACP_DEFERRED_FINALIZE_DEBOUNCE;
+            ? acpTiming.ACP_OPEN_REPLY_QUIET_LIMIT
+            : acpTiming.ACP_DEFERRED_FINALIZE_DEBOUNCE;
           yield* Effect.gen(function* () {
             yield* Effect.sleep(debounce);
             if (
@@ -6837,12 +6834,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const sliceStartedAt = yield* Clock.currentTimeMillis;
             const remaining = context.lastProgressAt + timeoutMillis - sliceStartedAt;
             if (remaining > 0) {
-              const slice = Math.min(remaining, ACP_PROMPT_INACTIVITY_SLICE_MILLIS);
+              const slice = Math.min(remaining, acpTiming.ACP_PROMPT_INACTIVITY_SLICE_MILLIS);
               yield* Effect.sleep(Duration.millis(slice));
               // Host sleep is not agent silence. Timers either fire late on wake (macOS, Windows)
               // or pause while the wall clock jumps (Linux); both overrun a short slice.
               const now = yield* Clock.currentTimeMillis;
-              if (now - sliceStartedAt > slice + ACP_HOST_SLEEP_TOLERANCE_MILLIS) {
+              if (now - sliceStartedAt > slice + acpTiming.ACP_HOST_SLEEP_TOLERANCE_MILLIS) {
                 context.lastProgressAt = now;
               }
               continue;
@@ -7097,7 +7094,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   Stream.map((commands) => commands.get(requestedSessionId)),
                   Stream.filter((commands) => commands !== undefined),
                   Stream.runHead,
-                  Effect.timeoutOption(ACP_LOADED_COMMANDS_WAIT),
+                  Effect.timeoutOption(acpTiming.ACP_LOADED_COMMANDS_WAIT),
                   Effect.map(Option.flatten),
                 )
               : Option.none<ReadonlySet<string>>();
@@ -7904,7 +7901,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         const closed = yield* restore(
                           runtime
                             .closeSession()
-                            .pipe(Effect.timeoutOption(ACP_STOP_CONFIRM_TIMEOUT_MS)),
+                            .pipe(Effect.timeoutOption(acpTiming.ACP_STOP_CONFIRM_TIMEOUT_MS)),
                         ).pipe(
                           Effect.mapError(
                             (cause) =>
@@ -7921,7 +7918,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                             driver,
                             providerThreadId: turnInput.providerThread.id,
                             providerTurnId: turnInput.providerTurnId,
-                            timeoutMs: ACP_STOP_CONFIRM_TIMEOUT_MS,
+                            timeoutMs: acpTiming.ACP_STOP_CONFIRM_TIMEOUT_MS,
                           });
                         }
                         yield* runtimeCallbackPermit.withPermit(
@@ -8155,7 +8152,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         }
                       }
                       const stopped = yield* Deferred.await(context.completed).pipe(
-                        Effect.timeoutOption(ACP_STOP_CONFIRM_TIMEOUT_MS),
+                        Effect.timeoutOption(acpTiming.ACP_STOP_CONFIRM_TIMEOUT_MS),
                       );
                       // The turn stays open: the agent may still be working, and the user
                       // decides whether to Force stop it.
@@ -8164,7 +8161,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           driver,
                           providerThreadId: turnInput.providerThread.id,
                           providerTurnId: turnInput.providerTurnId,
-                          timeoutMs: ACP_STOP_CONFIRM_TIMEOUT_MS,
+                          timeoutMs: acpTiming.ACP_STOP_CONFIRM_TIMEOUT_MS,
                         });
                       }
                     });
