@@ -225,7 +225,6 @@ export const MemoryFailureCode = Schema.Literals([
   "not_found",
   "forgotten",
   "revision_changed",
-  "move_receipt_missing",
   "operation_id_reused",
   "missing_parent",
   "conflict_changed",
@@ -258,6 +257,7 @@ export const MemoryFailureCode = Schema.Literals([
   "forget_pending",
   "hub_upgrade_required",
   "hub_unavailable",
+  "move_receipt_missing",
 ]);
 export type MemoryFailureCode = typeof MemoryFailureCode.Type;
 

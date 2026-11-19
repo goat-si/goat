@@ -43,6 +43,7 @@ it("preserves the stored failure-code ordinals from memory protocol V1", () => {
     "forget_pending",
     "hub_upgrade_required",
     "hub_unavailable",
+    "move_receipt_missing",
   ]);
 });
 
