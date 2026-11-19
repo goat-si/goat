@@ -6,10 +6,7 @@ import {
   EventId,
   GuestShareId,
   MessageId,
-  type OrchestrationV2TurnItem,
-  ProviderDriverKind,
   ThreadId,
-  TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -45,6 +42,7 @@ import {
   shareThread,
   shareThreadFor,
   threadId,
+  writeItem,
 } from "./GuestShareService.testkit.ts";
 
 it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
@@ -286,71 +284,6 @@ it.effect("serves no render for an item outside the shared thread", () =>
     );
   }).pipe(Effect.provide(layerTest)),
 );
-
-const ownerRun = Effect.gen(function* () {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  yield* orchestrator.dispatch({
-    type: "message.dispatch",
-    commandId: CommandId.make("owner-message-for-command"),
-    threadId,
-    messageId: MessageId.make("message:command"),
-    text: "Build it",
-    attachments: [],
-    dispatchMode: { type: "defer_start" },
-    createdBy: "user",
-    creationSource: "web",
-  });
-  const { runs } = (yield* orchestrator.getThreadSnapshotWindow(threadId, { rowLimit: 10 }))
-    .projection;
-  return runs[0]!.id;
-});
-
-const writeItem = (
-  id: string,
-  fields:
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
-        "type" | "status" | "input" | "output"
-      >
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
-        "type" | "status" | "fileName" | "diffStr" | "oldStr" | "newStr"
-      >,
-) =>
-  Effect.gen(function* () {
-    const runId = yield* ownerRun;
-    const eventSink = yield* EventSink.EventSinkV2;
-    const now = yield* DateTime.now;
-    yield* eventSink.write({
-      events: [
-        {
-          id: EventId.make(`event:${id}`),
-          type: "turn-item.updated",
-          threadId,
-          driver: ProviderDriverKind.make("codex"),
-          providerInstanceId: instanceId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make(id),
-            threadId,
-            runId,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            title: null,
-            startedAt: now,
-            completedAt: fields.status === "running" ? null : now,
-            updatedAt: now,
-            ...fields,
-          },
-        },
-      ],
-    });
-    return TurnItemId.make(id);
-  });
 
 it.effect("gives the guest a command's detail and output, but no file diffs", () =>
   Effect.gen(function* () {
