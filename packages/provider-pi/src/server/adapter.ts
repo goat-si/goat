@@ -1,3 +1,4 @@
+import { tokenUsageFromStats } from "./tokenUsage.ts";
 import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
 import { startPiConnection } from "./startConnection.ts";
 import { makeAsyncSubagents } from "./asyncSubagents.ts";
@@ -44,7 +45,6 @@ import {
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
   type MessageId,
-  type OrchestrationV2ProviderTurnTokenUsage,
 } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
 import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
@@ -544,32 +544,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.onInterrupt(() => connection.terminate),
           ),
       );
-
-      const tokenUsageFromStats = (
-        stats: unknown,
-        fallbackUsedTokens: number | null,
-        updatedAt: DateTime.Utc,
-      ): OrchestrationV2ProviderTurnTokenUsage | undefined => {
-        const contextUsage = recordField(stats, "contextUsage");
-        const maxTokens = nonNegativeInteger(contextUsage, "contextWindow");
-        const usedTokens =
-          nonNegativeInteger(contextUsage, "tokens") ?? fallbackUsedTokens ?? undefined;
-        if (usedTokens === undefined || maxTokens === undefined || maxTokens === 0)
-          return undefined;
-
-        const totals = recordField(stats, "tokens");
-        const inputTokens = nonNegativeInteger(totals, "input");
-        const cachedInputTokens = nonNegativeInteger(totals, "cacheRead");
-        const outputTokens = nonNegativeInteger(totals, "output");
-        return {
-          usedTokens,
-          maxTokens,
-          ...(inputTokens === undefined ? {} : { inputTokens }),
-          ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-          ...(outputTokens === undefined ? {} : { outputTokens }),
-          updatedAt: DateTime.formatIso(updatedAt),
-        };
-      };
 
       const readTokenUsage = (fallbackUsedTokens: number | null, updatedAt: DateTime.Utc) =>
         request({ type: "get_session_stats" }, 2_000).pipe(
