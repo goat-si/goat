@@ -30,6 +30,7 @@ export const makeLegacySessionFixture = Effect.fnUntraced(function* (
     ...fs,
     readDirectoryEntries: (path) => fs.readDirectoryEntries(map(path)),
     stat: (path) => fs.stat(map(path)),
+    realPath: (path) => fs.realPath(map(path)),
     readFile: (path) => fs.readFile(map(path)),
     open: (path, options) => fs.open(map(path), options),
   });
