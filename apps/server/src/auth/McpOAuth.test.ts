@@ -228,6 +228,36 @@ const authorizeParams = (clientId: string, redirect = "http://localhost:51234/ca
   resource: `${ORIGIN}/mcp`,
 });
 
+it.effect("accepts six callbacks while rejecting oversized and unsafe registrations", () =>
+  withRoutes((handler) =>
+    Effect.gen(function* () {
+      const post = (redirect_uris: string[], client_name = "x") =>
+        handler(
+          at("/oauth/mcp/register", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: encodeJson({ redirect_uris, client_name }),
+          }),
+        );
+      const valid = Array.from({ length: 6 }, (_, i) => `https://bot.example/${i}`);
+      expect((yield* post(valid)).status).toBe(201);
+      const legacyLong = Array.from(
+        { length: 5 },
+        (_, i) => `https://a.co/${i}/${"界".repeat(497)}`,
+      );
+      const legacy = yield* post(legacyLong, "界".repeat(100));
+      expect(legacy.status).toBe(201);
+      expect((yield* json<{ client_id: string }>(legacy)).client_id.length).toBeGreaterThan(10_240);
+      const oversized = Array.from(
+        { length: 10 },
+        (_, i) => `https://bot.example/${i}/${'"'.repeat(480)}`,
+      );
+      expect((yield* post(oversized)).status).toBe(400);
+      expect((yield* post(["https://user:pass@bot.example/callback"])).status).toBe(400);
+    }),
+  ),
+);
+
 it.effect("derives discovery metadata from the origin the client reached", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {

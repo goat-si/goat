@@ -51,8 +51,11 @@ import { requestUrl } from "../requestUrl.ts";
 const SIGNING_SECRET_NAME = "mcp-oauth-signing-key";
 const AUTHORIZATION_CODE_TTL_MS = 60_000;
 const MAX_CLIENT_NAME_LENGTH = 100;
-const MAX_REDIRECT_URIS = 5;
+const MAX_REDIRECT_URIS = 10;
 const MAX_REDIRECT_URI_LENGTH = 512;
+const MAX_CLIENT_ID_LENGTH = 10_240;
+// Five 512-character legacy URIs and a 100-character name fit even at worst-case JSON escaping.
+const MAX_LEGACY_CLIENT_ID_LENGTH = 32_768;
 const DEFAULT_CLIENT_NAME = "MCP client";
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -268,6 +271,7 @@ const make = Effect.gen(function* () {
   };
 
   const parseClientId = (clientId: string): McpOAuthClient | undefined => {
+    if (clientId.length > MAX_LEGACY_CLIENT_ID_LENGTH) return undefined;
     const [body, signature, extra] = clientId.split(".");
     if (!body || !signature || extra !== undefined) return undefined;
     if (!signer.verify(`mcp-client-id.${body}`, signature)) return undefined;
@@ -325,7 +329,14 @@ const make = Effect.gen(function* () {
         });
       }
       // RFC 7591 allows ignoring unsupported registration options; all clients use public PKCE.
-      return { clientId: signClientId(name, redirectUris), name, redirectUris };
+      const clientId = signClientId(name, redirectUris);
+      if (redirectUris.length > 5 && clientId.length > MAX_CLIENT_ID_LENGTH) {
+        return yield* new AuthMcpRegistrationError({
+          error: "invalid_redirect_uri",
+          error_description: "Redirect URIs are too long to fit in an authorization request.",
+        });
+      }
+      return { clientId, name, redirectUris };
     },
   );
 
