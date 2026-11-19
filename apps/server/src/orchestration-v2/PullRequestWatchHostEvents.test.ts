@@ -176,6 +176,98 @@ const fakeHost = (input: {
 };
 
 describe("pull request watch host events", () => {
+  it.effect("baselines a newly persisted watch before the next periodic sweep", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest(
+        "pr-watch-start-baseline",
+        65,
+      );
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const key = { host: "github.com", repository: "goat-si/goat", number: 65 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("baseline-stop"),
+        threadId,
+        ...key,
+        watching: false,
+      });
+      const detailReads = yield* Queue.unbounded<void>();
+      const watchListings = yield* Queue.unbounded<void>();
+      const events = yield* Queue.unbounded<import("@goat/contracts").OrchestrationV2DomainEvent>();
+      let checks: PullRequestDetail["checks"] = [
+        { name: "lint", status: "pending", description: null, url: null, required: true },
+      ];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Queue.offer(detailReads, undefined).pipe(
+              Effect.as({
+                ...watchedPullRequestDetail({
+                  projectId,
+                  number: 65,
+                  at: "2026-10-02T12:00:00.000Z",
+                }),
+                headSha: "aaaaaaaaaa",
+                checks,
+              }),
+            ),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () => Effect.succeed(null),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          dispatch: orchestrator.dispatch,
+          streamDomainEvents: Stream.fromQueue(events),
+        }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadsWithPullRequests: (id) =>
+            projections
+              .getThreadsWithPullRequests(id)
+              .pipe(Effect.tap(() => Queue.offer(watchListings, undefined))),
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* reactor.start();
+      yield* Queue.take(watchListings);
+      const started = yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("baseline-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/goat-si/goat/pull/65", source: "agent" },
+      });
+      yield* Queue.offerAll(
+        events,
+        started.storedEvents.map((stored) => stored.event),
+      );
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(yield* Queue.size(detailReads), 1);
+      checks = [{ name: "lint", status: "success", description: null, url: null, required: true }];
+      yield* reactor.sweep;
+      yield* worker.drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.lengthOf(
+        messages.filter((message) => message.notification?.summary === "#65: checks passed"),
+        1,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("wakes once for a rebase change at an unchanged PR timestamp", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));

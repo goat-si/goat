@@ -137,8 +137,9 @@ interface WatchLife {
   readonly reads: number;
 }
 
-const lifeKey = ({ thread, link, watch }: WatchTarget) =>
-  `${threadPullRequestKeyOf(link)} ${thread.id} ${watch.startedAt}`;
+const lifeKeyOf = (threadId: string, link: ThreadPullRequestLink, watch: ThreadPullRequestWatch) =>
+  `${threadPullRequestKeyOf(link)} ${threadId} ${watch.startedAt}`;
+const lifeKey = ({ thread, link, watch }: WatchTarget) => lifeKeyOf(thread.id, link, watch);
 
 // Checkout access differs by project.
 const groupKeyOf = ({ thread, link }: WatchTarget) =>
@@ -943,6 +944,21 @@ export const make = Effect.gen(function* () {
     "PullRequestWatchReactor.start",
   )(function* () {
     const feeds = yield* FiberMap.make<string>();
+    yield* forkParked(
+      Stream.runForEach(engine.streamDomainEvents, (event) => {
+        if (event.type !== "thread.pull-request-synced") return Effect.void;
+        const unread = visibleThreadPullRequests(event.payload.pullRequests ?? []).flatMap(
+          (link) =>
+            link.watch === undefined || lives.has(lifeKeyOf(event.threadId, link, link.watch))
+              ? []
+              : [threadPullRequestKeyOf(link)],
+        );
+        if (unread.length === 0) return Effect.void;
+        return hold.awaitRelease.pipe(
+          Effect.andThen(Effect.forEach(new Set(unread), readOnChange, { discard: true })),
+        );
+      }).pipe(Effect.catchCause(logFailure("pull request watch event stream failed", {}))),
+    );
     yield* forkParked(
       hold.awaitRelease.pipe(
         Effect.andThen(
