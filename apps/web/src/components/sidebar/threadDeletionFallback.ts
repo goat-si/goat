@@ -1,25 +1,16 @@
 import type { SidebarThreadSortOrder } from "@goat/contracts/settings";
-import {
-  effectiveSnoozed,
-  type ThreadSnoozeShell,
-} from "@goat/client-runtime/state/thread-settled";
+import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
 import { isSideChatThread } from "@goat/contracts";
-import { sortThreads, type ThreadSortInput } from "../../lib/threadSort";
+import { sortThreads } from "../../lib/threadSort";
 import type { Thread } from "../../types";
+import { topLevelThreadCandidates } from "./topLevelThreadCandidates";
 
 /** Subagents and side chats have no sidebar row of their own. */
 function isSidebarHiddenThread(thread: Pick<Thread, "lineage" | "sideChatOf">): boolean {
   return isSideChatThread(thread) || thread.lineage.relationshipToParent === "subagent";
 }
 
-export function getFallbackThreadIdAfterDelete<
-  T extends Pick<
-    Thread,
-    "id" | "projectId" | "createdAt" | "updatedAt" | "settledOverride" | "lineage" | "sideChatOf"
-  > &
-    ThreadSortInput &
-    ThreadSnoozeShell,
->(input: {
+export function getFallbackThreadIdAfterDelete<T extends Thread>(input: {
   threads: readonly T[];
   deletedThreadId: T["id"];
   sortOrder: SidebarThreadSortOrder;
@@ -34,7 +25,12 @@ export function getFallbackThreadIdAfterDelete<
 
   return (
     sortThreads(
-      threads.filter(
+      topLevelThreadCandidates(
+        threads.filter(
+          (thread) => thread.id !== deletedThreadId && !deletedThreadIds?.has(thread.id),
+        ),
+        now,
+      ).filter(
         (thread) =>
           thread.projectId === deletedThread.projectId &&
           thread.id !== deletedThreadId &&

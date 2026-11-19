@@ -120,3 +120,96 @@ describe("getFallbackThreadIdAfterDelete", () => {
     expect(fallbackThreadId).toBe(ThreadId.make("thread-visible"));
   });
 });
+
+it("falls back to a visible launcher instead of its folded child", () => {
+  const parent = makeThread({
+    id: ThreadId.make("launcher"),
+    createdAt: "2026-03-09T10:01:00.000Z",
+  });
+  const originalChild = makeThread({
+    id: ThreadId.make("child"),
+    createdAt: "2026-03-09T10:02:00.000Z",
+  });
+  const child = {
+    ...originalChild,
+    source: {
+      ...originalChild.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  const active = makeThread({ id: ThreadId.make("active"), createdAt: "2026-03-09T10:03:00.000Z" });
+  expect(
+    getFallbackThreadIdAfterDelete({
+      threads: [parent, child, active],
+      deletedThreadId: active.id,
+      sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
+    }),
+  ).toBe(parent.id);
+});
+
+it("keeps an orphan launched thread eligible after its launcher is deleted", () => {
+  const parent = makeThread({ id: ThreadId.make("parent") });
+  const base = makeThread({ id: ThreadId.make("orphan"), createdAt: "2026-03-09T10:02:00.000Z" });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  expect(
+    getFallbackThreadIdAfterDelete({
+      threads: [parent, child],
+      deletedThreadId: parent.id,
+      sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
+    }),
+  ).toBe(child.id);
+});
+
+it("keeps a pinned launched thread eligible as its own row", () => {
+  const parent = makeThread({ id: ThreadId.make("parent") });
+  const base = makeThread({
+    id: ThreadId.make("pinned"),
+    createdAt: "2026-03-09T10:02:00.000Z",
+    pinnedAt: "2026-03-09T10:00:00.000Z",
+  });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  const active = makeThread({ id: ThreadId.make("active"), createdAt: "2026-03-09T10:03:00.000Z" });
+  expect(
+    getFallbackThreadIdAfterDelete({
+      threads: [parent, child, active],
+      deletedThreadId: active.id,
+      sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
+    }),
+  ).toBe(child.id);
+});

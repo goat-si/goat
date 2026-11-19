@@ -1,3 +1,4 @@
+import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
 import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
 import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
@@ -195,7 +196,6 @@ import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildRootGroups,
-  isPaletteListedThread,
   buildLinkedThreadActionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
@@ -544,7 +544,7 @@ function OpenCommandPaletteDialog(props: {
         : target,
     );
   };
-  const threads = useThreadShells().filter(isPaletteListedThread);
+  const allThreads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, changeStyleItem, themeEditorItem } =
@@ -802,9 +802,10 @@ function OpenCommandPaletteDialog(props: {
           ),
         )
       : null;
+    const projectThreads = topLevelThreadCandidates(allThreads);
     const latestThread = groupedProjectKeys
       ? (sortThreads(
-          threads.filter(
+          projectThreads.filter(
             (thread) =>
               thread.archivedAt === null &&
               groupedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
@@ -812,7 +813,7 @@ function OpenCommandPaletteDialog(props: {
           clientSettings.sidebarThreadSortOrder,
         )[0] ?? null)
       : getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === project.environmentId),
+          projectThreads.filter((thread) => thread.environmentId === project.environmentId),
           project.id,
           clientSettings.sidebarThreadSortOrder,
         );
@@ -1893,7 +1894,9 @@ function OpenCommandPaletteDialog(props: {
         }).then((result) => reportProjectFailure("Failed to unarchive project", result));
       }
       const latestThread = getLatestThreadForProject(
-        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        topLevelThreadCandidates(allThreads).filter(
+          (thread) => thread.environmentId === existing.environmentId,
+        ),
         existing.id,
         clientSettings.sidebarThreadSortOrder,
       );
