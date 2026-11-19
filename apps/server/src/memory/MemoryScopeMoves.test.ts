@@ -31,6 +31,7 @@ import {
 } from "./MemoryHubService.testkit.ts";
 
 const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
+const encodePull = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPullResult));
 const isLegacyMoveInput = Schema.is(M.MemoryMoveInput);
 const features = M.MEMORY_FLOOR_2;
 const advertise = { ...pullInput, features };
@@ -122,7 +123,6 @@ describe("negotiated memory scope moves", () => {
       const member = principal(otherEnv);
       const request = { ...pullInput, environmentId: otherEnv, limit: 1 };
       const utf8 = (value: string) => new TextEncoder().encode(value).length;
-      const encodePull = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPullResult));
       const original = operation(65);
       const saved = (yield* hub.push(pushInput(original), principal())).receipts[0];
       if (!saved?.hubSequence) throw new Error("Expected a saved memory");
@@ -157,13 +157,13 @@ describe("negotiated memory scope moves", () => {
       };
       const width =
         M.MEMORY_PAGE_MAX_UTF8_BYTES -
-        utf8(encodePull({ ...oldPage, entries: [legacyEntry(1)] })) +
+        utf8(yield* encodePull({ ...oldPage, entries: [legacyEntry(1)] })) +
         1;
       const entry = legacyEntry(width);
       yield* sql`UPDATE memory_hub_operations SET entry_json=${JSON.stringify(entry)}
         WHERE operation_id=${original.operationId}`;
       assert.strictEqual(
-        utf8(encodePull(yield* hub.pull(request, member))),
+        utf8(yield* encodePull(yield* hub.pull(request, member))),
         M.MEMORY_PAGE_MAX_UTF8_BYTES,
       );
 
@@ -650,7 +650,7 @@ describe("negotiated memory scope moves", () => {
     for (const [ordinal, failureCode] of [
       ["1d", "source_invalidated"],
       ["20", "base_compacted"],
-    ]) {
+    ] as const) {
       const bytes = Buffer.from(`${prefix}${fields}${ordinal}00`, "hex");
       assert.include(Store.decodeCompactReceipt(bytes, space, () => hubEnv).receipt, {
         outcome: "rejected",

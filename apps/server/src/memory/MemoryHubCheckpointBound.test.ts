@@ -46,6 +46,7 @@ const decodeTombstone = Schema.decodeUnknownSync(M.MemoryTombstone);
 const decodeItem = Schema.decodeUnknownSync(M.MemoryItem);
 const decodeCompactReceipt = Schema.decodeUnknownSync(M.MemoryCompactReceipt);
 const decodePull = Schema.decodeUnknownExit(M.MemoryHubPullResult);
+const encodePull = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPullResult));
 const utf8 = (value: string) => new TextEncoder().encode(value).length;
 
 const layer = Store.layer.pipe(
@@ -327,7 +328,6 @@ it.effect(
         memorySpaceId: space,
         environmentId: HubKit.otherEnv,
       };
-      const encodePull = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPullResult));
       const original = HubKit.operation(71);
       const receipt = (yield* hub.push(HubKit.pushInput(original), HubKit.principal())).receipts[0];
       if (!receipt?.hubSequence) throw new Error("Expected an accepted operation");
@@ -364,18 +364,18 @@ it.effect(
         compactReceipts: [...base.compactReceipts, rejected(length)],
       });
       const width =
-        CHECKPOINT_PULL_MAX_BYTES - utf8(encodePull({ ...old, checkpoint: padded(1) })) + 1;
+        CHECKPOINT_PULL_MAX_BYTES - utf8(yield* encodePull({ ...old, checkpoint: padded(1) })) + 1;
       yield* sql`UPDATE memory_inbox_pending SET metadata_json=${JSON.stringify(padded(width))}
       WHERE space=${space} AND reason='hub_snapshot'`;
       const legacy = yield* hub.pull(pull, member);
-      assert.strictEqual(utf8(encodePull(legacy)), CHECKPOINT_PULL_MAX_BYTES);
+      assert.strictEqual(utf8(yield* encodePull(legacy)), CHECKPOINT_PULL_MAX_BYTES);
 
       yield* hub.pull(
         { ...HubKit.pullInput, afterSequence: joined.checkpointSequence, features },
         HubKit.principal(),
       );
       const activated = yield* hub.pull({ ...pull, features }, member);
-      const decoded = decodePull(JSON.parse(encodePull(activated)));
+      const decoded = decodePull(JSON.parse(yield* encodePull(activated)));
       if (!Exit.isSuccess(decoded)) throw new Error("Expected a valid upgraded envelope");
       const { checkpoint, derivedCap } = decoded.value;
       assert.strictEqual(derivedCap, 1000);

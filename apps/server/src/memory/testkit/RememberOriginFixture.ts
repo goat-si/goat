@@ -53,9 +53,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
           )
           .pipe(
             Effect.map((result) => ({ ...result, hubEnvironmentId: connection.hubEnvironmentId })),
-            Effect.catch((error) =>
-              error instanceof M.MemoryHubError ? Effect.fail(error) : Effect.die(error),
-            ),
+            Effect.catchIf((error) => error._tag !== "MemoryHubError", Effect.die),
           ),
       pull: (_connection, input) => {
         if (refuseOriginPull && member === memberEnv && input.afterOriginSequence !== undefined)
