@@ -14,8 +14,9 @@ it("writes initial input once after a running attachment accepts its measured re
   const calls: string[] = [];
   const command = (name: string) => ({
     label: name,
-    run: async () => {
+    run: async (_registry: AtomRegistry.AtomRegistry, value: { readonly input: unknown }) => {
       calls.push(name);
+      if (name === "resize") expect(value.input).toMatchObject({ cols: 100, rows: 30 });
       if (name === "resize") await resizeDone.promise;
       if (name === "write") written.resolve();
       return AsyncResult.success(undefined);
@@ -67,6 +68,7 @@ it("writes initial input once after a running attachment accepts its measured re
   emit("running", 3);
   emit("running", 0, 2);
   emit("running", 1, 2);
+  expect(calls.filter((call) => call === "resize")).toHaveLength(2);
   expect(calls.filter((call) => call === "write")).toHaveLength(1);
   mount();
   registry.dispose();
