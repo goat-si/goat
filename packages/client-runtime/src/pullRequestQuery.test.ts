@@ -2,6 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { applyPullRequestDraftFilterChange, parsePullRequestQuery } from "./pullRequestQuery.ts";
 
 describe("reading qualifiers out of a typed query", () => {
+  it("keeps inherited qualifier names in search text", () => {
+    expect(parsePullRequestQuery("review:constructor checks:__proto__ Status:toString")).toEqual({
+      text: "review:constructor checks:__proto__ Status:toString",
+      filters: {},
+    });
+  });
   it("keeps quoted values whole and separates negation", () => {
     expect(parsePullRequestQuery('label:"needs design" -label:wip Fix the parser')).toEqual({
       text: "Fix the parser",
