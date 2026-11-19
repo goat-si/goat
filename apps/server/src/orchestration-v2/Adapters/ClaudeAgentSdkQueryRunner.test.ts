@@ -864,3 +864,36 @@ if (HostProcess.Platform.defaultValue() !== "win32") {
     ),
   );
 }
+
+it.effect("filters only the synchronous SDK shadow warning during query startup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
+        process.emitWarning("shadowed", { code: "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED" });
+        process.emitWarning("other", { code: "OTHER_WARNING" });
+        return {
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
+          close: () => {},
+          [Symbol.asyncDispose]: async () => {},
+        } as unknown as ClaudeSdk.Query;
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          warning.mockRestore();
+          querySpy.mockRestore();
+        }),
+      );
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open(resumedMcpQueryInput);
+      yield* Effect.addFinalizer(() => session.close.pipe(Effect.orDie));
+      assert.deepEqual(
+        warning.mock.calls.map(([, options]) =>
+          typeof options === "object" ? options.code : options,
+        ),
+        ["OTHER_WARNING"],
+      );
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);

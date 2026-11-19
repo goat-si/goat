@@ -1,3 +1,4 @@
+import { withoutClaudeCanUseToolShadowedWarning } from "./ClaudeSdkWarning.ts";
 import { interruptedResumeOptions } from "./ClaudeInterruptedResume.ts";
 import {
   forkSession as forkClaudeSession,
@@ -608,10 +609,9 @@ export const layerQueryRunner: Layer.Layer<
           const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
             Effect.try({
               try: () =>
-                query({
-                  prompt,
-                  options: { ...options, spawnClaudeCodeProcess },
-                }),
+                withoutClaudeCanUseToolShadowedWarning(() =>
+                  query({ prompt, options: { ...options, spawnClaudeCodeProcess } }),
+                ),
               catch: (cause) => queryRunnerError(cause, "query"),
             }).pipe(
               Effect.tap((queryRuntime) =>
