@@ -344,6 +344,7 @@ describe("root reopen shortcut", () => {
           shortcut: parseKeybindingShortcut("mod+alt+u"),
         }),
         expect.objectContaining({ command: "rightPanel.toggle" }),
+        expect.objectContaining({ command: "rightPanel.close" }),
       ]),
     );
   });

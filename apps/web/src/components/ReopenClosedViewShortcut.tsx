@@ -51,6 +51,7 @@ const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "sidebar.toggleActivity",
   "rightPanel.toggle",
   "rightPanel.toggleMaximized",
+  "rightPanel.close",
 ] as const;
 
 const isGlobalPullRequests = (ref: ScopedThreadRef) =>

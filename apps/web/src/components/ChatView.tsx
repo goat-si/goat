@@ -327,6 +327,7 @@ import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullReq
 import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
+import { useDesktopPanelMenu } from "../hooks/useDesktopPanelMenu";
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
@@ -776,8 +777,7 @@ export default function ChatView(props: ChatViewProps) {
   const { activeProvider: selectedProviderByThreadId, modelSelectionByProvider } =
     useComposerDraftModelState(composerDraftTarget, threadHasStarted(activeThread));
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
-  // The global agent lives in a machine's no-project folder, but it is shown as
-  // one agent rather than a thread of that folder.
+  // Show the machine's no-project global agent as one agent, not as a folder thread.
   const isGlobalAgentActive =
     activeThread != null &&
     isGlobalAgentThread(
@@ -2843,14 +2843,14 @@ export default function ChatView(props: ChatViewProps) {
       return script ? () => void runProjectScriptStable(script) : undefined;
     },
   });
-  // A focused desktop browser page forwards these chords as menu actions.
-  useEffect(() => {
-    if (embedded) return;
-    return window.desktopBridge?.onMenuAction((action) => {
-      if (action === "rightPanel.toggle") toggleRightPanelStable();
-      else if (action === "rightPanel.toggleMaximized") toggleRightPanelMaximizedStable();
-    });
-  }, [embedded, toggleRightPanelStable, toggleRightPanelMaximizedStable]);
+  useDesktopPanelMenu(
+    !embedded && !backgroundThread,
+    toggleRightPanelStable,
+    toggleRightPanelMaximizedStable,
+    () => {
+      if (activeRightPanelSurface) closeRightPanelSurface(activeRightPanelSurface);
+    },
+  );
   usePasteToFocusComposer(activeThreadId, composerRef, embedded);
   const {
     onConfirmRevertStable,
