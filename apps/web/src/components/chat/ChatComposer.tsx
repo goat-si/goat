@@ -127,6 +127,7 @@ import {
 import {
   attachmentsToReleaseOnUploadCapabilityLoss,
   composerOtherFilesForPresentation,
+  composerInlineFileIds,
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
@@ -165,7 +166,6 @@ import {
 } from "../composerContextPresentation";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import {
-  collectInlineContextIds,
   type ComposerContextReference,
   ensureInlineContextReferences,
   formatInlineContextReference,
@@ -674,15 +674,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const prompt = composerDraft.prompt;
   const composerImages = attachmentDraft.images;
   const composerFiles = attachmentDraft.files;
-  const inlineFileIdSet = (() => {
-    if (questionAttachmentTarget) return new Set<string>();
-    const contextIds = new Set(collectInlineContextIds(prompt));
-    return new Set(
-      composerFiles
-        .filter((file) => contextIds.has(toKindScopedComposerContextId("file", file.id)))
-        .map((file) => file.id),
-    );
-  })();
+  const inlineFileIdSet = composerInlineFileIds(questionAttachmentTarget, prompt, composerFiles);
   const composerVideos = composerFiles.filter((file) =>
     isPreviewableComposerVideo(file, environmentId),
   );
