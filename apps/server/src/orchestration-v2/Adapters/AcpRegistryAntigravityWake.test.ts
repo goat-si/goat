@@ -156,6 +156,7 @@ describe("AcpRegistry Antigravity wake", () => {
               used: 100,
               size: 1000,
             }),
+            claudeMarker("reply ended"),
           ],
           gate,
           true,
@@ -186,13 +187,15 @@ describe("AcpRegistry Antigravity wake", () => {
         // The model can be silent longer than the finalize debounce before it goes on.
         yield* TestClock.adjust("10 seconds");
         gate.release("reply");
-        const output = yield* session.until(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "assistant_message" &&
-            event.turnItem.text === "Command approved.",
+        const output = yield* session.throughMarker("reply ended");
+        assert.isTrue(
+          output.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === "Command approved.",
+          ),
         );
-        assert.isTrue(output.some((event) => event.type === "turn_item.updated"));
         assert.isFalse(output.some((event) => event.type === "turn.terminal"));
         yield* TestClock.adjust("3 seconds");
         assert.equal((yield* session.terminal).status, "completed");
