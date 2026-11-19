@@ -90,6 +90,7 @@ export type GoatMcpToolSummaryAction =
   | "device"
   | "html-preview"
   | "html-list"
+  | "message-show"
   | "html-render"
   | "channel-message"
   | "channel-reply"
