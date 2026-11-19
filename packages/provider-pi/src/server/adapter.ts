@@ -2449,7 +2449,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           baselineThinking = null;
           contextWindow = null;
           const result = yield* lifecycleRequest(
-            resumeId != null
+            resumeId != null && existing !== undefined
               ? {
                   type: "switch_session",
                   sessionPath: yield* sessionFileInCwd(resumeId, existing.createdAt),

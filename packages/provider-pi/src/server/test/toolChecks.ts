@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as FileSystem from "effect/FileSystem";
 import { PI_PROVIDER } from "../adapter.ts";
@@ -5,6 +6,8 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function registerPiToolChecks({
   makeFakePi,
@@ -183,7 +186,7 @@ export function registerPiToolChecks({
       const file = `${dir}/old.jsonl`;
       yield* fs.writeFileString(
         file,
-        `${JSON.stringify({ type: "session", version: 3, id: "s", cwd: `${host.paths.cwd}-old` })}\n{}\n`,
+        `${encodeJson({ type: "session", version: 3, id: "s", cwd: `${host.paths.cwd}-old` })}\n{}\n`,
       );
       const forkFile = "/fake/forked-into-worktree.jsonl";
       forkFake.queueState({ sessionFile: forkFile });
