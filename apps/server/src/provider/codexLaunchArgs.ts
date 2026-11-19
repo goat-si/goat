@@ -45,18 +45,19 @@ const filterLaunchArgs = (args: ReadonlyArray<string>, exec: boolean) => {
   return kept;
 };
 
-export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => {
-  const args = filterLaunchArgs(codexLaunchArgv(launchArgs), true);
-  const hooks = new Set(["hooks", "codex_hooks"]);
-  return [
-    ...args.filter((arg, index) => {
-      if (arg.startsWith("--enable=")) return !hooks.has(arg.slice("--enable=".length));
-      if (arg === "--enable") return !hooks.has(args[index + 1] ?? "");
-      return !(args[index - 1] === "--enable" && hooks.has(arg));
-    }),
-    ...routeArgs,
-  ];
-};
+const mcpDisabledFeatures = new Set(["apps", "connectors", "plugins"]);
+const execDisabledFeatures = new Set([...mcpDisabledFeatures, "hooks", "codex_hooks"]);
+const omitFeatureEnables = (args: ReadonlyArray<string>, features: ReadonlySet<string>) =>
+  args.filter((arg, index) => {
+    if (arg.startsWith("--enable=")) return !features.has(arg.slice("--enable=".length));
+    if (arg === "--enable") return !features.has(args[index + 1] ?? "");
+    return !(args[index - 1] === "--enable" && features.has(arg));
+  });
+
+export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
+  ...omitFeatureEnables(filterLaunchArgs(codexLaunchArgv(launchArgs), true), execDisabledFeatures),
+  ...routeArgs,
+];
 
 export const codexMcpListLaunchArgs = (args: ReadonlyArray<string>) =>
-  filterLaunchArgs(args, false);
+  omitFeatureEnables(filterLaunchArgs(args, false), mcpDisabledFeatures);

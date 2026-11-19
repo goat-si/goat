@@ -52,6 +52,18 @@ it("keeps local provider flags for exec and filters them from mcp list", () => {
 });
 
 describe("codexExecLaunchArgs", () => {
+  it("filters apps, connectors and plugins from text generation and MCP listing", () => {
+    const input = "--enable apps --enable=connectors --enable plugins --enable foo";
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs(input), ["--enable", "foo"]);
+    NodeAssert.deepStrictEqual(codexMcpListLaunchArgs(codexExecLaunchArgs(input)), [
+      "--enable",
+      "foo",
+    ]);
+    NodeAssert.deepStrictEqual(
+      codexMcpListLaunchArgs(["--enable", "apps", "--enable=plugins"]),
+      [],
+    );
+  });
   it("keeps compact config and profile options", () => {
     NodeAssert.deepStrictEqual(codexExecLaunchArgs("-pwork -cmodel_provider=ollama"), [
       "-p=work",
