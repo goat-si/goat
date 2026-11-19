@@ -352,10 +352,13 @@ it("retries a failed measured resize once and then gives up", async () => {
 
 it("does not retry an old resize after the attachment generation changes", async () => {
   const { other: threadRef } = setup();
-  const failed = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+  let failResize: (result: AsyncResult.AsyncResult<unknown, unknown>) => void = () => {};
+  const failed = new Promise<AsyncResult.AsyncResult<unknown, unknown>>((resolve) => {
+    failResize = resolve;
+  });
   const resize = vi
     .fn()
-    .mockImplementationOnce(() => failed.promise)
+    .mockImplementationOnce(() => failed)
     .mockResolvedValue(AsyncResult.success(undefined));
   fixture.runResize = resize;
   fixture.reportedSize = { cols: 100, rows: 30 };
@@ -382,7 +385,7 @@ it("does not retry an old resize after the attachment generation changes", async
   });
   const callsAfterReattach = resize.mock.calls.length;
   await act(async () => {
-    failed.resolve(AsyncResult.failure(Cause.fail("resize failed")));
+    failResize(AsyncResult.failure(Cause.fail("resize failed")));
   });
   expect(resize).toHaveBeenCalledTimes(callsAfterReattach);
 });
