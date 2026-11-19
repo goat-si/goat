@@ -1,3 +1,11 @@
+import {
+  FILL_VALUE,
+  RESPONSIVE_VALUE,
+  viewportSelectValue,
+  viewportSelectLabel,
+  isValidDimension,
+  rotateViewport,
+} from "./browserViewportSettings";
 import { ScreenRotationIcon } from "~/components/solar";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
@@ -46,7 +54,6 @@ import {
   resolveBrowserProfiles,
   type BrowserImportSource,
   type PreviewAppearancePreference,
-  type PreviewViewportSetting,
 } from "@goat/contracts";
 import { isValidSearchUrlTemplate } from "@goat/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@goat/shared/previewViewport";
@@ -134,9 +141,6 @@ import { importBrowserCookiesIntoTarget } from "./browserProfileImport";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 
-const FILL_VALUE = "fill";
-const RESPONSIVE_VALUE = "responsive";
-
 type BrowserProfileDataBridge = Pick<
   NonNullable<typeof previewBridge>,
   "clearCookies" | "clearCache"
@@ -187,38 +191,6 @@ const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> =
 };
 
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
-
-const viewportSelectValue = (viewport: PreviewViewportSetting): string => {
-  if (viewport._tag === "fill") return FILL_VALUE;
-  if (
-    viewport._tag === "preset" &&
-    PREVIEW_VIEWPORT_PRESETS.some((preset) => preset.id === viewport.presetId)
-  ) {
-    return viewport.presetId;
-  }
-  return RESPONSIVE_VALUE;
-};
-
-/** Inline options lack an items map; bare SelectValue would display the stored fill token. */
-const viewportSelectLabel = (viewport: PreviewViewportSetting): string => {
-  const value = viewportSelectValue(viewport);
-  if (value === FILL_VALUE) return "Fill panel";
-  if (value === RESPONSIVE_VALUE) return "Responsive";
-  return PREVIEW_VIEWPORT_PRESETS.find((preset) => preset.id === value)?.label ?? "Responsive";
-};
-
-const isValidDimension = (value: number) =>
-  Number.isInteger(value) &&
-  value >= PREVIEW_VIEWPORT_MIN_DIMENSION &&
-  value <= PREVIEW_VIEWPORT_MAX_DIMENSION;
-
-const rotateViewport = (
-  viewport: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }>,
-): PreviewViewportSetting => ({
-  ...viewport,
-  width: viewport.height,
-  height: viewport.width,
-});
 
 function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
   const viewport = useClientSettings((settings) => settings.browserDefaultViewport);
