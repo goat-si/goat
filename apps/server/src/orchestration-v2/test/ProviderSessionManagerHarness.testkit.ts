@@ -84,7 +84,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly onTurnInput?: (
       input: ProviderAdapter.ProviderAdapterV2TurnInput,
     ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterTurnStartError>;
-    readonly startTurn?: Effect.Effect<void>;
+    readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
     readonly resumeTurn?: Effect.Effect<void>;
     readonly interruptTurn?: Effect.Effect<void>;
     readonly beforeUnload?: Effect.Effect<void>;
@@ -279,7 +279,7 @@ export function layerTest(input: {
   readonly onTurnInput?: (
     input: ProviderAdapter.ProviderAdapterV2TurnInput,
   ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterTurnStartError>;
-  readonly startTurn?: Effect.Effect<void>;
+  readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
   readonly resumeTurn?: Effect.Effect<void>;
   readonly interruptTurn?: Effect.Effect<void>;
   readonly beforeUnload?: Effect.Effect<void>;

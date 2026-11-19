@@ -50,6 +50,8 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
   CLAUDE_ROOT_REFUSAL,
+  CLAUDE_CONVERSATION_NOT_FOUND,
+  ClaudeConversationNotFoundError,
   ClaudeAgentSdkQueryRunnerError,
   ClaudeCodeRootRefusalError,
   ClaudeMcpRegistrationTimeoutError,
@@ -544,6 +546,7 @@ export const layerQueryRunner: Layer.Layer<
           let stderrTail = "";
           let stderrClosed: Promise<void> = Promise.resolve();
           let answered = false;
+          let conversationMissing = false;
           const appendStderr = (text: string) => {
             if (!answered) stderrTail = (stderrTail + text).slice(-2_048);
           };
@@ -705,15 +708,26 @@ export const layerQueryRunner: Layer.Layer<
                       );
                     const refusedRoot = !answered && stderrTail.includes(CLAUDE_ROOT_REFUSAL);
                     return yield* queryRunnerError(
-                      refusedRoot ? new ClaudeCodeRootRefusalError({ cause }) : cause,
+                      refusedRoot
+                        ? new ClaudeCodeRootRefusalError({ cause })
+                        : conversationMissing ||
+                            (!answered && stderrTail.includes(CLAUDE_CONVERSATION_NOT_FOUND))
+                          ? new ClaudeConversationNotFoundError({ cause })
+                          : cause,
                       "fromAsyncIterable",
                     );
                   }),
                 ),
               ),
-              Stream.tap(() =>
+              Stream.tap((message) =>
                 Effect.sync(() => {
                   answered = true;
+                  if (
+                    message.type === "result" &&
+                    message.subtype !== "success" &&
+                    message.errors.some((error) => error.startsWith(CLAUDE_CONVERSATION_NOT_FOUND))
+                  )
+                    conversationMissing = true;
                   stderrTail = "";
                 }),
               ),

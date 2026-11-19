@@ -1,3 +1,7 @@
+import {
+  isClaudeConversationNotFound,
+  MAX_CLAUDE_MISSING_NATIVE_THREADS,
+} from "./ClaudeQueryRunnerErrors.ts";
 import { isClaudePromptEchoGatedFrame, claudeFrameToolUseIds } from "./ClaudePromptFrames.ts";
 import { claudeWakeBufferDetail } from "./ClaudeWakeBufferDetail.ts";
 import {
@@ -2801,6 +2805,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
         });
         const openedNativeThreads = yield* Ref.make(new Set<string>());
+        const missingNativeThreads = new Set<string>();
         const pdfBudgets = new Map<string, ReturnType<typeof makeClaudeAttachmentBudget>>();
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
@@ -9269,7 +9274,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             Effect.exit,
             Effect.flatMap(
               Effect.fnUntraced(function* (exit: ClaudeQueryStreamExit) {
-                if (exit._tag === "Failure") context.exitCause = exit.cause;
+                if (exit._tag === "Failure") {
+                  context.exitCause = exit.cause;
+                  if (isClaudeConversationNotFound(exit.cause)) {
+                    missingNativeThreads.add(context.nativeThreadId);
+                    if (missingNativeThreads.size > MAX_CLAUDE_MISSING_NATIVE_THREADS) {
+                      const oldest = missingNativeThreads.values().next().value;
+                      if (oldest !== undefined) missingNativeThreads.delete(oldest);
+                    }
+                  }
+                }
                 const heldContext = yield* Ref.get(activeTurn);
                 if (
                   (yield* Ref.get(queryContext))?.query === querySession &&
@@ -10269,6 +10283,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 // A live process holds the conversation even before saving it.
                 (yield* Ref.get(queryContext))?.nativeThreadId !== nativeThreadId
               ) {
+                if (missingNativeThreads.has(nativeThreadId)) {
+                  return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: `Claude Code has no conversation ${nativeThreadId} to resume.`,
+                  });
+                }
                 // An unreadable transcript leaves the resume to the CLI.
                 const transcript = yield* claudeTranscriptState(nativeThreadId).pipe(
                   Effect.orElseSucceed(() => "missing" as const),

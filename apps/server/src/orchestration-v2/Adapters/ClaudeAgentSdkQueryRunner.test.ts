@@ -751,6 +751,53 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     }).pipe(Effect.provide(realQueryRunner)),
   );
 
+  it.effect("reports a missing Claude conversation without exposing its native id", () =>
+    Effect.gen(function* () {
+      const message = yield* startupFailureMessage(
+        "No conversation found with session ID: private-native-id",
+      );
+      assert.include(message, "could not find this conversation");
+      assert.notInclude(message, "private-native-id");
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
+  // What Claude Code writes when the session store behind --resume is gone.
+  it.effect("names a resumed conversation Claude Code cannot find", () =>
+    Effect.gen(function* () {
+      const missing = "No conversation found with session ID: native-session-fake-cli";
+      const result = JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        num_turns: 0,
+        duration_ms: 0,
+        duration_api_ms: 0,
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        errors: [missing],
+        session_id: "native-session-fake-cli",
+        uuid: "00000000-0000-4000-8000-000000000000",
+      });
+      const cli = fakeClaudeCli(
+        `printf '%s\\n' '${result}'\nprintf '%s\\n' '${missing}' >&2\nexit 1`,
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(NodePath.dirname(cli), { recursive: true, force: true })),
+      );
+      const session = yield* openFakeCli(cli);
+      const exit = yield* Stream.runDrain(session.messages).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.include(
+          makeProviderFailure({ cause: exit.cause, class: "transport_error" }).message,
+          "could not find this conversation",
+        );
+      }
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
   // The CLI keeps running its turn after its pipes close, so a server that
   // crashed would leave it working next to the session it resumes.
   it.effect("stops the CLI when the server that started it goes away", () =>
