@@ -26,7 +26,6 @@ import { parseCodexFeedbackCommand, submitCodexFeedback } from "@goat/client-run
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { createModelSelection } from "@goat/shared/model";
 import { useLayoutEffect, useRef } from "react";
-import { flushSync } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
@@ -993,25 +992,17 @@ export function useComposerSend(input: ComposerSendInput) {
       shouldDockDraftHeroForSubmission({ isDraftHeroState, activeThreadKey, submissionIntent }) &&
       activeThreadKey
     ) {
-      let resolveDockStarted: (() => void) | undefined;
-      const dockStarted = new Promise<void>((resolve) => {
-        resolveDockStarted = resolve;
-      });
-      const dockTransition = runMobileComposerTransition(
+      const docking = runMobileComposerTransition(
         () => {
-          flushSync(() => {
-            captureDraftHeroComposerRect();
-            setDockedDraftHeroThreadKey(activeThreadKey);
-          });
-          resolveDockStarted?.();
+          captureDraftHeroComposerRect();
+          setDockedDraftHeroThreadKey(activeThreadKey);
         },
         {
           active: panelAnimationsActive,
           durationMs: panelAnimationDurationMs,
         },
       );
-      void dockTransition.catch(() => resolveDockStarted?.());
-      await dockStarted;
+      if (docking) await docking;
     }
 
     const attachmentCapabilitiesBeforeDispatch = readLiveAttachmentCapabilities();
