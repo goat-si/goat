@@ -2,6 +2,7 @@ export interface GitPushResult {
   status: "pushed" | "skipped_up_to_date";
   branch: string;
   upstreamBranch?: string | undefined;
+  pushRemote?: string | undefined;
   setUpstream?: boolean | undefined;
 }
 
@@ -9,4 +10,5 @@ export interface GitPushResult {
 export interface GitPushTarget {
   remoteName: string;
   branchName: string;
+  viaPushRemote: boolean;
 }
