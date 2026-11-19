@@ -269,6 +269,40 @@ it("releases a removed thread's delivery slot for a newly queued message", async
   }
 });
 
+it("prevents editing either message while two threads are delivering", async () => {
+  const { editPendingThreadMessage } = await import("./edit-pending-thread-message");
+  setOperateGrant("secondary", true);
+  const first = message();
+  const second = message({
+    threadId: ThreadId.make("other-thread"),
+    messageId: MessageId.make("other-message"),
+    commandId: CommandId.make("other-command"),
+  });
+  appAtomRegistry.set(state.threadShells, [state.thread, { ...state.thread, id: "other-thread" }]);
+  await state.manager.enqueue(first);
+  await state.manager.enqueue(second);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockReturnValue(upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.prepare).toHaveBeenCalledTimes(2));
+    expect(await editPendingThreadMessage(first)).toBe(false);
+    expect(await editPendingThreadMessage(second)).toBe(false);
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
 it("delivers same-thread messages in order after the first upload finishes", async () => {
   setOperateGrant("secondary", true);
   const first = message();
