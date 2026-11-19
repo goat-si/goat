@@ -23,7 +23,7 @@ import {
 export { decodeThreadPayload } from "./ProjectionThreadPayload.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
-import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
+import { replayActivityBlockers } from "./goat/ProjectionStoreMemoryReads.ts";
 import {
   pendingRuntimeRequestSummary,
   secretRequestAsPendingInput,
@@ -169,6 +169,13 @@ import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import { JAVASCRIPT_TRIM_WHITESPACE } from "./deferredCommandMessage.ts";
 import { turnStartMessages } from "./turnStartMessages.ts";
 import { historyPageSubagents } from "./historySubagents.ts";
+import {
+  makeReplayRecordReads,
+  readRunCardRecords,
+  readRunProviderRecords,
+  type RunCardRead,
+  type RunProviderRead,
+} from "./RunProviderRecords.ts";
 import { compactedPromptReads, runIdsSinceLastCompaction } from "./CompactedPromptReads.ts";
 import { readableSearchText } from "./messageSearchIndex.ts";
 import {
@@ -658,6 +665,8 @@ export interface ProjectionStoreV2Shape
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) => Effect.Effect<ProjectionRecords<K>, ProjectionStoreV2Error>;
+  readonly getRunProviderRecords: RunProviderRead;
+  readonly getRunCardRecords: RunCardRead;
 
   readonly apply: {
     (
@@ -2847,7 +2856,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_run_attempts
-            WHERE thread_id = ${threadId}
+            WHERE ${threadColumn(filter?.attemptIds)} = ${threadId}
               ${inRecentRuns("run_id")}
               ${filter?.ancestryRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.ancestryRunIds)}))`}
               ${filter?.attemptIds === undefined ? sql`` : sql`AND attempt_id IN (SELECT value FROM json_each(${encodeIdList(filter.attemptIds)}))`}
@@ -3042,7 +3051,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_provider_turns
-            WHERE thread_id = ${threadId}
+            WHERE ${threadColumn(filter?.providerTurnAttemptIds ?? filter?.providerTurnIds)} = ${threadId}
               ${
                 recentRunIds === null
                   ? sql``
@@ -7550,6 +7559,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getMessagesById: readOnReader(makeMessageLookup(sql, decodeMessagePayload, controlReadError)),
       getThreadRecords: (threadId, fields, filter) =>
         readOnReader(() => getThreadRecords(threadId, fields, filter))(),
+      getRunProviderRecords: (threadId, runId, nodeId) =>
+        readOnReader(() =>
+          sql
+            .withTransaction(readRunProviderRecords(getThreadRecords, threadId, runId, nodeId))
+            .pipe(Effect.mapError(controlReadError(threadId))),
+        )(),
+      getRunCardRecords: (threadId, runId, nodeId) =>
+        readOnReader(() =>
+          sql
+            .withTransaction(readRunCardRecords(getThreadRecords, threadId, runId, nodeId))
+            .pipe(Effect.mapError(controlReadError(threadId))),
+        )(),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
@@ -8267,13 +8288,9 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             );
           }),
         ),
-      getThreadRecords: Effect.fn("ProjectionStore.getThreadRecords")(
-        function* (threadId, fields, filter) {
-          const projection = (yield* Ref.get(replayState)).projections.get(threadId);
-          if (projection === undefined)
-            return yield* new ProjectionStoreThreadNotFoundError({ threadId });
-          return selectThreadRecords(projection, fields, filter);
-        },
+      ...makeReplayRecordReads(
+        replayState,
+        (threadId) => new ProjectionStoreThreadNotFoundError({ threadId }),
       ),
       getRuntimeRequest: Effect.fn("ProjectionStore.getRuntimeRequest")(
         function* (threadId, requestId) {

@@ -267,6 +267,8 @@ it.effect(
           getTurnItem: () => Effect.die("unused turn item read"),
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
           getThreadRecords: () => Effect.die("unused record read"),
+          getRunProviderRecords: () => Effect.die("unused provider read"),
+          getRunCardRecords: () => Effect.die("unused card read"),
           getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
           getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),
           getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),

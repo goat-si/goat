@@ -197,6 +197,7 @@ describe("V2 preview upgrade", () => {
         [184, "RemoteDispatchEnvironment"],
         [185, "BackgroundRecoveryIndexes"],
         [186, "TurnStartReadIndexes"],
+        [187, "ProviderTurnAttemptIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -404,6 +405,7 @@ describe("V2 preview upgrade", () => {
         [184, "RemoteDispatchEnvironment"],
         [185, "BackgroundRecoveryIndexes"],
         [186, "TurnStartReadIndexes"],
+        [187, "ProviderTurnAttemptIndex"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

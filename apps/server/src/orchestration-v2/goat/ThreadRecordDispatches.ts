@@ -145,11 +145,7 @@ export const makeThreadRecordDispatches = (
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
       const projection = yield* projectionStore
-        .getThreadRecords(
-          command.threadId,
-          ["runs", "nodes", "turnItems", "attempts", "providerTurns"],
-          { turnItemTypes: ["secret_request", "human_handoff"], messageRoles: [] },
-        )
+        .getRunCardRecords(command.threadId, command.runId, command.nodeId)
         .pipe(
           Effect.mapError(
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),

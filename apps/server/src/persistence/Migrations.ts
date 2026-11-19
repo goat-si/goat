@@ -199,6 +199,7 @@ import Migration0183 from "./Migrations/183_ChannelInputSessionAuthority.ts";
 import Migration0184 from "./Migrations/184_RemoteDispatchEnvironment.ts";
 import Migration0185 from "./Migrations/185_BackgroundRecoveryIndexes.ts";
 import Migration0186 from "./Migrations/186_TurnStartReadIndexes.ts";
+import Migration0187 from "./Migrations/187_ProviderTurnAttemptIndex.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -391,6 +392,7 @@ export const migrationEntries = [
   [184, "RemoteDispatchEnvironment", Migration0184],
   [185, "BackgroundRecoveryIndexes", Migration0185],
   [186, "TurnStartReadIndexes", Migration0186],
+  [187, "ProviderTurnAttemptIndex", Migration0187],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
