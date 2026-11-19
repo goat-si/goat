@@ -142,8 +142,12 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
   }
 }
 
-export function shouldShowComposerMenu(kind: ComposerTriggerKind, itemCount: number): boolean {
-  return itemCount > 0 || kind === "pull-request";
+export function shouldShowComposerMenu(menu: {
+  readonly trigger: { readonly kind: ComposerTriggerKind } | null;
+  readonly items: ReadonlyArray<unknown>;
+  readonly error: string | null;
+}): boolean {
+  return menu.items.length > 0 || menu.trigger?.kind === "pull-request" || menu.error !== null;
 }
 
 export function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean): string {

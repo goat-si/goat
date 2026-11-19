@@ -693,9 +693,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         style={{ maxWidth: props.contentMaxWidth }}
       >
         {props.draftControls}
-        {!isSubmissionLocked &&
-        composerMenu.trigger &&
-        shouldShowComposerMenu(composerMenu.trigger.kind, composerMenu.items.length) ? (
+        {!isSubmissionLocked && composerMenu.trigger && shouldShowComposerMenu(composerMenu) ? (
           <ComposerPopoverAnchor>
             <ComposerCommandPopover
               items={composerMenu.items}
