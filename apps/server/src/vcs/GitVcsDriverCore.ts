@@ -1,3 +1,4 @@
+import { makeRemoteRefContainsHead } from "./gitPushDestinationChecks.ts";
 import { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 export { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
@@ -1307,16 +1308,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return yield* resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
   });
 
-  const remoteRefContainsHead = (cwd: string, remoteRef: string) =>
-    executeGit(
-      "GitVcsDriver.pushCurrentBranch.publishContainsHead",
-      cwd,
-      ["merge-base", "--is-ancestor", "HEAD", `refs/remotes/${remoteRef}`],
-      { allowNonZeroExit: true },
-    ).pipe(
-      Effect.map((result) => result.exitCode === 0),
-      Effect.orElseSucceed(() => false),
-    );
+  const remoteRefContainsHead = makeRemoteRefContainsHead(executeGit);
 
   const ensureRemote: GitVcsDriver.GitVcsDriver["Service"]["ensureRemote"] = Effect.fn(
     "ensureRemote",
