@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react";
 import { useCommitOnBlur } from "../../hooks/useCommitOnBlur";
 import { STANDING_INSTRUCTIONS_MAX_CHARS } from "@goat/contracts";
 
@@ -20,6 +21,8 @@ export function StandingInstructionsSettings({ isProjectScope }: { isProjectScop
 }
 
 function StandingInstructionsFields({ isProjectScope }: { isProjectScope: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const mixed = useScopedSettingsMixed(["standingInstructions"]);
@@ -35,16 +38,21 @@ function StandingInstructionsFields({ isProjectScope }: { isProjectScope: boolea
       serverScoped
       settingKeys={["standingInstructions"]}
       mixed={mixed}
-      {...searchableSetting("standing-instructions")}
+      id={searchableSetting("standing-instructions").id}
+      title={m(searchableSetting("standing-instructions").title)}
       description={
         isProjectScope
-          ? "Put in front of the first message of every thread an agent launches in this project, in place of the environment's."
-          : "Put in front of the first message of every thread an agent launches here, including launches from other machines. Projects can replace them. The thread shows them collapsed."
+          ? gt(
+              "Put in front of the first message of every thread an agent launches in this project, in place of the environment's.",
+            )
+          : gt(
+              "Put in front of the first message of every thread an agent launches here, including launches from other machines. Projects can replace them. The thread shows them collapsed.",
+            )
       }
       resetAction={
         mixed || settings.standingInstructions !== "" ? (
           <SettingResetButton
-            label="standing instructions"
+            label={gt("standing instructions")}
             onClick={() => updateSettings({ standingInstructions: "" })}
           />
         ) : null
@@ -53,13 +61,13 @@ function StandingInstructionsFields({ isProjectScope }: { isProjectScope: boolea
       <div className="mt-3 max-w-2xl pb-3.5">
         <Textarea
           {...input}
-          aria-label="Standing instructions"
+          aria-label={gt("Standing instructions")}
           maxLength={STANDING_INSTRUCTIONS_MAX_CHARS}
           rows={4}
           placeholder={
             mixed
-              ? "Mixed. Enter instructions to apply to all selected targets."
-              : "Use sol for subagents. Work without waiting for approval. One topic per PR."
+              ? gt("Mixed. Enter instructions to apply to all selected targets.")
+              : gt("Use sol for subagents. Work without waiting for approval. One topic per PR.")
           }
         />
       </div>

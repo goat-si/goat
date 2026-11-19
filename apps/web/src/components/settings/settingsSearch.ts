@@ -249,7 +249,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "project-defaults",
-    title: "Project defaults and overrides",
+    title: msg("Project defaults and overrides"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: ["model workspace environments projects inheritance checkout"],
@@ -262,14 +262,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "default-model",
-    title: "Default model",
+    title: msg("Default model"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: ["new thread project provider reasoning effort"],
   },
   {
     id: "default-permissions",
-    title: "Permissions",
+    title: msg("Permissions"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: [
@@ -278,7 +278,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "standing-instructions",
-    title: "Standing instructions",
+    title: msg("Standing instructions"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: [
@@ -632,14 +632,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "new-threads",
-    title: "New threads",
+    title: msg("New threads"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: ["default workspace mode draft local worktree"],
   },
   {
     id: "worktree-submodules",
-    title: "Submodules",
+    title: msg("Submodules"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: ["git submodule init recursive top-level none worktree goat.json t3.json"],
