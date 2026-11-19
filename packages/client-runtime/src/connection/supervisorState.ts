@@ -1,4 +1,9 @@
-import type { ConnectionFailure, NetworkStatus, SupervisorConnectionState } from "./model.ts";
+import {
+  NO_REFUSED_ROUTES,
+  type ConnectionFailure,
+  type NetworkStatus,
+  type SupervisorConnectionState,
+} from "./model.ts";
 
 export interface SupervisorIntent {
   readonly desired: boolean;
@@ -18,6 +23,7 @@ export function availableState(
     generation,
     lastFailure: null,
     retryAt: null,
+    refusedRouteIds: NO_REFUSED_ROUTES,
   };
 }
 
@@ -36,6 +42,7 @@ export function offlineState(
     generation,
     lastFailure,
     retryAt: null,
+    refusedRouteIds: NO_REFUSED_ROUTES,
   };
 }
 
@@ -55,5 +62,6 @@ export function connectingState(
     generation,
     lastFailure,
     retryAt: null,
+    refusedRouteIds: NO_REFUSED_ROUTES,
   };
 }

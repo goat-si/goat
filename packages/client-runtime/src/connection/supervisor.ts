@@ -36,6 +36,7 @@ import {
   type ConnectionTarget,
   ConnectionTransientError,
   type NetworkStatus,
+  NO_REFUSED_ROUTES,
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "./model.ts";
@@ -71,6 +72,7 @@ const BETTER_ROUTE_COOLDOWN_MS = 300_000;
 
 type ConnectedLease = ConnectionDriver.EnvironmentConnectionLease & {
   readonly activeRoute: ConnectionRoute | undefined;
+  readonly generation: number;
 };
 
 export type SupervisorSignal =
@@ -88,6 +90,17 @@ interface PendingRetryTrace {
   readonly failureCount: number;
   readonly delayMs: number;
   readonly reason: ConnectionFailure["reason"];
+}
+
+function mergeRefusedRoutes(
+  known: ReadonlyArray<string>,
+  refused: ReadonlyArray<string>,
+  keep: (routeId: string) => boolean,
+): ReadonlyArray<string> {
+  const next = [...new Set([...known, ...refused])].filter(keep);
+  return next.length === known.length && next.every((id, index) => id === known[index])
+    ? known
+    : next;
 }
 
 interface TracedAttemptFailure {
@@ -258,6 +271,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const preferredRouteId = yield* Ref.make(Option.none<string>());
   const routeCooldowns = yield* Ref.make<ReadonlyMap<string, bigint>>(new Map());
   const setupSamples = yield* Ref.make<ReadonlyArray<number>>([]);
+  const refusedRoutes = yield* Ref.make(NO_REFUSED_ROUTES);
 
   const attemptEntry = Effect.gen(function* () {
     const latest = yield* Ref.get(currentEntry);
@@ -318,15 +332,30 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const better = connectionRoutes(latest)
       .slice(0, current)
       .filter((route) => (cooldowns.get(connectionRouteId(route.target)) ?? 0n) <= now);
-    const passed = yield* Effect.forEach(
+    const results = yield* Effect.forEach(
       better,
       (route: ConnectionRoute) => driver.preflight(latest, route),
       { concurrency: "unbounded" },
     );
-    const index = passed.indexOf(true);
-    if (index === -1) return;
     const live = yield* SubscriptionRef.get(session);
     if (Option.isNone(live) || live.value !== lease.session) return;
+    const refused = better
+      .filter((_route, position) => results[position] === "refused")
+      .map((route) => connectionRouteId(route.target));
+    if (refused.length > 0) {
+      const known = yield* Ref.updateAndGet(refusedRoutes, (current) =>
+        mergeRefusedRoutes(current, refused, () => true),
+      );
+      yield* SubscriptionRef.updateSome(state, (current) =>
+        current.phase === "connected" &&
+        current.generation === lease.generation &&
+        current.refusedRouteIds !== known
+          ? Option.some({ ...current, refusedRouteIds: known })
+          : Option.none(),
+      );
+    }
+    const index = results.findIndex((result) => result === "ready" || result === true);
+    if (index === -1) return;
     yield* signal({
       _tag: "BetterRouteAvailable",
       routeId: connectionRouteId(better[index]!.target),
@@ -1019,13 +1048,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       [...samples, setupElapsedMs].slice(-SETUP_SAMPLE_COUNT),
     );
     yield* Ref.set(wakeRetryUntil, 0n);
+    const savedRoutes = yield* currentRoutes;
+    const activeRouteId = connectionRouteId(active.lease.prepared.target);
     const connectedLease: ConnectedLease = {
       ...active.lease,
-      activeRoute: (yield* currentRoutes).find(
-        (route) =>
-          connectionRouteId(route.target) === connectionRouteId(active.lease.prepared.target),
-      ),
+      activeRoute: savedRoutes.find((route) => connectionRouteId(route.target) === activeRouteId),
+      generation,
     };
+    const refusedRouteIds = yield* Ref.updateAndGet(refusedRoutes, (known) =>
+      mergeRefusedRoutes(
+        known,
+        active.lease.refusedRouteIds,
+        (id) =>
+          id !== activeRouteId &&
+          savedRoutes.some((route) => connectionRouteId(route.target) === id),
+      ),
+    );
     const connectedAt = yield* Clock.currentTimeMillis;
     yield* Queue.clear(betterRouteChecks);
     yield* Queue.take(betterRouteChecks).pipe(
@@ -1052,6 +1090,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       generation,
       lastFailure: null,
       retryAt: null,
+      refusedRouteIds,
     });
 
     yield* Effect.sleep(BACKOFF_RESET_AFTER_MS).pipe(
@@ -1255,6 +1294,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           generation,
           lastFailure: error,
           retryAt: null,
+          refusedRouteIds: NO_REFUSED_ROUTES,
         });
         const blockedWait =
           error.reason === "configuration" && error.localProxyUnavailable === true
@@ -1294,6 +1334,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         generation,
         lastFailure: latestFailure,
         retryAt: (yield* Clock.currentTimeMillis) + delayMs,
+        refusedRouteIds: NO_REFUSED_ROUTES,
       });
       handleSignal(yield* waitForRetrySignal(delayMs));
     }
