@@ -11,6 +11,20 @@ import {
 const GITLAB = { mentions: true, referenceSigils: ["#", "!"] } as const;
 
 describe("detectPullRequestComposerTrigger", () => {
+  it("completes display names in different scripts while rejecting an initial combining mark", () => {
+    for (const query of ["김철", "ㄱ", "प्रिया", "e\u0301"]) {
+      const text = `@${query}`;
+      expect(detectPullRequestComposerTrigger(text, text.length, GITLAB)).toEqual({
+        kind: "mention",
+        sigil: "@",
+        query,
+        rangeStart: 0,
+        rangeEnd: text.length,
+      });
+    }
+    expect(detectPullRequestComposerTrigger("@\u0301x", 3, GITLAB)).toBeNull();
+  });
+
   it.each([
     ["@", 0, "@", ""],
     ["cc @ju", 3, "@", "ju"],
