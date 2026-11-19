@@ -515,4 +515,12 @@ export function registerPiToolChecks({
         assert.isFalse(fake.allRequests().some((request) => request.type === "switch_session"));
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("passes the GOAT thread identity to Pi without an MCP session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      yield* openRuntime(fake);
+      assert.equal(fake.lastSpawn().env.GOAT_THREAD_ID, THREAD_ID);
+      assert.equal(fake.lastSpawn().env.T3CODE_THREAD_ID, THREAD_ID);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }

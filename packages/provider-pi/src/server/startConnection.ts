@@ -82,7 +82,7 @@ export const startScopedPiConnection = Effect.fnUntraced(function* (
   const connectionScope = yield* Scope.fork(input.scope, "sequential");
   const launch = buildPiRpcLaunch({
     ...input.launchInput,
-    environment: yield* input.currentEnvironment,
+    environment: { ...(yield* input.currentEnvironment), GOAT_THREAD_ID: input.input.threadId },
     sessionPath: input.sessionPath,
   });
   const connection = yield* startPiConnection({ ...input, launch, scope: connectionScope }).pipe(
