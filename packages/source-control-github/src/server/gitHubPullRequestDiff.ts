@@ -28,7 +28,8 @@ import { decodeCommitFilesJson, decodePullRequestFilesJson } from "./gitHubPullR
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export const DIFF_TIMEOUT = Duration.seconds(60);
-const DIFF_FILES_PAGE_SIZE = 100;
+const DIFF_FILES_PAGE_SIZE = 30;
+const DIFF_FILES_MAX_PAGES = 100;
 const WITHHELD_FILE_RESPONSE_LIMIT = 32 * 1024 * 1024;
 const WITHHELD_FILE_LINE_LIMIT = 1_000;
 const COMPARE_FILES_LIMIT = 300;
@@ -80,10 +81,11 @@ export function makeGitHubPullRequestDiff(
         Effect.map((files) => {
           // Use raw row counts so malformed files cannot prematurely end pagination.
           const morePages = files.rawCount >= DIFF_FILES_PAGE_SIZE;
+          const atLimit = morePages && input.page >= DIFF_FILES_MAX_PAGES;
           return {
             patch: files.patch,
-            truncated: files.truncated,
-            nextCursor: morePages ? String(input.page + 1) : null,
+            truncated: files.truncated || atLimit,
+            nextCursor: morePages && !atLimit ? String(input.page + 1) : null,
             ...(files.omittedFileStats.length === 0
               ? {}
               : { omittedFileStats: files.omittedFileStats }),
@@ -199,7 +201,7 @@ export function makeGitHubPullRequestDiff(
 
     if (input.cursor !== undefined) {
       const page = diffCursorPage(input.cursor);
-      return yield* page === null
+      return yield* page === null || page > DIFF_FILES_MAX_PAGES
         ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
         : filesPage(page);
     }

@@ -40,14 +40,14 @@ layer("GitHub pull request diffs", (it) => {
       expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
       expect(diff.patch).toContain("diff --git a/src/file2.ts b/src/file2.ts");
       assert.strictEqual(callAt(1).host, "github.acme.dev");
-      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=100&page=1");
+      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=30&page=1");
     }),
   );
 
   it.effect("hands back a cursor for the next page rather than walking on by itself", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(30, 0))));
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
@@ -97,7 +97,7 @@ layer("GitHub pull request diffs", (it) => {
         number: 7,
       });
 
-      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=100&page=1");
+      assert.strictEqual(pathAt(1), "repos/acme/web/pulls/7/files?per_page=30&page=1");
       expect(slice.patch).toContain("src/file1.ts");
       expect(slice.patch).not.toContain("diff --git a/a b/a");
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
