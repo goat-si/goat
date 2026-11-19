@@ -83,3 +83,7 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
     filterSidebarV2VisibleThreads([thread], null).length === 1;
   return { pendingKey, widensScope };
 }
+
+export function scrollSidebarToTop(content: HTMLElement | null) {
+  content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
+}

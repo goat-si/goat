@@ -227,6 +227,7 @@ import { SidebarProjectScope } from "./sidebar/SidebarProjectScope";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
 import {
+  scrollSidebarToTop,
   resolveSidebarRouteReveal,
   type SidebarRouteReveal,
   useActiveRowReveal,
@@ -290,10 +291,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "goat:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "goat:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "goat:sidebar:working-expanded";
-function scrollSidebarToTop(content: HTMLElement | null) {
-  content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
-}
-
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 }
