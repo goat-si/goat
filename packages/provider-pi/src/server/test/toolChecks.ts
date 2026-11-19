@@ -128,4 +128,38 @@ export function registerPiToolChecks({
       }
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("classifies Pi notifications and keeps unknown notices at the legacy default", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      for (const [notifyType, severity] of [
+        ["info", "info"],
+        ["warning", "warning"],
+        ["error", "warning"],
+        ["other", undefined],
+        [undefined, undefined],
+      ] as const) {
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "notify",
+          message: "notice",
+          ...(notifyType === undefined ? {} : { notifyType }),
+        });
+        const event = yield* takeEvent(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "system_notice",
+        );
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "system_notice")
+          return yield* Effect.die("Expected notice");
+        assert.equal(event.turnItem.severity, severity);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }

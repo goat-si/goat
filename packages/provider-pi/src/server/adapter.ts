@@ -1249,6 +1249,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         turn: ActivePiTurn,
         nativeItemId: string,
         message: string,
+        severity?: "info" | "warning",
       ) {
         const emittedAt = yield* DateTime.now;
         yield* emitItemNode(turn, nativeItemId, "system", "completed", emittedAt, emittedAt);
@@ -1262,6 +1263,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             title: message,
             type: "system_notice",
             message,
+            ...(severity === undefined ? {} : { severity }),
           },
         });
       });
@@ -1311,6 +1313,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             turn,
             `notify:${turn.providerTurn.id}:${turn.nextItemOrdinal}`,
             message,
+            event["notifyType"] === "info"
+              ? "info"
+              : event["notifyType"] === "warning" || event["notifyType"] === "error"
+                ? "warning"
+                : undefined,
           );
           return;
         }
