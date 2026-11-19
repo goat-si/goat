@@ -91,7 +91,6 @@ import {
 } from "./threadLauncher.logic";
 import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 import { resolveSideChatOpen } from "../sideChat/sideChat.logic";
-import { readThreadShell } from "../../state/entities";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -512,7 +511,15 @@ export function ThreadRelationshipsPanel(props: {
   const openScopedThread = (threadRef: ScopedThreadRef) => {
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(resolveSideChatOpen(threadRef, readThreadShell(threadRef))),
+      params: buildThreadRouteParams(
+        resolveSideChatOpen(
+          threadRef,
+          threadShells.find(
+            (shell) =>
+              shell.environmentId === threadRef.environmentId && shell.id === threadRef.threadId,
+          ) ?? null,
+        ),
+      ),
     });
   };
   const openThread = (threadId: ThreadId) => {
