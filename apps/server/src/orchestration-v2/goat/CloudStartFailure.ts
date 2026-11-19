@@ -23,7 +23,7 @@ export function makeCloudStartFailureHandler({
   readonly idAllocator: IdAllocatorV2["Service"];
   readonly eventSink: EventSinkV2["Service"];
 }) {
-  return (cause: unknown) =>
+  return <E>(cause: E) =>
     Effect.gen(function* () {
       // A retried start finds the attach run already running and returns, so an
       // attach settles on its first failure.
