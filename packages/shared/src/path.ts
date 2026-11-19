@@ -118,7 +118,7 @@ export function isWindowsReservedFileName(name: string): boolean {
 const LATIN_FOLDS: Record<string, string> = {
   Ŀ: "L",
   ŀ: "l",
-  ŉ: "'n",
+  ŉ: "n",
   Đ: "D",
   đ: "d",
   Ð: "D",
