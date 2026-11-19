@@ -99,6 +99,26 @@ function setup() {
   };
 }
 
+it("explains unavailable merge back without executing it", async () => {
+  setup();
+  state.projection = { ...(state.projection as Record<string, unknown>), runs: [] };
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={threadId} />,
+    { router: "/environment/fork" },
+  );
+  const merge = screen.getByRole("button", { name: "Merge back to source conversation" });
+  await expect.element(merge).toHaveAttribute("aria-disabled", "true");
+  await userEvent.hover(merge);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+      "Complete a run in this fork before merging it back",
+    ),
+  );
+  state.commandSucceeds = true;
+  await merge.click({ force: true });
+  expect(screen.router?.state.location.pathname).toBe("/environment/fork");
+});
+
 it.each([
   ["merge", "Could not merge back"],
   ["disconnect", "Could not disconnect agent session"],
