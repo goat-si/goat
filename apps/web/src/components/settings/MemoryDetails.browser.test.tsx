@@ -293,8 +293,8 @@ it.each(["accepted", "expired"])("reports a details move when the body is %s", a
   if (original.status !== "active") throw new Error("Expected an active memory");
   const before = decodeItem({ ...original, scope, revision: { ...original.revision, scope } });
   state.queries.set("read", Option.some(before));
-  const receipt = Promise.withResolvers<unknown>();
-  state.move.mockReturnValue(receipt.promise);
+  let settle!: (value: unknown) => void;
+  state.move.mockReturnValue(new Promise((resolve) => (settle = resolve)));
   await using screen = await renderDetails(registry, details(state.onForgotten, true));
   await click(screen, "Move to…");
   await screen.getByRole("combobox", { name: "Memory scope" }).click();
@@ -308,7 +308,7 @@ it.each(["accepted", "expired"])("reports a details move when the body is %s", a
   await screen.getByRole("button", { name: "Move memory", exact: true }).click();
   expect(state.move).toHaveBeenCalledOnce();
   await update(() => signal(registry, "invalidate"));
-  await act(() => receipt.resolve({ _tag: "Success", value: { outcome: "accepted" } }));
+  await act(() => settle({ _tag: "Success", value: { outcome: "accepted", pendingSync: false } }));
   await expect.element(screen.getByText("Memory moved.")).toBeVisible();
   await update(() => state.queries.set("read", Option.some(original)));
   await expect.element(screen.getByText("Scope: User")).toBeVisible();
