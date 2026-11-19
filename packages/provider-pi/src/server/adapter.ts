@@ -1,3 +1,4 @@
+import type { PiProviderRetryState } from "./compactionTitle.ts";
 import { piThreadSnapshot } from "./threadSnapshot.ts";
 import { piApprovalRequestKind } from "./approvalRequestKind.ts";
 import { commandOutputDelta } from "./commandOutputDelta.ts";
@@ -23,9 +24,7 @@ import {
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ExecutionNode,
-  type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRef,
-  type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -115,12 +114,6 @@ interface PiStreamItemState {
   completed: boolean;
   flushScheduled: boolean;
   readonly startedAt: DateTime.Utc;
-}
-interface PiProviderRetryState {
-  readonly retry: OrchestrationV2ProviderRetry;
-  readonly failure: OrchestrationV2ProviderFailure;
-  readonly startedAt: DateTime.Utc;
-  readonly itemOrdinal: number;
 }
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;

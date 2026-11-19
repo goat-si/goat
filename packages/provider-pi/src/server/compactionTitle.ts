@@ -1,3 +1,4 @@
+import type { OrchestrationV2ProviderFailure, OrchestrationV2ProviderRetry } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 
 export type PiCompactionStatus = "running" | "completed" | "failed" | "cancelled";
@@ -17,4 +18,11 @@ export function compactionTitle(status: PiCompactionStatus): string {
 export interface PiCompactionState {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
+}
+
+export interface PiProviderRetryState {
+  readonly retry: OrchestrationV2ProviderRetry;
+  readonly failure: OrchestrationV2ProviderFailure;
+  readonly startedAt: DateTime.Utc;
+  readonly itemOrdinal: number;
 }
