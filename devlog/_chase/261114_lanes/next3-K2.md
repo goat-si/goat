@@ -456,3 +456,24 @@ Local head `c87507c00c7386dba27cdbc03280acf949e3cafc` merges integration `a00670
 - CodeTab `--sequence.shuffle --sequence.seed=1` exited 1 (15 passed, 1 failed). The unchanged stale-commit case's header was at 304px and its upper-half bound was 250px. Substituting integration's exact test file on the same merged production also exited 1 on the same assertion (12 passed, 1 failed). Asked the coordinator for Rule 3 permission to try the exact four-line `__setClientSettingsForTests` setup from `5fff34868c8`, with `diffFilesCollapsed: false` and the original assertion. The merged head still needs fresh proof if the change is approved.
 
 NOT RUN: `vp run check:changed origin/chase/t3-261114-next3`, lane CI, live client/P1, live forge checks and independent re-review. The lane code push is held for Rule 3.
+
+### Coordinator Rule 3 ruling, verbatim
+
+```text
+K2 Rule 3 ruling (coordinator): DENIED. Evidence: on the integration tip (a00670156950 plus K7b/U11/U13 merges) without K2, apps/web/src/components/pullRequest/PullRequestCodeTab.browser.test.tsx run with --sequence.shuffle --sequence.seed=1 passes 13/13. So the unchanged "reveals a pending file across pages while a stale selected commit falls back to all commits" case fails only with K2's production code, and pinning diffFilesCollapsed:false in its setup would hide a K2 regression (this is the same edit review r2 flagged).
+
+Find the cause in K2: which K2 change makes the pending file land 304px down (vs <250) under seed 1 — e.g. K2 production code reading/initializing the diffFilesCollapsed client setting differently, a module-level store or cache in K2 code that survives between tests, or a K2-added test elsewhere in the shuffled run that mutates client settings without disposal. Fix it in production code (or, if the leak is in a K2-added test, make that new test dispose what it sets), with the stale-commit case byte-identical to integration. Prove with seed-1 and default-order runs of the whole file, then continue the round: push, gate (whole changed files + vp run check:changed origin/chase/t3-261114-next3, Node 26.12.1), record this ruling verbatim in next3-K2.md, and report READY with head SHA, the root cause in one sentence, receipts and NOT RUN. If you conclude K2 intentionally changes the default collapse behavior users see, stop and send me that product change with evidence instead.
+```
+
+### Review fix round 2 follow-up
+
+K2's line-range guard delayed even a file-header reveal until its file expanded, leaving the paged destination at 304px. `505803dee3b02776e0a3ad9ac1e7d3a9ac937548` lets a folded header scroll immediately while line ranges still wait for expansion. The default collapse setting and the stale-commit case are byte-identical to integration. The redirect suite is also byte-identical to integration. Plain fast-forward push from `134249c1c3` succeeded and `git ls-remote` verified the lane SHA.
+
+- Folded-header regression in `useCodeViewFileReveal.test.ts`: red exit 1, 8 passed and 1 failed (zero item scrolls instead of one); green exit 0, 9 passed. The line-range regression still verifies waiting on a folded file.
+- Whole `PullRequestCodeTab.browser.test.tsx`: seed 1 red exit 1, 15 passed and the unchanged stale-commit case failed at 304px versus <250px. Seed 1 and default order each exited 0 with 16 passed on the fix.
+- Node 26.12.1, final head: whole `vp test run` for 24 changed non-server files plus the restored redirect suite exited 0 (25 files, 213 passed). Three changed server suites run from `apps/server` with `GOAT_TEST_TMP_GUARD=fail` exited 0 (3 files, 10 passed). The attachment-await red and green receipts are above.
+- `VITEST_MAX_WORKERS=4 GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 1. All static checks passed, including 42-package typecheck. The 2,907-file selection yielded 2,901 passed, 1 failed and 5 skipped, with 39,169 tests passed, 16 failed and 21 skipped. The workspace batch passed all 1,438 files (20,385 passed, 4 skipped). The only failed file was `apps/server/src/textGeneration/GrokTextGeneration.test.ts`. A four-case probe on exact integration `a00670156950` also failed all four, reproducing ACP exit 127 (`exec: node: not found`) and the memory fixture failures. K2 has no diff in the Grok/ACP provider code, the server text-generation directory, or the Vitest configuration. On the same exact integration checkout, the Code tab seed-1 baseline passed 13/13.
+
+READY for independent re-review at `505803dee3b02776e0a3ad9ac1e7d3a9ac937548`. The broad gate's only red suite has the integration fixture failure described above.
+
+NOT RUN: hosted lane CI, live client/P1, live forge checks, full baseline Grok suite, independent re-review.
