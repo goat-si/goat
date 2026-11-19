@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
@@ -21,6 +22,7 @@ import {
   decodeGitLabMergeRequestListJson,
 } from "./gitLabMergeRequests.ts";
 import type * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
+import { GitLabDescriptionError, readGitLabDescription } from "./gitLabDescription.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 // GitLab allows ~1M-character descriptions; glab's JSON escaping (`\u003c`) can grow one sixfold.
@@ -125,6 +127,7 @@ export class GitLabCliCommandError extends Schema.TaggedError<GitLabCliCommandEr
   gitLabCliExecutionErrorContext,
 ) {
   get detail(): string {
+    if (this.cause instanceof GitLabDescriptionError) return this.cause.message;
     return "GitLab CLI command failed.";
   }
 
@@ -458,6 +461,7 @@ const classifyGlabFailure = (stderr: string): VcsProcessExitFailureKind | null =
 /** @public */
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   const run = (
     input: Parameters<GitLabCli["Service"]["execute"]>[0],
@@ -680,6 +684,17 @@ export const make = Effect.gen(function* () {
       );
     }),
     createMergeRequest: Effect.fn("GitLabCli.createMergeRequest")(function* (input) {
+      const description = yield* readGitLabDescription(fileSystem, input.bodyFile).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitLabCliCommandError({
+              operation: "execute",
+              command: "glab",
+              cwd: input.cwd,
+              cause,
+            }),
+        ),
+      );
       let project = ":fullpath";
       let targetProjectId: number | undefined;
       if (input.source?.repository || input.source?.owner) {
@@ -717,8 +732,9 @@ export const make = Effect.gen(function* () {
           "--raw-field",
           `title=${input.title}`,
           "--field",
-          `description=@${input.bodyFile}`,
+          "description=@-",
         ],
+        stdin: description,
       });
     }),
     getDefaultBranch: Effect.fn("GitLabCli.getDefaultBranch")(function (input) {

@@ -12,6 +12,8 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+export const CHANGE_REQUEST_BODY_MAX_BYTES = 4_000_000;
+
 export interface SourceControlProcessInput {
   readonly operation: string;
   readonly command: string;

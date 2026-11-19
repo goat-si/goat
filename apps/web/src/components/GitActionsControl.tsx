@@ -1,3 +1,4 @@
+import { ChangesAction } from "./ChangesAction";
 import { GitActionItemIcon, GitQuickActionIcon } from "./GitActionIcons";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomValue } from "@effect/atom-react";
@@ -16,7 +17,6 @@ import {
   ChevronDownIcon,
   CloudDownloadIcon,
   CloudUploadIcon,
-  FileDiffIcon,
   GitBranchPlusIcon,
 } from "~/components/solar";
 import { cn } from "~/lib/utils";
@@ -1109,36 +1109,7 @@ export default function GitActionsControl({
         </ActionGroup>
       )}
       {isPanel && isRepo && !quietEmptyDraft ? (
-        <ThreadDetailsControl
-          type="button"
-          variant="ghost"
-          size="sm"
-          part="row"
-          disabled={!onOpenChanges}
-          onClick={onOpenChanges}
-        >
-          <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
-          <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
-            Changes{" "}
-            {changesTotals.baseRef === null ? "(Uncommitted)" : `(vs ${changesTotals.baseRef})`}
-          </span>
-          <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
-            <span
-              className={
-                changesTotals.insertions ? "text-diff-addition-foreground" : "text-muted-foreground"
-              }
-            >
-              +{formatDiffCount(changesTotals.insertions)}
-            </span>
-            <span
-              className={
-                changesTotals.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
-              }
-            >
-              -{formatDiffCount(changesTotals.deletions)}
-            </span>
-          </span>
-        </ThreadDetailsControl>
+        <ChangesAction changesTotals={changesTotals} onOpenChanges={onOpenChanges} />
       ) : null}
       <Dialog
         open={isCommitDialogOpen}

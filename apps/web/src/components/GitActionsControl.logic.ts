@@ -11,10 +11,12 @@ import type {
   SshWorkspaceFetchBackInput,
   GitRunStackedActionResult,
   GitStackedAction,
+  PullRequestChangeBreakdown,
   ReviewDiffPreviewSource,
   VcsStatusResult,
 } from "@goat/contracts";
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
+import { summarizeChangedFiles } from "@goat/shared/changedFileKind";
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 import {
   canCreateChangeRequest,
@@ -540,6 +542,7 @@ export type ChangesLineTotals = {
   readonly deletions: number;
   /** Ref the counts compare against; `null` means they are uncommitted changes against HEAD. */
   readonly baseRef: string | null;
+  readonly breakdown?: PullRequestChangeBreakdown;
 };
 
 // `branchChanges ?? workingTree` treats `{0,0}` as present, so a zero branch total hid a dirty
@@ -549,6 +552,7 @@ export type ChangesLineTotals = {
 export function resolveChangesTotals(
   status: VcsStatusResult | null | undefined,
   branchPreview?: ReviewDiffPreviewSource | null,
+  includeBreakdown = false,
 ): ChangesLineTotals | null {
   if (branchPreview?.files) {
     let insertions = 0;
@@ -557,7 +561,14 @@ export function resolveChangesTotals(
       insertions += file.additions;
       deletions += file.deletions;
     }
-    return { insertions, deletions, baseRef: branchPreview.baseRef };
+    return {
+      insertions,
+      deletions,
+      baseRef: branchPreview.baseRef,
+      ...(includeBreakdown
+        ? { breakdown: branchPreview.truncated ? null : summarizeChangedFiles(branchPreview.files) }
+        : {}),
+    };
   }
   if (!status) return null;
   const branch = status.branchChanges;
@@ -568,10 +579,23 @@ export function resolveChangesTotals(
       : tree.insertions > 0 || tree.deletions > 0
         ? tree
         : (branch ?? tree);
+  let breakdown: PullRequestChangeBreakdown = null;
+  if (includeBreakdown && selected === tree) {
+    const files = tree.files.map((file) => ({
+      path: file.path,
+      additions: file.insertions,
+      deletions: file.deletions,
+    }));
+    const fileInsertions = files.reduce((sum, file) => sum + file.additions, 0);
+    const fileDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
+    if (fileInsertions === selected.insertions && fileDeletions === selected.deletions)
+      breakdown = summarizeChangedFiles(files);
+  }
   return {
     insertions: selected.insertions,
     deletions: selected.deletions,
     baseRef: selected.baseRef,
+    ...(includeBreakdown ? { breakdown } : {}),
   };
 }
 
