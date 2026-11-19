@@ -250,6 +250,7 @@ import {
 } from "../state/environments";
 import {
   resolveThreadDetailRef,
+  readThreadShell,
   useEnvironmentSupportsServerBrowser,
   useProject,
   useQuietThreadProjection,
@@ -299,7 +300,7 @@ import {
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { SideChatSurface } from "./sideChat/SideChatSurface";
-import { canOpenSideChat } from "./sideChat/sideChat.logic";
+import { canOpenSideChat, resolveSideChatOpen } from "./sideChat/sideChat.logic";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -396,10 +397,8 @@ import { SshThreadHandoffDialog } from "./chat/SshThreadHandoffDialog";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { findSavedSshWorktreeOption } from "../lib/sshWorktree";
 import { isGlobalAgentThread } from "../globalAgentRoute";
-import { savedSshWorktreeOptions } from "../lib/sshWorktree";
-import { sshThreadHandoffBlockReason } from "../lib/sshWorktree";
-import { sshWorktreeSelectionBlockReason } from "../lib/sshWorktree";
-import { sshWorktreeSendBlockReason } from "../lib/sshWorktree";
+import { savedSshWorktreeOptions, sshThreadHandoffBlockReason } from "../lib/sshWorktree";
+import { sshWorktreeSelectionBlockReason, sshWorktreeSendBlockReason } from "../lib/sshWorktree";
 import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { useBrowserHistoryProject } from "../hooks/useBrowserHistoryProject";
 import { useGlobalAgentStore } from "../globalAgentStore";
@@ -868,7 +867,7 @@ export default function ChatView(props: ChatViewProps) {
   const onOpenScopedThread = (ref: ScopedThreadRef) => {
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(ref),
+      params: buildThreadRouteParams(resolveSideChatOpen(ref, readThreadShell(ref))),
     });
   };
   const workflowOpening =
