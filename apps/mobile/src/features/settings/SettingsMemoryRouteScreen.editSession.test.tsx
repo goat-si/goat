@@ -103,8 +103,8 @@ const accept = (input: unknown) => ({
 const CLOSED_LINE =
   "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.";
 
-async function openEditor(typed?: string) {
-  h = createNativeMemoryHarness();
+async function mountMemoryScreen(capabilities?: Parameters<typeof createNativeMemoryHarness>[0]) {
+  h = createNativeMemoryHarness(capabilities);
   await h.waitForAtom(h.memory.syncStatus.permissionAtom(nativeEnv), Boolean);
   view = renderNative(
     h,
@@ -113,6 +113,9 @@ async function openEditor(typed?: string) {
     />,
   );
   await view.render();
+}
+async function openEditor(typed?: string) {
+  await mountMemoryScreen();
   await view.click("Open memory: Synthetic memory body");
   await view.click("Edit");
   if (typed !== undefined) await view.type("Memory text", typed);
@@ -120,6 +123,11 @@ async function openEditor(typed?: string) {
 const field = () =>
   view.container.querySelector<HTMLInputElement>('input[aria-label="Memory text"]');
 const text = () => view.container.textContent ?? "";
+
+it("shows the conversation picker's unfiltered value before opening the menu", async () => {
+  await mountMemoryScreen({ protocolVersion: 1, originFilter: true });
+  expect(text()).toContain("Saved from conversation · Any conversation");
+});
 const saveButton = () =>
   Array.from(view.container.querySelectorAll("button")).find(
     (button) => button.textContent === "Save memory",

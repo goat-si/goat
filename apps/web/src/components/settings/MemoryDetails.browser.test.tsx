@@ -100,6 +100,10 @@ vi.mock("../../state/environments", async (original) => ({
   ...(await original<typeof import("../../state/environments")>()),
   useEnvironments: () => ({ environments: [] }),
 }));
+vi.mock("../../state/entities", async (original) => ({
+  ...(await original<typeof import("../../state/entities")>()),
+  useThreadShells: () => [],
+}));
 vi.mock("../../state/session", async (original) => ({
   ...(await original<typeof import("../../state/session")>()),
   usePreparedConnection: () => Option.some(state.listeners),
@@ -123,10 +127,20 @@ vi.mock("@tanstack/react-router", async (original) => ({
   useNavigate: () => state.navigate,
 }));
 import { memoryEnvironment } from "../../state/memory";
+import { MemoryOriginPicker } from "./MemoryErgonomics";
 import { measureMemoryListRow, memoryListPageIdentity, MemoryDetails } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+it("shows the conversation picker's unfiltered value before opening the menu", async () => {
+  await using screen = await render(
+    <MemoryOriginPicker environmentId={EnvironmentId.make("remote-owner")} onChange={vi.fn()} />,
+  );
+  await expect
+    .element(screen.getByRole("combobox", { name: "Saved from conversation" }))
+    .toHaveTextContent("Any conversation");
+});
 const decodeItem = Schema.decodeUnknownSync(MemoryItem);
 const decodeRevision = Schema.decodeUnknownSync(MemoryRevision);
 const memoryItem = (n: number, text: string) =>
