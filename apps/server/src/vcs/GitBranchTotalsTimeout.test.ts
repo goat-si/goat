@@ -98,3 +98,50 @@ it.layer(layerTest)("branch totals timeout", (it) => {
     }),
   );
 });
+
+it.layer(layerTest)("branch totals without HEAD", (it) => {
+  it.effect("does not cache a timeout against an unborn HEAD", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir("git-unborn-totals-");
+      yield* git(cwd, ["init", "-b", "main"]);
+      yield* writeTextFile(cwd, "new.txt", "one\n");
+      let diffs = 0;
+      let hang = true;
+      const started = yield* Queue.unbounded<void>();
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.suspend(() => {
+          if (
+            !ChildProcess.isStandardCommand(command) ||
+            !command.args.includes("diff-index") ||
+            !command.options.env?.GIT_INDEX_FILE
+          )
+            return delegate.spawn(command);
+          diffs++;
+          if (!hang) return delegate.spawn(command);
+          return Queue.offer(started, undefined).pipe(
+            Effect.as(
+              ChildProcessSpawner.makeHandle({
+                ...makeSuccessfulHandle(""),
+                isRunning: Effect.succeed(true),
+                exitCode: Effect.never,
+              }),
+            ),
+          );
+        }),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(layerServerConfig),
+      );
+      const read = driver.statusDetailsLocal(cwd, { includeBranchChanges: true });
+      const first = yield* read.pipe(Effect.forkChild);
+      yield* Queue.take(started);
+      yield* TestClock.adjust("30 seconds");
+      yield* Fiber.join(first);
+      hang = false;
+      yield* read;
+      assert.isAbove(diffs, 1);
+    }),
+  );
+});

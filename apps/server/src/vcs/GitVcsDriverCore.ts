@@ -1697,8 +1697,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const untrackedRoots: string[] = [];
 
     const statusRecords = statusStdout.split("\0");
-    const headOid =
-      statusRecords.find((line) => line.startsWith("# branch.oid "))?.slice(13) ?? null;
+    const statusOid = statusRecords.find((line) => line.startsWith("# branch.oid "))?.slice(13);
+    const headOid = statusOid && statusOid !== "(initial)" ? statusOid : null;
     for (let index = 0; index < statusRecords.length; index++) {
       const line = statusRecords[index]!;
       if (line.startsWith("# branch.head ")) {
