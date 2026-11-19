@@ -173,6 +173,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "BackgroundRecoveryIndexes",
   "TurnStartReadIndexes",
   "ProviderTurnAttemptIndex",
+  "ThreadItemCounts",
 ]);
 
 type MigrationEntry<E> = readonly [
