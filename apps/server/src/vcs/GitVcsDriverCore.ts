@@ -1664,11 +1664,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     options?: GitVcsDriver.GitLocalStatusOptions,
   ) {
     const includeDivergence = options?.includeDivergence !== false;
+    const untrackedConfig = yield* runGitStdout(
+      "GitVcsDriver.status.untrackedConfig",
+      cwd,
+      ["config", "--get", "status.showUntrackedFiles"],
+      true,
+    ).pipe(Effect.orElseSucceed(() => "no"));
+    const hidden = !["", "normal", "all", "true", "yes", "on", "1"].includes(
+      untrackedConfig.trim().toLowerCase(),
+    );
     const statusArgs = [
       "status",
       "--porcelain=2",
       "--branch",
       "-z",
+      ...(hidden ? ["--untracked-files=normal"] : []),
       ...(includeDivergence ? [] : ["--no-ahead-behind"]),
     ];
     const indexResult = yield* executeGitWithStableDiagnostics(
