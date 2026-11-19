@@ -242,6 +242,7 @@ it.effect(
           getThreadShell: () => Effect.die("unused getThreadShell"),
           getThreadNewestRun: () => Effect.die("unused getThreadNewestRun"),
           findGuestShareThreadId: () => Effect.die("unused findGuestShareThreadId"),
+          findThread: () => Ref.get(projection).pipe(Effect.map((state) => state.thread)),
           getThread: () => Ref.get(projection).pipe(Effect.map((state) => state.thread)),
           getSettlementCandidates: () => Effect.die("unused getSettlementCandidates"),
           getThreadsWithPullRequests: () => Effect.die("unused getThreadsWithPullRequests"),
