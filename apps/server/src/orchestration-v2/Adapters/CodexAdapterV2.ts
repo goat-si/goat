@@ -1,5 +1,5 @@
 import { codexItemStatus, codexNativeItemRef, codexUserMessageText, providerTurnStatusToTerminal, codexPlanStepStatus } from "./CodexItemProjection.ts";
-import { type CodexWebSearchItem, trimText, webSearchPatterns } from "./CodexWebSearch.ts";
+import { type CodexWebSearchItem, trimText, webSearchPatterns, nonEmptyText, normalizeCodexCause } from "./CodexWebSearch.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
 import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
@@ -299,10 +299,6 @@ function toProtocolError(
   });
 }
 
-function normalizeCodexCause(error: unknown): unknown {
-  return error;
-}
-
 export function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
   return seconds === null || seconds === undefined
     ? DateTime.nowUnsafe()
@@ -362,10 +358,6 @@ const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicTool
   };
   return output === undefined ? projection : { ...projection, output };
 });
-
-function nonEmptyText(value: string | null | undefined, fallback: string): string {
-  return trimText(value) ?? fallback;
-}
 
 function providerSession(input: {
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
