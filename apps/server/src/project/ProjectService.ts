@@ -10,6 +10,8 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { isWslSharePath } from "@goat/shared/path";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -258,6 +260,19 @@ export const make = Effect.gen(function* () {
     });
   });
 
+  // Git for Windows can't trust an index written inside the distro and rereads every file across the
+  // share, so git status can hit its timeout. Checked before normalizing, which already stats the share.
+  const rejectWslSharePath = Effect.fn("ProjectService.rejectWslSharePath")(function* (
+    projectId: ProjectId,
+    workspaceRoot: string,
+  ) {
+    if (!isWslSharePath(workspaceRoot) || !(yield* HostProcess.isWindows)) return;
+    return yield* new ProjectInvalidError({
+      projectId,
+      detail: `${workspaceRoot.trim()} is inside WSL. Add it to the WSL backend instead of the Windows one.`,
+    });
+  });
+
   const commit = Effect.fn("ProjectService.commit")(function* (command: ProjectCommand) {
     const { projectId } = command;
     const dispatchError = (cause: unknown) =>
@@ -392,6 +407,7 @@ export const make = Effect.gen(function* () {
 
   const create: ProjectService["Service"]["create"] = Effect.fn("ProjectService.create")(
     function* (input) {
+      yield* rejectWslSharePath(input.projectId, input.workspaceRoot);
       const workspaceRoot = yield* normalizeWorkspaceRoot({
         projectId: input.projectId,
         workspaceRoot: input.workspaceRoot,
@@ -418,6 +434,9 @@ export const make = Effect.gen(function* () {
         return yield* new ProjectNotFoundError({ projectId: input.projectId });
       }
       const previousRoot = existing.value.workspaceRoot;
+      if (input.workspaceRoot !== undefined && input.workspaceRoot !== previousRoot) {
+        yield* rejectWslSharePath(input.projectId, input.workspaceRoot);
+      }
       const workspaceRoot =
         input.workspaceRoot === undefined
           ? previousRoot
