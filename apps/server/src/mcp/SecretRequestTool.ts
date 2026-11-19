@@ -86,7 +86,7 @@ export const makeRequestSecret = (deps: {
     }
     const runId = run.id;
     const nodeId = run.rootNodeId;
-    const key = yield* deps.requestKey(input.clientRequestId);
+    const key = `${runId}:${yield* deps.requestKey(input.clientRequestId)}`;
     let turnItemId = TurnItemId.make(
       `turn-item:secret-request:${stablePart(threadId)}:${stablePart(key)}`,
     );
