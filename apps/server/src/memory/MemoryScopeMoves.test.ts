@@ -109,6 +109,72 @@ describe("negotiated memory scope moves", () => {
     }).pipe(checkUsage, Effect.provide(live)),
   );
 
+  it.effect("never exposes a superseded body to a member catching up before compaction", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      yield* hub.pull(advertise, principal());
+      const member = principal(otherEnv);
+      const pull = { ...advertise, environmentId: otherEnv, limit: 1 };
+      yield* hub.pull(pull, member);
+      const root = newMemory(481);
+      const saved = (yield* hub.push({ ...pushInput(root), features }, principal())).receipts[0];
+      if (!saved?.hubSequence) throw new Error("Expected a saved memory");
+      const move = decodeOperation({
+        protocolVersion: 1,
+        kind: "move",
+        operationId: id(482),
+        memorySpaceId: space,
+        memoryId: root.memoryId,
+        originEnvironmentId: hubEnv,
+        expectedHeads: [root.revision.revisionId],
+        expectedScopeVersion: 0,
+        fromScope: root.revision.scope,
+        toScope: {
+          kind: "thread",
+          thread: { environmentId: hubEnv, threadId: M.ThreadId.make("narrower-scope") },
+        },
+      });
+      assert.include((yield* hub.push({ ...pushInput(move), features }, principal())).receipts[0], {
+        outcome: "accepted",
+      });
+      const result = yield* hub
+        .pull({ ...pull, highWatermark: saved.hubSequence }, member)
+        .pipe(Effect.result);
+      yield* Effect.gen(function* () {
+        const replica = yield* Service.MemoryService;
+        if (result._tag === "Success") {
+          yield* replica.receiveHubPage({
+            memorySpaceId: space,
+            hubEnvironmentId: hubEnv,
+            localEnvironmentId: otherEnv,
+            expectedSequence: 0,
+            page: result.success,
+            reauthorize: Effect.void,
+          });
+          if (result.success.entries.some((entry) => entry.receipt.memoryId === root.memoryId))
+            yield* scanReplicaMemory(root.memoryId);
+        }
+        const oldScope = yield* replica.list(
+          {
+            memorySpaceId: space,
+            scope: root.revision.scope,
+            includeQuarantined: false,
+            limit: 10,
+          },
+          Effect.void,
+        );
+        assert.deepStrictEqual(
+          oldScope.items.map((item) => item.memoryId),
+          [],
+        );
+      }).pipe(Effect.provide(Layer.fresh(coreFor(otherEnv))));
+      assert.include(result._tag === "Failure" ? result.failure : undefined, {
+        code: "cursor_expired",
+      });
+    }).pipe(Effect.provide(live)),
+  );
+
   it.effect(
     "moves the same memory and its history, fences stale moves and retires old handles",
     () =>
