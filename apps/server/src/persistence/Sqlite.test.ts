@@ -514,7 +514,7 @@ const layerGoatHome = ServerConfig.layerTest(process.cwd(), { prefix: "goat-sqli
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("layerCliConfig", (it) => {
   it.effect("does not migrate a GOAT home a running server owns", () =>
     Effect.gen(function* () {
-      const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
+      const recorded = migrationManifest.at(-2)?.[0] ?? 0;
       yield* onServerDatabase(runMigrations({ toMigrationInclusive: recorded }));
       yield* ownGoatHome();
 

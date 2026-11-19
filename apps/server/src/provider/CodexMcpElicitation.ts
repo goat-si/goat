@@ -130,7 +130,7 @@ const EMPTY_CONFIRM_SCHEMAS = [
   { type: "object", properties: {}, required: [] },
 ] as const;
 
-export function autoApproveMcpElicitation(
+function autoApproveMcpElicitation(
   payload: McpElicitationResponseInput,
 ): EffectCodexSchema.McpServerElicitationRequestResponse {
   if (payload.mode !== "form") return { action: "cancel" };

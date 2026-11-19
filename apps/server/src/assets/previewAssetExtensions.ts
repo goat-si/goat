@@ -1,7 +1,7 @@
 import { WORKSPACE_BROWSER_PREVIEW_EXTENSIONS } from "@goat/shared/filePreview";
 import type * as Path from "effect/Path";
 
-export const PREVIEW_ASSET_EXTENSIONS = new Set([
+const PREVIEW_ASSET_EXTENSIONS = new Set([
   ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   // Keep HTML dependency grants independent of newly supported file viewers.
   ".avif",

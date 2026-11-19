@@ -54,7 +54,7 @@ it.effect("does not let OTLP serialization failures alter application effects", 
       Effect.sync(() => {
         expect(fetchFn).toHaveBeenCalledOnce();
         expect(new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array)).toContain(
-          "mobile.test.failed-span",
+          '"name":"relay.operation"',
         );
       }),
     ),

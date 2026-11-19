@@ -108,6 +108,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         [164, "MemoryOriginCatchup"],
         [165, "MemorySuggestionQuota"],
         [166, "ScheduledTaskFirstBindIntent"],
+        ...laterGoatRows.filter(([id]) => id > 166),
       ]);
       assert.deepStrictEqual(yield* snapshot, yield* fresh);
       assert.isFalse(yield* hasPendingMigrations());
@@ -144,6 +145,7 @@ describe("GOAT migrations after upstream 080-089", () => {
           [163, "MemoryCompactMoveReceipts"],
           [164, "MemoryOriginCatchup"],
           [165, "MemorySuggestionQuota"],
+          ...laterGoatRows.filter(([id]) => id > 166),
         ]);
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);

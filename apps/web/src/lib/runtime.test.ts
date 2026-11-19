@@ -78,7 +78,7 @@ describe("web runtime relay telemetry policy", () => {
       expect(fetchFn).toHaveBeenCalledOnce();
       expect(String(fetchFn.mock.calls[0]?.[0])).toBe("https://telemetry.example.test/v1/traces");
       const payload = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
-      expect(payload).toContain('"name":"relay.first-operation"');
+      expect(payload).toContain('"name":"relay.operation"');
     } else {
       expect(fetchFn).not.toHaveBeenCalled();
     }

@@ -1,6 +1,5 @@
 import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ, type DesktopBridge } from "@goat/contracts";
 import { VOICE_RECORDING_LIMIT_SECONDS } from "@goat/client-runtime/voice-input";
-import { useEffect, useState, useSyncExternalStore } from "react";
 import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding";
 import { requestVoiceMicrophone } from "./requestVoiceMicrophone";
 
@@ -376,27 +375,5 @@ export class BrowserVoiceRecorder {
 
   readonly cancelRecording = async (): Promise<void> => {
     await this.teardown();
-  };
-}
-
-export function useVoiceRecorder() {
-  const [recorder] = useState(() => new BrowserVoiceRecorder());
-  const state = useSyncExternalStore(
-    recorder.subscribe,
-    recorder.getSnapshot,
-    recorder.getSnapshot,
-  );
-  // oxlint-disable-next-line goat/react-effect-budget -- Release the browser microphone when its owner unmounts.
-  useEffect(
-    () => () => {
-      void recorder.cancelRecording();
-    },
-    [recorder],
-  );
-  return {
-    ...state,
-    startRecording: recorder.startRecording,
-    stopRecording: recorder.stopRecording,
-    cancelRecording: recorder.cancelRecording,
   };
 }

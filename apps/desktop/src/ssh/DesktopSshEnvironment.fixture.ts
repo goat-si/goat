@@ -41,7 +41,7 @@ export const successfulProcess = (stdout: string) =>
     unref: Effect.succeed(Effect.void),
   });
 
-export const probeSession = (probe: Effect.Effect<void>) => ({
+const probeSession = (probe: Effect.Effect<void>) => ({
   client: {} as WsRpcProtocolClient,
   initialConfig: Effect.succeed(probeCapableConfig),
   subscribeServerConfig: () => Stream.never,
@@ -49,4 +49,11 @@ export const probeSession = (probe: Effect.Effect<void>) => ({
   probe,
   inboundFrames: Effect.succeed(0),
   closed: Effect.never,
+});
+
+export const probeLease = <P>(prepared: P, probe: Effect.Effect<void>) => ({
+  prepared,
+  openProbeSocket: Effect.never,
+  session: probeSession(probe),
+  refusedRouteIds: [],
 });

@@ -211,7 +211,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   );
 });
 
-export const preflightRoute = (
+const preflightRoute = (
   check: Effect.Effect<RouteCheck>,
   prepare: Effect.Effect<unknown, ConnectionAttemptError>,
 ): Effect.Effect<RoutePreflight> =>
@@ -408,7 +408,7 @@ export const make = Effect.gen(function* () {
       sendsTokenInClear(connectionRoutes(entry), route)
         ? Effect.succeed("silent" as const)
         : checkRoute(entry, route),
-      resolver.prepare(routeEntry(entry, route)),
+      Effect.suspend(() => resolver.prepare(routeEntry(entry, route))),
     ).pipe(Effect.withSpan("ConnectionDriver.preflight"));
 
   return ConnectionDriver.of({ connect, checkRoute, preflight, checkHost });
