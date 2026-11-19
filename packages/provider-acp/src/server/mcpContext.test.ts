@@ -35,6 +35,29 @@ describe("ACP GOAT MCP context", () => {
     ).toContain("goat_screen_run");
   });
 
+  it("adds authenticated HTTP as a negotiated alternative only for the opted-in agent", () => {
+    const self = { command: "/goat/node", entrypoint: undefined };
+    const session = {
+      environmentId: EnvironmentId.make("environment-one"),
+      threadId: ThreadId.make("thread-one"),
+      providerSessionId: "session-one",
+      providerInstanceId: ProviderInstanceId.make("acp"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture",
+      browserToolsAvailable: false,
+    };
+    expect(acpMcpContext(session, self, true).httpServers).toEqual([
+      {
+        type: "http",
+        name: "goat",
+        url: session.endpoint,
+        headers: [{ name: "Authorization", value: "Bearer fixture" }],
+      },
+    ]);
+    expect(acpMcpContext(session, self).httpServers).toBeUndefined();
+    expect(acpMcpContext(undefined, self, true).httpServers).toBeUndefined();
+  });
+
   it("routes BROWSER to GOAT's opener only where the agent's own environment has none", () => {
     const opener = "/tmp/goat-threads-fixture/goat-browser";
     const { processEnvironment } = acpMcpContext(

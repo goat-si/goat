@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off
+import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Effect from "effect/Effect";
@@ -135,6 +136,7 @@ const initialGrokReasoningEffort =
 const promptDelayMs = Number(process.env.GOAT_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.GOAT_ACP_SESSION_LIFECYCLE === "1";
 const supportsAcpMcp = process.env.GOAT_ACP_MCP_ACP === "1";
+const supportsHttpMcp = process.env.GOAT_ACP_MCP_HTTP === "1";
 const supportsV2Management = process.env.GOAT_ACP_V2_MANAGEMENT === "1";
 const omitSessionListHandler = process.env.GOAT_ACP_OMIT_SESSION_LIST_HANDLER === "1";
 const advertisedAuthMethodId = process.env.GOAT_ACP_AUTH_METHOD_ID?.trim();
@@ -494,6 +496,7 @@ function modelState(): AcpCompat.SessionModelState {
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
+  const loadRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
   const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
@@ -541,7 +544,11 @@ const program = Effect.gen(function* () {
           session: {
             ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
             ...(supportsV2Management ? { delete: {} } : {}),
-            ...(supportsAcpMcp ? { mcp: { acp: {} } } : {}),
+            ...(supportsAcpMcp
+              ? { mcp: { acp: {} } }
+              : supportsHttpMcp
+                ? { mcp: { http: {} } }
+                : {}),
           },
           ...(supportsV2Management ? { providers: {} } : {}),
         },
@@ -676,28 +683,7 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  const emitLoadReplayNotifications = (requestedSessionId: string) => {
-    writeJsonRpcNotification("session/update", {
-      _meta: { isReplay: true },
-      sessionId: requestedSessionId,
-      update: {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "replay-tool-1",
-        title: "Replay tool",
-        kind: "search",
-        status: "completed",
-      },
-    });
-    writeJsonRpcNotification("session/update", {
-      _meta: { isReplay: true },
-      sessionId: requestedSessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        messageId: "mock-agent-message",
-        content: { type: "text", text: "replayed assistant text" },
-      },
-    });
-  };
+  const emitLoadReplayNotifications = makeLoadReplayEmitter(writeJsonRpcNotification);
 
   yield* agent.handleLoadSession((request) =>
     Effect.gen(function* () {
@@ -752,6 +738,9 @@ const program = Effect.gen(function* () {
         emitLoadReplayNotifications(requestedSessionId);
       }
       yield* agent.client.sessionUpdate({
+        ...(process.env.GOAT_ACP_WAIT_FOR_LOAD_RELEASE === "1"
+          ? { _meta: { isReplay: true } }
+          : {}),
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "user_message_chunk",
@@ -759,6 +748,9 @@ const program = Effect.gen(function* () {
           content: { type: "text", text: "replay" },
         },
       });
+      if (process.env.GOAT_ACP_WAIT_FOR_LOAD_RELEASE === "1") {
+        yield* Deferred.await(loadRelease);
+      }
       return {
         configOptions: configOptions(),
       };
@@ -2617,6 +2609,9 @@ const program = Effect.gen(function* () {
         inherited: process.env.GOAT_ACP_RUNTIME_AMBIENT === "sentinel",
         explicit: process.env.GOAT_ACP_RUNTIME_EXPLICIT === "kept",
       });
+    }
+    if (method === "_test/release-load") {
+      return Deferred.succeed(loadRelease, undefined).pipe(Effect.as({}));
     }
     if (method === "_test/release-resume") {
       return Deferred.succeed(resumeRelease, undefined).pipe(Effect.as({}));

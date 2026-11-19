@@ -1,3 +1,8 @@
+import {
+  ensureActiveAssistantSegment,
+  closeActiveAssistantSegment,
+  type AcpAssistantSegmentState,
+} from "./assistantSegments.ts";
 export {
   parseUnifiedCgroupPath,
   isSafeCgroupPath,
@@ -31,7 +36,7 @@ import * as EffectAcpClient from "effect-acp/client";
 import { completeAcpSessionLoad, makeAcpRequestRunner } from "./AcpRequestDeadline.ts";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import type * as EffectAcpProtocol from "effect-acp/protocol";
+import * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import { AgentScope, AgentScopeThreadId, handleAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -129,6 +134,7 @@ export interface AcpSessionRuntimeOptions {
   readonly requireSessionLoadResponse?: true;
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
+  readonly sessionLoadReplayIdleReadiness?: boolean;
   readonly interruptPromptOnCancel?: boolean;
   readonly cancelMeta?: EffectAcpSchema.CancelNotification["_meta"];
   readonly initializeMeta?: EffectAcpSchema.InitializeRequest["_meta"];
@@ -167,6 +173,7 @@ export interface AcpSessionRuntimeOptions {
     result: EffectAcpSchema.InitializeResponse,
   ) => Effect.Effect<void, never>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -734,6 +741,7 @@ export interface AcpSessionRuntimeStartResult {
 export interface AcpSessionActivationOptions {
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
 }
 
 export class AcpSessionRuntime extends Context.Service<
@@ -874,19 +882,10 @@ type AcpInitializeState =
     }
   | { readonly _tag: "Started"; readonly result: EffectAcpSchema.InitializeResponse };
 
-interface AcpAssistantSegmentState {
-  readonly nextSegmentIndex: number;
-  readonly activeItemId?: string;
-}
-
-interface EnsureActiveAssistantSegmentResult {
-  readonly itemId: string;
-  readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
-}
-
 interface AcpActivePrompt {
   readonly fiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
   readonly completed: Deferred.Deferred<void>;
+  readonly queued: Deferred.Deferred<void>;
 }
 
 export const make = Effect.fn("AcpSessionRuntime.make")(function* (
@@ -898,6 +897,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 > {
   const random = yield* SecureRandom.SecureRandom;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const hostPlatform = yield* HostProcess.Platform;
   const runtimeScope = yield* forkRuntimeScope();
   const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
   const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
@@ -1085,9 +1085,10 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
         ...(spawnEnvironment ? { env: spawnEnvironment } : {}),
         extendEnv: spawned.extendEnv,
+        // Windows taskkill owns tree cleanup while the shim keeps attached stdio.
         ...(options.ownDetachedProcessGroup === undefined
           ? {}
-          : { detached: options.ownDetachedProcessGroup }),
+          : { detached: options.ownDetachedProcessGroup && hostPlatform !== "win32" }),
         shell: containedSpawnCommand.shell,
       }),
     )
@@ -1254,7 +1255,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     Effect.uninterruptible(terminateOwnedProcessGroupImpl),
   );
   if (options.ownDetachedProcessGroup === true) {
-    const hostPlatform = yield* HostProcess.Platform;
     const forceTerminateOwnedProcessGroup =
       hostPlatform === "win32"
         ? terminateWindowsProcessTreeWithTaskkill(Number(child.pid)).pipe(
@@ -1350,7 +1350,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           notification.sessionId === gate.value.sessionId;
         if (
           loadingThisSession &&
-          sessionUpdateCountsAsLoadReplayActivity(notification, gate.value.sessionId)
+          sessionUpdateCountsAsLoadReplayActivity(
+            notification,
+            gate.value.sessionId,
+            gate.value.lastActivityAtMillis !== undefined,
+          )
         ) {
           const lastActivityAtMillis = yield* Clock.currentTimeMillis;
           yield* Ref.set(
@@ -1598,9 +1602,9 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const loaded = yield* completeAcpSessionLoad(
             acp.agent.loadSession(loadPayload),
             sessionLoadTimeout,
-            options.requireSessionLoadResponse
-              ? undefined
-              : waitForSessionLoadReplayIdle({ gateRef: sessionLoadGateRef }),
+            options.sessionLoadReplayIdleReadiness === true && !options.requireSessionLoadResponse
+              ? waitForSessionLoadReplayIdle({ gateRef: sessionLoadGateRef })
+              : undefined,
           ).pipe(
             Effect.tap((result) =>
               logRequest({
@@ -1731,6 +1735,14 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     initializeResult: EffectAcpSchema.InitializeResponse,
     activationOptions?: AcpSessionActivationOptions,
   ): ReadonlyArray<EffectAcpSchema.McpServer> => {
+    const httpServers =
+      activationOptions === undefined ? options.httpMcpServers : activationOptions.httpMcpServers;
+    if (
+      initializeResult.agentCapabilities?.mcpCapabilities?.http === true &&
+      httpServers !== undefined
+    ) {
+      return httpServers;
+    }
     const acpServers = activationOptions?.acpMcpServers ?? options.acpMcpServers ?? [];
     if (
       initializeResult.agentCapabilities?.mcpCapabilities?.acp === true &&
@@ -1974,8 +1986,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       sessionId: started.sessionId,
       ...(options.cancelMeta === undefined ? {} : { _meta: options.cancelMeta }),
     } satisfies EffectAcpSchema.CancelNotification;
+    const promptQueued = Option.isSome(activePrompt)
+      ? Effect.raceFirst(
+          Deferred.await(activePrompt.value.queued),
+          Fiber.await(activePrompt.value.fiber).pipe(Effect.asVoid),
+        ).pipe(Effect.timeoutOption(options.cancelTimeout ?? defaultCancelTimeout))
+      : Effect.void;
     if (options.cancelBehavior !== "wait-for-prompt") {
       if (options.interruptPromptOnCancel === false) {
+        yield* promptQueued;
         return yield* acp.agent.cancel(cancelPayload);
       }
       if (Option.isSome(activePrompt)) {
@@ -1986,6 +2005,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       return;
     }
 
+    yield* promptQueued;
     yield* acp.agent.cancel(cancelPayload);
     if (Option.isNone(activePrompt)) {
       return;
@@ -2226,12 +2246,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                   ...payload,
                 } satisfies EffectAcpSchema.PromptRequest;
                 const completed = yield* Deferred.make<void>();
+                const queued = yield* Deferred.make<void>();
                 const fiber = yield* runLoggedRequest(
                   "session/prompt",
                   requestPayload,
-                  acp.agent.prompt(requestPayload),
+                  acp.agent
+                    .prompt(requestPayload)
+                    .pipe(Effect.provideService(EffectAcpProtocol.AcpOutgoingQueued, queued)),
                 ).pipe(Effect.forkIn(runtimeScope));
-                const active = { fiber, completed } satisfies AcpActivePrompt;
+                const active = { fiber, completed, queued } satisfies AcpActivePrompt;
                 yield* Ref.set(activePromptRef, Option.some(active));
                 if (promptOptions?.dispatched) {
                   yield* Deferred.succeed(promptOptions.dispatched, undefined);
@@ -2289,7 +2312,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           ),
         ),
     cancel:
-      options.cancelBehavior === "wait-for-prompt"
+      options.cancelBehavior === "wait-for-prompt" || options.interruptPromptOnCancel === false
         ? promptDispatchSemaphore.withPermit(cancel)
         : cancel,
     ...(options.ownDetachedProcessGroup === true ? { terminateProcessGroup } : {}),
@@ -2503,68 +2526,3 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
       }
     : modeState;
 }
-
-const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:runtime:${runtimeId}:segment:${segmentIndex}`;
-
-const ensureActiveAssistantSegment = ({
-  queue,
-  assistantSegmentRef,
-  sessionId,
-  assistantItemRuntimeId,
-}: {
-  readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
-  readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
-  readonly sessionId: string;
-  readonly assistantItemRuntimeId: string;
-}) =>
-  Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
-    assistantSegmentRef,
-    (current) => {
-      if (current.activeItemId) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      const itemId = assistantItemId(sessionId, assistantItemRuntimeId, current.nextSegmentIndex);
-      return [
-        {
-          itemId,
-          startedEvent: {
-            _tag: "AssistantItemStarted",
-            itemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
-        },
-        {
-          nextSegmentIndex: current.nextSegmentIndex + 1,
-          activeItemId: itemId,
-        } satisfies AcpAssistantSegmentState,
-      ] as const;
-    },
-  ).pipe(
-    Effect.flatMap((result) =>
-      result.startedEvent
-        ? Queue.offer(queue, result.startedEvent).pipe(Effect.as(result.itemId))
-        : Effect.succeed(result.itemId),
-    ),
-  );
-
-const closeActiveAssistantSegment = ({
-  queue,
-  assistantSegmentRef,
-}: {
-  readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
-  readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
-}) =>
-  Ref.modify(assistantSegmentRef, (current) => {
-    if (!current.activeItemId) {
-      return [undefined, current] as const;
-    }
-    return [
-      {
-        _tag: "AssistantItemCompleted",
-        itemId: current.activeItemId,
-      } satisfies AcpParsedSessionEvent,
-      {
-        nextSegmentIndex: current.nextSegmentIndex,
-      } satisfies AcpAssistantSegmentState,
-    ] as const;
-  }).pipe(Effect.flatMap((event) => (event ? Queue.offer(queue, event) : Effect.void)));

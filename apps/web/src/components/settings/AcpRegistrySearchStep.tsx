@@ -1,4 +1,8 @@
-import { ACP_REGISTRY_MAX_AGENTS, AuthProvidersManageScope } from "@goat/contracts";
+import {
+  ACP_REGISTRY_MAX_AGENTS,
+  ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH,
+  AuthProvidersManageScope,
+} from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import {
   isAtomCommandInterrupted,
@@ -103,7 +107,7 @@ export function AcpRegistrySearchStep({
       clearTimeout(searchTimer.current);
       searchTimer.current = null;
     }
-    const trimmed = nextQuery.trim();
+    const trimmed = nextQuery.slice(0, ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH).trim();
     setQuery(trimmed);
     setPrepareError(null);
     if (trimmed === submittedQuery) {
@@ -161,9 +165,13 @@ export function AcpRegistrySearchStep({
           </InputGroupAddon>
           <InputGroupInput
             aria-label="Search ACP Registry"
+            maxLength={ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH}
             disabled={preparingId !== null}
             onChange={(event) => {
-              const nextQuery = event.currentTarget.value;
+              const nextQuery = event.currentTarget.value.slice(
+                0,
+                ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH,
+              );
               setQuery(nextQuery);
               setPrepareError(null);
               if (searchTimer.current !== null) clearTimeout(searchTimer.current);

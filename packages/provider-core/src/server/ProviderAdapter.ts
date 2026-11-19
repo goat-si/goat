@@ -109,6 +109,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("node.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
     sessionScoped: Schema.optional(Schema.Boolean),
@@ -126,6 +127,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("turn_item.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     turnItem: OrchestrationV2TurnItem,
     /** Persist recovered activity independently of a run subscription. */
@@ -164,6 +166,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("plan.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     plan: OrchestrationV2PlanArtifact,
   }),

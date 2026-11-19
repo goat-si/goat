@@ -69,6 +69,22 @@ export function routeProviderEvent(
   const ownsChildThread = (threadId: ThreadId): boolean =>
     threadId !== input.threadId && ownsThread(threadId);
   const ownsRun = (runId: string | null): boolean => runId === input.runId;
+  if ("planUpdateRunId" in event && event.planUpdateRunId !== undefined) {
+    const row =
+      event.type === "node.updated"
+        ? event.node
+        : event.type === "turn_item.updated"
+          ? event.turnItem
+          : event.plan;
+    return [
+      event.planUpdateRunId === input.runId &&
+        row.threadId === input.threadId &&
+        !state.rootTurnEnded &&
+        state.rootProviderTurnId !== null,
+      state,
+    ];
+  }
+
   const addProviderThread = (providerThreadId: ProviderThreadId): ProviderEventRoutingState => ({
     ...state,
     ownedProviderThreadIds: new Set([...state.ownedProviderThreadIds, providerThreadId]),

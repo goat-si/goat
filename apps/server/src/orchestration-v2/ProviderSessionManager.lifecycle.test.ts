@@ -220,7 +220,9 @@ const layer = (fixture: Fixture, options: { readonly maxIdlePinMs?: number } = {
     ),
   ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
-const openSession = Effect.gen(function* () {
+const openSessionWithPolicy = Effect.fn("ProviderSessionManager.lifecycle.openSession")(function* (
+  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+) {
   const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const eventSink = yield* EventSink.EventSinkV2;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -268,6 +270,7 @@ const openSession = Effect.gen(function* () {
   yield* reopen;
   return { manager, providerSessionId, reopen };
 });
+const openSession = openSessionWithPolicy(runtimePolicy);
 
 it.effect("live work keeps an idle session past the pin ceiling until it settles", () =>
   Effect.gen(function* () {
@@ -306,10 +309,10 @@ it.effect("pending background work without live work still ends at the pin ceili
 );
 
 /** Releases the open session, its close held at `gate`, and returns once the close has begun. */
-const releaseHeld = (fixture: Fixture, gate: Effect.Effect<void>) =>
+const releaseHeld = (fixture: Fixture, gate: Effect.Effect<void>, open = openSession) =>
   Effect.gen(function* () {
     yield* Ref.set(fixture.nextClose, gate);
-    const opened = yield* openSession;
+    const opened = yield* open;
     const release = yield* opened.manager
       .close(opened.providerSessionId)
       .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
@@ -345,7 +348,12 @@ it.effect("a reopen fails after the bound while the old close never finishes", (
     const fixture = yield* makeFixture({ reopenAfterClose: true });
     const exited = yield* Deferred.make<void>();
     yield* Effect.gen(function* () {
-      const { reopen } = yield* releaseHeld(fixture, Deferred.await(exited));
+      // Avoid the unrelated asynchronous workspace stat before the reopen wait starts.
+      const { reopen } = yield* releaseHeld(
+        fixture,
+        Deferred.await(exited),
+        openSessionWithPolicy({ ...runtimePolicy, cwd: null }),
+      );
       const reopened = yield* reopen.pipe(
         Effect.exit,
         Effect.forkChild({ startImmediately: true }),

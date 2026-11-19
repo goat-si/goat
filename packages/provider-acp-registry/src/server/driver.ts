@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   resolveOfficialAcpRegistryIconUrl,
   type AcpRegistryOperationError,
+  type AcpRegistryProbeModel,
   type ServerProvider,
   type ServerProviderModel,
 } from "@goat/contracts";
@@ -93,19 +94,34 @@ function modelsFromDiscovery(
     discovery === undefined || discovery.configOptions.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors: discovery.configOptions });
-  // Model-specific options describe only the session's current model; other
-  // models keep the shared ones plus what an earlier session reported for them.
   const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
   const shared = (discovery?.configOptions ?? []).filter(
     (descriptor) => !modelOptionIds.has(descriptor.id),
   );
   const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
-  const capabilitiesFor = (slug: string) => {
-    if (slug === discovery?.currentModelId) return capabilities;
-    const own = (
-      previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? []
-    ).filter((descriptor) => !sharedIds.has(descriptor.id));
-    const optionDescriptors = [...shared, ...own];
+  const capabilitiesFor = ({ id: slug, reasoningEffort }: AcpRegistryProbeModel) => {
+    const isCurrent = slug === discovery?.currentModelId;
+    if (isCurrent && reasoningEffort === undefined) return capabilities;
+    const inherited = isCurrent
+      ? (capabilities.optionDescriptors ?? [])
+      : [
+          ...shared,
+          ...(
+            previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ??
+            []
+          ).filter((descriptor) => !sharedIds.has(descriptor.id)),
+        ];
+    const optionDescriptors =
+      reasoningEffort === undefined
+        ? inherited
+        : [
+            ...inherited.filter(
+              (descriptor) =>
+                descriptor.id !== reasoningEffort?.id &&
+                !(descriptor.type === "select" && descriptor.role === "reasoning"),
+            ),
+            ...(reasoningEffort === null ? [] : [reasoningEffort]),
+          ];
     return optionDescriptors.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors });
@@ -126,7 +142,7 @@ function modelsFromDiscovery(
           name: model.name,
           isCustom: false,
           ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities: capabilitiesFor(model.id),
+          capabilities: capabilitiesFor(model),
         }));
   return providerModelsFromSettings(builtInModels, customModels, capabilities);
 }

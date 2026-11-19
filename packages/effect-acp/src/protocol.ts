@@ -1,4 +1,10 @@
-import { makeStrictNdJsonRpcParser, type AcpDecodedWireMessage } from "./_internal/strictParser.ts";
+import * as Context from "effect/Context";
+import {
+  isProtocolError,
+  normalizeAcpJsonRpcError,
+  makeStrictNdJsonRpcParser,
+  type AcpDecodedWireMessage,
+} from "./_internal/strictParser.ts";
 import {
   makeRawNotificationBuffer,
   type AcpBufferedRawNotification,
@@ -116,6 +122,12 @@ export interface AcpPatchedProtocolOptions {
   };
 }
 
+/** The request has entered the writer queue. Its RPC reply may still be pending. */
+export const AcpOutgoingQueued = Context.Reference<Deferred.Deferred<void> | undefined>(
+  "effect-acp/protocol/AcpOutgoingQueued",
+  { defaultValue: () => undefined },
+);
+
 export interface AcpPatchedProtocol {
   readonly clientProtocol: RpcClient.Protocol["Service"];
   readonly serverProtocol: RpcServer.Protocol["Service"];
@@ -191,31 +203,6 @@ export const RPC_REQUEST_ID_START = 2 ** 30;
 
 const isEffectRpcRequestId = (requestId: AcpError.AcpRequestId): boolean =>
   typeof requestId === "number" && Number.isSafeInteger(requestId);
-
-/**
- * Effect RPC's JSON-RPC codec treats a standard JSON-RPC error object as a
- * defect unless it carries Effect's private `_tag: "Cause"` envelope.
- */
-function normalizeAcpJsonRpcError(
-  message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
-): RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded {
-  if (message._tag !== "Exit" || message.exit._tag !== "Failure") return message;
-  const [failure] = message.exit.cause;
-  if (
-    message.exit.cause.length !== 1 ||
-    failure?._tag !== "Die" ||
-    !isProtocolError(failure.defect)
-  ) {
-    return message;
-  }
-  return {
-    ...message,
-    exit: {
-      _tag: "Failure",
-      cause: [{ _tag: "Fail", error: failure.defect }],
-    },
-  };
-}
 
 export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(function* (
   options: AcpPatchedProtocolOptions,
@@ -344,6 +331,10 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
               }).pipe(Effect.andThen(Deferred.fail(acknowledgement, error)), Effect.asVoid),
         ),
       );
+      if (message._tag === "Request") {
+        const queued = yield* AcpOutgoingQueued;
+        if (queued !== undefined) yield* Deferred.succeed(queued, undefined);
+      }
       if (acknowledgement !== undefined) {
         yield* Deferred.await(acknowledgement);
       }
@@ -999,5 +990,3 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     notify: sendNotification,
   } satisfies AcpPatchedProtocol;
 });
-
-const isProtocolError = Schema.is(AcpSchema.Error);
