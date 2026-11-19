@@ -3421,7 +3421,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               attachments: [],
             },
           });
-          assert.equal(harness.offeredMessages[1]?.priority, "now");
+          assert.equal(harness.offeredMessages[1]?.priority, "next");
         }
         const partialText = "The audit covers the `integ";
         if (!queryExits)
@@ -4610,7 +4610,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const failOffers = yield* Deferred.make<void>();
           const harness = yield* makeWakeHarnessWithOptions({
             offer: (message) => {
-              if (message.priority !== "now") return Effect.void;
+              if (message.priority !== "next") return Effect.void;
               if (failure === "concurrent-offer")
                 return Queue.offer(offersEntered, undefined).pipe(
                   Effect.andThen(Deferred.await(failOffers)),
@@ -4667,7 +4667,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           };
           if (failure === "prior-success") {
             yield* harness.runtime.steerTurn(steerInput);
-            assert.equal(harness.offeredMessages[1]?.priority, "now");
+            assert.equal(harness.offeredMessages[1]?.priority, "next");
           }
           steering = true;
           const steer = yield* harness.runtime
@@ -15422,7 +15422,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
         });
         const attachmentNote = `\n\n[Attached file "requirements.pdf" is saved at: ${path.join(harness.attachmentsDir, attachmentRelativePath(attachment)!)}]`;
-        assert.equal(harness.offeredMessages[1]?.priority, "now");
+        assert.equal(harness.offeredMessages[1]?.priority, "next");
         assert.deepEqual(harness.offeredMessages[1]?.message.content, [
           { type: "text", text: `${leadingText}${attachmentNote}` },
           { type: "text", text: `/implement the fixes${attachmentNote}` },
@@ -15995,7 +15995,7 @@ describe("Claude WP4 memory delivery", () => {
           }),
           message: { ...base.message, text: "steer" },
         });
-        assert.equal(offers[1]?.priority, "now");
+        assert.equal(offers[1]?.priority, "next");
         assert.include(JSON.stringify(offers[1]?.message.content), "&lt;untrusted&gt;");
         yield* finish(offers[0]!);
         yield* Queue.take(terminals);
