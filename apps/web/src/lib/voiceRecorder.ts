@@ -1,6 +1,7 @@
 import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ, type DesktopBridge } from "@goat/contracts";
 import { VOICE_RECORDING_LIMIT_SECONDS } from "@goat/client-runtime/voice-input";
 import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding";
+import { StreamingPcmEncoder } from "../speech/streamingPcmEncoder";
 import { requestVoiceMicrophone } from "./requestVoiceMicrophone";
 
 export const MAX_WAVEFORM_SAMPLES = 160;
@@ -115,6 +116,7 @@ interface RecorderRuntime {
   readonly processor: ScriptProcessorNode;
   readonly gain: GainNode;
   readonly chunks: Float32Array[];
+  readonly pcmEncoder: StreamingPcmEncoder | null;
   streamingChunks: Float32Array[];
   streamingSamples: number;
   sampleCount: number;
@@ -243,6 +245,9 @@ export class BrowserVoiceRecorder {
         processor,
         gain,
         chunks: [],
+        pcmEncoder: options.onPcmFrame
+          ? new StreamingPcmEncoder(context.sampleRate, options.onPcmFrame)
+          : null,
         streamingChunks: [],
         streamingSamples: 0,
         sampleCount: 0,
@@ -275,6 +280,7 @@ export class BrowserVoiceRecorder {
         runtime.hasAudioSignal = true;
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
+        runtime.pcmEncoder?.push(mono);
         if (options.onStreamingChunk) {
           runtime.streamingChunks.push(mono);
           runtime.streamingSamples += mono.length;
@@ -371,6 +377,7 @@ export class BrowserVoiceRecorder {
 
   readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
     const runtime = await this.teardown();
+    runtime?.pcmEncoder?.finish();
     return runtime ? encodePayload(runtime.chunks, runtime.context.sampleRate) : null;
   };
 
