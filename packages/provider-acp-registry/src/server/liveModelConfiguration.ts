@@ -1,3 +1,4 @@
+import type { CustomModelSetting } from "@goat/contracts";
 import type { ServerProvider, ServerProviderModel } from "@goat/contracts";
 import type { AcpRegistryLiveConfiguration } from "./probe.ts";
 import { modelsFromDiscovery } from "./discoveredModels.ts";
@@ -5,7 +6,7 @@ import { modelsFromDiscovery } from "./discoveredModels.ts";
 export function applyAcpRegistryLiveConfiguration(
   provider: ServerProvider,
   configuration: AcpRegistryLiveConfiguration,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<CustomModelSetting>,
   previousModels: ReadonlyArray<ServerProviderModel> = provider.models,
 ): ServerProvider {
   const { message: _staleProbeMessage, ...snapshot } = provider;

@@ -1,3 +1,4 @@
+import type { CustomModelSetting } from "@goat/contracts";
 import type { ServerProvider } from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import type { AcpRegistryLiveConfiguration } from "./probe.ts";
@@ -24,14 +25,14 @@ export function updateAcpRegistryEnrichmentCache(
   input: {
     readonly cache: AcpRegistryEnrichmentCache;
     readonly configuration: AcpRegistryLiveConfiguration;
-    readonly customModels: ReadonlyArray<string>;
+    readonly customModels: ReadonlyArray<CustomModelSetting>;
     readonly now: number;
     readonly environmentKey?: string;
   },
   merge: (
     provider: ServerProvider,
     configuration: AcpRegistryLiveConfiguration,
-    customModels: ReadonlyArray<string>,
+    customModels: ReadonlyArray<CustomModelSetting>,
   ) => ServerProvider,
 ): AcpRegistryEnrichmentCache {
   const { cache, configuration, customModels, now } = input;

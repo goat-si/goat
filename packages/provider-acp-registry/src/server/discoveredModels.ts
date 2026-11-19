@@ -1,3 +1,4 @@
+import type { CustomModelSetting } from "@goat/contracts";
 import type { AcpRegistryProbeModel, ServerProviderModel } from "@goat/contracts";
 import { createModelCapabilities } from "@goat/shared/model";
 import { providerModelsFromSettings } from "@goat/provider-core/server/snapshotProbe";
@@ -12,7 +13,7 @@ export function modelsFromDiscovery(
         "models" | "currentModelId" | "configOptions" | "modelOptionIds"
       >
     | undefined,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<CustomModelSetting>,
   previousModels: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
   const discovered = discovery?.models ?? [];

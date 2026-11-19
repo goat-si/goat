@@ -1,4 +1,4 @@
-import { nextConfigBlobWithValue } from "./ProviderConfigValue";
+import { readProviderCustomModels, writeProviderCustomModels } from "./ProviderAcpCustomModels";
 import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
@@ -39,11 +39,7 @@ import {
   type ServerSettings,
 } from "@goat/contracts";
 
-import {
-  type CustomModelDefinition,
-  readCustomModelEntries,
-  toCustomModelSetting,
-} from "@goat/shared/model";
+import { type CustomModelDefinition } from "@goat/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -628,7 +624,6 @@ interface ProviderInstanceCardProps {
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
-const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
 /** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
  * project, not instance.enabled. */
@@ -761,14 +756,11 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const storedCustomModels =
-    instance.config !== null && typeof instance.config === "object"
-      ? (instance.config as Record<string, unknown>).customModels
-      : undefined;
-  const customModels =
-    instance.driver === "antigravity"
-      ? NO_CUSTOM_MODELS
-      : readCustomModelEntries(storedCustomModels);
+  const customModels = readProviderCustomModels(
+    instance.driver,
+    instance.config,
+    liveProvider?.supportsStructuredCustomModels === true,
+  );
   const modelsForDisplay = deriveProviderModelsForDisplay({
     liveModels: liveProvider?.models,
     customModels,
@@ -811,10 +803,11 @@ export function ProviderInstanceCard({
   };
 
   const updateCustomModels = useStableCallback((next: ReadonlyArray<CustomModelDefinition>) => {
-    const nextConfig = nextConfigBlobWithValue(
+    const nextConfig = writeProviderCustomModels(
+      instance.driver,
       instance.config,
-      "customModels",
-      next.map(toCustomModelSetting),
+      next,
+      liveProvider?.supportsStructuredCustomModels === true,
     );
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);

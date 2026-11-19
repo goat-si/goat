@@ -1,3 +1,4 @@
+import { resolveAcpCustomModels } from "../customModels.ts";
 import {
   officialAcpRegistryIconUrlForAgentId,
   ProviderDriverKind,
@@ -114,6 +115,7 @@ function baseSnapshot(
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
     supportsTextGeneration: false,
+    supportsStructuredCustomModels: true,
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,
@@ -132,7 +134,7 @@ function baseSnapshot(
             : input.settings.agentId.length > 0),
     },
     ...(input.message ? { message: input.message } : {}),
-    models: modelsFromDiscovery(input.probe?.probe, input.settings.customModels),
+    models: modelsFromDiscovery(input.probe?.probe, resolveAcpCustomModels(input.settings)),
     ...(input.probe === undefined
       ? {}
       : {
@@ -438,7 +440,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       applyAcpRegistryLiveConfiguration(
         provider,
         configuration,
-        effectiveConfig.customModels,
+        resolveAcpCustomModels(effectiveConfig),
         previous,
       ),
     );
@@ -707,7 +709,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                                 const updated = updateAcpRegistryEnrichmentCache({
                                   cache,
                                   configuration,
-                                  customModels: effectiveConfig.customModels,
+                                  customModels: resolveAcpCustomModels(effectiveConfig),
                                   environmentKey: key,
                                   now,
                                 });
