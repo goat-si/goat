@@ -1,3 +1,4 @@
+import { compactionTitle, type PiCompactionStatus } from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
 import * as NodeUtil from "node:util";
 import { readPiEntries, piSessionListing, walkPiBranch } from "./entries.ts";
@@ -108,7 +109,6 @@ interface PiStreamItemState {
   flushScheduled: boolean;
   readonly startedAt: DateTime.Utc;
 }
-type PiCompactionStatus = "running" | "completed" | "failed" | "cancelled";
 interface PiCompactionState {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
@@ -118,18 +118,6 @@ interface PiProviderRetryState {
   readonly failure: OrchestrationV2ProviderFailure;
   readonly startedAt: DateTime.Utc;
   readonly itemOrdinal: number;
-}
-function compactionTitle(status: PiCompactionStatus): string {
-  switch (status) {
-    case "running":
-      return "Compacting context...";
-    case "completed":
-      return "Context compacted";
-    case "failed":
-      return "Context compaction failed";
-    case "cancelled":
-      return "Context compaction stopped";
-  }
 }
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
