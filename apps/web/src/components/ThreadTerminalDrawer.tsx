@@ -1,3 +1,4 @@
+import { terminalFontOptions } from "./terminal/terminalFontOptions";
 import { withLiveVisibility, runtimeEnvSignature } from "./terminal/terminalViewportUtils";
 import { useTerminalLinkValidation } from "./terminal/useTerminalLinkValidation";
 import {
@@ -248,11 +249,6 @@ function normalizeComputedColor(value: string | null | undefined, fallback: stri
 
 function readThemeColor(styles: CSSStyleDeclaration, variable: string, fallback: string): string {
   return normalizeComputedColor(styles.getPropertyValue(variable), fallback);
-}
-
-function terminalFontOptions(family: string, size: number): { family?: string; size: number } {
-  const trimmed = family.trim();
-  return trimmed.length > 0 ? { family: trimmed, size } : { size };
 }
 
 export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
