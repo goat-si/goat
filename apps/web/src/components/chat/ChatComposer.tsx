@@ -2,7 +2,10 @@ import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
 import { useMessages } from "gt-react";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
-import { composerPathOrModelReplacement } from "./composerModelMentions";
+import {
+  composerPathOrModelReplacement,
+  selectedModelOrCustomFallback,
+} from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
@@ -39,7 +42,7 @@ import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/con
 import { isPasteAsTextShortcut } from "@goat/client-runtime/text-paste";
 import { useComposerFolderDrop } from "./useComposerFolderDrop";
 import { splitTransferredFiles } from "./workspaceFileDrop";
-import { createModelSelection, normalizeModelSlug } from "@goat/shared/model";
+import { createModelSelection } from "@goat/shared/model";
 import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   memo,
@@ -972,12 +975,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   }
 
-  const selectedModelForPickerWithCustomFallback = (() => {
-    const currentOptions = modelOptionsByInstance.get(selectedInstanceId) ?? [];
-    return currentOptions.some((option) => option.slug === selectedModelForPicker)
-      ? selectedModelForPicker
-      : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  })();
+  const selectedModelForPickerWithCustomFallback = selectedModelOrCustomFallback(
+    modelOptionsByInstance.get(selectedInstanceId) ?? [],
+    selectedModelForPicker,
+    selectedProvider,
+  );
 
   const activeThreadModelDisplayName = resolveContextWindowModelDisplayName(
     activeThreadModelSelection,
