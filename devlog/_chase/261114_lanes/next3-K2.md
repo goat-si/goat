@@ -477,3 +477,19 @@ K2's line-range guard delayed even a file-header reveal until its file expanded,
 READY for independent re-review at `505803dee3b02776e0a3ad9ac1e7d3a9ac937548`. The broad gate's only red suite has the integration fixture failure described above.
 
 NOT RUN: hosted lane CI, live client/P1, live forge checks, full baseline Grok suite, independent re-review.
+
+## Review fix round 3
+
+An in-flight single-model send could start on its captured branch and worktree while the reused draft acquired another checkout's PR during attachment upload. `88464591de1a5a4a4b736a45bd92dcb16e438864` requires the dispatched branch in `checkoutLink.read` and passes `activeThreadBranch` from the single-model bootstrap. The multi-model caller still passes the base branch it dispatches. A branchless send or a live draft for a different branch produces no link.
+
+The dedicated checkout Chromium suite on `505803dee3` plus the new test exited 1 (3 passed, 1 failed). An upload barrier paused dispatch while the draft was rebound. The single thread still started on `feature` in `/worktrees/feature`, but the acknowledgment linked `https://github.com/org/repo/pull/2` once instead of recording zero links. After the fix, the same whole suite exited 0 (4 passed).
+
+`4702b9156e309754c5e14fa1fd0514b8827ea993` merges integration `bb35c19e1e5f9ad227416bff7bc668bc4db71414` once with no conflicts. All 13 integration CodeTab case bodies and the full redirect file are byte-identical to integration. The folded-header fix is in the merged head.
+
+- Node 26.12.1. Whole test files changed against integration or carried in this merge, plus the redirect suite: 35 non-server files passed with 335 tests passed and 2 skipped. Guarded `vp test run` from `apps/server` with `GOAT_TEST_TMP_GUARD=fail`: 4 files and 46 tests passed.
+- Whole `PullRequestCodeTab.browser.test.tsx`: default order and `--sequence.shuffle --sequence.seed=1` each passed all 16 cases.
+- `VITEST_MAX_WORKERS=8 GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` on merge base `bb35c19e1e5` exited 1. Format, lint, both Knip passes, both GraphQL checks, unused patches, agent audits and the 42-package typecheck passed. Across 2,907 selected files, 2,901 passed, 1 failed and 5 skipped. Tests: 39,171 passed, 16 failed and 21 skipped. The workspace batch passed all 1,438 files (20,387 passed, 4 skipped). The only failing suite was `apps/server/src/textGeneration/GrokTextGeneration.test.ts`. All 16 failing test names match the round 2 gate, including the known ACP exit 127 (`exec: node: not found`) and its fixture timeouts.
+
+READY for independent re-review. Plain fast-forward push verified the lane head at `4702b9156e309754c5e14fa1fd0514b8827ea993`. Integration advanced during the gate to `654b9955d71792664d6bf4a291816d63ac199880`; `git merge-tree --write-tree` against that head exited 0. The gate used `bb35c19e1e5`.
+
+NOT RUN: hosted lane CI, live client/P1, live forge checks, a gate on a merge with the newer integration tip, a fresh Grok baseline on the newer integration tip, independent re-review.
