@@ -210,6 +210,10 @@ export const make = Effect.gen(function* () {
           yield* Effect.forkIn(failCurrent(current, "expired"), connectionScope);
         });
         const idle = Effect.fnUntraced(function* (): Effect.fn.Return<void> {
+          if (current.busy) {
+            yield* Effect.sleep(Duration.millis(STREAM_IDLE_TIMEOUT_MS));
+            return yield* idle();
+          }
           const now = yield* Clock.currentTimeMillis;
           const remaining = Math.max(0, STREAM_IDLE_TIMEOUT_MS - (now - current.lastAudioAt));
           if (remaining === 0) return yield* expire;
@@ -266,6 +270,7 @@ export const make = Effect.gen(function* () {
         Effect.onInterrupt(() => failCurrent(current, "failed")),
       );
       current.busy = false;
+      current.lastAudioAt = yield* Clock.currentTimeMillis;
       if (session !== current) return yield* new SpeechStreamError({ code: "expired" });
       if (result._tag === "Failure") {
         yield* failCurrent(current, "failed");
