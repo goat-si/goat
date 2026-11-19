@@ -235,7 +235,7 @@ export const make = Effect.gen(function* () {
             afterSequence: request.afterSequence,
             highWatermark: request.highWatermark ?? null,
             limit: request.limit,
-            maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES - (active ? 18 : 0),
+            maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES,
           });
           if (!active && request.features && tail.entries.length === 0)
             return {

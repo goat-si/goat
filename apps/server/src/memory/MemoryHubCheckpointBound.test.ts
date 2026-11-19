@@ -307,6 +307,8 @@ it.effect("contract: the page bound assumes MemoryHubPullResult's encoded limit"
     const fits = CHECKPOINT_PULL_MAX_BYTES - utf8(JSON.stringify(pull(0)));
     assert.isTrue(Exit.isSuccess(decodePull(pull(fits))));
     assert.isTrue(Exit.isFailure(decodePull(pull(fits + 1))));
+    assert.isTrue(Exit.isSuccess(decodePull({ ...pull(fits), derivedCap: 1000 })));
+    assert.isTrue(Exit.isFailure(decodePull({ ...pull(fits + 1), derivedCap: 1000 })));
   }),
 );
 

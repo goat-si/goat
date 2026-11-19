@@ -2737,32 +2737,30 @@ export const MemoryHubPullInput = struct({
 );
 export type MemoryHubPullInput = typeof MemoryHubPullInput.Type;
 
-export const MemoryHubPullResult = bounded(
-  struct({
-    ...upgradeBlockers,
-    highWatermark: NonNegativeInt,
-    throughSequence: NonNegativeInt,
-    hasMore: Schema.Boolean,
-    entries: array(MemoryHubEntry),
-    checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
-    originPage: Schema.optionalKey(memoryOriginPage),
-    originCatchupPending: Schema.optionalKey(Schema.Literal(true)),
-    derivedCap: Schema.optionalKey(Schema.Literal(1000)),
-  }).check(
-    Schema.makeFilter(
-      (v) =>
-        v.throughSequence <= v.highWatermark &&
-        ((v.originPage === undefined && v.originCatchupPending === undefined) ||
-          (v.checkpoint === undefined &&
-            !v.hasMore &&
-            !(v.originPage && v.originCatchupPending))) &&
-        (v.checkpoint === undefined ||
-          (v.entries.length === 0 &&
-            v.throughSequence === v.checkpoint.checkpointSequence &&
-            v.hasMore === !v.checkpoint.bootstrapComplete)),
-    ),
+export const MemoryHubPullResult = struct({
+  ...upgradeBlockers,
+  highWatermark: NonNegativeInt,
+  throughSequence: NonNegativeInt,
+  hasMore: Schema.Boolean,
+  entries: array(MemoryHubEntry),
+  checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
+  originPage: Schema.optionalKey(memoryOriginPage),
+  originCatchupPending: Schema.optionalKey(Schema.Literal(true)),
+  derivedCap: Schema.optionalKey(Schema.Literal(1000)),
+}).check(
+  Schema.makeFilter(
+    (v) =>
+      v.throughSequence <= v.highWatermark &&
+      ((v.originPage === undefined && v.originCatchupPending === undefined) ||
+        (v.checkpoint === undefined && !v.hasMore && !(v.originPage && v.originCatchupPending))) &&
+      (v.checkpoint === undefined ||
+        (v.entries.length === 0 &&
+          v.throughSequence === v.checkpoint.checkpointSequence &&
+          v.hasMore === !v.checkpoint.bootstrapComplete)),
   ),
-  262144,
+  Schema.makeFilter(({ derivedCap: _derivedCap, ...page }) => jsonBytes(page) <= 262144, {
+    expected: "at most 262144 encoded UTF-8 bytes plus the negotiated derived cap",
+  }),
 );
 export type MemoryHubPullResult = typeof MemoryHubPullResult.Type;
 const leaseKey = {
