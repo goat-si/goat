@@ -407,6 +407,312 @@ export function registerPiModelAndRollbackChecks({
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "recovers a legacy target before an uncaptured Pi boundary using the on-disk branch",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const entry = (id: string, parentId: string | null, role: string, seconds: number) => ({
+          type: "message",
+          id,
+          parentId,
+          timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+          message: {
+            role,
+            content: [{ type: "text", text: "synthetic" }],
+            timestamp: seconds * 1000,
+          },
+        });
+        const entries = [
+          entry("u1", null, "user", 10),
+          entry("a1", "u1", "assistant", 20),
+          entry("u2", "a1", "user", 110),
+          entry("a2", "u2", "assistant", 120),
+        ];
+        yield* fs.writeFileString(
+          `${dir}/current.jsonl`,
+          [
+            {
+              type: "session",
+              version: 3,
+              id: "synthetic",
+              cwd: "/workspace",
+              timestamp: "1970-01-01T00:00:00.000Z",
+            },
+            ...entries,
+          ]
+            .map((record) => encodeJson(record))
+            .join("\n") + "\n",
+        );
+        const fake = yield* makeFakePi;
+        const forkFake = yield* makeFakePi;
+        const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+        const source = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        const target = {
+          id: ProviderTurnId.make("target-weak"),
+          providerThreadId: source.id,
+          nodeId: NodeId.make("target-node"),
+          runAttemptId: null,
+          nativeTurnRef: { driver: PI_PROVIDER, nativeId: "u1", strength: "strong" as const },
+          ordinal: 1,
+          status: "completed" as const,
+          startedAt: DateTime.makeUnsafe(0),
+          completedAt: DateTime.makeUnsafe(50000),
+        };
+        const next = {
+          ...target,
+          id: ProviderTurnId.make("uncaptured"),
+          ordinal: 2,
+          nativeTurnRef: { driver: PI_PROVIDER, nativeId: "synthetic", strength: "weak" as const },
+          startedAt: DateTime.makeUnsafe(100000),
+          completedAt: DateTime.makeUnsafe(200000),
+        };
+        forkFake.queueEntries({ entries, leafId: "a2" });
+        forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+        fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+        yield* runtime.forkThread({
+          sourceProviderThread: {
+            ...source,
+            nativeThreadRef: {
+              driver: PI_PROVIDER,
+              nativeId: `${dir}/current.jsonl`,
+              strength: "strong",
+            },
+          },
+          sourceProviderTurns: [target, next],
+          providerTurnId: target.id,
+          targetThreadId: ThreadId.make("legacy-weak"),
+        });
+        assert.equal(
+          forkFake.allRequests().find((request) => request.type === "fork")?.entryId,
+          "u2",
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("refuses ambiguous target sessions even when a later boundary is unique", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const e = (id: string, parentId: string | null, seconds: number) => ({
+        type: "message",
+        id,
+        parentId,
+        timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+        message: { role: "user", content: [] },
+      });
+      const header = {
+        type: "session",
+        version: 3,
+        id: "synthetic",
+        cwd: "/workspace",
+        timestamp: "1970-01-01T00:00:00.000Z",
+      };
+      yield* fs.writeFileString(
+        `${dir}/current.jsonl`,
+        [header, e("target", null, 10), e("boundary", "target", 30)]
+          .map((x) => encodeJson(x))
+          .join("\n") + "\n",
+      );
+      yield* fs.writeFileString(
+        `${dir}/old.jsonl`,
+        [header, e("target", null, 10)].map((x) => encodeJson(x)).join("\n") + "\n",
+      );
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (ordinal: number, nativeId: string) => ({
+        id: ProviderTurnId.make(`ambiguous-${ordinal}`),
+        providerThreadId: source.id,
+        nodeId: NodeId.make(`node-ambiguous-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId, strength: "strong" as const },
+        ordinal,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe((ordinal * 20 - 15) * 1000),
+        completedAt: DateTime.makeUnsafe(ordinal * 20 * 1000),
+      });
+      forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      const error = yield* Effect.flip(
+        runtime.forkThread({
+          sourceProviderThread: {
+            ...source,
+            nativeThreadRef: {
+              driver: PI_PROVIDER,
+              nativeId: `${dir}/current.jsonl`,
+              strength: "strong",
+            },
+          },
+          sourceProviderTurns: [turn(1, "target"), turn(2, "boundary")],
+          providerTurnId: turn(1, "target").id,
+          targetThreadId: ThreadId.make("ambiguous-target"),
+        }),
+      );
+      assert.include(String(error.cause), "multiple matching sibling sessions");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("forks before a verified legacy boundary even when Pi recorded a later steer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const entry = (id: string, parentId: string | null, seconds: number) => ({
+        type: "message",
+        id,
+        parentId,
+        timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+        message: { role: "user", content: [] },
+      });
+      const entries = [
+        entry("target", null, 10),
+        entry("next", "target", 110),
+        entry("steer", "next", 130),
+      ];
+      yield* fs.writeFileString(
+        `${dir}/current.jsonl`,
+        [
+          {
+            type: "session",
+            version: 3,
+            id: "synthetic",
+            cwd: "/workspace",
+            timestamp: "1970-01-01T00:00:00.000Z",
+          },
+          ...entries,
+        ]
+          .map((x) => encodeJson(x))
+          .join("\n") + "\n",
+      );
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (ordinal: number, nativeId: string) => ({
+        id: ProviderTurnId.make(`steer-${ordinal}`),
+        providerThreadId: source.id,
+        nodeId: NodeId.make(`steer-node-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId, strength: "strong" as const },
+        ordinal,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe((ordinal === 1 ? 0 : 100) * 1000),
+        completedAt: DateTime.makeUnsafe((ordinal === 1 ? 50 : 150) * 1000),
+      });
+      forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      yield* runtime.forkThread({
+        sourceProviderThread: {
+          ...source,
+          nativeThreadRef: {
+            driver: PI_PROVIDER,
+            nativeId: `${dir}/current.jsonl`,
+            strength: "strong",
+          },
+        },
+        sourceProviderTurns: [turn(1, "target"), turn(2, "next")],
+        providerTurnId: turn(1, "target").id,
+        targetThreadId: ThreadId.make("steered-legacy"),
+      });
+      assert.equal(
+        forkFake.allRequests().find((request) => request.type === "fork")?.entryId,
+        "next",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("recovers a single legacy turn from a Pi-format session without a second turn", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const records = [
+        {
+          type: "session",
+          version: 3,
+          id: "synthetic-session",
+          timestamp: "1970-01-01T00:00:01.000Z",
+          cwd: "/workspace",
+        },
+        {
+          type: "message",
+          id: "a1b2c3d4",
+          parentId: null,
+          timestamp: "1970-01-01T00:00:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "synthetic prompt" }],
+            timestamp: 10000,
+          },
+        },
+        {
+          type: "message",
+          id: "e5f6a7b8",
+          parentId: "a1b2c3d4",
+          timestamp: "1970-01-01T00:00:11.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "synthetic reply" }],
+            timestamp: 11000,
+          },
+        },
+      ];
+      yield* fs.writeFileString(
+        `${dir}/current.jsonl`,
+        records.map((record) => encodeJson(record)).join("\n") + "\n",
+      );
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const target = {
+        id: ProviderTurnId.make("one-turn"),
+        providerThreadId: source.id,
+        nodeId: NodeId.make("one-node"),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId: "a1b2c3d4", strength: "strong" as const },
+        ordinal: 1,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe(9000),
+        completedAt: DateTime.makeUnsafe(12000),
+      };
+      forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      yield* runtime.forkThread({
+        sourceProviderThread: {
+          ...source,
+          nativeThreadRef: {
+            driver: PI_PROVIDER,
+            nativeId: `${dir}/current.jsonl`,
+            strength: "strong",
+          },
+        },
+        sourceProviderTurns: [target],
+        providerTurnId: target.id,
+        targetThreadId: ThreadId.make("one-fork"),
+      });
+      const args = forkFake.lastSpawn().args;
+      assert.equal(args[args.indexOf("--fork") + 1], `${dir}/current.jsonl`);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("refuses an unverified last legacy turn after a Pi session change", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -560,7 +866,6 @@ export function registerPiModelAndRollbackChecks({
         startedAt: DateTime.makeUnsafe((ordinal === 1 ? 5 : 20) * 1000),
         completedAt: DateTime.makeUnsafe((ordinal === 1 ? 20 : 40) * 1000),
       });
-      forkFake.failNextFork();
       forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
       fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
       const fork = runtime.forkThread({

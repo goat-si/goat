@@ -100,33 +100,58 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
   const boundary = input.boundary;
   const target = boundary.target;
   if (target != null && target.nativeThreadRef == null) {
-    const laterBoundary =
-      boundary.type === "entry" && boundary.turn.nativeThreadRef == null ? boundary : undefined;
     const id = target.nativeTurnRef?.strength === "strong" ? target.nativeTurnRef.nativeId : null;
-    const verification =
-      laterBoundary ??
-      (boundary.previous !== undefined && id != null
-        ? { type: "entry" as const, entryId: id, turn: target, target: boundary.previous }
-        : undefined);
-    if (verification === undefined)
+    if (id == null)
       return yield* new ProviderAdapter.ProviderAdapterProtocolError({
         driver: input.driver,
-        detail: "Cannot recover Pi fork session: legacy turn has no verifiable boundary",
+        detail: "Cannot recover Pi fork session: missing captured target entry",
       });
-    const sourceFile = yield* findHistoricalForkSession(
-      input.sourceFile,
-      verification,
-      input.driver,
-      true,
-    ).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
+    const targetProof = { type: "entry" as const, entryId: id, turn: target, target };
+    const provideFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
+      effect.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+    const sourceFile = yield* provideFs(
+      findHistoricalForkSession(
+        input.sourceFile,
+        targetProof,
+        input.driver,
+        true,
+        true,
+        boundary.type !== "nothing",
+      ),
     );
-    return yield* forkPiSessionOnce({
-      ...input,
-      sourceFile,
-      boundary: laterBoundary ?? { type: "nothing" },
-    });
+    if (boundary.type === "entry") {
+      const narrowed = yield* provideFs(
+        findHistoricalForkSession(
+          input.sourceFile,
+          boundary,
+          input.driver,
+          true,
+          false,
+          false,
+          sourceFile,
+        ),
+      ).pipe(
+        Effect.map(() => boundary),
+        Effect.catch(() =>
+          provideFs(
+            findHistoricalForkSession(
+              input.sourceFile,
+              targetProof,
+              input.driver,
+              true,
+              true,
+              false,
+              sourceFile,
+            ),
+          ).pipe(Effect.as({ type: "nothing" as const })),
+        ),
+      );
+      return yield* forkPiSessionOnce({ ...input, sourceFile, boundary: narrowed });
+    }
+    return yield* forkPiSessionOnce({ ...input, sourceFile, boundary });
   }
 
   const sourceFile =
