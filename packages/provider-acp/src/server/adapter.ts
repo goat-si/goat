@@ -4164,11 +4164,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const lateMonitorChatter =
                 /<monitor-event\b/i.test(text) ||
                 /Monitor\s+["']?[0-9a-f-]{8,}["']?\s+ended/i.test(text);
-              if (
-                text.trim().length > 0 &&
-                lateBackgroundMutations.length === 0 &&
-                !lateMonitorChatter
-              ) {
+              if (lateBackgroundMutations.length === 0 && !lateMonitorChatter) {
                 yield* appendLoadedHistory(
                   notification,
                   update.sessionUpdate === "user_message_chunk"
@@ -8298,9 +8294,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     });
                   const messages = state.order.flatMap((key) => {
                     const message = state.messages.get(key);
-                    return message === undefined ? [] : [message];
+                    return message === undefined ||
+                      (message.text.trim().length === 0 && message.attachments.length === 0)
+                      ? []
+                      : [message];
                   });
-                  const reasoningMessageIds = [...state.reasoningIds];
+                  const reasoningMessageIds = messages
+                    .filter((message) => state.reasoningIds.has(message.id))
+                    .map((message) => message.id);
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {
