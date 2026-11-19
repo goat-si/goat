@@ -23,6 +23,15 @@ const html = (source: string) =>
     .trim();
 
 describe("splitMarkdownBlocks", () => {
+  it("renders a line-leading inline backtick span at each streamed prefix", () => {
+    const text = "```a``` is inline.\n\nprose\n\n```\none\n\ntwo\n```\n\nafter";
+    for (let end = 0; end <= text.length; end++) {
+      const source = text.slice(0, end);
+      const blocks = splitMarkdownBlocks(source);
+      expect(blocks?.join("")).toBe(source);
+      expect(blocks!.map(html).join("")).toBe(html(source));
+    }
+  });
   it.each([
     "# Title\n\nFirst paragraph with `code` and **bold**.\n\nSecond [link](https://example.com).",
     "- one\n- two\n\n- loose three\n\n  continued\n\nAfter the list.",

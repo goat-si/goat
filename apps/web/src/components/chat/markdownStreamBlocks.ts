@@ -1,7 +1,7 @@
 // Definitions, footnotes, raw HTML, container directives and display math can tie blocks together.
 // Definitions can appear in containers; false matches only disable block splitting.
 const DOCUMENT_WIDE_SYNTAX = /\]:|^ {0,3}(?:<[A-Za-z!?/]|:::|\$\$)|\[\^/m;
-const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_PATTERN = /^ {0,3}(`{3,}(?![^`\n]*`)|~{3,})/;
 // After a blank line these still continue the previous block: a list item or indented content.
 const CONTINUATION_PATTERN = /^(?:[ \t]|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
 // Claude insight fences render as one callout, so they stay in one block until the closing rule.
