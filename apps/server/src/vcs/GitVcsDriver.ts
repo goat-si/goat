@@ -1515,7 +1515,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ),
       ),
 
-    hasCheckpointRef: makeHasCheckpointRef(resolveCheckpointCommit),
+    hasCheckpointRef: (input) =>
+      resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
+        Effect.map((commit) => commit !== null),
+      ),
 
     restoreCheckpoint: Effect.fn("GitVcsDriver.checkpoints.restoreCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.restoreCheckpoint";

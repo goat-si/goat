@@ -33,12 +33,3 @@ export function makeResolveCheckpointCommit(execute: VcsDriver.VcsDriver["Servic
       allowNonZeroExit: true,
     }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
 }
-
-export function makeHasCheckpointRef(
-  resolveCheckpointCommit: ReturnType<typeof makeResolveCheckpointCommit>,
-): NonNullable<VcsDriver.VcsCheckpointOps["hasCheckpointRef"]> {
-  return (input) =>
-    resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
-      Effect.map((commit) => commit !== null),
-    );
-}
