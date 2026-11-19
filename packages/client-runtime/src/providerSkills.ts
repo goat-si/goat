@@ -521,7 +521,11 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
               snapshot?.checkedAt !==
                 (provider && resolveProviderWorkspaceSnapshot(provider, cwd))?.checkedAt);
           if (!refreshed) return retryLater();
-          if (!hasCompleteProviderWorkspaceSnapshot(currentProvider, cwd)) retry(0);
+          if (
+            currentProvider?.workspaceRescannedAt !== provider?.workspaceRescannedAt &&
+            !hasCompleteProviderWorkspaceSnapshot(currentProvider, cwd)
+          )
+            retry(0);
         }, retryLater);
         return plan.state;
       },

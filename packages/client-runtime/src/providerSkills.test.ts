@@ -368,6 +368,26 @@ describe("provider workspace snapshot refresh atom", () => {
     },
   );
 
+  it("retries immediately when a rescan revision invalidates an in-flight workspace reply", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-01-01T00:01:01.000Z") });
+    const first = Promise.withResolvers<ReadonlyArray<ServerProvider>>();
+    const { registry, providersAtom, responses, run, unmount } = setup(noSnapshot, [
+      () => first.promise,
+    ]);
+    try {
+      registry.set(providersAtom, [
+        { ...noSnapshot[0]!, workspaceRescannedAt: "2026-01-01T00:01:00.000Z" },
+      ]);
+      responses.push(() => withSnapshot("2026-01-01T00:01:01.000Z"));
+      first.resolve(withSnapshot("2026-01-01T00:00:30.000Z"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  });
+
   it.each(["recovers", "stops after three discarded replies"])(
     "%s when the initial cwd reply belongs to an older catalog digest",
     async (expected) => {
