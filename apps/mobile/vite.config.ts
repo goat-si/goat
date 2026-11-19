@@ -43,6 +43,7 @@ const reactTests = [
   "src/components/ui/AndroidAnchoredMenu.keyboard.test.tsx",
   "src/features/connection/useRetryEnvironment.test.tsx",
   "src/features/threads/PendingUserInputCard.stop.test.tsx",
+  "src/features/threads/SubagentRow.provider.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
