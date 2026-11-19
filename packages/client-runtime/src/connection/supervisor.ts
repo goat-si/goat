@@ -1,3 +1,9 @@
+import {
+  availableState,
+  offlineState,
+  connectingState,
+  type SupervisorIntent,
+} from "./supervisorState.ts";
 import { exitUnlessInterrupted } from "./exitUnlessInterrupted.ts";
 import type { EstablishmentProgress, SetupPreparation } from "./establishmentProgress.ts";
 import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
@@ -67,11 +73,6 @@ type ConnectedLease = ConnectionDriver.EnvironmentConnectionLease & {
   readonly activeRoute: ConnectionRoute | undefined;
 };
 
-interface SupervisorIntent {
-  readonly desired: boolean;
-  readonly network: NetworkStatus;
-}
-
 export type SupervisorSignal =
   | { readonly _tag: "ConnectRequested" }
   | { readonly _tag: "DisconnectRequested" }
@@ -140,56 +141,6 @@ function annotateTarget(target: ConnectionTarget) {
     "environment.label": target.label,
     "environment.target.kind": target._tag,
   });
-}
-
-function availableState(intent: SupervisorIntent, generation: number): SupervisorConnectionState {
-  return {
-    desired: false,
-    network: intent.network,
-    phase: "available",
-    stage: null,
-    attempt: 0,
-    generation,
-    lastFailure: null,
-    retryAt: null,
-  };
-}
-
-function offlineState(
-  intent: SupervisorIntent,
-  generation: number,
-  attempt: number,
-  lastFailure: ConnectionFailure | null,
-): SupervisorConnectionState {
-  return {
-    desired: true,
-    network: intent.network,
-    phase: "offline",
-    stage: null,
-    attempt,
-    generation,
-    lastFailure,
-    retryAt: null,
-  };
-}
-
-function connectingState(
-  intent: SupervisorIntent,
-  generation: number,
-  attempt: number,
-  lastFailure: ConnectionFailure | null,
-  stage: SupervisorConnectionState["stage"] = "preparing",
-): SupervisorConnectionState {
-  return {
-    desired: true,
-    network: intent.network,
-    phase: "connecting",
-    stage,
-    attempt,
-    generation,
-    lastFailure,
-    retryAt: null,
-  };
 }
 
 function failureFromExit<A>(
