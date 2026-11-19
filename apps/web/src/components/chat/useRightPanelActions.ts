@@ -200,6 +200,13 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     if (surface.kind === "terminal") {
       focusTerminal(activeThreadRef, surface.activeTerminalId);
     }
+    if (surface.kind === "side-chat") {
+      requestWorkspaceFocus({
+        area: "panel",
+        selector:
+          '[data-side-chat-surface] [data-workspace-area="composer"] [contenteditable="true"]',
+      });
+    }
     if (surface.kind === "diff" && !diffOpen) {
       onDiffPanelOpen?.();
     }
