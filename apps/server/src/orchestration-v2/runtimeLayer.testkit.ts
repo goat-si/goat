@@ -1,9 +1,9 @@
 import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { assert } from "@effect/vitest";
 import * as Queue from "effect/Queue";
-import type * as Orchestrator from "./Orchestrator.ts";
+import * as Orchestrator from "./Orchestrator.ts";
 import * as DateTime from "effect/DateTime";
-import type * as EventSink from "./EventSink.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -12,10 +12,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
   CommandId,
-  type ThreadId,
+  ThreadId,
+  NodeId,
+  RuntimeRequestId,
   MessageId,
   type ModelSelection,
-  type ProjectId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type PullRequestDetail,
@@ -400,6 +402,109 @@ export const finishBufferedReplay = Effect.fn("finishBufferedReplay")(function* 
   assert.equal(yield* Queue.take(promotedRunIds), marker.id);
   const after = yield* orchestrator.getThreadProjection(threadId);
   assert.isTrue(after.runs.find((run) => run.id === agent.id)?.queueHeld);
+});
+
+export const seedFoundationQuestion = Effect.fn("runtimeTest.seedFoundationQuestion")(function* (
+  name: string,
+  requestOverrides: Partial<import("@goat/contracts").OrchestrationV2RuntimeRequest> = {},
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make(`${name}`);
+  const requestId = RuntimeRequestId.make(`${name}-request`);
+  const nodeId = NodeId.make(`${name}-node`);
+  const itemId = TurnItemId.make(`${name}-item`);
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`${name}-create`),
+    createdBy: "user",
+    creationSource: "web",
+    threadId,
+    projectId: ProjectId.make(`${name}-project`),
+    title: "Async question",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: process.cwd(),
+  });
+  yield* eventSink.write({
+    commandId: CommandId.make(`${name}-seed`),
+    events: [
+      {
+        id: EventId.make(`${name}-node-event`),
+        type: "node.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: nodeId,
+          threadId,
+          runId: null,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        id: EventId.make(`${name}-request-event`),
+        type: "runtime-request.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+          ...requestOverrides,
+        },
+      },
+      {
+        id: EventId.make(`${name}-item-event`),
+        type: "turn-item.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          type: "user_input_request",
+          threadId,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          requestId,
+          responseMode: "message",
+          questions: [{ id: "color", header: "Color", question: "Which color?", options: [] }],
+        },
+      },
+    ],
+  });
+  return { threadId, requestId, nodeId, itemId, now };
 });
 
 export const layerSharedApplicationDataPlaneTest = Layer.mergeAll(

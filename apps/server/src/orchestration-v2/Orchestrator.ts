@@ -27,7 +27,11 @@ import {
   hasTitleSetBeforeFirstMessage,
   pendingThreadTitleGenerationEffect,
 } from "./threadTitleGenerationEffect.ts";
-import { WORKSPACE_PREPARATION_INPUT, withoutPreparationResult } from "./preparationItem.ts";
+import {
+  preparedRunState,
+  WORKSPACE_PREPARATION_INPUT,
+  withoutPreparationResult,
+} from "./preparationItem.ts";
 import { threadHasUnfinishedWork } from "./threadUnfinishedWork.ts";
 import { usageLimitHoldsQueue, usageLimitHoldsQueuedRuns } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
@@ -2962,10 +2966,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "The reset time has passed. Retry the thread manually.",
         });
       }
+      if (thread.settledOverride === "settled") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The thread is settled. Un-settle it to resume at the reset.",
+        });
+      }
       if (
         !Number.isFinite(resetMs) ||
         thread.archivedAt !== null ||
-        thread.settledOverride === "settled" ||
         run?.id !== command.limitRecovery.runId ||
         failure?.class !== "usage_limit" ||
         failure.resetAt !== command.limitRecovery.resetAt ||
@@ -3066,6 +3076,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
+            // Settled threads refuse recovery, so an armed resume would stay hidden until un-settled.
+            limitRecovery: thread.limitRecovery
+              ? { ...thread.limitRecovery, autoResume: false, snooze: false }
+              : thread.limitRecovery,
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
             unsettledAt: null,
             pinnedAt: null,
@@ -8968,48 +8982,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           (cause) => new OrchestratorProjectionError({ threadId: commandThreadId(command), cause }),
         ),
       );
-
-  const preparedRunState = (
-    command: Extract<
-      OrchestrationV2Command,
-      {
-        readonly type:
-          | "prepared-run.release"
-          | "prepared-run.progress"
-          | "prepared-run.fail"
-          | "prepared-run.retry";
-      }
-    >,
-    projection: Pick<
-      OrchestrationV2ThreadProjection,
-      "runs" | "attempts" | "nodes" | "providerThreads" | "turnItems"
-    >,
-  ) => {
-    const run = projection.runs.find((candidate) => candidate.id === command.runId);
-    const attempt = projection.attempts.find((candidate) => candidate.id === run?.activeAttemptId);
-    const rootNode = projection.nodes.find((candidate) => candidate.id === run?.rootNodeId);
-    const providerThread = projection.providerThreads.find(
-      (candidate) => candidate.id === run?.providerThreadId,
-    );
-    const preparationItem = projection.turnItems.find(
-      (
-        candidate,
-      ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> =>
-        candidate.runId === command.runId &&
-        candidate.type === "command_execution" &&
-        candidate.input === WORKSPACE_PREPARATION_INPUT,
-    );
-    if (
-      run?.status !== (command.type === "prepared-run.retry" ? "failed" : "preparing") ||
-      attempt === undefined ||
-      rootNode === undefined ||
-      providerThread === undefined ||
-      preparationItem === undefined
-    ) {
-      return null;
-    }
-    return { run, attempt, rootNode, providerThread, preparationItem } as const;
-  };
 
   const dispatchPreparedRunProgress = Effect.fn("Orchestrator.dispatchPreparedRunProgress")(
     function* (

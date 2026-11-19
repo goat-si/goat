@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { cursorFetchRange, mergeCursorFetch } from "./accountCache.ts";
+import { cursorFetchRange, isCursorCacheFresh, mergeCursorFetch } from "./accountCache.ts";
 import type { UsageRecord } from "@goat/provider-core/server/usage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -23,6 +23,28 @@ const record = (timestampMs: number): UsageRecord => ({
 });
 
 describe("cursorAccountCache", () => {
+  it("bounds an initial or long-offline backfill independently of unlimited retention", () => {
+    const now = 20_000 * DAY_MS;
+    const expected = { sinceMs: now - 92 * DAY_MS, untilMs: now };
+    const old = {
+      accountKey: "a",
+      sinceMs: 0,
+      untilMs: now - 200 * DAY_MS,
+      fetchedAtMs: now - 200 * DAY_MS,
+      records: [record(now - 201 * DAY_MS)],
+    };
+    assert.deepStrictEqual(cursorFetchRange(undefined, 0, now), expected);
+    const range = cursorFetchRange(old, 0, now);
+    assert.deepStrictEqual(range, expected);
+    const { cache } = mergeCursorFetch(old, "a", range, [record(now - DAY_MS)], now, 0);
+    assert.deepEqual(
+      cache.records.map(({ timestampMs }) => timestampMs),
+      [now - 201 * DAY_MS, now - DAY_MS],
+    );
+    assert.isFalse(isCursorCacheFresh(cache, now, now - 100 * DAY_MS));
+    assert.isTrue(isCursorCacheFresh(cache, now, expected.sinceMs));
+  });
+
   it("refetches everything once the cache no longer reaches the retention start", () => {
     const cache = {
       accountKey: "a",
@@ -31,6 +53,20 @@ describe("cursorAccountCache", () => {
       fetchedAtMs: 10 * DAY_MS,
       records: [record(5 * DAY_MS)],
     };
+    assert.isTrue(isCursorCacheFresh(cache, 10 * DAY_MS, 0));
+    const narrow = { ...cache, sinceMs: DAY_MS };
+    assert.isFalse(isCursorCacheFresh(narrow, 10 * DAY_MS, 0));
+    const widenedRange = cursorFetchRange(narrow, 0, 10 * DAY_MS);
+    assert.deepStrictEqual(widenedRange, {
+      sinceMs: 0,
+      untilMs: 10 * DAY_MS,
+    });
+    const widened = mergeCursorFetch(narrow, "a", widenedRange, cache.records, 10 * DAY_MS, 0);
+    assert.isTrue(isCursorCacheFresh(widened.cache, 10 * DAY_MS, 0));
+    assert.deepStrictEqual(cursorFetchRange(widened.cache, 0, 11 * DAY_MS), {
+      sinceMs: 10 * DAY_MS - 60 * 60 * 1000,
+      untilMs: 11 * DAY_MS,
+    });
     const nowMs = 100 * DAY_MS;
     const range = cursorFetchRange(cache, 10 * DAY_MS, nowMs);
     assert.deepStrictEqual(range, { sinceMs: 10 * DAY_MS, untilMs: nowMs });
@@ -75,6 +111,19 @@ describe("cursorAccountCache", () => {
     );
     assert.isTrue(pruned.changed);
     assert.deepStrictEqual(pruned.cache.records, [record(10 * DAY_MS)]);
+    assert.isTrue(
+      mergeCursorFetch(cache, "a", range, [record(10 * DAY_MS)], 11 * DAY_MS, 2 * DAY_MS).changed,
+    );
+    assert.isTrue(
+      mergeCursorFetch(
+        { ...cache, sinceMs: DAY_MS, records: [] },
+        "a",
+        { sinceMs: 0, untilMs: 11 * DAY_MS },
+        [],
+        11 * DAY_MS,
+        0,
+      ).changed,
+    );
     assert.isTrue(
       mergeCursorFetch(
         cache,

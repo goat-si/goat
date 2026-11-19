@@ -93,6 +93,7 @@ import {
   layerTestProviderInstanceRegistry,
   moveProject,
   seedProject,
+  seedFoundationQuestion,
   watchedPullRequestDetail,
   writeProviderFailureForQueue,
   dispatchBufferedQueueWake,
@@ -128,109 +129,6 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerProjectServiceTest),
   Layer.provide(layerPlatformTest),
 );
-
-const seedFoundationQuestion = Effect.fn("runtimeTest.seedFoundationQuestion")(function* (
-  name: string,
-  requestOverrides: Partial<import("@goat/contracts").OrchestrationV2RuntimeRequest> = {},
-) {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const eventSink = yield* EventSink.EventSinkV2;
-  const now = yield* DateTime.now;
-  const threadId = ThreadId.make(`${name}`);
-  const requestId = RuntimeRequestId.make(`${name}-request`);
-  const nodeId = NodeId.make(`${name}-node`);
-  const itemId = TurnItemId.make(`${name}-item`);
-  yield* orchestrator.dispatch({
-    type: "thread.create",
-    commandId: CommandId.make(`${name}-create`),
-    createdBy: "user",
-    creationSource: "web",
-    threadId,
-    projectId: ProjectId.make(`${name}-project`),
-    title: "Async question",
-    modelSelection,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: process.cwd(),
-  });
-  yield* eventSink.write({
-    commandId: CommandId.make(`${name}-seed`),
-    events: [
-      {
-        id: EventId.make(`${name}-node-event`),
-        type: "node.updated",
-        threadId,
-        nodeId,
-        occurredAt: now,
-        payload: {
-          id: nodeId,
-          threadId,
-          runId: null,
-          parentNodeId: null,
-          rootNodeId: nodeId,
-          kind: "user_input_request",
-          status: "waiting",
-          countsForRun: false,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          runtimeRequestId: requestId,
-          checkpointScopeId: null,
-          startedAt: now,
-          completedAt: null,
-        },
-      },
-      {
-        id: EventId.make(`${name}-request-event`),
-        type: "runtime-request.updated",
-        threadId,
-        nodeId,
-        occurredAt: now,
-        payload: {
-          id: requestId,
-          nodeId,
-          providerTurnId: null,
-          nativeRequestRef: null,
-          kind: "user_input",
-          status: "pending",
-          responseCapability: { type: "message" },
-          createdAt: now,
-          resolvedAt: null,
-          ...requestOverrides,
-        },
-      },
-      {
-        id: EventId.make(`${name}-item-event`),
-        type: "turn-item.updated",
-        threadId,
-        nodeId,
-        occurredAt: now,
-        payload: {
-          id: itemId,
-          type: "user_input_request",
-          threadId,
-          runId: null,
-          nodeId,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: 0,
-          status: "waiting",
-          title: null,
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-          requestId,
-          responseMode: "message",
-          questions: [{ id: "color", header: "Color", question: "Which color?", options: [] }],
-        },
-      },
-    ],
-  });
-  return { threadId, requestId, nodeId, itemId, now };
-});
 
 it.effect.each([
   "provider_error",
@@ -9302,6 +9200,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "manual-snooze",
     "manual-snooze-after-recovery",
     "invalid-snooze",
+    "settled",
     "snooze-only",
     "snooze-resume",
     "cancel-resume-keep-snooze",
@@ -9453,6 +9352,38 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         const current = yield* orchestrator.getThreadProjection(threadId);
         assert.isNull(current.thread.limitRecovery ?? null);
         assert.isNull(current.thread.snoozedUntil);
+        return;
+      }
+      if (scenario === "settled") {
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("recovery:arm-before-settle:settled"),
+          threadId,
+          limitRecovery: { runId: run.id, resetAt, autoResume: true, snooze: true },
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("recovery:settle:settled"),
+          threadId,
+        });
+        const error = yield* orchestrator
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("recovery:arm:settled"),
+            threadId,
+            limitRecovery: { runId: run.id, resetAt, autoResume: true },
+          })
+          .pipe(Effect.flip);
+        assert(error._tag === "OrchestratorDispatchError");
+        assert.equal(error.cause, "The thread is settled. Un-settle it to resume at the reset.");
+        assert.deepInclude(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.limitRecovery,
+          {
+            runId: run.id,
+            autoResume: false,
+            snooze: false,
+          },
+        );
         return;
       }
       const snooze = [

@@ -5,7 +5,8 @@ export const quoteRemoteArg = (value: string) => `'${value.replaceAll("'", "'\"'
 
 export const remoteDeviceEnvironment = `export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 if [ -z "$ANDROID_HOME" ]; then
-  if [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk";
+  if [ -n "$ANDROID_SDK_ROOT" ]; then export ANDROID_HOME="$ANDROID_SDK_ROOT";
+  elif [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk";
   elif [ -d "$HOME/Android/Sdk" ]; then export ANDROID_HOME="$HOME/Android/Sdk"; fi
 fi
 if [ -n "$ANDROID_HOME" ]; then export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"; fi
@@ -50,10 +51,32 @@ const stopDaemon = (entry, cleanMs, plainMs) => {
 };
 const probePlatforms = () => {
   const ios = process.platform === 'darwin' && run('xcrun', ['simctl', 'help']).status === 0;
-  const android = run('adb', ['version']).status === 0;
+  const sdk = process.env.ANDROID_HOME;
+  const executable = (relative) => {
+    if (!sdk) return false;
+    try {
+      const file = path.join(sdk, relative);
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const sdkAdb = executable('platform-tools/adb') &&
+    run(path.join(sdk, 'platform-tools/adb'), ['version']).status === 0;
+  const android = sdkAdb || run('adb', ['version']).status === 0;
+  const androidReason = !sdk
+    ? 'Set ANDROID_HOME or ANDROID_SDK_ROOT on the SSH host to use Android emulators.'
+    : !sdkAdb
+      ? 'Install working Android SDK Platform-Tools in ' + sdk + ' through Android Studio SDK Manager.'
+      : !executable('emulator/emulator')
+        ? 'Android Emulator is missing from ' + sdk + '. Install it in Android Studio SDK Manager.'
+        : !executable('cmdline-tools/latest/bin/avdmanager')
+          ? 'Android SDK Command-line Tools (latest) are missing from ' + sdk + '. Install them in Android Studio SDK Manager.'
+          : null;
   return { ios, android, platforms: [
     { platform: 'ios', available: ios, ...(!ios ? { reason: 'iOS needs macOS with Xcode and working xcrun simctl.' } : {}) },
-    { platform: 'android', available: android, ...(!android ? { reason: 'Android SDK missing. Set ANDROID_HOME or put adb on the SSH PATH.' } : {}) },
+    { platform: 'android', available: android, ...(androidReason ? { reason: androidReason } : {}) },
   ] };
 };
 const write = (file, value) => { const tmp = file + '.' + process.pid; fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(tmp, file); };

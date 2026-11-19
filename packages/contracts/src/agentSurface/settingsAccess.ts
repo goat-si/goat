@@ -133,6 +133,9 @@ export const SETTINGS_ACCESS = {
   textGenerators: person(HOLDS_SECRETS),
   secretProviders: person(HOLDS_SECRETS),
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
+  usageHistoryRetentionDays: person(
+    "Shorter retention can permanently remove saved usage history.",
+  ),
   usagePriceOverrides: agent,
   usageModelAliases: agent,
   usageModelFilter: agent,
