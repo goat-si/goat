@@ -26,6 +26,7 @@ const state = vi.hoisted(() => ({
   queries: new Map<string, unknown>(),
   upsert: null as ((input: unknown) => Promise<unknown>) | null,
   calls: vi.fn(),
+  move: vi.fn(),
   refresh: vi.fn(),
   navigate: vi.fn(),
   onForgotten: vi.fn(),
@@ -77,6 +78,9 @@ vi.mock("../../state/memory", async () => {
       readSource: () => ({ label: "readSource" }),
       upsert: command("upsert"),
       forget: command("forget"),
+      move: command("move"),
+      projectBindingGet: command("projectBindingGet"),
+      projectBindingUpdate: command("projectBindingUpdate"),
       draftAtom: ({ draftId }: { draftId: string }) => drafts(draftId),
     },
   };
@@ -88,13 +92,15 @@ vi.mock("../../state/query", () => ({
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: ({ label }: { label: string }) =>
-    label === "upsert"
+  useAtomCommand: ({ label }: { label: string }) => {
+    if (label === "move") return state.move;
+    return label === "upsert"
       ? (input: unknown) => {
           state.calls(input);
           return state.upsert?.(input) ?? Promise.resolve({ _tag: "Failure" });
         }
-      : () => Promise.resolve(label === "revert" ? state.revert : { _tag: "Failure" }),
+      : () => Promise.resolve(label === "revert" ? state.revert : { _tag: "Failure" });
+  },
 }));
 vi.mock("../../state/environments", async (original) => ({
   ...(await original<typeof import("../../state/environments")>()),
@@ -102,6 +108,7 @@ vi.mock("../../state/environments", async (original) => ({
 }));
 vi.mock("../../state/entities", async (original) => ({
   ...(await original<typeof import("../../state/entities")>()),
+  useProjects: () => [],
   useThreadShells: () => [],
 }));
 vi.mock("../../state/session", async (original) => ({
@@ -190,7 +197,7 @@ function setup() {
   state.queries.clear();
   state.queries.set("read", Option.some(original));
   state.upsert = null;
-  for (const mock of [state.calls, state.refresh, state.navigate, state.onForgotten])
+  for (const mock of [state.calls, state.move, state.refresh, state.navigate, state.onForgotten])
     mock.mockReset();
   const registry = AtomRegistry.make();
   const get = registry.get.bind(registry);
@@ -200,7 +207,7 @@ function setup() {
   });
   return registry;
 }
-const details = (onForgotten: (message: string) => void) => (
+const details = (onForgotten: (message: string) => void, scopeMoves = false) => (
   <MemoryDetails
     target={validateMemorySettingsSearch({
       environmentId: "remote-owner",
@@ -210,6 +217,7 @@ const details = (onForgotten: (message: string) => void) => (
     environmentId={EnvironmentId.make("remote-owner")}
     memorySpaceId={MemorySpaceId.make(id(1))}
     onForgotten={onForgotten}
+    scopeMoves={scopeMoves}
     memoryEnabled
   />
 );
@@ -277,6 +285,33 @@ async function save(screen: Screen) {
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
   );
 }
+
+it.each(["accepted", "expired"])("reports a details move when the body is %s", async (event) => {
+  const registry = setup();
+  const scope = { kind: "thread", thread: { environmentId: "remote-owner", threadId: "source" } };
+  if (original.status !== "active") throw new Error("Expected an active memory");
+  const before = decodeItem({ ...original, scope, revision: { ...original.revision, scope } });
+  state.queries.set("read", Option.some(before));
+  const receipt = Promise.withResolvers<unknown>();
+  state.move.mockReturnValue(receipt.promise);
+  await using screen = await renderDetails(registry, details(state.onForgotten, true));
+  await click(screen, "Move to…");
+  await screen.getByRole("combobox", { name: "Memory scope" }).click();
+  await screen.getByRole("option", { name: "All projects" }).click();
+  if (event === "expired") {
+    await update(expire);
+    await expect.element(screen.getByText("Show the memory again to move it.")).toBeVisible();
+    expect(state.move).not.toHaveBeenCalled();
+    return;
+  }
+  await screen.getByRole("button", { name: "Move memory", exact: true }).click();
+  expect(state.move).toHaveBeenCalledOnce();
+  await update(() => signal(registry, "invalidate"));
+  await act(() => receipt.resolve({ _tag: "Success", value: { outcome: "accepted" } }));
+  await expect.element(screen.getByText("Memory moved.")).toBeVisible();
+  await update(() => state.queries.set("read", Option.some(original)));
+  await expect.element(screen.getByText("Scope: User")).toBeVisible();
+});
 
 it("keeps an edited draft through the one-minute expiry, claims no forget, and saves against the starting version", async () => {
   const registry = setup();

@@ -103,8 +103,12 @@ const accept = (input: unknown) => ({
 const CLOSED_LINE =
   "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.";
 
-async function mountMemoryScreen(capabilities?: Parameters<typeof createNativeMemoryHarness>[0]) {
+async function mountMemoryScreen(
+  capabilities?: Parameters<typeof createNativeMemoryHarness>[0],
+  setup?: (harness: NativeMemoryHarness) => void,
+) {
   h = createNativeMemoryHarness(capabilities);
+  setup?.(h);
   await h.waitForAtom(h.memory.syncStatus.permissionAtom(nativeEnv), Boolean);
   view = renderNative(
     h,
@@ -189,6 +193,59 @@ async function changeSignal(kind: "upsert" | "invalidate" = "upsert") {
   });
   return reply;
 }
+
+async function openMoveMenu() {
+  await mountMemoryScreen({ protocolVersion: 1, scopeMoves: true }, (harness) => {
+    harness.projects.push({
+      id: "server",
+      title: "server",
+      environmentId: nativeEnv,
+      repositoryIdentity: null,
+    });
+    harness.responses.set(WS_METHODS.memoryProjectBindingGet, () => ({
+      memorySpaceId: nativeSpace,
+      project: { environmentId: nativeEnv, projectId: "server" },
+      projectKey: { kind: "explicit", sharedProjectId: "server-memory" },
+      repositoryKey: null,
+      version: 1,
+    }));
+  });
+  await view.click("Open memory: Synthetic memory body");
+  await view.click("Move to…");
+}
+
+it("confirms a project move when the details body is invalidated before the receipt", async () => {
+  await openMoveMenu();
+  expect(text()).toContain("Source: User");
+  await view.click("server");
+  const receipt = h.deferred<unknown>();
+  h.responses.set(WS_METHODS.memoryMove, () => receipt.response);
+  await view.click("Move memory");
+  await h.waitForCall(WS_METHODS.memoryMove);
+  const input = h.calls.find(({ method }) => method === WS_METHODS.memoryMove)?.input;
+  expect(input).toMatchObject({ toScope: { kind: "project" } });
+  await changeSignal("invalidate");
+  h.responses.set(WS_METHODS.memoryList, () => ({
+    items: [],
+    nextCursor: null,
+    projectionWatermark: 2,
+  }));
+  await act(async () => {
+    await receipt.succeed(accept(input));
+  });
+  expect(text()).toContain("Memory moved.");
+  expect(text()).not.toContain("Close details");
+  expect(text()).not.toContain("Source: User");
+});
+
+it("explains why a details move needs the memory text when it expires", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await openMoveMenu();
+  await expire();
+  expect(text()).toContain("Show the memory again to move it.");
+  expect(text()).not.toContain("Move memory");
+  expect(h.calls.some(({ method }) => method === WS_METHODS.memoryMove)).toBe(false);
+});
 
 it("an edit the person changed keeps its text when the memory text expires, and Save sends it against the starting version (#3601)", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
