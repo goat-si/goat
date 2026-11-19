@@ -39,7 +39,7 @@ import { request, subscribeThreadItems } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
-import { threadStateChanges } from "./threadStateAtoms.ts";
+import { notifyThreadDeleted, threadStateChanges } from "./threadStateAtoms.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
 import {
@@ -72,6 +72,7 @@ import {
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
   resumeCache?: ThreadResumeCache,
+  onThreadDeleted?: (environmentId: EnvironmentIdType, threadId: ThreadIdType) => void,
 ) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
   const cache = yield* Persistence.EnvironmentCacheStore;
@@ -509,6 +510,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* noteEvents(fresh, unknown, sequence);
 
     if (result._tag === "delete") {
+      yield* notifyThreadDeleted(onThreadDeleted, environmentId, threadId);
       yield* setDeleted();
       return;
     }
@@ -1012,6 +1014,7 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     | R,
     E
   >,
+  onThreadDeleted?: (environmentId: EnvironmentIdType, threadId: ThreadIdType) => void,
 ) {
   // Cache definitions must outlive collectible live-atom definitions. The
   // registry retains these nodes without retaining environment or RPC scopes.
@@ -1037,6 +1040,7 @@ export function createEnvironmentThreadStateAtoms<R, E>(
             environmentId,
             threadId,
             resume,
+            onThreadDeleted,
           );
           return resume.snapshot === undefined
             ? live

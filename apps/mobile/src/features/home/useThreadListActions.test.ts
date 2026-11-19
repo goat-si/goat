@@ -110,6 +110,10 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => command,
 }));
 vi.mock("../../state/use-thread-outbox", () => ({ queuedThreadKeysAtom: "queued-thread-keys" }));
+vi.mock("../../state/use-composer-drafts", () => ({
+  clearComposerDraft: vi.fn(),
+  waitForComposerDraftsLoaded: vi.fn(async () => {}),
+}));
 vi.mock("../threads/goatBotThreadVisibility", () => ({
   hiddenGoatBotThreadKeysAtom: "hidden-bot-thread-keys",
 }));

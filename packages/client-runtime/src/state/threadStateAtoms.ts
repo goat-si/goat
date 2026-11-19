@@ -10,11 +10,28 @@ export function threadStateChanges(
   environmentId: EnvironmentIdType,
   threadId: ThreadIdType,
   resumeCache?: ThreadResumeCache,
+  onThreadDeleted?: (environmentId: EnvironmentIdType, threadId: ThreadIdType) => void,
 ) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentThreadState(threadId, resumeCache).pipe(Effect.map(SubscriptionRef.changes)),
+      makeEnvironmentThreadState(threadId, resumeCache, onThreadDeleted).pipe(
+        Effect.map(SubscriptionRef.changes),
+      ),
     ),
   );
+}
+
+export function notifyThreadDeleted(
+  observer: ((environmentId: EnvironmentIdType, threadId: ThreadIdType) => void) | undefined,
+  environmentId: EnvironmentIdType,
+  threadId: ThreadIdType,
+) {
+  return observer === undefined
+    ? Effect.void
+    : Effect.sync(() => observer(environmentId, threadId)).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Thread deletion observer failed.", { cause }),
+        ),
+      );
 }
