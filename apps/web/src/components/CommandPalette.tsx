@@ -1,3 +1,4 @@
+import { makeAddProjectInitialQuery } from "./paletteProjectBaseDirectory";
 import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
 import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
 import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
@@ -156,7 +157,6 @@ import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
-  ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,
   hasTrailingPathSeparator,
@@ -697,15 +697,7 @@ function OpenCommandPaletteDialog(props: {
   const isBrowsing = browsePath.isBrowsing;
   const browseDirectoryPath = browsePath.directoryPath;
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
-  const getAddProjectInitialQueryForEnvironment = (environmentId: EnvironmentId | null): string => {
-    const environment = environments.find((candidate) => candidate.environmentId === environmentId);
-    const environmentSettings = environment?.serverConfig?.settings ?? null;
-    const baseDirectory = environmentSettings?.addProjectBaseDirectory?.trim() ?? "";
-    if (baseDirectory.length === 0) {
-      return "~/";
-    }
-    return ensureBrowseDirectoryPath(baseDirectory);
-  };
+  const getAddProjectInitialQueryForEnvironment = makeAddProjectInitialQuery(environments);
   const { projectByKey } = useProjectLookups();
   const activeThreadKey = activeThread
     ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
