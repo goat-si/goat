@@ -90,6 +90,31 @@ it("returns the final transcript without editing a draft during recording", asyn
   expect(await session?.finish()).toBe("hello world");
 });
 
+it("falls back if the server ends before the recorder has stopped", async () => {
+  let event: Parameters<LiveSpeechTransport["subscribe"]>[1] | undefined;
+  const onFailure = vi.fn();
+  const transport: LiveSpeechTransport = {
+    start: vi.fn(async () => ({ streamId: "fixture" })),
+    subscribe: vi.fn(async (_id, onEvent) => {
+      event = onEvent;
+      return () => {};
+    }),
+    feed: vi.fn(async () => {}),
+    finish: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {}),
+  };
+  const session = await startLiveSpeechSession({
+    transport,
+    locale: "en",
+    canSend: () => true,
+    onPreview: () => {},
+    onFailure,
+  });
+  event?.({ type: "final", text: "early" });
+  expect(onFailure).toHaveBeenCalledOnce();
+  expect(await session?.finish()).toBeNull();
+});
+
 it("falls back rather than dropping audio when inference cannot keep up", async () => {
   const pending = deferred();
   const failed = deferred();

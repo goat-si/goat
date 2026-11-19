@@ -34,6 +34,7 @@ export async function startLiveSpeechSession(options: {
     return null;
   }
   let active = true;
+  let finishing = false;
   let sequence = 0;
   let revision = -1;
   let inFlight: Promise<void> | null = null;
@@ -70,6 +71,7 @@ export async function startLiveSpeechSession(options: {
     if (event.type === "ready") return;
     if (event.type === "error") return fail();
     if (event.type === "final") {
+      if (!finishing) return fail();
       active = false;
       resolveFinal(event.text);
       dispose();
@@ -124,6 +126,7 @@ export async function startLiveSpeechSession(options: {
         fail();
         return null;
       }
+      finishing = true;
       try {
         await options.transport.finish(streamId, options.signal);
       } catch {
