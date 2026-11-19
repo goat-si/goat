@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { PullRequestSavedViewIdentity } from "@goat/client-runtime/pull-request-saved-views";
 import {
   ChannelBotRef,
   EnvironmentId,
@@ -39,6 +40,15 @@ export const PullRequestListControls = Schema.Struct({
   sort: Schema.Literals(["updated", "created", "oldest"]),
 });
 export type PullRequestListControls = typeof PullRequestListControls.Type;
+
+export const PullRequestSavedView = Schema.Struct({
+  ...PullRequestSavedViewIdentity.fields,
+  environmentId: Schema.NullOr(Schema.String),
+  controls: PullRequestListControls,
+  query: Schema.String,
+});
+export type PullRequestSavedView = typeof PullRequestSavedView.Type;
+const isPullRequestSavedView = Schema.is(PullRequestSavedView);
 
 const ThreadListFilters = Schema.Struct({
   environmentId: Schema.NullOr(EnvironmentId),
@@ -150,6 +160,7 @@ export interface Preferences {
   /** Whether the computer use readiness details and skill switch are shown. */
   readonly computerUseAdvancedExpanded?: boolean;
   readonly workspaceSelections?: WorkspaceSelections;
+  readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -237,6 +248,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     pullRequestListFilters?: PullRequestListPreferences;
     computerUseAdvancedExpanded?: boolean;
     workspaceSelections?: WorkspaceSelections;
+    pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
   } = {};
 
   if (parsed.homeMode === "thread" || parsed.homeMode === "bot") {
@@ -416,6 +428,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isWorkspaceSelections(parsed.workspaceSelections)) {
     preferences.workspaceSelections = parsed.workspaceSelections;
+  }
+  if (Array.isArray(parsed.pullRequestSavedViews)) {
+    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews.filter(isPullRequestSavedView);
   }
   return preferences;
 }
