@@ -1,3 +1,4 @@
+import { formatDuration } from "./diagnosticsDuration";
 import { ProcessSignalActions } from "./ProcessSignalActions";
 import { resolveUsageAccess } from "@goat/client-runtime/state/usage-access";
 import { environmentSession } from "../../state/session";
@@ -50,11 +51,6 @@ const NUMBER_FORMAT = new Intl.NumberFormat();
 
 function formatCount(value: number): string {
   return NUMBER_FORMAT.format(value);
-}
-
-function formatDuration(value: number): string {
-  if (value < 1_000) return `${Math.round(value)} ms`;
-  return `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)} s`;
 }
 
 function RelativeTimeNoWrap(props: { value: DateTime.Utc }) {
