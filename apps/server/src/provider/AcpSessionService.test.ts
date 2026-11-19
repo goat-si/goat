@@ -25,6 +25,7 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as AcpSessionService from "./AcpSessionService.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 
 it.effect("preserves incomplete listings, imports once, and protects imported sessions", () =>
   Effect.gen(function* () {
@@ -82,6 +83,7 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
     } as unknown as ProviderInstance;
     const dependencies = Layer.mergeAll(
       NodeCrypto.layer,
+      SqlitePersistence.layerMemory,
       Layer.mock(ProjectService.ProjectService)({
         getById: () =>
           Effect.succeedSome({
@@ -276,6 +278,7 @@ const provideHeldSessions = (
     Layer.provide(
       Layer.mergeAll(
         NodeCrypto.layer,
+        SqlitePersistence.layerMemory,
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
             Effect.succeedSome({

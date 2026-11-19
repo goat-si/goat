@@ -161,6 +161,7 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
           [168, "TurnItemMessageOrdinalIndex"],
           [169, "TurnItemInlineWorkOutput"],
           [170, "RepairStaleTitleRegeneration"],
+          [175, "AcpSessionOwnerIndex"],
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -673,6 +674,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
           [168, "TurnItemMessageOrdinalIndex"],
           [169, "TurnItemInlineWorkOutput"],
           [170, "RepairStaleTitleRegeneration"],
+          [175, "AcpSessionOwnerIndex"],
         ],
       );
       const sql = yield* SqlClient.SqlClient;
