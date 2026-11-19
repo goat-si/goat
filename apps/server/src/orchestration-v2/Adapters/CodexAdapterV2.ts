@@ -235,6 +235,7 @@ import { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./Codex
 export { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./CodexForkBoundary.ts";
 import {
   approvalDecisionToLegacyReviewDecision,
+  codexFileChangeApprovalPrompt,
   permissionsResponseFromDecision,
   providerRequestKindFromPermissions,
   toCodexUserInputAnswers,
@@ -251,27 +252,6 @@ export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER
 type CodexFileChangeKinds = Readonly<
   Record<string, CodexSchema.V2ItemStartedNotification__PatchChangeKind>
 >;
-
-function codexFileChangeApprovalPrompt(input: {
-  readonly reason?: string | null;
-  readonly grantRoot?: string | null;
-  readonly fileChanges?: CodexFileChangeKinds;
-}): string | undefined {
-  const reason = input.reason?.trim();
-  if (reason) return reason;
-  const entries = Object.entries(input.fileChanges ?? {}).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  if (entries.length > 0) {
-    const described = entries.slice(0, 20).map(([path, change]) => {
-      const movePath = change.type === "update" ? change.move_path : undefined;
-      return movePath ? `${change.type} ${path} -> ${movePath}` : `${change.type} ${path}`;
-    });
-    const remaining = entries.length - described.length;
-    return remaining > 0 ? `${described.join("\n")}\n+${remaining} more` : described.join("\n");
-  }
-  return input.grantRoot?.trim() || undefined;
-}
 
 // Reasoning-effort changes preserve the tokenizer and context window; other changes need fresh telemetry.
 export function canReuseCodexContextUsage(previous: ModelSelection, next: ModelSelection): boolean {
