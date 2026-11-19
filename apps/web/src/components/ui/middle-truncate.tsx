@@ -79,13 +79,15 @@ function fitPendingHeads() {
     (head) => head.scrollWidth > head.clientWidth && head.firstChild instanceof Text,
   );
   heads.forEach((head, index) => head.toggleAttribute("data-overflow", overflowing[index]));
-  const slacks = heads.map((head, index) => (overflowing[index] ? measureSlack(head) : 0));
-  heads.forEach((head, index) => {
-    const slack = slacks[index]!;
+  const fits = heads.map((head, index) => ({
+    head,
+    slack: overflowing[index] ? measureSlack(head) : 0,
+  }));
+  for (const { head, slack } of fits) {
     head.style.clipPath = slack > 0 ? `inset(-0.25em ${slack}px -0.25em 0)` : "";
     const tail = head.nextElementSibling;
     if (tail instanceof HTMLElement) tail.style.translate = slack > 0 ? `-${slack}px 0` : "";
-  });
+  }
 }
 
 function measureSlack(head: HTMLElement) {
