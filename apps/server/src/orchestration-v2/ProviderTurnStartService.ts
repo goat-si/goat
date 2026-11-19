@@ -1,3 +1,4 @@
+import { hasPendingHandoff } from "./goat/ProviderHandoffPending.ts";
 import {
   isProviderTurnStartError,
   isCloudTaskSourceError,
@@ -847,12 +848,7 @@ export const layer: Layer.Layer<
             }),
           );
         }
-        const uncertainDelivery = projection.contextHandoffs.some(
-          (handoff) =>
-            handoff.toProviderThreadId === providerThread.id &&
-            handoff.delivery?.nativeThreadId === providerThread.nativeThreadRef?.nativeId &&
-            handoff.delivery?.status === "pending",
-        );
+        const uncertainDelivery = hasPendingHandoff(projection, providerThread);
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
           nativeSessionMissesKeptTurns(projection, providerThread, run);
