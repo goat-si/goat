@@ -179,6 +179,38 @@ const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMess
 const remaining = () =>
   Object.values(appAtomRegistry.get(state.manager.queuedMessagesByThreadKeyAtom)).flat();
 
+it("delivers another thread while the first thread is waiting on an upload", async () => {
+  setOperateGrant("secondary", true);
+  const first = message();
+  const second = message({
+    threadId: ThreadId.make("other-thread"),
+    messageId: MessageId.make("other-message"),
+    commandId: CommandId.make("other-command"),
+  });
+  appAtomRegistry.set(state.threadShells, [state.thread, { ...state.thread, id: "other-thread" }]);
+  await state.manager.enqueue(first);
+  await state.manager.enqueue(second);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockImplementationOnce(() => upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledOnce());
+    expect(state.start.mock.calls[0]?.[0].input.threadId).toBe("other-thread");
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
 function setOperateGrant(environmentId: string, granted: boolean): void {
   // The mocked session atom holds the grant itself (see the ./session mock).
   const sessionAtom = environmentSession.sessionStateAtom(EnvironmentId.make(environmentId));

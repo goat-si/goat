@@ -237,6 +237,33 @@ afterEach(() => {
 });
 
 describe("upload retry budget across deferrals", () => {
+  it("keeps its retry budget when a removed environment is added again", async () => {
+    const { workspaceConnections } = await import("./workspace");
+    const environments = workspaceConnections.environmentsAtom as unknown as Atom.Writable<
+      ReadonlyArray<{ environmentId: string; connectionState: string }>
+    >;
+    const connected = [{ environmentId: "secondary", connectionState: "connected" }];
+    state.cleanups.push(() => appAtomRegistry.set(environments, connected));
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    const queued = message();
+    await state.manager.enqueue(queued);
+    state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+    await runDrain();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(state.prepare).toHaveBeenCalledTimes(4);
+    appAtomRegistry.set(environments, [
+      { environmentId: "secondary", connectionState: "disconnected" },
+    ]);
+    appAtomRegistry.set(environments, []);
+    appAtomRegistry.set(environments, connected);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(state.prepare).toHaveBeenCalledTimes(5);
+    expect(remaining()).toEqual([queued]);
+    expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+  });
+
   it.each(["missing", "editor"] as const)(
     "keeps failed upload attempts across a %s deferral",
     async (kind) => {
