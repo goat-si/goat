@@ -14,9 +14,9 @@ function deferred() {
   return { promise, resolve };
 }
 
-it.each(["connection loss", "server shutdown"])(
+it.each(["connection loss", "server shutdown", "audio backlog overflow"])(
   "uses the full batch recording after %s",
-  async () => {
+  async (scenario) => {
     const environmentId = EnvironmentId.make("fixture");
     chooseEnvironmentSpeech(environmentId);
     const grant = readEnvironmentSpeechGrant();
@@ -33,7 +33,8 @@ it.each(["connection loss", "server shutdown"])(
         subscribed.resolve();
         return () => {};
       },
-      feed: async () => {},
+      feed: async () =>
+        scenario === "audio backlog overflow" ? new Promise<void>(() => {}) : undefined,
       finish: async () => {},
       cancel,
     };
@@ -93,9 +94,13 @@ it.each(["connection loss", "server shutdown"])(
     try {
       await controller.start();
       await subscribed.promise;
-      options.onPcmFrame?.(new Uint8Array([0, 0]));
       onEvent?.({ type: "partial", revision: 1, committed: "live", tentative: " preview" });
-      disconnect?.();
+      if (scenario === "audio backlog overflow") {
+        for (let index = 0; index < 16; index++) options.onPcmFrame?.(new Uint8Array(32_000));
+      } else {
+        options.onPcmFrame?.(new Uint8Array([0, 0]));
+        disconnect?.();
+      }
       expect(cancel).toHaveBeenCalledOnce();
       expect(controller.getSnapshot()).toMatchObject({
         phase: "recording",
