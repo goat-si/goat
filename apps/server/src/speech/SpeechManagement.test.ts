@@ -16,6 +16,53 @@ import * as SpeechInference from "./SpeechInference.ts";
 
 const modelId = "handy-computer/whisper-tiny-gguf";
 
+it.effect("holds the shared inference slot for a stream and releases it on scope close", () =>
+  Effect.gen(function* () {
+    const store = Layer.mock(SpeechModelStore.SpeechModelStore)({
+      installedPath: () => Effect.succeed("fixture.gguf"),
+    });
+    const settings = Layer.mock(ServerSettingsService)({
+      getSettings: Effect.succeed({
+        ...DEFAULT_SERVER_SETTINGS,
+        speech: { ...DEFAULT_SERVER_SETTINGS.speech, modelId },
+      }),
+    });
+    let unsupported = true;
+    const inference = Layer.mock(SpeechInference.SpeechInference)({
+      transcribe: () => Effect.succeed("batch result"),
+      openStream: () =>
+        unsupported
+          ? Effect.fail(new SpeechInference.SpeechInferenceError({ cause: "unsupported" }))
+          : Effect.succeed({
+              feed: () => Effect.succeed({ revision: 0, text: null }),
+              finish: Effect.succeed(""),
+            }),
+    });
+    const service = yield* SpeechManagement.SpeechManagement.pipe(
+      Effect.provide(
+        SpeechManagement.layer.pipe(Layer.provide(Layer.mergeAll(store, settings, inference))),
+      ),
+    );
+    const encoded = encodeMonoPcm16Wav([new Float32Array(24_000)], 24_000);
+    if (!encoded) throw new Error("invalid fixture");
+    const audio = validateCanonicalVoiceWav(encoded.bytes);
+    if (!audio.ok) throw new Error("invalid fixture");
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        expect(yield* Effect.result(service.startStream("en"))).toMatchObject({ _tag: "Failure" });
+        expect(yield* service.transcribe(audio.value)).toBe("batch result");
+        unsupported = false;
+        yield* service.startStream("en");
+        expect(yield* Effect.result(service.transcribe(audio.value))).toMatchObject({
+          _tag: "Failure",
+          failure: { cause: "Speech is busy." },
+        });
+      }),
+    );
+    expect(yield* service.transcribe(audio.value)).toBe("batch result");
+  }),
+);
+
 it.effect("lists, downloads, configures and removes catalog models", () =>
   Effect.gen(function* () {
     const installed = new Set<string>();
@@ -50,7 +97,7 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
             Layer.mergeAll(
               store,
               settingsLayer,
-              Layer.succeed(SpeechInference.SpeechInference, {
+              Layer.mock(SpeechInference.SpeechInference)({
                 transcribe: (_path, _pcm, _config, language) => Effect.succeed(language ?? "none"),
               }),
             ),

@@ -1,8 +1,10 @@
 import type { SpeechConfiguration, ValidatedVoiceWav } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { getSpeechModel, SPEECH_MODELS } from "./model.ts";
@@ -42,6 +44,24 @@ export class SpeechManagement extends Context.Service<
       audio: ValidatedVoiceWav,
       language?: string,
     ) => Effect.Effect<string, SpeechManagementError>;
+    readonly startStream: (
+      language?: string,
+    ) => Effect.Effect<
+      {
+        readonly feed: (
+          pcm: Float32Array,
+        ) => Effect.Effect<
+          {
+            readonly revision: number;
+            readonly text: { readonly committed: string; readonly tentative: string } | null;
+          },
+          SpeechInference.SpeechInferenceError
+        >;
+        readonly finish: Effect.Effect<string, SpeechInference.SpeechInferenceError>;
+      },
+      SpeechManagementError,
+      Scope.Scope
+    >;
   }
 >()("goat/speech/SpeechManagement") {}
 
@@ -157,6 +177,41 @@ const make = Effect.gen(function* () {
           );
         }),
       ),
+    ),
+    startStream: Effect.fn("SpeechManagement.startStream")((language) =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          const scope = yield* Scope.make();
+          const stream = yield* Effect.gen(function* () {
+            yield* Effect.acquireRelease(
+              Semaphore.takeIfAvailable(gate, 1).pipe(
+                Effect.flatMap((acquired) =>
+                  acquired ? Effect.void : Effect.fail(failure("stream", "Speech is busy.")),
+                ),
+              ),
+              () => Semaphore.release(gate, 1),
+            );
+            const config = (yield* settings.getSettings.pipe(
+              Effect.mapError((error) => failure("stream", error)),
+            )).speech;
+            const model = yield* definition(config.modelId);
+            const path = yield* store
+              .installedPath(model)
+              .pipe(Effect.mapError((error) => failure("stream", error)));
+            if (path === undefined)
+              return yield* failure("stream", "The selected speech model is not installed.");
+            return yield* inference
+              .openStream(path, config, language)
+              .pipe(Effect.mapError((error) => failure("stream", error)));
+          }).pipe(
+            Scope.provide(scope),
+            Effect.onError(() => Scope.close(scope, Exit.void)),
+          );
+          return { scope, stream };
+        }),
+        ({ scope }) => Scope.close(scope, Exit.void),
+        { interruptible: true },
+      ).pipe(Effect.map(({ stream }) => stream)),
     ),
   });
 });
