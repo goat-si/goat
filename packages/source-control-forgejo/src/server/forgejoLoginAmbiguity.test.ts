@@ -135,3 +135,44 @@ it.effect.each([false, true])(
       ),
     ),
 );
+
+it.effect("names ambiguous SSH logins even when one is a default", () =>
+  Effect.gen(function* () {
+    const cli = yield* ForgejoCli.make;
+    const result = yield* cli
+      .resolveRepository({ cwd: "/repo", repository: "git@forgejo.test:owner/repo.git" })
+      .pipe(Effect.result);
+    assert.isTrue(Result.isFailure(result));
+    if (Result.isFailure(result)) {
+      assert.include(result.failure.detail, "alpha");
+      assert.include(result.failure.detail, "beta");
+      assert.include(result.failure.detail, "full server URL");
+    }
+  }).pipe(
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+    ),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("unexpected HTTP")),
+    ),
+    Effect.provide(
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) =>
+            Effect.succeed(
+              TestSourceControlHost.processOutput(
+                input.args[0] === "login"
+                  ? JSON.stringify([
+                      login("alpha", "https://forgejo.test:3000", true),
+                      login("beta", "https://forgejo.test:4000"),
+                    ])
+                  : "",
+              ),
+            ),
+        },
+      }),
+    ),
+  ),
+);
