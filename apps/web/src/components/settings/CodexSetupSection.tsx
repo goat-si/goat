@@ -52,20 +52,7 @@ import {
 
 const noop = () => undefined;
 
-interface CodexSetupSectionProps {
-  readonly environmentId: EnvironmentId;
-  readonly instanceId: ProviderInstanceId;
-  readonly provider: ServerProvider | undefined;
-  readonly mode: "managed" | "existing";
-  readonly enabled: boolean;
-  readonly readOnly?: boolean;
-  readonly presentation?: "settings" | "onboarding";
-  readonly onModeChange: (mode: "managed" | "existing") => void;
-  readonly autoStart?: boolean;
-  readonly displayName?: string | undefined;
-  readonly onAutoStartConsumed?: () => void;
-  readonly onSignInCancelled?: (() => void) | undefined;
-}
+import type { CodexSetupSectionProps } from "./CodexSetupSection.types";
 
 export function CodexSetupSection(props: CodexSetupSectionProps) {
   const [requested, setRequested] = useState(false);
