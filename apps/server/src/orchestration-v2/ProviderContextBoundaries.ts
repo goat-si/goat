@@ -109,6 +109,26 @@ export function pendingForkTransferForThread(
   );
 }
 
+export function supersedeForkEvent(
+  transfer: OrchestrationV2ContextTransfer,
+  run: OrchestrationV2Run,
+  now: DateTime.Utc,
+) {
+  return {
+    type: "context-transfer.updated" as const,
+    threadId: run.threadId,
+    runId: run.id,
+    providerInstanceId: run.providerInstanceId,
+    occurredAt: now,
+    payload: {
+      ...transfer,
+      status: "superseded" as const,
+      error: "Superseded by a fresh session.",
+      updatedAt: now,
+    },
+  };
+}
+
 export function pendingMergeBackTransfersForThread(
   projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread">,
 ): ReadonlyArray<OrchestrationV2ContextTransfer> {
