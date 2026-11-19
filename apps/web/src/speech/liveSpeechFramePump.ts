@@ -97,9 +97,18 @@ export class LiveSpeechFramePump {
         return null;
       }
     }
-    if (this.state !== "ready" || this.queued.length > 0) return null;
+    if (this.state !== "ready") return null;
+    if (this.queued.length > 0) {
+      this.fail();
+      return null;
+    }
     this.state = "finishing";
-    return await this.session.finish();
+    try {
+      return await this.session.finish();
+    } catch {
+      this.fail();
+      return null;
+    }
   }
 
   cancel() {

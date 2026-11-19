@@ -79,3 +79,24 @@ it("uses batch fallback when stopped during model startup and cancels a late str
   expect(session.feed).not.toHaveBeenCalled();
   expect(session.cancel).toHaveBeenCalledOnce();
 });
+
+it("falls back when finishing a live stream rejects", async () => {
+  const frameReceived = deferred<void>();
+  const failed = vi.fn();
+  const pump = new LiveSpeechFramePump(
+    async () => ({
+      feed: async () => {
+        frameReceived.resolve();
+      },
+      finish: async () => {
+        throw new Error("disconnected");
+      },
+      cancel: () => {},
+    }),
+    failed,
+  );
+  pump.push(new Uint8Array([1, 0]));
+  await frameReceived.promise;
+  expect(await pump.finish()).toBeNull();
+  expect(failed).toHaveBeenCalledOnce();
+});
