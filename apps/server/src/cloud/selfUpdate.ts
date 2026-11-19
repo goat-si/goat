@@ -34,6 +34,7 @@ import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
+import { processStartIdentity, writeServiceUpdateHandoff } from "../serviceUpdateHandoff.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimePaths,
@@ -216,7 +217,9 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
   },
 );
 
-export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+export const make = Effect.fn("cloud.server_self_update.make")(function* (options?: {
+  readonly launcherIdentity?: () => Promise<{ readonly pid: number; readonly start: string }>;
+}) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const desktopAppUpdate = yield* DesktopAppUpdate.DesktopAppUpdate;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
@@ -370,6 +373,20 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         mode: input.confirmReplacement === true ? ("confirmed" as const) : ("idle" as const),
       };
       let accepted = false;
+      const launcherIdentity = yield* Effect.tryPromise({
+        try:
+          options?.launcherIdentity ??
+          (async () => {
+            const pid = process.ppid;
+            return { pid, start: await processStartIdentity(pid, platform) };
+          }),
+        catch: (cause) => failWith("Could not identify the service launcher.", cause),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.logWarning("Could not identify the service launcher for update handoff."),
+        ),
+        Effect.option,
+      );
       const updateId = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* admission.beginDrain;
@@ -393,9 +410,32 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
                     error,
                   ),
                 ),
-                Effect.tap(() => {
-                  accepted = true;
-                  return onHandoffAccepted();
+                Effect.tap((updateId) => {
+                  const marker = Option.isSome(launcherIdentity)
+                    ? Effect.tryPromise({
+                        try: () =>
+                          writeServiceUpdateHandoff(
+                            serverConfig.baseDir,
+                            updateId,
+                            launcherIdentity.value.pid,
+                            launcherIdentity.value.start,
+                          ),
+                        catch: (cause) =>
+                          failWith("Could not record the service update handoff.", cause),
+                      }).pipe(
+                        Effect.catch(() =>
+                          Effect.logWarning("Could not record the service update handoff."),
+                        ),
+                      )
+                    : Effect.void;
+                  return marker.pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        accepted = true;
+                      }),
+                    ),
+                    Effect.andThen(Effect.suspend(onHandoffAccepted)),
+                  );
                 }),
                 Effect.tap((updateId) =>
                   audit

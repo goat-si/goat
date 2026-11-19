@@ -110,7 +110,7 @@ export function makeCommandCandidates(deps: {
         : processEnvironment.PATH;
     const candidates: string[] = [];
     for (const directory of (pathValue ?? "").split(platform === "win32" ? ";" : ":")) {
-      const entry = directory.trim().replace(/^"|"$/gu, "");
+      const entry = platform === "win32" ? directory.trim().replace(/^"|"$/gu, "") : directory;
       if (entry.length === 0) continue;
       const resolved = yield* commandPath(command, { ...processEnvironment, PATH: entry });
       if (resolved !== null) candidates.push(resolved);

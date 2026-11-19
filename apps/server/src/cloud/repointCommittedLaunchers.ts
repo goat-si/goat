@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import { posixLauncherTarget, writePosixLauncher } from "./posixLauncher.ts";
 
 import {
   launcherOwnsVersionsDir,
@@ -12,10 +13,10 @@ import {
 } from "./pinnedRuntime.ts";
 
 /**
- * After this start committed a remote update, moves the goat symlinks that point into this
+ * After this start committed a remote update, moves the goat launchers that point into this
  * home's runtimes to the new one: the recorded launchers (a service does not see the installer's
  * GOAT_INSTALL_BIN_DIR), the default install directory, and the first goat on PATH. A link
- * elsewhere, or a regular file, is left alone. Windows shims are not moved here.
+ * elsewhere, or an unrelated file, is left alone. Windows shims are not moved here.
  */
 export const repointCommittedLaunchers = Effect.fn("cloud.repoint_committed_launchers")(
   function* (input: { readonly baseDir: string; readonly targetVersion: string }) {
@@ -55,24 +56,16 @@ export const repointCommittedLaunchers = Effect.fn("cloud.repoint_committed_laun
     for (const launcher of candidates) {
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const linkTarget = yield* fs.readLink(launcher).pipe(Effect.option);
-          if (Option.isNone(linkTarget)) return;
-          const lexicalTarget = path.resolve(path.dirname(launcher), linkTarget.value);
+          const lexicalTarget = yield* Effect.promise(() => posixLauncherTarget(launcher));
+          if (lexicalTarget === undefined) return;
           if (!launcherOwnsVersionsDir(path, versionsDir, lexicalTarget)) return;
-          const resolved = yield* fs.realPath(launcher).pipe(Effect.option);
+          const resolved = yield* fs.realPath(lexicalTarget).pipe(Effect.option);
           if (
             Option.isNone(resolved) ||
             !launcherOwnsVersionsDir(path, realVersionsDir.value, resolved.value)
           )
             return;
-          // A new link renamed over the old one, so the command never disappears.
-          const temporary = yield* fs.makeTempDirectoryScoped({
-            directory: path.dirname(launcher),
-            prefix: ".goat-launcher-",
-          });
-          const link = path.join(temporary, "goat");
-          yield* fs.symlink(target.entryPath, link);
-          yield* fs.rename(link, launcher);
+          yield* Effect.promise(() => writePosixLauncher(launcher, target.entryPath));
         }),
       ).pipe(
         Effect.catchCause((cause) =>

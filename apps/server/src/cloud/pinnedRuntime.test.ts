@@ -525,6 +525,60 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
     return { baseDir, versionsDir, install };
   });
 
+  it.effect("retains a runtime referenced by an absolute script launcher", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "2.0.0", "3.0.0", "4.0.0"]);
+      const bin = path.join(baseDir, "bin");
+      yield* fs.makeDirectory(bin);
+      yield* fs.writeFileString(
+        path.join(bin, "goat"),
+        `#!/bin/sh\nexec '${path.join(versionsDir, "1.0.0/goat")}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["4.0.0"] }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+        ),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: bin }),
+      );
+      assert.notInclude(removed, "1.0.0");
+      assert.include(removed, "2.0.0");
+      assert.isTrue(yield* fs.exists(path.join(versionsDir, "1.0.0/goat")));
+    }),
+  );
+
+  it.effect("does not prune when a recorded launcher cannot be inspected", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "2.0.0", "3.0.0"]);
+      const bin = path.join(baseDir, "bin");
+      yield* fs.makeDirectory(bin);
+      const launcher = path.join(bin, "goat");
+      yield* fs.writeFileString(
+        launcher,
+        `#!/bin/sh\nexec '${path.join(versionsDir, "1.0.0/goat")}' "$@"\n`,
+      );
+      yield* fs.chmod(launcher, 0);
+      yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${launcher}\n`);
+      const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["3.0.0"] }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+        ),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: bin }),
+      );
+      assert.deepEqual(removed, []);
+      assert.isTrue(yield* fs.exists(path.join(versionsDir, "1.0.0/goat")));
+      yield* fs.chmod(launcher, 0o600);
+    }),
+  );
+
   it.effect("removes only completed runtimes nothing references", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

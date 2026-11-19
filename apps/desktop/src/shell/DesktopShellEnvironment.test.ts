@@ -477,6 +477,18 @@ describe("DesktopShellEnvironment", () => {
     }),
   );
 
+  it.effect("keeps literal whitespace and quotes in a POSIX login PATH", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () => envOutput({ PATH: ' /fixture path :"/literal"' }),
+      });
+      assert.isTrue(env.PATH?.startsWith(' /fixture path :"/literal":/usr/bin:') ?? false);
+    }),
+  );
+
   it.effect("hydrates PATH and missing SSH_AUTH_SOCK from the login shell on macOS", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = {

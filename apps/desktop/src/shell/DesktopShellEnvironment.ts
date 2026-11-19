@@ -4,6 +4,7 @@ import {
   applyShellEnvironment,
   buildEnvironmentCaptureCommand,
   listLoginShellCandidates,
+  mergePathValues,
   setWindowsPath,
 } from "@goat/shared/shell";
 import * as Context from "effect/Context";
@@ -130,10 +131,11 @@ const trimNonEmpty = (value: string | null | undefined): Option.Option<string> =
     Option.filter((entry) => entry.length > 0),
   );
 
-const pathDelimiter = (platform: NodeJS.Platform) => (platform === "win32" ? ";" : ":");
+const nonEmptyPath = (value: string | null | undefined): Option.Option<string> =>
+  Option.fromNullishOr(value).pipe(Option.filter((entry) => entry.length > 0));
 
 const readEnvPath = (env: NodeJS.ProcessEnv): Option.Option<string> =>
-  trimNonEmpty(env.PATH ?? env.Path ?? env.path);
+  nonEmptyPath(env.PATH ?? env.Path ?? env.path);
 
 const normalizeRuntimeDir = (value: string): string => value.replace(/\/+$/u, "");
 
@@ -152,39 +154,16 @@ const linuxRuntimeDirCandidates = (
   return candidates.filter((candidate) => candidate.length > 0);
 };
 
-const pathComparisonKey = (entry: string, platform: NodeJS.Platform) => {
-  const normalized = entry.trim().replace(/^"+|"+$/g, "");
-  return platform === "win32" ? normalized.toLowerCase() : normalized;
-};
-
-const sanitizePathEntry = (entry: string, platform: NodeJS.Platform) =>
-  platform === "win32" ? entry.replaceAll('"', "") : entry;
-
 const mergePaths = (
   platform: NodeJS.Platform,
   values: ReadonlyArray<Option.Option<string>>,
-): Option.Option<string> => {
-  const delimiter = pathDelimiter(platform);
-  const entries: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of values) {
-    if (Option.isNone(value)) continue;
-
-    for (const entry of value.value.split(delimiter)) {
-      const sanitized = sanitizePathEntry(entry.trim(), platform);
-      if (sanitized.length === 0) continue;
-
-      const key = pathComparisonKey(sanitized, platform);
-      if (key.length === 0 || seen.has(key)) continue;
-
-      seen.add(key);
-      entries.push(sanitized);
-    }
-  }
-
-  return entries.length > 0 ? Option.some(entries.join(delimiter)) : Option.none();
-};
+): Option.Option<string> =>
+  Option.fromNullishOr(
+    values.reduce<string | undefined>(
+      (merged, value) => mergePathValues(merged, Option.getOrUndefined(value), platform),
+      undefined,
+    ),
+  );
 
 const knownWindowsCliDirs = (env: NodeJS.ProcessEnv): ReadonlyArray<string> => [
   ...trimNonEmpty(env.APPDATA).pipe(
@@ -356,7 +335,7 @@ const readLaunchctlPath = (env: NodeJS.ProcessEnv) =>
     command: "/bin/launchctl",
     args: ["getenv", "PATH"],
     timeout: LAUNCHCTL_TIMEOUT,
-  }).pipe(Effect.map(trimNonEmpty));
+  }).pipe(Effect.map((value) => nonEmptyPath(value.replace(/\r?\n$/, ""))));
 
 const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEnvironment")(
   function* (
@@ -452,7 +431,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
         ? yield* readLaunchctlPath(config.env)
         : Option.none<string>();
     const mergedPath = mergePaths(config.platform, [
-      trimNonEmpty(shellEnvironment.PATH).pipe(Option.orElse(() => launchctlPath)),
+      nonEmptyPath(shellEnvironment.PATH).pipe(Option.orElse(() => launchctlPath)),
       readEnvPath(config.env),
     ]);
 
@@ -543,7 +522,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
     }
 
     // A fallback shell's PATH is used but is not the person's, so discovery stays unfinished.
-    return answeredBy === candidates[0] && Option.isSome(trimNonEmpty(shellEnvironment.PATH));
+    return answeredBy === candidates[0] && Option.isSome(nonEmptyPath(shellEnvironment.PATH));
   },
 );
 
