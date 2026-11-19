@@ -109,6 +109,7 @@ export function makeWorktreeStartHarness(
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         Layer.succeed(FileSystem.FileSystem, {
           exists: () => Effect.succeed(false),
+          stat: () => Effect.succeed({ type: "Directory" }),
           realPath: (target: string) =>
             normalize(target) in realPaths
               ? Effect.succeed(realPaths[normalize(target)])
@@ -120,12 +121,17 @@ export function makeWorktreeStartHarness(
                     pathOrDescriptor: target,
                   }),
                 ),
+          makeDirectory: () => Effect.void,
+          makeTempFileScoped: () => Effect.succeed("/tmp/restore-fixture-marker"),
+          writeFileString: () => Effect.void,
+          rename: () => Effect.void,
         } as never),
         layerWorktreeLocation(),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees,
           createWorktree,
           listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
+          resolveCommit: () => Effect.succeed({ commitSha: "fixture-head" }),
         }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
@@ -242,5 +248,10 @@ export const makeRestorableCheckout = Effect.gen(function* () {
     Effect.andThen(git("worktree", "add", "-q", worktreePath, "feature/restore")),
   );
   yield* addWorktree;
-  return { worktreePath, addWorktree, location };
+  const headSha = NodeChildProcess.execFileSync(
+    "git",
+    ["-C", location.workspaceRoot, "rev-parse", "HEAD"],
+    { encoding: "utf8" },
+  ).trim();
+  return { worktreePath, addWorktree, location: { ...location, headSha } };
 });

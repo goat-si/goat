@@ -1,3 +1,6 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { captureEmptySubmodules } from "./worktreeSubmoduleRecovery.ts";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -356,3 +359,36 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
       }),
   );
 });
+
+it.effect(
+  "recovers a fresh submodule when Git prints a Windows checkout with forward slashes",
+  () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const cwd = "C:\\Users\\Goat\\worktree";
+      let cloned = false;
+      const selectRecovery = yield* captureEmptySubmodules({
+        cwd,
+        path,
+        fs: FileSystem.makeNoop({
+          realPath: (name) => Effect.succeed(name),
+          readDirectory: () => Effect.succeed(cloned ? [".git"] : []),
+          stat: () => Effect.succeed({ type: "File" } as FileSystem.File.Info),
+          exists: () => Effect.succeed(false),
+        }),
+        git: (operation) =>
+          Effect.succeed(
+            operation === "GitVcsDriver.listSubmodulePaths"
+              ? "submodule.library.path\nlibrary\0"
+              : operation === "GitVcsDriver.submoduleRoot"
+                ? "c:/Users/Goat/worktree/library\n"
+                : ".git/index\n",
+          ),
+      });
+      cloned = true;
+      assert.deepEqual(yield* selectRecovery, ["library"]);
+    }).pipe(
+      Effect.provide(NodePath.layerWin32),
+      Effect.provideService(HostProcess.Platform, "win32"),
+    ),
+);

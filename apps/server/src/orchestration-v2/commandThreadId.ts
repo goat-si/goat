@@ -44,6 +44,7 @@ export function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId
     case "notification.delivery.accept":
     case "prepared-run.release":
     case "prepared-run.progress":
+    case "prepared-run.pin-base":
     case "prepared-run.fail":
     case "prepared-run.retry":
     case "subagent.stop":

@@ -6,7 +6,6 @@ import {
   boundAttachmentIds,
   formatOutgoingPrompt,
   optimisticMessageAttachments,
-  planComposerTurn,
   sendTitleFallbackLabels,
   snapshotComposerSend,
   withMessageContext,
@@ -130,6 +129,7 @@ import {
   selectPlanModeEnabled,
   showMultipleModelsNeedGitThread,
 } from "./useComposerSend.helpers";
+import { planComposerTurn } from "../composerTurnPlan";
 import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
@@ -715,7 +715,6 @@ export function useComposerSend(input: ComposerSendInput) {
       }).finally(() => {
         feedbackUploadsInFlightRef.current.delete(routeThreadKey);
       });
-
       return;
     }
     if (
@@ -888,6 +887,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendEnvMode,
       worktreePath: activeThread.worktreePath,
       activeThreadBranch,
+      isScratchProject: input.activeProjectIsScratch === true,
       resumeCompactionTokens,
       keepFullHistory,
       phase,

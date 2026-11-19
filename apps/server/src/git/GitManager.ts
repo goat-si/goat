@@ -1,3 +1,4 @@
+import { makePullRequestWorktreeLifecycle } from "./pullRequestWorktreeLifecycle.ts";
 import {
   isPullRequestWorktreeLocalBranchName,
   resolvePullRequestWorktreeLocalBranchName,
@@ -397,6 +398,7 @@ export const make = Effect.gen(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  const pullRequestWorktree = yield* makePullRequestWorktreeLifecycle(gitCore);
   const runPullRequestSetup = yield* makePullRequestSetup;
   const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -2551,6 +2553,7 @@ export const make = Effect.gen(function* () {
           };
         }
 
+        yield* pullRequestWorktree.verifyReusable(input.cwd, worktreePath, checkedOutBranch);
         yield* ensureExistingWorktreeUpstream(worktreePath);
 
         // The pull request's own ref, because it is the only thing that certainly names its
@@ -2668,22 +2671,19 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const createPullRequestWorktree = Effect.fn("createPullRequestWorktree")(function* (
+      const createPullRequestWorktree = (
         onWorktreeClaimed?: (path: string) => Effect.Effect<void>,
-      ) {
-        return yield* gitCore.createWorktree(
-          { cwd: input.cwd, refName: localPullRequestBranch, path: null },
-          {
-            ...(onWorktreeClaimed ? { progress: { onWorktreeClaimed } } : {}),
-            worktreesDirectory: yield* readWorktreesDirectory,
-            skipSetupHook: input.threadId !== undefined,
-            submodules: yield* projectSettingsFor(input).pipe(
-              Effect.map(({ settings }) => settings.worktreeSubmodules),
-              Effect.orElseSucceed(() => null),
-            ),
-          },
-        );
-      });
+      ) =>
+        pullRequestWorktree.create(input.cwd, localPullRequestBranch, {
+          worktreesDirectory: readWorktreesDirectory,
+          skipSetupHook: input.threadId !== undefined,
+          submodules: projectSettingsFor(input).pipe(
+            Effect.map(({ settings }) => settings.worktreeSubmodules),
+            Effect.orElseSucceed(() => null),
+          ),
+          onWorktreeClaimed,
+        });
+      const finishWorktree = pullRequestWorktree.finishSetup(input.cwd, localPullRequestBranch);
       // Materializing would force this branch onto the head; its own commits would leave it.
       if (existingBranchBeforeFetch !== null) {
         const refresh = makeRefreshNewPullRequestWorktree({
@@ -2698,15 +2698,17 @@ export const make = Effect.gen(function* () {
           headSha: pullRequestSummary.headSha,
           localBranch: localPullRequestBranch,
         });
-        let isOnPullRequestHead = false;
+        const target = { head: null as string | null };
         const worktree = yield* createPullRequestWorktree((cwd) =>
           refresh(cwd).pipe(
-            Effect.map((onTarget) => {
-              isOnPullRequestHead = onTarget;
+            Effect.map((head) => {
+              target.head = head;
             }),
           ),
         );
-        yield* runPullRequestSetup(input, worktree.worktree.path);
+        const isOnPullRequestHead = yield* finishWorktree(worktree, target.head, (path) =>
+          runPullRequestSetup(input, path),
+        );
         return {
           pullRequest,
           branch: worktree.worktree.refName,
@@ -2744,15 +2746,13 @@ export const make = Effect.gen(function* () {
       }
 
       const worktree = yield* createPullRequestWorktree();
-      yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* runPullRequestSetup(input, worktree.worktree.path);
-
-      return {
-        pullRequest,
-        branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
-        isOnPullRequestHead: true,
-      };
+      const worktreePath = worktree.worktree.path;
+      const isOnPullRequestHead = yield* finishWorktree(worktree, worktree.pinnedHead, (path) =>
+        ensureExistingWorktreeUpstream(path).pipe(
+          Effect.andThen(() => runPullRequestSetup(input, path)),
+        ),
+      );
+      return { pullRequest, branch: worktree.worktree.refName, worktreePath, isOnPullRequestHead };
     }).pipe(
       Effect.tap((result) =>
         checkedOutPullRequest.write(input.cwd, result.branch, result.pullRequest.url),

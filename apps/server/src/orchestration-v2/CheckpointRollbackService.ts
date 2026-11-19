@@ -1,7 +1,9 @@
+import { makeRestorePending } from "./goat/restorePending.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import {
   CheckpointId,
   CheckpointScopeId,
+  type GitCommandError,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
   ProviderThreadId,
@@ -150,6 +152,7 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const setAside = yield* makeSetAsideFolder;
+    const pendingRestore = yield* makeRestorePending;
     const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
@@ -253,9 +256,38 @@ export const layer: Layer.Layer<
 
       const { worktreePath, branch } = context.thread;
       let setAsidePath: string | null = null;
+      let verifyRecreation = Effect.void as Effect.Effect<void, GitCommandError>;
+      let completeRecreation = Effect.void as Effect.Effect<
+        void,
+        import("./goat/restorePending.ts").RestorePendingError
+      >;
+
       // Recreated only where the server would have made it, as turn start does.
       if (worktreePath != null && branch != null) {
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
+        if (
+          restoreFiles &&
+          (yield* fileSystem
+            .exists(path.join(worktreePath, ".git"))
+            .pipe(Effect.orElseSucceed(() => false)))
+        ) {
+          const project = yield* projects.get(context.thread.projectId);
+          if (
+            Option.isSome(project) &&
+            (yield* pendingRestore.readStrict(worktreePath, project.value.workspaceRoot))
+              ?.applied === false
+          ) {
+            return yield* new CheckpointRollbackExecutionError({
+              reason: "unexpected-failure",
+              threadId: input.threadId,
+              providerThreadId: input.providerThreadId,
+              checkpointId: input.checkpointId,
+              cause: new Error(
+                `Restore the incomplete workspace at ${worktreePath} before retrying Edit from here.`,
+              ),
+            });
+          }
+        }
         const leftover = restoreFiles && (yield* setAside.lostCheckout(worktreePath));
         if (
           (leftover || (yield* setAside.missing(worktreePath))) &&
@@ -263,15 +295,35 @@ export const layer: Layer.Layer<
         ) {
           const project = yield* projects.get(context.thread.projectId);
           if (Option.isSome(project)) {
-            const recreate = gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: project.value.workspaceRoot,
-                  refName: branch,
-                  path: worktreePath,
-                }),
-              ),
-            );
+            const cwd = project.value.workspaceRoot;
+            const recreate = Effect.gen(function* () {
+              yield* gitWorkflow.pruneWorktrees({ cwd });
+              const { commitSha: headSha } = yield* gitWorkflow.resolveCommit({
+                cwd,
+                revision: `refs/heads/${branch}`,
+              });
+              const state = {
+                restoredFrom: "branch" as const,
+                headSha,
+                snapshotSha: null,
+                snapshotRef: null,
+                applied: false,
+              };
+              yield* pendingRestore.write(worktreePath, state, cwd);
+              yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
+              verifyRecreation = gitWorkflow.verifyManagedCheckout({
+                projectCwd: cwd,
+                worktreePath: scope.cwd,
+                expectedPath: worktreePath,
+                branch,
+                expectedHead: headSha,
+              });
+              completeRecreation = pendingRestore.write(
+                worktreePath,
+                { ...state, applied: true },
+                cwd,
+              );
+            });
             if (leftover) {
               if (!(yield* isolated)) return yield* sharedWorkspace();
               setAsidePath = (yield* setAside.around(worktreePath, recreate, aside)).setAsidePath;
@@ -315,6 +367,7 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      if (restoreFiles && runsToRollback.length > 0) yield* verifyRecreation;
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }
@@ -323,7 +376,11 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (restoreFiles) yield* checkpoints.restore({ scope, checkpoint });
+      if (restoreFiles) {
+        yield* verifyRecreation;
+        yield* checkpoints.restore({ scope, checkpoint });
+      }
+      yield* completeRecreation;
       if (staleCheckpoints.length > 0) {
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });
       }

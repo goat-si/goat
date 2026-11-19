@@ -1,3 +1,8 @@
+import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
+import { isSameWorktreePath } from "./worktreePath.ts";
+export { isSameWorktreePath } from "./worktreePath.ts";
+import { captureEmptySubmodules } from "./worktreeSubmoduleRecovery.ts";
+import { createTrace2Monitor } from "./gitTrace2Monitor.ts";
 export { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import {
   parseDefaultBranchFromRemoteHeadRef,
@@ -44,10 +49,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
@@ -63,10 +64,8 @@ import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import { dedupeRemoteBranchesWithLocalMatches } from "@goat/shared/git";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { compactTraceAttributes } from "@goat/shared/observability";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
-import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand, runsGitWithoutConsole } from "@goat/shared/shell";
 import * as ServerConfig from "../config.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -82,7 +81,7 @@ import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import { unquoteGitPath } from "./gitQuotedPath.ts";
-import { tryWithForeignWorkspaceSubtree } from "../workspace/workspaceLease.ts";
+import { tryWithWorkspaceLease, tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
   makeHookRunProbe,
@@ -98,7 +97,11 @@ import {
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
 import { unsetInheritedRepositoryEnv } from "./VcsProcess.ts";
 import { makeCachedGitConfigReader } from "./gitConfigReadCache.ts";
-import { recordPushedUpstream, runSharedConfigCommand } from "./GitSharedConfig.ts";
+import {
+  recordPushedUpstream,
+  runSharedConfigCommand,
+  withSharedConfigWrite,
+} from "./GitSharedConfig.ts";
 import {
   deriveLocalBranchNameFromRemoteRef,
   fetchFailureDetail,
@@ -135,6 +138,7 @@ const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 // The first fetch after a long gap can pull thousands of new refs for minutes while
 // printing progress the whole time, so the worktree base fetch also stops only on silence.
 const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
+const FETCH_REMOTE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -189,11 +193,6 @@ const NON_REPOSITORY_REMOTE_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitRemot
   behindCount: 0,
   aheadOfDefaultCount: 0,
 });
-
-type TraceTailState = {
-  processedChars: number;
-  remainder: string;
-};
 
 class StatusRemoteRefreshCacheKey extends Data.Class<{
   gitCommonDir: string;
@@ -254,17 +253,6 @@ function parsePorcelainPath(record: string): string | null {
   if (fieldsBeforePath === undefined) return null;
   const filePath = record.split(" ").slice(fieldsBeforePath).join(" ");
   return filePath.length > 0 ? filePath : null;
-}
-
-/** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
-const isGitCommandError = Schema.is(GitCommandError);
-
-export function isSameWorktreePath(left: string, right: string, platform: NodeJS.Platform) {
-  const trim = (value: string) => value.replace(/(?<=[^\\/:])[\\/]+$/u, "");
-  return platform === "win32"
-    ? normalizeProjectPathForComparison(trim(left)) ===
-        normalizeProjectPathForComparison(trim(right))
-    : trim(left) === trim(right);
 }
 
 export function uniqueCommitsProblem(count: number, baseRef: string): string {
@@ -394,199 +382,6 @@ function isMissingWorktreeStderr(stderr: string): boolean {
     normalized.includes("cannot remove working tree")
   );
 }
-
-interface Trace2Monitor {
-  readonly env: NodeJS.ProcessEnv;
-  readonly flush: Effect.Effect<void, never>;
-}
-
-const nowUnixNano = DateTime.now.pipe(
-  Effect.map((now) => BigInt(DateTime.toEpochMillis(now)) * 1_000_000n),
-);
-
-const addCurrentSpanEvent =
-  /* This helper annotates the existing operation span. */
-  Effect.fnUntraced(
-    function* (name: string, attributes: Record<string, unknown>) {
-      const span = yield* Effect.currentSpan;
-      const timestamp = yield* nowUnixNano;
-      yield* Effect.sync(() => {
-        span.event(name, timestamp, compactTraceAttributes(attributes));
-      });
-    },
-    Effect.catchTags({
-      NoSuchElementError: () => Effect.void,
-    }),
-  );
-
-// Nested Git processes share the trace file but reuse child IDs in their own sessions.
-function trace2ChildKey(record: Record<string, unknown>): string | null {
-  const childId = record.child_id;
-  if (typeof childId === "number" || typeof childId === "string") {
-    return typeof record.sid === "string" ? `${record.sid}\n${childId}` : String(childId);
-  }
-  const hookName = record.hook_name;
-  return typeof hookName === "string" && hookName.trim().length > 0 ? hookName.trim() : null;
-}
-
-const Trace2Record = Schema.Record(Schema.String, Schema.Unknown);
-const decodeTrace2Record = decodeJsonResult(Trace2Record);
-
-const createTrace2Monitor = Effect.fnUntraced(function* (
-  input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
-  progress: GitVcsDriver.ExecuteGitProgress | undefined,
-): Effect.fn.Return<
-  Trace2Monitor,
-  PlatformError.PlatformError,
-  Scope.Scope | FileSystem.FileSystem | Path.Path
-> {
-  if (!progress?.onHookStarted && !progress?.onHookFinished) {
-    return {
-      env: {},
-      flush: Effect.void,
-    };
-  }
-
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const traceFilePath = yield* fs.makeTempFileScoped({
-    prefix: `goat-git-trace2-${process.pid}-`,
-    suffix: ".json",
-  });
-  const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
-  const traceTailState = yield* Ref.make<TraceTailState>({
-    processedChars: 0,
-    remainder: "",
-  });
-
-  const handleTraceLine = Effect.fn("handleTraceLine")(function* (line: string) {
-    const trimmedLine = line.trim();
-    if (trimmedLine.length === 0) {
-      return;
-    }
-
-    const traceRecord = decodeTrace2Record(trimmedLine);
-    if (Result.isFailure(traceRecord)) {
-      yield* Effect.logDebug(
-        `GitVcsDriver.trace2: failed to parse trace line for ${input.operation} in ${input.cwd} (${input.args.length} arguments)`,
-        traceRecord.failure,
-      );
-      return;
-    }
-
-    const event = traceRecord.success.event;
-    const childKey = trace2ChildKey(traceRecord.success);
-    if (childKey === null) {
-      return;
-    }
-    const started = hookStartByChildKey.get(childKey);
-    const hookNameFromEvent =
-      typeof traceRecord.success.hook_name === "string" ? traceRecord.success.hook_name.trim() : "";
-    const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
-    if (hookName.length === 0) {
-      return;
-    }
-
-    if (event === "child_start") {
-      if (traceRecord.success.child_class !== "hook") {
-        return;
-      }
-      const now = yield* DateTime.now;
-      hookStartByChildKey.set(childKey, { hookName, startedAtMs: DateTime.toEpochMillis(now) });
-      yield* addCurrentSpanEvent("git.hook.started", {
-        hookName,
-      });
-      if (progress.onHookStarted) {
-        yield* progress.onHookStarted(hookName);
-      }
-      return;
-    }
-
-    if (event === "child_exit" && started) {
-      hookStartByChildKey.delete(childKey);
-      const code = traceRecord.success.code;
-      const exitCode = typeof code === "number" && Number.isInteger(code) ? code : null;
-      const now = yield* DateTime.now;
-      const durationMs = Math.max(0, DateTime.toEpochMillis(now) - started.startedAtMs);
-      yield* addCurrentSpanEvent("git.hook.finished", {
-        hookName: started.hookName,
-        exitCode,
-        durationMs,
-      });
-      if (progress.onHookFinished) {
-        yield* progress.onHookFinished({
-          hookName: started.hookName,
-          exitCode,
-          durationMs,
-        });
-      }
-    }
-  });
-
-  const deltaMutex = yield* Semaphore.make(1);
-  const readTraceDelta = deltaMutex.withPermit(
-    fs.readFileString(traceFilePath).pipe(
-      Effect.flatMap((contents) =>
-        Effect.uninterruptible(
-          Ref.modify(traceTailState, ({ processedChars, remainder }) => {
-            if (contents.length <= processedChars) {
-              return [[], { processedChars, remainder }];
-            }
-
-            const appended = contents.slice(processedChars);
-            const combined = remainder + appended;
-            const lines = combined.split("\n");
-            const nextRemainder = lines.pop() ?? "";
-
-            return [
-              lines.map((line) => line.replace(/\r$/, "")),
-              {
-                processedChars: contents.length,
-                remainder: nextRemainder,
-              },
-            ];
-          }).pipe(
-            Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
-          ),
-        ),
-      ),
-      Effect.ignore({ log: true }),
-    ),
-  );
-  const traceFileName = path.basename(traceFilePath);
-  yield* Stream.runForEach(fs.watch(traceFilePath), (event) => {
-    const eventPath = event.path;
-    const isTargetTraceEvent =
-      eventPath === traceFilePath ||
-      eventPath === traceFileName ||
-      path.basename(eventPath) === traceFileName;
-    if (!isTargetTraceEvent) return Effect.void;
-    return readTraceDelta;
-  }).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
-
-  const finalizeTrace2Monitor = Effect.fn("finalizeTrace2Monitor")(function* () {
-    yield* readTraceDelta;
-    const finalLine = yield* Ref.modify(traceTailState, ({ processedChars, remainder }) => [
-      remainder.trim(),
-      {
-        processedChars,
-        remainder: "",
-      },
-    ]);
-    if (finalLine.length > 0) {
-      yield* handleTraceLine(finalLine);
-    }
-  });
-
-  yield* Effect.addFinalizer(finalizeTrace2Monitor);
-
-  return {
-    env: {
-      GIT_TRACE2_EVENT: traceFilePath,
-    },
-    flush: readTraceDelta,
-  };
-});
 
 const GIT_CHECKOUT_PROGRESS_LINE = /Updating files:\s+(\d+)%\s+\((\d+)\/(\d+)\)/;
 
@@ -913,6 +708,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
+  const sharedConfigRepository = (cwd: string) =>
+    Effect.suspend(() => resolveRepositoryPaths(cwd)).pipe(
+      Effect.map((repository) =>
+        repository === null
+          ? null
+          : hostPlatform === "win32"
+            ? repository.gitCommonDir.toLowerCase()
+            : repository.gitCommonDir,
+      ),
+    );
+
   const executeGit = (
     operation: string,
     cwd: string,
@@ -941,15 +747,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
         ...(options.progress ? { progress: options.progress } : {}),
       }),
-      repository: Effect.suspend(() => resolveRepositoryPaths(cwd)).pipe(
-        Effect.map((repository) =>
-          repository === null
-            ? null
-            : hostPlatform === "win32"
-              ? repository.gitCommonDir.toLowerCase()
-              : repository.gitCommonDir,
-        ),
-      ),
+      repository: sharedConfigRepository(cwd),
       write: options.writesSharedConfig === true,
       retry: options.retryConfigLock === true,
     }).pipe(
@@ -2046,7 +1844,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const line = statusRecords[index]!;
       if (line.startsWith("# branch.head ")) {
         const value = line.slice("# branch.head ".length).trim();
-        refName = value === "(detached)" ? null : value;
+        refName = value === "(detached)" || value === "(unknown)" ? null : value;
         continue;
       }
       if (line.startsWith("# branch.upstream ")) {
@@ -3820,10 +3618,49 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* runGit("GitVcsDriver.inspectExistingBranch.prune", input.cwd, ["worktree", "prune"], {
         timeoutMs: 15_000,
       });
-      const worktreePath =
-        (yield* readWorktreeRecords("GitVcsDriver.inspectExistingBranch.find", input.cwd)).find(
-          (record) => record.branch === `refs/heads/${input.branch}`,
-        )?.path ?? null;
+      const checkout = (yield* readWorktreeRecords(
+        "GitVcsDriver.inspectExistingBranch.find",
+        input.cwd,
+      )).find((record) => record.branch === `refs/heads/${input.branch}`);
+      if (checkout?.lockReason?.startsWith("goat-create-")) {
+        const originalReason = checkout.lockReason;
+        const holderState = yield* Effect.sync(() => worktreeCreationHolder(originalReason));
+        const recovered =
+          holderState === "dead"
+            ? yield* tryWithWorkspaceSubtree(
+                checkout.path,
+                Effect.gen(function* () {
+                  const current = (yield* readWorktreeRecords(
+                    "GitVcsDriver.recheckCreationLock",
+                    input.cwd,
+                  )).find((record) => isSameWorktreePath(record.path, checkout.path, hostPlatform));
+                  if (current?.lockReason !== originalReason || current.branch !== checkout.branch)
+                    return false;
+                  yield* runGit("GitVcsDriver.recoverCreationLock", input.cwd, [
+                    "worktree",
+                    "unlock",
+                    "--",
+                    current.path,
+                  ]);
+                  return true;
+                }),
+              ).pipe(Effect.orElseSucceed(() => Option.none()))
+            : Option.none();
+        if (!Option.getOrElse(recovered, () => false)) {
+          const recovery =
+            holderState === "live"
+              ? "It is still being prepared."
+              : 'GOAT cannot tell if it is still being prepared. After confirming no GOAT setup is using it, run git worktree unlock -- "<checkout path>" from the project, then retry.';
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.inspectExistingBranch",
+            command: "git worktree list",
+            cwd: input.cwd,
+            reason: "branch_already_exists",
+            detail: `Branch ${input.branch} has a reserved checkout at ${checkout.path}. ${recovery}`,
+          });
+        }
+      }
+      const worktreePath = checkout?.path ?? null;
       const uniqueCommits = Number(
         (yield* runGitStdout("GitVcsDriver.inspectExistingBranch.count", input.cwd, [
           "rev-list",
@@ -4009,14 +3846,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           return yield* conflict(`its worktree ${checkedOutAt} has uncommitted changes`);
         }
         if (matchesLegacy) worktreePath = targetPath = checkedOutAt;
-        if (existingTip !== startSha) {
-          yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
-            "merge",
-            "--ff-only",
-            "--quiet",
-            startSha,
-          ]);
-        }
+        const reused = yield* tryWithWorkspaceLease(
+          checkedOutAt,
+          Effect.gen(function* () {
+            const current = yield* inspectExistingBranch({
+              cwd: input.cwd,
+              branch: newBranch,
+              baseRef: input.refName,
+            });
+            if (
+              current?.worktreePath !== checkedOutAt ||
+              current.tip !== existingTip ||
+              current.dirty
+            )
+              return yield* conflict("changed while GOAT was checking its worktree");
+            if (existingTip !== startSha) {
+              yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
+                "merge",
+                "--ff-only",
+                "--quiet",
+                startSha,
+              ]);
+            }
+          }),
+        ).pipe(
+          Effect.catchTags({
+            WorkspaceLeaseUnavailableError: (error) => Effect.fail(conflict(error.message)),
+          }),
+        );
+        if (Option.isNone(reused)) return yield* conflict("has a worktree that is in use");
         existing = "reused";
       } else {
         if (existingTip !== startSha) {
@@ -4039,80 +3897,65 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     if (input.path === null && existing !== "reused")
       targetPath = worktreePath = yield* availableWorktreePath(fileSystem, input.cwd, worktreePath);
-    const args =
-      newBranch && existing === null
-        ? ["worktree", "add", "-b", newBranch, "--", worktreePath, input.refName]
-        : [
-            "worktree",
-            "add",
-            "--",
-            worktreePath,
-            existing === "added" ? newBranch! : input.refName,
-          ];
-    const onCheckoutProgress = progress?.onCheckoutProgress;
-    const pathExisted = yield* fileSystem
-      .exists(worktreePath)
-      .pipe(Effect.orElseSucceed(() => true));
-    // A failed or interrupted add (a timed-out Windows checkout, say) can leave the new branch
-    // and a half-written worktree behind, which a retry of the same launch would trip over.
-    const rollbackAdd = Effect.fn("GitVcsDriver.createWorktree.rollback")(function* (
-      failure: Cause.Cause<GitCommandError>,
-    ) {
-      const error = Cause.squash(failure);
-      if (
-        pathExisted ||
-        (isGitCommandError(error) &&
-          (error.reason === "branch_already_exists" || error.reason === "path_already_exists"))
-      ) {
-        return;
-      }
-      const branchCreated =
-        newBranch !== undefined &&
-        existingTip === null &&
-        (yield* readBranchTip(input.cwd, newBranch)) !== null;
-      const realTarget = yield* fileSystem.realPath(targetPath).pipe(Effect.option);
-      if (!branchCreated && Option.isNone(realTarget)) return;
-      // Turn start may lease this folder while recreating it; keep other GOAT servers out.
-      const removed = yield* tryWithForeignWorkspaceSubtree(
-        targetPath,
-        Effect.gen(function* () {
-          const claimed = (yield* readWorktreeRecords(
-            "GitVcsDriver.createWorktree.rollbackList",
+    const addHelp =
+      existing === "reused"
+        ? null
+        : yield* executeGit(
+            "GitVcsDriver.createWorktree.capabilities",
             input.cwd,
-          )).some(
-            (record) =>
-              isSameWorktreePath(record.path, targetPath, hostPlatform) ||
-              (Option.isSome(realTarget) &&
-                isSameWorktreePath(record.path, realTarget.value, hostPlatform)),
+            ["worktree", "add", "-h"],
+            { allowNonZeroExit: true },
           );
-          if (claimed) {
-            // Git locks a worktree while adding it; a second --force removes a locked one.
-            yield* runGit("GitVcsDriver.createWorktree.rollbackWorktree", input.cwd, [
-              "worktree",
-              "remove",
-              "--force",
-              "--force",
-              "--",
-              targetPath,
-            ]);
-          }
-          yield* fileSystem.remove(targetPath, { recursive: true }).pipe(Effect.ignore);
-        }),
+    const lockOnAdd =
+      addHelp !== null && `${addHelp.stdout}\n${addHelp.stderr}`.includes("--reason");
+    const lockReason =
+      existing === "reused" ? null : worktreeCreationReason(yield* random.uuidV4());
+    const args = [
+      "worktree",
+      "add",
+      ...(lockOnAdd && lockReason !== null ? ["--lock", "--reason", lockReason] : []),
+      ...(newBranch && existing === null ? ["-b", newBranch] : []),
+      "--",
+      worktreePath,
+      existing === "added" ? (newBranch ?? input.refName) : input.refName,
+    ];
+    const onCheckoutProgress = progress?.onCheckoutProgress;
+    const pathExisted = yield* fileSystem.exists(targetPath).pipe(Effect.orElseSucceed(() => true));
+    const registration = Effect.fn("GitVcsDriver.createWorktree.registration")(function* () {
+      if (lockReason === null) return;
+      const physicalPath = yield* fileSystem
+        .realPath(targetPath)
+        .pipe(Effect.orElseSucceed(() => targetPath));
+      const records = yield* readWorktreeRecords(
+        "GitVcsDriver.createWorktree.registrationList",
+        input.cwd,
       );
-      if (Option.isNone(removed))
-        return yield* Effect.logWarning("worktree add rollback kept a folder that is in use", {
-          worktreePath: targetPath,
-        });
-      if (branchCreated) {
-        yield* runGit("GitVcsDriver.createWorktree.rollbackBranch", input.cwd, [
-          "branch",
-          "-D",
-          "--",
-          newBranch!,
-        ]);
-      }
+      return records.find(
+        (record) =>
+          record.lockReason === lockReason &&
+          (isSameWorktreePath(record.path, targetPath, hostPlatform) ||
+            isSameWorktreePath(record.path, physicalPath, hostPlatform)),
+      );
     });
-
+    const unlock = (ownedPath: string) =>
+      runGit("GitVcsDriver.createWorktree.unlock", input.cwd, [
+        "worktree",
+        "unlock",
+        "--",
+        ownedPath,
+      ]);
+    const release = Effect.fn("GitVcsDriver.createWorktree.release")(
+      function* () {
+        const owned = yield* registration();
+        if (owned !== undefined) yield* unlock(owned.path);
+      },
+      Effect.catchCause((cause) =>
+        Effect.logWarning("could not unlock the created worktree", {
+          worktreePath: targetPath,
+          cause,
+        }),
+      ),
+    );
     if (hostPlatform === "win32" && existing !== "reused") {
       yield* applyWindowsCheckoutSettings(input.cwd);
     }
@@ -4198,6 +4041,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     };
     if (existing !== "reused") {
+      let transferred = false;
       const sparse = yield* readWorktreeSparseCheckout(
         input.cwd,
         existing === "added" ? newBranch! : input.refName,
@@ -4206,6 +4050,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const canReplayHook =
         sparse !== null || (root.checkoutApart && (yield* supportsHookRun(input.cwd)));
       yield* Effect.gen(function* () {
+        if (options?.beforeAdd) yield* options.beforeAdd(targetPath);
         if (sparse === null && !root.checkoutApart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
           if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
@@ -4272,21 +4117,55 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             }
           }),
         ),
-        Effect.onError((cause) =>
-          rollbackAdd(cause).pipe(
-            Effect.catchCause((rollbackCause) =>
-              Effect.logWarning("worktree add rollback failed; the retry reports what is left", {
-                worktreePath: targetPath,
-                cause: rollbackCause,
-              }),
+        Effect.andThen(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (!lockOnAdd && lockReason !== null && progress?.onWorktreeOwnership) {
+                yield* runGit("GitVcsDriver.createWorktree.lock", input.cwd, [
+                  "worktree",
+                  "lock",
+                  "--reason",
+                  lockReason,
+                  "--",
+                  targetPath,
+                ]).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Git could not reserve the checkout for preparation", {
+                      worktreePath: targetPath,
+                      cause,
+                    }),
+                  ),
+                );
+              }
+              yield* progress?.onWorktreeClaimed?.(targetPath) ?? Effect.void;
+              if (progress?.onWorktreeOwnership !== undefined) {
+                yield* progress.onWorktreeOwnership({
+                  path: targetPath,
+                  release: release(),
+                });
+                transferred = true;
+              }
+            }),
+          ),
+        ),
+        Effect.catch((error) =>
+          registration().pipe(
+            Effect.option,
+            Effect.flatMap((owned) =>
+              Option.getOrUndefined(owned) === undefined
+                ? Effect.fail(error)
+                : Effect.fail(
+                    new GitCommandError({
+                      ...error,
+                      detail: `${error.detail}. The unfinished checkout and branch were kept at ${targetPath}.`,
+                    }),
+                  ),
             ),
           ),
         ),
+        Effect.ensuring(Effect.suspend(() => (transferred ? Effect.void : release()))),
       );
 
-      if (progress?.onWorktreeClaimed) {
-        yield* progress.onWorktreeClaimed(worktreePath);
-      }
       yield* refreshNewWorktreeIndex(worktreePath, executeGit, fileSystem, path).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("worktree index refresh failed", { worktreePath, cause }),
@@ -4340,6 +4219,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         yield* progress.onSubmodulesStarted();
       }
       const onSubmoduleLine = progress?.onSubmoduleLine;
+      const submoduleUpdate = (args: readonly string[]) =>
+        runGit(
+          "GitVcsDriver.createWorktree.updateSubmodules",
+          worktreePath,
+          ["submodule", "update", "--init", ...(onSubmoduleLine ? ["--progress"] : []), ...args],
+          {
+            timeoutMs: null,
+            ...(onSubmoduleLine
+              ? {
+                  env: { LANGUAGE: "C" },
+                  appendTruncationMarker: true,
+                  keepLineCallbacksAfterTruncation: true,
+                  progress: { onStdoutLine: onSubmoduleLine, onStderrLine: onSubmoduleLine },
+                }
+              : {}),
+          },
+        );
       yield* runGit(
         "GitVcsDriver.createWorktree.initSubmodules",
         worktreePath,
@@ -4347,31 +4243,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         { writesSharedConfig: true },
       ).pipe(
         Effect.andThen(
-          runGit(
-            "GitVcsDriver.createWorktree.updateSubmodules",
-            worktreePath,
-            [
-              "submodule",
-              "update",
-              "--init",
-              ...(submoduleMode.value === "recursive" ? ["--recursive"] : []),
-              // Git reports transfer progress to a pipe only when forced.
-              ...(onSubmoduleLine ? ["--progress"] : []),
-            ],
-            {
-              // Cloning scales with remote size; let it finish or be cancelled, like worktree add.
-              timeoutMs: null,
-              ...(onSubmoduleLine
-                ? {
-                    env: { LANGUAGE: "C" },
-                    progress: { onStdoutLine: onSubmoduleLine, onStderrLine: onSubmoduleLine },
-                    // Progress for many submodules can pass the output cap; truncate instead of failing.
-                    appendTruncationMarker: true,
-                    keepLineCallbacksAfterTruncation: true,
-                  }
-                : {}),
-            },
-          ),
+          Effect.gen(function* () {
+            const candidates =
+              existing === "reused" || pathExisted
+                ? Effect.succeed([])
+                : yield* captureEmptySubmodules({
+                    cwd: worktreePath,
+                    fs: fileSystem,
+                    path,
+                    git: (operation, cwd, args) => runGitStdout(operation, cwd, args),
+                  }).pipe(Effect.orElseSucceed(() => Effect.succeed([])));
+
+            yield* submoduleUpdate(submoduleMode.value === "recursive" ? ["--recursive"] : []).pipe(
+              Effect.tapError(() =>
+                Effect.gen(function* () {
+                  const cloned = yield* candidates;
+                  if (cloned.length > 0)
+                    yield* submoduleUpdate(["--force", "--checkout", "--", ...cloned]);
+                }).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("could not check out cloned worktree submodules", {
+                      worktreePath,
+                      cause,
+                    }),
+                  ),
+                ),
+              ),
+            );
+          }),
         ),
         Effect.matchEffect({
           onFailure: (cause) =>
@@ -4451,11 +4350,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"] = Effect.fn(
     "resolveCommit",
   )(function* (input) {
-    const commitSha = yield* runGitStdout("GitVcsDriver.resolveCommit", input.cwd, [
-      "rev-parse",
-      "--verify",
-      `${input.revision}^{commit}`,
-    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    yield* refuseOptionLikeRefName("GitVcsDriver.resolveCommit", input.cwd, input.revision);
+    const revision = input.revision === "-" ? "@{-1}" : input.revision;
+    const commit = revision.startsWith(":/") ? revision : `${revision}^{commit}`;
+    const commitSha = (yield* executeGitWithStableDiagnostics(
+      "GitVcsDriver.resolveCommit",
+      input.cwd,
+      ["rev-parse", "--verify", commit],
+    )).stdout.trim();
 
     return { commitSha };
   });
@@ -4524,6 +4426,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const options = {
       env: STATUS_UPSTREAM_REFRESH_ENV,
       fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
+      timeoutMs: FETCH_REMOTE_TIMEOUT_MS,
     };
     // Another fetch in the same repository, such as the background status
     // poll, can win the race for a remote-tracking ref. The loser fails, but
@@ -4617,6 +4520,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"] =
     Effect.fn("resolveWorktreeBaseRemote")(function* (input) {
+      const refName = input.refName.replace(/^refs\/heads\//, "");
       const remoteNames = (yield* listRemoteNames(input.cwd)).toSorted(
         (left, right) => right.length - left.length,
       );
@@ -4625,13 +4529,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const localBranch = yield* runGitStdout("GitVcsDriver.resolveWorktreeBaseRemote", input.cwd, [
         "for-each-ref",
         "--format=%(refname)\t%(upstream:remotename)\t%(upstream:remoteref)",
-        `refs/heads/${input.refName}`,
+        `refs/heads/${refName}`,
       ]).pipe(
         Effect.map((stdout) =>
           stdout
             .split("\n")
             .map((line) => line.split("\t"))
-            .find(([refName]) => refName === `refs/heads/${input.refName}`),
+            .find(([name]) => name === `refs/heads/${refName}`),
         ),
       );
       let target: { remoteName: string; branchName: string } | null;
@@ -4643,12 +4547,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ? { remoteName, branchName: merge.slice("refs/heads/".length) }
             : null;
       } else {
-        target = parseRemoteRefWithRemoteNames(input.refName, remoteNames);
+        target = parseRemoteRefWithRemoteNames(refName, remoteNames);
       }
       const { remoteName, branchName } = target ?? {
         remoteName: "origin",
-        branchName: input.refName,
+        branchName: refName,
       };
+      if (branchName.startsWith("-") || /[\x00-\x20\x7f~^:?*[\]\\]|\.\.|@\{/.test(branchName))
+        return null;
       return servedRemoteBranch(remoteNames, { remoteName, branchName });
     });
 
@@ -5002,22 +4908,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (input.oldBranch === input.newBranch) {
       return { branch: input.newBranch };
     }
-    const targetBranch = input.exactName
-      ? input.newBranch
-      : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
+    // Parallel launches often generate the same name; picking it under the lock that serializes
+    // the renames keeps a second launch from choosing a name the first is about to take.
+    return yield* withSharedConfigWrite(
+      sharedConfigRepository(input.cwd),
+      Effect.gen(function* () {
+        const targetBranch = input.exactName
+          ? input.newBranch
+          : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
-    yield* executeGit(
-      "GitVcsDriver.renameBranch",
-      input.cwd,
-      ["branch", "-m", "--", input.oldBranch, targetBranch],
-      {
-        timeoutMs: 10_000,
-        fallbackErrorDetail: "git branch rename failed",
-        writesSharedConfig: true,
-      },
+        yield* executeGit(
+          "GitVcsDriver.renameBranch",
+          input.cwd,
+          ["branch", "-m", "--", input.oldBranch, targetBranch],
+          {
+            timeoutMs: 10_000,
+            fallbackErrorDetail: "git branch rename failed",
+          },
+        );
+
+        return { branch: targetBranch };
+      }),
     );
-
-    return { branch: targetBranch };
   });
 
   const switchRef: GitVcsDriver.GitVcsDriver["Service"]["switchRef"] = Effect.fn("switchRef")(
@@ -5167,6 +5079,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               path: path.resolve(cwd, worktree.slice("worktree ".length)),
               branch: fields.find((field) => field.startsWith("branch "))?.slice("branch ".length),
               prunable: fields.some((field) => field.startsWith("prunable")),
+              lockReason: fields
+                .find((field) => field.startsWith("locked "))
+                ?.slice("locked ".length),
             },
           ];
         }),
@@ -5213,6 +5128,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }),
       ),
     );
+
+  const invalidateRefs = Effect.fn("GitVcsDriver.invalidateRefs")(function* (cwd: string) {
+    const key = normalizeRepositoryPathsCacheKey(cwd);
+    yield* Cache.invalidate(repositoryPathsRefreshCache, key);
+    yield* Cache.invalidate(repositoryPathsCache, key);
+    yield* withListRefsInvalidation(cwd, Effect.void);
+  });
 
   // Forwarders retain the underlying Git operation spans.
   return GitVcsDriver.GitVcsDriver.of({
@@ -5307,6 +5229,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* withListRefsInvalidation(input.cwd, switchRef(input));
     }),
     initRepo: initRepoWithListRefsInvalidation,
+    invalidateRefs,
     listLocalBranchNames,
     listWorktreePaths,
     branchWorktreePath,

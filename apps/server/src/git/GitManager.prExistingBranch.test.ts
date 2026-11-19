@@ -1,3 +1,5 @@
+import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
+import { ThreadId } from "@goat/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -29,6 +31,96 @@ const findExistingPrWorktree = Effect.fn("findExistingPrWorktree")(function* (re
 });
 
 it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
+  it.effect("refuses a PR worktree path that now contains another repository", () =>
+    Effect.gen(function* () {
+      const repo = yield* makeTempDir("goat-pr-registered-");
+      yield* initRepo(repo);
+      const remote = yield* createBareRemote();
+      yield* runGit(repo, ["remote", "add", "origin", remote]);
+      yield* runGit(repo, ["branch", "feature/pr-replaced"]);
+      const worktree = NodePath.join(repo, "linked");
+      yield* runGit(repo, ["worktree", "add", worktree, "feature/pr-replaced"]);
+      NodeFS.renameSync(worktree, worktree + "-original");
+      yield* runGit(repo, ["clone", "--shared", "-b", "feature/pr-replaced", repo, worktree]);
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Replaced PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/pr-replaced",
+            state: "open",
+          },
+        },
+      });
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repo,
+        reference: "84",
+        mode: "worktree",
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure.message).toContain("worktree registration");
+    }),
+  );
+
+  it.effect.each(["checkout hook", "setup script"] as const)(
+    "does not report a fresh PR at its target after the %s advances HEAD",
+    (stage) =>
+      Effect.gen(function* () {
+        const repo = yield* makeTempDir("goat-pr-hook-head-");
+        yield* initRepo(repo);
+        const remote = yield* createBareRemote();
+        yield* runGit(repo, ["remote", "add", "origin", remote]);
+        const head = (yield* runGit(repo, ["rev-parse", "HEAD"])).stdout.trim();
+        yield* runGit(repo, ["push", "origin", "HEAD:refs/pull/88/head"]);
+        if (stage === "checkout hook") {
+          NodeFS.mkdirSync(NodePath.join(repo, ".git", "hooks"), { recursive: true });
+          NodeFS.writeFileSync(
+            NodePath.join(repo, ".git", "hooks", "post-checkout"),
+            "#!/bin/sh\ngit -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm hook\n",
+            { mode: 0o755 },
+          );
+        }
+        const git = yield* GitVcsDriver;
+        let setups = 0;
+        const { manager } = yield* makeManager({
+          setupScriptRunner: {
+            runForThread: ({ worktreePath }) =>
+              Effect.gen(function* () {
+                setups += 1;
+                if (stage === "setup script" && worktreePath !== null) {
+                  yield* runGit(worktreePath, ["commit", "--allow-empty", "-m", "setup"]).pipe(
+                    Effect.orDie,
+                  );
+                }
+                return { status: "no-script" as const };
+              }).pipe(Effect.provideService(GitVcsDriver, git)),
+          },
+          providerScenario: {
+            pullRequest: {
+              number: 88,
+              title: "PR target",
+              url: "https://github.com/pingdotgg/codething-mvp/pull/88",
+              baseRefName: "main",
+              headRefName: "feature/advanced",
+              state: "open",
+              headSha: head,
+            },
+          },
+        });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repo,
+          reference: "88",
+          mode: "worktree",
+          threadId: ThreadId.make("pr-hook-head"),
+        });
+        expect(result.isOnPullRequestHead).toBe(false);
+        expect(setups).toBe(stage === "checkout hook" ? 0 : 1);
+      }),
+  );
+
   it.effect.each([
     { localBranch: "ahead", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "behind", expectedHead: "pull request", isOnPullRequestHead: true },

@@ -1,3 +1,13 @@
+import * as Deferred from "effect/Deferred";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as ServerConfig from "../config.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { verifyManagedCheckout } from "./goat/restoreSnapshot.ts";
+import * as Stream from "effect/Stream";
+import { GitCommandError } from "@goat/contracts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import { preparationSettled } from "./testkit/preparationSettled.ts";
 import {
   encodeThreadProjection,
   adapter,
@@ -249,3 +259,359 @@ it.effect("retains automation and sender attribution while a message waits in th
     assert.equal(message?.text, "Run the audit");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("publishes the missing base and its replacement in the scheduled fetch stage", () => {
+  const harness = makeHarness({ hasCommit: ({ refName }) => Effect.succeed(refName === "HEAD") });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const input = launchInput({
+      command: "launch:scheduled-missing-base",
+      thread: "thread:scheduled-missing-base",
+      message: "Start",
+      workspace: { type: "worktree", baseRef: "gone", startFromOrigin: false },
+    });
+    const launched = yield* launches.launch({
+      ...input,
+      initialMessage: {
+        text: "Start",
+        attachments: [],
+        scheduledTaskId: ScheduledTaskId.make("task:gone"),
+      },
+    });
+    yield* preparationSettled(launched.threadId);
+    const snapshot = yield* tracker.get(launched.threadId);
+    assert.deepInclude(
+      snapshot?.stages.find((stage) => stage.id === "fetch"),
+      {
+        detail: "Saved base gone is missing. Using HEAD.",
+      },
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a scheduled preparation retry refuses a replaced checkout before starting setup", () => {
+  let setupCalls = 0;
+  let replaced = false;
+  const harness = makeHarness({
+    git: {
+      verifyManagedCheckout: ({ projectCwd }) =>
+        replaced
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "verifyManagedCheckout",
+                command: "git worktree",
+                cwd: projectCwd,
+                detail: "wrong repository",
+              }),
+            )
+          : Effect.void,
+    },
+    runSetup: () =>
+      Effect.sync(() =>
+        ++setupCalls === 1
+          ? {
+              status: "started" as const,
+              terminalId: "test",
+              scriptName: "Setup",
+              scriptCommand: "false",
+              cwd: "/repo-worktrees/feature",
+              scriptId: "setup",
+              async: false,
+              completion: Effect.succeed({ exitCode: 1, durationMs: 0 }),
+            }
+          : { status: "no-script" as const },
+      ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const initial = launchInput({
+      command: "launch:scheduled-replaced",
+      thread: "thread:scheduled-replaced",
+      message: "Start",
+      workspace: { type: "worktree", baseRef: "main", branch: "feature/fixture" },
+    });
+    const launch = yield* launches.launch({
+      ...initial,
+      initialMessage: {
+        text: "Start",
+        attachments: [],
+        scheduledTaskId: ScheduledTaskId.make("task:retry"),
+      },
+    });
+    const first = yield* preparationSettled(launch.threadId);
+    const run = first.runs[0];
+    assert.equal(run?.status, "failed");
+    if (run === undefined) return assert.fail("Expected prepared run");
+    replaced = true;
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("launch:scheduled-replaced:retry"),
+      threadId: launch.threadId,
+      runId: run.id,
+    });
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    yield* threads.streamStoredEventsFrom({ threadId: launch.threadId }).pipe(
+      Stream.filter(
+        (event) =>
+          (event.commandId === "launch:scheduled-replaced:retry:fail" ||
+            event.commandId === "launch:scheduled-replaced:retry:release") &&
+          event.event.type === "run.updated",
+      ),
+      Stream.runHead,
+    );
+    const retried = yield* threads.getThreadProjection(launch.threadId);
+    assert.equal(retried.runs[0]?.status, "failed");
+    assert.equal(harness.runSetup.mock.calls.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect.each(["first checkout", "retry"] as const)(
+  "uses the accepted local commit to reject HEAD drift during $case",
+  (scenario) => {
+    const retry = scenario === "retry";
+    let liveHead = retry ? "initial-local-head" : "advanced-head";
+    let baseHead = "initial-local-head";
+    let setupCalls = 0;
+    const harness = makeHarness({
+      git: {
+        resolveCommit: () => Effect.succeed({ commitSha: baseHead }),
+        verifyManagedCheckout: ({ expectedHead, projectCwd }) =>
+          expectedHead !== undefined && expectedHead !== liveHead
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git worktree",
+                  cwd: projectCwd,
+                  detail: "checkout HEAD changed",
+                }),
+              )
+            : Effect.void,
+      },
+      runSetup: () =>
+        Effect.sync(() =>
+          ++setupCalls === 1 && retry
+            ? {
+                status: "started" as const,
+                terminalId: "test",
+                scriptName: "Setup",
+                scriptCommand: "false",
+                cwd: "/repo-worktrees/feature",
+                scriptId: "setup",
+                async: false,
+                completion: Effect.succeed({ exitCode: 1, durationMs: 0 }),
+              }
+            : { status: "no-script" as const },
+        ),
+    });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launch = yield* launches.launch(
+        launchInput({
+          command: "launch:local-pin",
+          thread: "thread:local-pin",
+          message: "Start",
+          workspace: {
+            type: "worktree",
+            baseRef: "main",
+            startFromOrigin: false,
+            branch: "feature/fixture",
+          },
+        }),
+      );
+      const first = yield* preparationSettled(launch.threadId);
+      assert.equal(first.runs[0]?.status, "failed");
+      assert.deepInclude(first.runs[0]?.workspacePreparationBasePin, {
+        commitSha: "initial-local-head",
+        baseRefName: "main",
+      });
+      if (retry) {
+        const run = first.runs[0];
+        if (run === undefined) return assert.fail("Expected prepared run");
+        liveHead = baseHead = "advanced-head";
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("launch:local-pin:retry"),
+          threadId: launch.threadId,
+          runId: run.id,
+        });
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* threads.streamStoredEventsFrom({ threadId: launch.threadId }).pipe(
+          Stream.filter(
+            (event) =>
+              event.event.type === "run.updated" &&
+              (event.commandId === "launch:local-pin:retry:fail" ||
+                event.commandId === "launch:local-pin:retry:release"),
+          ),
+          Stream.runHead,
+        );
+        const result = yield* threads.getThreadProjection(launch.threadId);
+        assert.equal(result.runs[0]?.status, "failed");
+      }
+      assert.equal(harness.runSetup.mock.calls.length, retry ? 1 : 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "checks out the accepted SHA even if the named base moves before add, then retries there",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-launch-pinned-base-" });
+      const cwd = `${root}/repo`;
+      const worktreePath = `${root}/checkout`;
+      const seenHead = `${root}/hook-head`;
+      const git = (cwd: string, args: string[]) =>
+        driver.execute({ operation: "pin-fixture", cwd, args });
+      yield* fs.makeDirectory(cwd);
+      yield* git(cwd, ["init", "-b", "main"]);
+      yield* git(cwd, ["config", "user.name", "Test"]);
+      yield* git(cwd, ["config", "user.email", "test@example.invalid"]);
+      yield* git(cwd, ["commit", "--allow-empty", "-m", "pinned"]);
+      const pin = (yield* git(cwd, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* fs.makeDirectory(`${cwd}/.git/hooks`, { recursive: true });
+      const hook = `${cwd}/.git/hooks/post-checkout`;
+      yield* fs.writeFileString(hook, `#!/bin/sh\ngit rev-parse HEAD > '${seenHead}'\nexit 1\n`);
+      yield* fs.chmod(hook, 0o755);
+      const harness = makeHarness({
+        git: {
+          resolveCommit: (input) => driver.resolveCommit({ ...input, cwd }),
+          verifyManagedCheckout: (input) =>
+            verifyManagedCheckout({ ...input, projectCwd: cwd }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    cwd,
+                    operation: "verifyManagedCheckout",
+                    command: "git",
+                    detail: cause.detail,
+                    cause,
+                  }),
+              ),
+            ),
+        },
+        createWorktree: (input, options) =>
+          Effect.gen(function* () {
+            if (!(yield* fs.exists(worktreePath).pipe(Effect.orDie)))
+              yield* git(cwd, ["commit", "--allow-empty", "-m", "base advanced"]);
+            return yield* driver.createWorktree({ ...input, cwd, path: worktreePath }, options);
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const thread = yield* launches.launch(
+          launchInput({
+            command: "launch:pin-add",
+            thread: "thread:pin-add",
+            message: "Start",
+            workspace: {
+              type: "worktree",
+              baseRef: "main",
+              startFromOrigin: false,
+            },
+          }),
+        );
+        const initial = yield* preparationSettled(thread.threadId);
+        assert.equal(initial.runs[0]?.status, "failed");
+        assert.equal((yield* fs.readFileString(seenHead)).trim(), pin);
+        yield* fs.remove(hook);
+        const run = initial.runs[0];
+        if (run === undefined) return assert.fail("Expected prepared run");
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("launch:pin-add:retry"),
+          threadId: thread.threadId,
+          runId: run.id,
+        });
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* threads.streamStoredEventsFrom({ threadId: thread.threadId }).pipe(
+          Stream.filter(
+            (event) =>
+              event.event.type === "run.updated" &&
+              (event.commandId === "launch:pin-add:retry:fail" ||
+                event.commandId === "launch:pin-add:retry:release"),
+          ),
+          Stream.runHead,
+        );
+        const retried = yield* threads.getThreadProjection(thread.threadId);
+        assert.equal(retried.runs[0]?.status, "starting");
+        assert.equal(retried.thread.worktreePath, worktreePath);
+        assert.equal((yield* git(worktreePath, ["rev-parse", "HEAD"])).stdout.trim(), pin);
+      }).pipe(Effect.provide(harness.layer));
+    }).pipe(
+      Effect.provide(
+        GitVcsDriver.layer.pipe(
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "goat-launch-pinned-fixture-" }),
+          ),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
+);
+
+it.effect.each(["legacy progress", "different accepted pin"] as const)(
+  "uses a durable worktree pin in the presence of $case",
+  (scenario) =>
+    Effect.gen(function* () {
+      const resolving = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        git: {
+          resolveCommit: () =>
+            Deferred.succeed(resolving, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({ commitSha: "proposed-head" }),
+            ),
+        },
+        runSetup: () => Effect.succeed({ status: "no-script" as const }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const launch = yield* launches.launch(
+          launchInput({
+            command: "launch:old-progress",
+            thread: "thread:old-progress",
+            message: "Start",
+            workspace: {
+              type: "worktree",
+              baseRef: "main",
+              startFromOrigin: false,
+              branch: "feature/pin",
+            },
+          }),
+        );
+        yield* Deferred.await(resolving);
+        const run = launch.projection.runs[0];
+        if (run === undefined) return assert.fail("Expected preparing run");
+        if (scenario === "legacy progress") {
+          yield* threads.dispatch({
+            type: "prepared-run.progress",
+            commandId: CommandId.make("launch:old-progress:progress:worktree"),
+            threadId: launch.threadId,
+            runId: run.id,
+            phase: "worktree",
+          });
+        } else {
+          yield* threads.dispatch({
+            type: "prepared-run.pin-base",
+            commandId: CommandId.make("other:pin"),
+            threadId: launch.threadId,
+            runId: run.id,
+            basePin: { commitSha: "accepted-head", baseRefName: "stable" },
+          });
+        }
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* preparationSettled(launch.threadId);
+        const expected =
+          scenario === "legacy progress"
+            ? { commitSha: "proposed-head", baseRefName: "main" }
+            : { commitSha: "accepted-head", baseRefName: "stable" };
+        assert.deepEqual(result.runs[0]?.workspacePreparationBasePin, expected);
+        assert.deepInclude(harness.createWorktree.mock.calls[0]?.[0], {
+          refName: expected.commitSha,
+          baseRefName: expected.baseRefName,
+        });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);

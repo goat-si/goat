@@ -312,10 +312,13 @@ effectIt.effect(
         prefix: "goat-recreate-failure-",
       });
       const worktreePath = path.join(worktreesDir, "project", "restore");
+      const workspaceRoot = path.join(worktreesDir, "fixture-repository");
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
       const harness = makeLocalCommandHarness({
         text: "Continue",
         worktreesDir,
         worktreePath,
+        workspaceRoot,
         fileSystem,
         failReadsAfterRunning: true,
       });
@@ -330,19 +333,16 @@ effectIt.effect(
           }),
         ),
       );
-
       const interrupted = yield* Effect.exit(harness.start);
       expect(interrupted._tag).toBe("Failure");
       if (interrupted._tag === "Failure")
         expect(Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
       expect(harness.events).toEqual([]);
       expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-
       const retry = yield* Effect.result(harness.startWithRetry);
       expect(retry).toMatchObject({ _tag: "Failure", failure: { _tag: "ProviderTurnStartError" } });
       expect(harness.events).toEqual([]);
       expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-
       yield* harness.start;
       expect(harness.createWorktree).toHaveBeenCalledTimes(3);
       expect(harness.writeIfRunCurrent).toHaveBeenCalledOnce();

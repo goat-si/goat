@@ -1,3 +1,4 @@
+import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -116,7 +117,6 @@ export interface GitRemoteStatusDetails {
   behindCount: number;
   aheadOfDefaultCount: number;
 }
-
 export interface GitPreparedCommitContext {
   stagedSummary: string;
   stagedPatch: string;
@@ -132,10 +132,10 @@ export interface ExecuteGitProgress {
     durationMs: number | null;
   }) => Effect.Effect<void, never>;
 }
-
 export interface CreateWorktreeProgress {
   /** Git refuses existing paths; claimed paths belong to this call and can be removed on cancel. */
-  readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, never>;
+  readonly onWorktreeOwnership?: (ownership: WorktreePreparationOwnership) => Effect.Effect<void>;
+  readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, GitCommandError>;
   /**
    * Fires before checkout when the configured `worktreesDirectory` is
    * unavailable and the worktree goes to the default directory instead.
@@ -181,8 +181,8 @@ export interface CreateWorktreeProgress {
     readonly fastForwarded: boolean;
   }) => Effect.Effect<void, never>;
 }
-
 export interface CreateWorktreeOptions {
+  readonly beforeAdd?: (path: string) => Effect.Effect<void, GitCommandError>;
   readonly progress?: CreateWorktreeProgress;
   /** Null or omitted defers to the checkout's t3.json. */
   readonly submodules?: WorktreeSubmodules | null;
@@ -200,7 +200,6 @@ export interface CreateWorktreeOptions {
    */
   readonly skipSetupHook?: boolean;
 }
-
 export interface GitCommitProgress {
   readonly onOutputLine?: (input: {
     stream: "stdout" | "stderr";
@@ -375,7 +374,6 @@ export interface GitWorkspaceSnapshotResult {
   /** False when the snapshot omitted contents it could not read. */
   readonly complete: boolean;
 }
-
 export class GitVcsDriver extends Context.Service<
   GitVcsDriver,
   {
@@ -524,6 +522,7 @@ export class GitVcsDriver extends Context.Service<
     readonly switchRef: (
       input: VcsSwitchRefInput,
     ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;
+    readonly invalidateRefs: (cwd: string) => Effect.Effect<void>;
     readonly initRepo: (input: VcsInitInput) => Effect.Effect<void, GitCommandError>;
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
   } & import("./GitSharedConfig.ts").SharedConfigDriver

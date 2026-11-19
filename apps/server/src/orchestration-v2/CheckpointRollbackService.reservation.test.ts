@@ -81,7 +81,10 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
           Layer.mergeAll(
             ThreadCommandExecutor.layer,
             NodeServices.layer,
-            Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+            Layer.mock(ServerConfig.ServerConfig)({
+              worktreesDir,
+              stateDir: workspaceRoot,
+            } as never),
             ServerSettings.layerTest(),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               get: () => Effect.succeedSome({ workspaceRoot } as never),

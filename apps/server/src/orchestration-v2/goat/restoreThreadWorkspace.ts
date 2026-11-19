@@ -1,19 +1,27 @@
+import { removeEmptyDirectory } from "../../vcs/removeEmptyDirectory.ts";
 import {
   ThreadWorkspaceRestoreError,
   type ThreadId,
   type ThreadWorkspaceRestoreFailure,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { reuseHeldWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
-import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
+import { makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
-import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import {
+  git,
+  RestoreSnapshotError,
+  verifyRestoredWorktree,
+  verifyWorktreeRegistration,
+} from "./restoreSnapshot.ts";
 import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
-import { makeSetAsideFolder } from "./setAsideFolder.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 export { makeRestorePending } from "./restorePending.ts";
 
@@ -31,12 +39,14 @@ export interface RestoredThreadWorkspace {
  */
 export const verifyInterruptedRestore = Effect.fn("ThreadWorkspace.verifyInterruptedRestore")(
   function* (input: {
+    readonly projectCwd: string;
     readonly worktreePath: string;
     readonly branch: string;
     readonly state: RestorePendingState;
   }) {
     if (input.state.snapshotSha !== null && input.state.applied !== true)
       return yield* new RestoreSnapshotError({ detail: "snapshot" });
+    yield* verifyWorktreeRegistration(input);
     const head = yield* Effect.tryPromise({
       try: async () => {
         // Status asks this too; a hung Git must not hold up the thread view for minutes.
@@ -76,7 +86,8 @@ interface RestoreInput {
  */
 export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const recreate = yield* makeRecreateMissingWorktree;
-  const discardWorktree = yield* makeDiscardWorktree;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const pending = yield* makeRestorePending;
   const setAside = yield* makeSetAsideFolder;
   // Optional so turn-start harnesses without the ledger or setup runner keep plain recreation.
@@ -85,37 +96,110 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
     ProjectSetupScriptRunner.ProjectSetupScriptRunner,
   );
   const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
+  const archiveIncomplete = Effect.fn("ThreadWorkspace.archiveIncomplete")(function* (
+    input: RestoreInput,
+    state: RestorePendingState,
+    aside: { path: string | null },
+  ) {
+    if (!(yield* fs.exists(path.join(input.worktreePath, ".git")))) return;
+    yield* verifyWorktreeRegistration({ projectCwd: input.cwd, worktreePath: input.worktreePath });
+    yield* verifyRestoredWorktree({
+      cwd: input.worktreePath,
+      branch: input.branch,
+      expectedHead: state.headSha,
+    });
+    const folder = yield* fs.makeTempDirectory({
+      directory: path.dirname(input.worktreePath),
+      prefix: `${path.basename(input.worktreePath)}-set-aside-`,
+    });
+    const archived = path.join(folder, "checkout");
+    yield* Effect.gen(function* () {
+      yield* Effect.tryPromise({
+        try: () => git(input.cwd, ["worktree", "move", "--", input.worktreePath, archived]),
+        catch: (cause) =>
+          new RestoreSnapshotError({
+            detail: `Git could not move the checkout at ${input.worktreePath}. Back up the checkout and each initialized submodule, including uncommitted files and local commits. Then remove the old worktree using GOAT and retry the restore.`,
+            cause,
+          }),
+      }).pipe(Effect.tapError(() => removeEmptyDirectory(folder).pipe(Effect.ignore)));
+      aside.path = archived;
+      // Detach only the Git ref. Checkout would overwrite the preserved files.
+      yield* Effect.tryPromise({
+        try: () =>
+          git(archived, ["update-ref", "--no-deref", "HEAD", state.headSha, state.headSha]),
+        catch: (cause) =>
+          new RestoreSnapshotError({ detail: "detach the preserved checkout", cause }),
+      });
+    }).pipe(Effect.uninterruptible);
+  });
+
   const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (
     input: RestoreInput,
-    aside?: { path: string | null },
+    aside: { path: string | null },
+    archived: { path: string | null },
   ) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
-    // A rollback that could not delete the folder keeps the marker, so this repeats until it passes.
-    const discard = discardWorktree({ cwd: input.cwd, worktreePath: input.worktreePath });
-    const resumed = yield* pending.marked(input.worktreePath);
-    const state: RestorePendingState = resumed
-      ? yield* pending.read(input.worktreePath).pipe(
+    const saved = (yield* pending.marked(input.worktreePath, input.cwd))
+      ? yield* pending.read(input.worktreePath, input.cwd).pipe(
           Effect.filterOrFail(
-            (resumed): resumed is RestorePendingState => resumed !== null,
+            (state): state is RestorePendingState => state !== null,
             () => fail("verify-failed", "GOAT couldn't read where the earlier restore stopped."),
           ),
         )
+      : null;
+    const lenient =
+      saved !== null &&
+      (yield* fs.exists(path.join(input.worktreePath, ".git"))) &&
+      (saved.applied === true || (saved.applied === undefined && saved.snapshotSha === null));
+    if (lenient) {
+      yield* verifyInterruptedRestore({
+        projectCwd: input.cwd,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        state: saved,
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+    }
+    const state: RestorePendingState = lenient
+      ? saved
       : yield* Effect.gen(function* () {
-          const snapshot = Option.isSome(snapshots)
-            ? yield* snapshots.value.latestForThread(input.threadId)
-            : null;
-          const marker = (created: Pick<RestorePendingState, "restoredFrom" | "headSha">) => ({
+          if (saved !== null) {
+            yield* archiveIncomplete(input, saved, archived).pipe(
+              Effect.mapError((error) =>
+                fail(
+                  "git-failed",
+                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error._tag === "RestoreSnapshotError" ? error.detail : error.message}`,
+                ),
+              ),
+            );
+          }
+          const snapshot =
+            saved !== null
+              ? saved.snapshotSha === null
+                ? null
+                : {
+                    snapshotSha: saved.snapshotSha,
+                    headSha: saved.headSha,
+                    snapshotRef: saved.snapshotRef,
+                  }
+              : Option.isSome(snapshots)
+                ? yield* snapshots.value.latestForThread(input.threadId)
+                : null;
+          const marker = (
+            created: Pick<RestorePendingState, "restoredFrom" | "headSha">,
+            applied: boolean,
+          ) => ({
             ...created,
             snapshotSha: snapshot?.snapshotSha ?? null,
             snapshotRef: snapshot?.snapshotRef ?? null,
+            applied,
           });
-          // Marked before the snapshot is applied, so a rollback that fails cannot pass for done.
           const restored = yield* recreate({
             cwd: input.cwd,
             worktreePath: input.worktreePath,
             branch: input.branch,
-            onCreated: (created) => pending.write(input.worktreePath, marker(created)),
+            beforeCreate: (created) =>
+              pending.write(input.worktreePath, marker(created, false), input.cwd),
             ...(snapshot === null
               ? {}
               : { snapshot: { snapshotSha: snapshot.snapshotSha, headSha: snapshot.headSha } }),
@@ -129,17 +213,20 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
                 : fail("git-failed", error.message),
             ),
           );
-          if (snapshot === null) return marker(restored);
-          const applied = { ...marker(restored), applied: true };
+          const applied = marker(restored, true);
           yield* pending
-            .write(input.worktreePath, applied)
+            .write(input.worktreePath, applied, input.cwd)
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message)));
           return applied;
         });
-    // A folder an earlier restore finished filling may hold work since; this attempt never removes it.
-    const lenient = resumed && (state.snapshotSha === null || state.applied === true);
+    if (!lenient) {
+      yield* verifyWorktreeRegistration({
+        projectCwd: input.cwd,
+        worktreePath: input.worktreePath,
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+    }
     // Before setup, so only shells that predate the new folder are told.
-    yield* noticeFolderReplaced(input.worktreePath, aside?.path);
+    yield* noticeFolderReplaced(input.worktreePath, archived.path ?? aside.path);
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
@@ -170,6 +257,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       yield* (
         lenient
           ? verifyInterruptedRestore({
+              projectCwd: input.cwd,
               worktreePath: input.worktreePath,
               branch: input.branch,
               state,
@@ -185,13 +273,29 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         Effect.mapError((error) => fail("verify-failed", error.detail)),
         Effect.andThen(
           pending
-            .clear(input.worktreePath)
+            .clear(input.worktreePath, input.cwd)
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message))),
         ),
         Effect.uninterruptible,
       );
       return setup;
-    }).pipe(Effect.tapError(() => (lenient ? Effect.void : discard)));
+    }).pipe(
+      Effect.tapError(() =>
+        lenient
+          ? Effect.void
+          : archiveIncomplete(input, state, archived).pipe(
+              Effect.andThen(
+                pending.write(input.worktreePath, { ...state, applied: false }, input.cwd),
+              ),
+              Effect.catch((error) =>
+                Effect.logWarning("kept the failed restore checkout", {
+                  path: input.worktreePath,
+                  cause: error,
+                }),
+              ),
+            ),
+      ),
+    );
     if (state.snapshotRef !== null && Option.isSome(snapshots))
       yield* snapshots.value.markRestored(state.snapshotRef);
     return {
@@ -203,23 +307,40 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   return Effect.fn("ThreadWorkspace.restoreMissing")(function* (
     input: RestoreInput,
   ): Effect.fn.Return<RestoredThreadWorkspace, ThreadWorkspaceRestoreError> {
-    // Git refuses a folder that is not empty; a failed restore moves the leftovers back.
-    if (!(yield* setAside.leftover(input.worktreePath))) return yield* restore(input);
     const aside: { path: string | null } = { path: null };
-    const { result, setAsidePath } = yield* setAside
-      .around(input.worktreePath, restore(input, aside), aside)
-      .pipe(
-        Effect.catchTags({
-          PlatformError: (error) =>
-            Effect.fail(
-              new ThreadWorkspaceRestoreError({
-                threadId: input.threadId,
-                reason: "git-failed",
-                detail: `GOAT couldn't move the leftover folder at ${input.worktreePath} aside: ${error.message}`,
-              }),
-            ),
-        }),
-      );
-    return { ...result, setAsidePath };
+    const archived: { path: string | null } = { path: null };
+    const restoring = restore(input, aside, archived);
+    const result = yield* (
+      (yield* setAside.leftover(input.worktreePath))
+        ? setAside
+            .around(input.worktreePath, restoring, aside)
+            .pipe(Effect.map(({ result }) => result))
+        : restoring
+    ).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          Effect.fail(
+            new ThreadWorkspaceRestoreError({
+              threadId: input.threadId,
+              reason: "git-failed",
+              detail: `GOAT couldn't move the leftover folder at ${input.worktreePath} aside: ${error.message}`,
+            }),
+          ),
+      }),
+      Effect.mapError((error) => {
+        const locations = [aside.path, archived.path].flatMap((path) =>
+          path === null ? [] : [setAsideSentence(path)],
+        );
+        return locations.length === 0
+          ? error
+          : new ThreadWorkspaceRestoreError({
+              threadId: error.threadId,
+              reason: error.reason,
+              detail: [error.detail, ...locations].join(" "),
+            });
+      }),
+    );
+    const setAsidePath = archived.path ?? aside.path;
+    return setAsidePath === null ? result : { ...result, setAsidePath };
   });
 });

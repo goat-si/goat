@@ -1,16 +1,13 @@
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
-import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import { parseRemoteNamesInGitOrder } from "../../git/remoteRefs.ts";
-import { tryWithForeignWorkspaceSubtree } from "../../workspace/workspaceLease.ts";
 import type { RestorePendingError } from "./restorePending.ts";
 import {
   applySnapshotToWorktree,
   git,
-  pathExists,
   verifyRestoredWorktree,
+  verifyWorktreeRegistration,
 } from "./restoreSnapshot.ts";
 
 class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateError>()(
@@ -45,36 +42,8 @@ export class WorktreeSnapshotConflictError extends Schema.TaggedError<WorktreeSn
   },
 ) {}
 
-/**
- * Removes a worktree this restore created, through the removal that leaves Windows junction
- * targets alone. The caller holds the folder's lease, so only other servers are kept out.
- * Succeeds with whether the folder went; a failure is logged for the caller's retry state.
- */
-export const makeDiscardWorktree = Effect.gen(function* () {
-  // Optional so turn-start harnesses without Git keep plain recreation; the folder then stays.
-  const vcs = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
-  return Effect.fn("RecreateWorktree.discard")(function* (input: {
-    readonly cwd: string;
-    readonly worktreePath: string;
-  }) {
-    if (Option.isNone(vcs)) return false;
-    const removed = yield* tryWithForeignWorkspaceSubtree(
-      input.worktreePath,
-      vcs.value.removeWorktree({ cwd: input.cwd, path: input.worktreePath, force: true }),
-    ).pipe(Effect.result);
-    const gone = removed._tag === "Success" && Option.isSome(removed.success);
-    if (!gone)
-      yield* Effect.logWarning("restore rollback kept the worktree", {
-        worktreePath: input.worktreePath,
-        cause: removed._tag === "Failure" ? removed.failure : "in use by another GOAT server",
-      });
-    return gone;
-  });
-});
-
 export const makeRecreateMissingWorktree = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
-  const discard = yield* makeDiscardWorktree;
   const resolveRecreateBase = Effect.fn("ProviderTurnStartService.resolveRecreateBase")(function* (
     cwd: string,
     remoteName: string | null,
@@ -107,22 +76,17 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       readonly worktreePath: string;
       readonly branch: string;
       readonly snapshot?: { readonly snapshotSha: string; readonly headSha: string };
-      /** Runs once the worktree exists, before the snapshot is applied; a failure rolls it back. */
-      readonly onCreated?: (created: {
+      readonly beforeCreate?: (created: {
         readonly restoredFrom: "snapshot" | "branch" | "remote-branch" | "base";
         readonly headSha: string;
       }) => Effect.Effect<void, RestorePendingError>;
     }) {
-      const { cwd, worktreePath, branch, snapshot, onCreated } = input;
+      const { cwd, worktreePath, branch, snapshot, beforeCreate } = input;
       const runGit = (args: string[]) =>
         Effect.tryPromise({
           try: async () => (await git(cwd, args)).toString().trim(),
           catch: (cause) => new WorktreeRecreateError({ worktreePath, branch, cause }),
         });
-      const existed = yield* Effect.tryPromise({
-        try: () => pathExists(worktreePath),
-        catch: (cause) => new WorktreeRecreateError({ worktreePath, branch, cause }),
-      });
       yield* gitWorkflow.pruneWorktrees({ cwd });
       const localBranchNames = yield* gitWorkflow.listLocalBranchNames(cwd);
       let restoredFrom: "snapshot" | "branch" | "remote-branch" | "base";
@@ -139,6 +103,7 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
             actualHead: snapshotHead,
           });
         }
+        yield* runGit(["rev-parse", "--verify", `${snapshot.snapshotSha}^2^{tree}`]);
         if (localBranchNames.includes(branch)) {
           const actualHead = yield* runGit(["rev-parse", `refs/heads/${branch}^{commit}`]);
           if (actualHead !== snapshot.headSha) {
@@ -179,6 +144,11 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
         }
         newRefName = branch;
       }
+      const target = restoredFrom === "branch" ? `refs/heads/${branch}` : refName;
+      const headSha =
+        snapshot?.headSha ??
+        (yield* gitWorkflow.resolveCommit({ cwd, revision: target })).commitSha;
+      if (beforeCreate) yield* beforeCreate({ restoredFrom, headSha });
       yield* gitWorkflow.createWorktree({
         cwd,
         refName,
@@ -186,29 +156,18 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
         ...(newRefName === undefined ? {} : { newRefName }),
         ...(baseRefName === undefined ? {} : { baseRefName }),
       });
-      return yield* Effect.gen(function* () {
-        // Qualified, so a tag that shares the branch's name cannot stand in for it.
-        const headSha =
-          snapshot?.headSha ?? (yield* runGit(["rev-parse", `refs/heads/${branch}^{commit}`]));
-        if (onCreated) yield* onCreated({ restoredFrom, headSha });
-        if (snapshot)
-          yield* applySnapshotToWorktree({ cwd: worktreePath, snapshotSha: snapshot.snapshotSha });
-        yield* verifyRestoredWorktree({
-          cwd: worktreePath,
-          expectedPath: worktreePath,
-          branch,
-          expectedHead: headSha,
-          ...(snapshot ? { snapshot: snapshot.snapshotSha } : {}),
-        });
-        return { restoredFrom, headSha };
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            if (!existed) yield* discard({ cwd, worktreePath });
-            return yield* Effect.failCause(cause);
-          }),
-        ),
-      );
+      yield* verifyWorktreeRegistration({ projectCwd: cwd, worktreePath });
+      yield* verifyRestoredWorktree({ cwd: worktreePath, branch, expectedHead: headSha });
+      if (snapshot)
+        yield* applySnapshotToWorktree({ cwd: worktreePath, snapshotSha: snapshot.snapshotSha });
+      yield* verifyRestoredWorktree({
+        cwd: worktreePath,
+        expectedPath: worktreePath,
+        branch,
+        expectedHead: headSha,
+        ...(snapshot ? { snapshot: snapshot.snapshotSha } : {}),
+      });
+      return { restoredFrom, headSha };
     },
     (effect, { worktreePath, branch }) =>
       effect.pipe(

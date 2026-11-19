@@ -1,5 +1,5 @@
 import type {
-  OrchestrationV2Command,
+  OrchestrationV2ServerCommand,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
@@ -15,11 +15,12 @@ export function withoutPreparationResult(
 
 export const preparedRunState = (
   command: Extract<
-    OrchestrationV2Command,
+    OrchestrationV2ServerCommand,
     {
       readonly type:
         | "prepared-run.release"
         | "prepared-run.progress"
+        | "prepared-run.pin-base"
         | "prepared-run.fail"
         | "prepared-run.retry";
     }

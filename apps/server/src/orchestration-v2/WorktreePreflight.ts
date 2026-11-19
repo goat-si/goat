@@ -1,4 +1,4 @@
-import { ProjectId } from "@goat/contracts";
+import { ProjectId, type ServerSettingsError } from "@goat/contracts";
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import * as Effect from "effect/Effect";
@@ -18,6 +18,7 @@ export class ThreadLaunchBaseRefError extends Schema.TaggedError<ThreadLaunchBas
     projectTitle: Schema.String,
     workspaceRoot: Schema.String,
     baseRef: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -87,11 +88,13 @@ export function makeWorktreePreflight({
   git,
   receipts,
   managedFolders,
+  startWorktreesFromOrigin,
 }: {
   projects: ProjectService.ProjectService["Service"];
   git: GitWorkflow.GitWorkflowService["Service"];
   receipts: CommandReceiptStore.CommandReceiptStoreV2["Service"];
   managedFolders: ManagedProjectFolders.ManagedProjectFolders["Service"];
+  startWorktreesFromOrigin: (projectId: ProjectId) => Effect.Effect<boolean, ServerSettingsError>;
 }) {
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
@@ -183,7 +186,7 @@ export function makeWorktreePreflight({
     }
     if (localBase) return;
     const unresolved = yield* Effect.gen(function* () {
-      if (strategy.startFromOrigin === true) {
+      if (strategy.startFromOrigin ?? (yield* startWorktreesFromOrigin(input.projectId))) {
         const remote = yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef });
         // The remote may have deleted the branch since the local ref was last fetched.
         if (

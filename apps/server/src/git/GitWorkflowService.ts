@@ -1,3 +1,7 @@
+import {
+  verifyManagedCheckout,
+  type ManagedCheckoutIdentity,
+} from "../orchestration-v2/goat/restoreSnapshot.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -51,6 +55,10 @@ export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
     readonly repositoryRoot: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
+    readonly verifyManagedCheckout: (
+      input: ManagedCheckoutIdentity,
+    ) => Effect.Effect<void, GitCommandError>;
+    readonly resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"];
     readonly hasCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -124,6 +132,10 @@ export class GitWorkflowService extends Context.Service<
       { readonly commitSha: string; readonly remoteRefName: string },
       GitCommandError
     >;
+    readonly resolveWorktreeFallbackRemote: (
+      cwd: string,
+      preferredRemote?: string,
+    ) => Effect.Effect<GitVcsDriver.GitWorktreeBaseRemote | null, GitCommandError>;
     readonly resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"];
     readonly fetchWorktreeBaseCommit: (input: {
       readonly cwd: string;
@@ -354,6 +366,24 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+    verifyManagedCheckout: (input) =>
+      verifyManagedCheckout(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitWorkflowService.verifyManagedCheckout",
+              command: "git worktree",
+              cwd: input.projectCwd,
+              detail: `Could not verify the checkout at ${input.worktreePath}: ${cause.detail}.`,
+              cause,
+            }),
+        ),
+      ),
+    resolveCommit: Effect.fn("GitWorkflowService.resolveCommit")(function (input) {
+      return ensureGitCommand("GitWorkflowService.resolveCommit", input.cwd).pipe(
+        Effect.andThen(git.resolveCommit(input)),
+      );
+    }),
     hasCommit: Effect.fn("GitWorkflowService.hasCommit")(function (input) {
       return ensureGitCommand("GitWorkflowService.hasCommit", input.cwd).pipe(
         Effect.andThen(
@@ -532,6 +562,14 @@ export const make = Effect.gen(function* () {
         return ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
           Effect.andThen(git.resolveRemoteTrackingCommit(input)),
         );
+      },
+    ),
+    resolveWorktreeFallbackRemote: Effect.fn("GitWorkflowService.resolveWorktreeFallbackRemote")(
+      function* (cwd, preferredRemote) {
+        yield* ensureGitCommand("GitWorkflowService.resolveWorktreeFallbackRemote", cwd);
+        const remoteName = preferredRemote ?? (yield* git.resolvePrimaryRemoteName(cwd));
+        const branchName = yield* git.resolveDefaultBranchName(cwd, remoteName);
+        return branchName === null ? null : { remoteName, branchName };
       },
     ),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(

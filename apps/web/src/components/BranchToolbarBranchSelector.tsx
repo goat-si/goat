@@ -20,6 +20,7 @@ import {
 import { ChevronDownIcon, GitBranchIcon } from "~/components/solar";
 import {
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useOptimistic,
   useState,
@@ -32,6 +33,7 @@ import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
+import { useProjectClone } from "../state/projectClones";
 import { usePaginatedBranches } from "../state/queries";
 import { readThreadShell, useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
@@ -51,6 +53,7 @@ import {
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
+  resolveDefaultWorktreeBaseBranch,
   shouldReuseSelectedWorktree,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
@@ -303,7 +306,6 @@ export function BranchToolbarBranchSelector({
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
-  const defaultBranchName = refs.find((refName) => refName.isDefault)?.name ?? null;
   const pickerCreateBranchItemValue = hasExactBranchMatch ? null : createBranchItemValue;
   const branchPickerItems = [
     ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
@@ -549,7 +551,26 @@ export function BranchToolbarBranchSelector({
 
   const worktreeBaseBranchCandidate = isInitialBranchesLoadPending
     ? null
-    : (defaultBranchName ?? currentGitBranch);
+    : resolveDefaultWorktreeBaseBranch(refs);
+  const cloneDone = useProjectClone(activeProjectRef)?.phase === "done";
+  const statusBranch = branchStatusQuery.data?.refName ?? null;
+  const refreshStaleRefs = useEffectEvent(
+    (cwd: string | null, environment: EnvironmentId, cloneDone: boolean, branch: string | null) => {
+      if (
+        cwd === null ||
+        (!cloneDone && (branch === null || branchByName.get(branch)?.current === true))
+      )
+        return;
+      void refreshLocalStatusForPicker({
+        environmentId: environment,
+        input: { cwd, localOnly: true },
+      });
+    },
+  );
+  // oxlint-disable-next-line goat/react-effect-budget -- refresh refs left stale by a clone or external checkout
+  useEffect(() => {
+    refreshStaleRefs(branchCwd, environmentId, cloneDone, statusBranch);
+  }, [branchCwd, environmentId, cloneDone, statusBranch]);
 
   // The server sets started threads' branches; defaulting here would detach the agent from its worktree.
   const threadStarted = serverSession !== null;

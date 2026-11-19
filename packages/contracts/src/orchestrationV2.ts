@@ -3,6 +3,8 @@ import {
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2Launch.ts";
 export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
+import { PreparedRunPinBase, WorktreePreparationBasePin } from "./worktreePreparation.ts";
+export type { WorktreePreparationBasePin } from "./worktreePreparation.ts";
 export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
@@ -244,7 +246,6 @@ export const OrchestrationV2ContextSourcePoint = Schema.Struct({
   providerTurnRef: Schema.optional(OrchestrationV2ProviderRef),
 });
 export type OrchestrationV2ContextSourcePoint = typeof OrchestrationV2ContextSourcePoint.Type;
-
 export const OrchestrationV2ThreadForkSourcePoint = Schema.Union([
   Schema.Struct({ type: Schema.Literal("latest_stable") }),
   Schema.Struct({ type: Schema.Literal("run"), runId: RunId }),
@@ -606,8 +607,7 @@ export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
 export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
-export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
-
+export { ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE } from "./worktreePreparation.ts";
 /** Another Codex turn on the thread that a starting run must wait for. */
 export const OrchestrationV2RunStartHold = Schema.Struct({
   /**
@@ -620,7 +620,6 @@ export const OrchestrationV2RunStartHold = Schema.Struct({
   nativeTurnId: Schema.optional(Schema.String),
 });
 export type OrchestrationV2RunStartHold = typeof OrchestrationV2RunStartHold.Type;
-
 export const OrchestrationV2Run = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
@@ -662,11 +661,11 @@ export const OrchestrationV2Run = Schema.Struct({
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  workspacePreparationBasePin: Schema.optional(WorktreePreparationBasePin),
   /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
   freshContext: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
-
 export function orchestrationV2RunWorkStartedAt(
   run: Pick<OrchestrationV2Run, "workStartedAt" | "startedAt" | "requestedAt">,
 ): OrchestrationV2Run["requestedAt"] {
@@ -3401,6 +3400,7 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  PreparedRunPinBase,
   OrchestrationV2ReviewContinueCommand,
   Schema.Struct({
     ...ThreadTitleRegenerationCompleteCommand.fields,
@@ -3583,7 +3583,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 
 export type OrchestrationV2ServerCommand = OrchestrationV2Command | OrchestrationV2InternalCommand;
-
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",

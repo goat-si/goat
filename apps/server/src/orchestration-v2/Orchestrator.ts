@@ -8971,7 +8971,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
 
   const loadProjectionForCommand = <K extends ProjectionRecordField>(
-    command: OrchestrationV2Command,
+    command: OrchestrationV2ServerCommand,
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) =>
@@ -8982,10 +8982,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           (cause) => new OrchestratorProjectionError({ threadId: commandThreadId(command), cause }),
         ),
       );
-
   const dispatchPreparedRunProgress = Effect.fn("Orchestrator.dispatchPreparedRunProgress")(
     function* (
-      command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.progress" }>,
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "prepared-run.progress" | "prepared-run.pin-base" }
+      >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
       const projection = yield* loadProjectionForCommand(
@@ -9002,6 +9004,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const now = yield* DateTime.now;
+      if (
+        command.type === "prepared-run.pin-base" &&
+        (state.run.workspacePreparation ?? command.workspaceStrategy)?.type === "worktree" &&
+        state.run.workspacePreparationBasePin === undefined
+      ) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: state.run.id,
+          nodeId: state.rootNode.id,
+          providerInstanceId: state.run.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...state.run,
+            workspacePreparation: state.run.workspacePreparation ?? command.workspaceStrategy,
+            workspacePreparationBasePin: command.basePin,
+          },
+        });
+      }
       yield* emit(
         events,
         command,
@@ -9014,13 +9038,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: {
           ...state.preparationItem,
-          title: command.phase === "worktree" ? "Preparing worktree" : "Starting setup script",
+          title:
+            command.type === "prepared-run.pin-base" || command.phase === "worktree"
+              ? "Preparing worktree"
+              : "Starting setup script",
           updatedAt: now,
         },
       });
     },
   );
-
   const dispatchPreparedRunRelease = Effect.fn("Orchestrator.dispatchPreparedRunRelease")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.release" }>,
@@ -12314,6 +12340,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchPreparedRunRelease(command, events, effects);
         break;
       case "prepared-run.progress":
+      case "prepared-run.pin-base":
         yield* dispatchPreparedRunProgress(command, events);
         break;
       case "prepared-run.fail":
