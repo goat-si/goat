@@ -1,3 +1,9 @@
+import {
+  resolveOpenCodeRootStop,
+  runOpenCodeStop,
+  STOP_CONFIRM_TIMEOUT_MS,
+  type OpenCodeStopDeadline,
+} from "./sessionStop.ts";
 import { subagentResultPreview, TRACKING_LOST } from "./subagentResult.ts";
 import { childCallsToStop, makeDetachedChildOutcomes } from "./detachedChildOutcomes.ts";
 import {
@@ -377,7 +383,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           status: "ready",
           cwd,
           model: input.modelSelection.model,
-          capabilities: OpenCodeProviderCapabilitiesV2,
+          capabilities: {
+            ...OpenCodeProviderCapabilitiesV2,
+            sessions: {
+              ...OpenCodeProviderCapabilitiesV2.sessions,
+              ownsProcess: !connection.external,
+            },
+          },
           createdAt: now,
           updatedAt: now,
           lastError: null,
@@ -2307,7 +2319,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const abortRoot = (sessionId: string) =>
           sdkCall("session.abort", { sessionID: sessionId }, (signal) =>
             client.session.abort({ sessionID: sessionId }, { signal }),
-          ).pipe(Effect.timeout("10 seconds"));
+          ).pipe(Effect.timeout(STOP_CONFIRM_TIMEOUT_MS));
 
         const cleanupSessionWork = Effect.fn("OpenCode.cleanupSessionWork")(function* <E>(
           sessionId: string,
@@ -2832,6 +2844,70 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             }),
           );
         });
+
+        const interruptTurn = Effect.fn("OpencodeAdapter.interruptTurn")(
+          function* (
+            interruptInput: ProviderAdapter.ProviderAdapterV2InterruptInput,
+            deadline: OpenCodeStopDeadline,
+          ) {
+            const { providerThread, providerTurnId, requestRuntimeRestart } = interruptInput;
+            const sessionId = nativeThreadId(providerThread);
+            const state = threads.get(sessionId);
+            const turn = state?.activeTurn;
+            const resolveRootStop = resolveOpenCodeRootStop.bind(null, interruptInput, deadline);
+            if (turn == null && requestRuntimeRestart === true) {
+              for (const controller of commandControllers.get(sessionId) ?? []) controller.abort();
+              yield* state === undefined
+                ? cleanupSessionWork(sessionId, interruptInput.onRootStopResolved ?? Effect.void)
+                : background.stop(state, resolveRootStop);
+              return;
+            }
+            if (state === undefined || turn == null || turn.providerTurnId !== providerTurnId) {
+              return yield* protocolError(`OpenCode turn ${providerTurnId} is not active`);
+            }
+            turn.interrupted = true;
+            for (const controller of commandControllers.get(sessionId) ?? []) controller.abort();
+            const admissionWasPending = turn.admissionPending;
+            cancelOpenCodePromptAdmission(turn, state.nextAdmissionGeneration++);
+            turn.admissionAbortController?.abort();
+            if (turn.priorWakeSettled !== undefined)
+              yield* Deferred.succeed(turn.priorWakeSettled, undefined);
+            if (admissionWasPending) {
+              // Local admission timeout must not block the server-side abort.
+              yield* Deferred.await(turn.admissionSettled).pipe(
+                Effect.timeout("10 seconds"),
+                Effect.ignore,
+              );
+            }
+            yield* cleanupSessionWork(
+              sessionId,
+              resolveRootStop(
+                abortRoot(sessionId),
+                () => turn.finalized,
+                () => {
+                  turn.interrupted = false;
+                },
+              ),
+            );
+          },
+          (effect, interruptInput) => {
+            const id = interruptInput.providerThread.nativeThreadRef?.nativeId;
+            return background
+              .serializeLifecycle(id == null ? effect : childOutcomes.withStop(id, effect))
+              .pipe(
+                Effect.mapError((cause) =>
+                  cause._tag === "ProviderAdapterInterruptTimeoutError"
+                    ? cause
+                    : new ProviderAdapter.ProviderAdapterInterruptError({
+                        driver: OPENCODE_PROVIDER,
+                        providerThreadId: interruptInput.providerThread.id,
+                        providerTurnId: interruptInput.providerTurnId,
+                        cause,
+                      }),
+                ),
+              );
+          },
+        );
 
         const runtimeSession: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: options.instanceId,
@@ -3370,76 +3446,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ),
               ),
           ),
-          interruptTurn: Effect.fn("OpencodeAdapter.interruptTurn")(
-            function* (interruptInput) {
-              const sessionId = nativeThreadId(interruptInput.providerThread);
-              const state = threads.get(sessionId);
-              const turn = state?.activeTurn;
-              if (
-                (turn === undefined || turn === null) &&
-                interruptInput.requestRuntimeRestart === true
-              ) {
-                for (const controller of commandControllers.get(sessionId) ?? [])
-                  controller.abort();
-                if (state === undefined) yield* cleanupSessionWork(sessionId, Effect.void);
-                else yield* background.stop(state);
-                return;
-              }
-              if (
-                state === undefined ||
-                turn === null ||
-                turn === undefined ||
-                turn.providerTurnId !== interruptInput.providerTurnId
-              ) {
-                return yield* protocolError(
-                  `OpenCode turn ${interruptInput.providerTurnId} is not active`,
-                );
-              }
-              turn.interrupted = true;
-              for (const controller of commandControllers.get(sessionId) ?? []) controller.abort();
-              const admissionWasPending = turn.admissionPending;
-              cancelOpenCodePromptAdmission(turn, state.nextAdmissionGeneration++);
-              turn.admissionAbortController?.abort();
-              if (turn.priorWakeSettled !== undefined)
-                yield* Deferred.succeed(turn.priorWakeSettled, undefined);
-              if (admissionWasPending) {
-                // Local admission timeout must not block the server-side abort.
-                yield* Deferred.await(turn.admissionSettled).pipe(
-                  Effect.timeout("10 seconds"),
-                  Effect.ignore,
-                );
-              }
-              yield* cleanupSessionWork(
-                sessionId,
-                abortRoot(sessionId).pipe(
-                  Effect.catch((cause) =>
-                    turn.finalized
-                      ? Effect.void
-                      : Effect.suspend(() => {
-                          turn.interrupted = false;
-                          return Effect.fail(cause);
-                        }),
-                  ),
-                ),
-              );
-            },
-            (effect, interruptInput) => {
-              const id = interruptInput.providerThread.nativeThreadRef?.nativeId;
-              return background
-                .serializeLifecycle(id == null ? effect : childOutcomes.withStop(id, effect))
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ProviderAdapter.ProviderAdapterInterruptError({
-                        driver: OPENCODE_PROVIDER,
-                        providerThreadId: interruptInput.providerThread.id,
-                        providerTurnId: interruptInput.providerTurnId,
-                        cause,
-                      }),
-                  ),
-                );
-            },
-          ),
+          interruptTurn: (input) =>
+            runOpenCodeStop(scope, (deadline) => interruptTurn(input, deadline)),
           respondToRuntimeRequest: Effect.fn("OpencodeAdapter.respondToRuntimeRequest")(
             function* (requestInput) {
               const pending = pendingRequests.get(String(requestInput.requestId));
