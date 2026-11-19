@@ -1,3 +1,8 @@
+import {
+  CLAUDE_ATTACHMENT_MAX_BYTES,
+  makeClaudeAttachmentBudget,
+  reserveClaudePdfBudget,
+} from "./ClaudeAttachmentBudget.ts";
 export { loggedClaudeQueryOptions } from "./ClaudeLoggedQueryOptions.ts";
 import { claudeAutoCompactThreshold, claudeMessageInputTokens } from "./ClaudeContextUsage.ts";
 import {
@@ -1162,48 +1167,6 @@ const estimateClaudePdfPages = (bytes: Buffer): number | null => {
   }
   return catalog && pageTree && pages > 0 && count === pages ? pages : null;
 };
-
-const CLAUDE_ATTACHMENT_MAX_BYTES = 28 * 1024 * 1024;
-const CLAUDE_ATTACHMENT_MAX_PAGES = 100;
-
-const makeClaudeAttachmentBudget = (used?: { pagesUsed: number; bytesUsed: number }) => ({
-  committed: { pages: used?.pagesUsed ?? 0, bytes: used?.bytesUsed ?? 0 },
-  pending: { pages: 0, bytes: 0 },
-  compacting: null as { pages: number; bytes: number } | null,
-  get remainingPages() {
-    return CLAUDE_ATTACHMENT_MAX_PAGES - this.committed.pages - this.pending.pages;
-  },
-  get remainingBytes() {
-    return CLAUDE_ATTACHMENT_MAX_BYTES - this.committed.bytes - this.pending.bytes;
-  },
-});
-
-const reserveClaudePdfBudget = (
-  budget: ReturnType<typeof makeClaudeAttachmentBudget>,
-  persist: Effect.Effect<void>,
-) =>
-  Effect.acquireRelease(
-    Effect.sync(() => ({
-      budget,
-      pages: 0,
-      bytes: 0,
-      delivered: false,
-      commit() {
-        if (this.delivered) return;
-        this.delivered = true;
-        budget.pending.pages -= this.pages;
-        budget.pending.bytes -= this.bytes;
-        budget.committed.pages += this.pages;
-        budget.committed.bytes += this.bytes;
-      },
-    })),
-    (reservation) =>
-      Effect.sync(() => {
-        if (reservation.delivered) return;
-        budget.pending.pages -= reservation.pages;
-        budget.pending.bytes -= reservation.bytes;
-      }).pipe(Effect.andThen(persist)),
-  );
 
 const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input: {
   readonly text: string;
