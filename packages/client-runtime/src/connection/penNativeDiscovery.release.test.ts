@@ -15,7 +15,12 @@ import {
 } from "../platform/capabilities.ts";
 import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import { PenConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
-import { PenConnectionTarget, penConnectionId } from "./model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  ConnectionBlockedError,
+  PenConnectionTarget,
+  penConnectionId,
+} from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
 import { makePenNativeDiscovery } from "./penNativeDiscovery.ts";
 import { EnvironmentRegistry } from "./registry.ts";
@@ -63,6 +68,8 @@ const discover = <E>(
     readonly initial: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
     readonly descriptor: "ok" | "unreachable" | "hangs";
     readonly register: "ok" | "fails";
+    readonly blocked?: boolean;
+    readonly retried?: Array<EnvironmentId>;
     readonly opening?: {
       readonly started: Deferred.Deferred<void>;
       readonly done: Deferred.Deferred<void>;
@@ -92,11 +99,23 @@ const discover = <E>(
       removeRoute: unused,
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
-      retryNow: unused,
+      retryNow: (environmentId) => Effect.sync(() => void options.retried?.push(environmentId)),
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () =>
+        Effect.succeed({
+          ...AVAILABLE_CONNECTION_STATE,
+          ...(options.blocked === true
+            ? {
+                phase: "blocked" as const,
+                lastFailure: new ConnectionBlockedError({
+                  reason: "configuration",
+                  detail: "Pen machines were off.",
+                }),
+              }
+            : {}),
+        }),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,
@@ -219,4 +238,20 @@ it.effect("switching Pen machines off closes a saved member's link, whoever open
     });
     expect(closed).toEqual([pin.nodeId]);
   }),
+);
+
+it.effect(
+  "a saved machine blocked while Pen machines were off tries again once its member is back",
+  () =>
+    Effect.gen(function* () {
+      const retried: Array<EnvironmentId> = [];
+      yield* discover((discovery) => discovery.pass(ready), {
+        initial: saved,
+        descriptor: "ok",
+        register: "ok",
+        blocked: true,
+        retried,
+      });
+      expect(retried).toEqual([env]);
+    }),
 );

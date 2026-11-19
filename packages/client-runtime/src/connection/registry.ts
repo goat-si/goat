@@ -30,7 +30,6 @@ import type {
   ConnectionAttemptError,
   ConnectionTarget,
   NetworkStatus,
-  PenConnectionTarget,
   PersistedConnectionTarget,
   SupervisorConnectionState,
 } from "./model.ts";
@@ -445,19 +444,6 @@ export const make = Effect.gen(function* () {
 
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
-  const savedElsewhere = (target: PenConnectionTarget) =>
-    storage.list.pipe(
-      Effect.map((saved) =>
-        saved.some(
-          (other) =>
-            other._tag === "PenConnectionTarget" &&
-            other.connectionId === target.connectionId &&
-            other.environmentId !== target.environmentId,
-        ),
-      ),
-      Effect.orElseSucceed(() => false),
-    );
-
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
     options?: { readonly knownAddressOnly?: boolean; readonly unlessSameAddress?: boolean },
@@ -468,11 +454,8 @@ export const make = Effect.gen(function* () {
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
-        // A Pen route the closed gate holds back is never saved or shown through here, and one
-        // another environment saved (perhaps from another channel) is not taken over.
+        // A Pen route the closed gate holds back is never saved or shown through here.
         if (!routeIsShown(route)) return false;
-        if (route.target._tag === "PenConnectionTarget" && (yield* savedElsewhere(route.target)))
-          return false;
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return false;
         }
@@ -481,6 +464,7 @@ export const make = Effect.gen(function* () {
         }
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
         let entry = registered;
+        let restoreTrust: Effect.Effect<void> = Effect.void;
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);
           if (
@@ -501,12 +485,25 @@ export const make = Effect.gen(function* () {
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
           if (next.addressesChanged) {
+            const prior = yield* pullRequestRoutingPermissions.get(previous);
             yield* forgetRoutingTrust(environmentId, "register-connection");
+            if (prior !== "off")
+              restoreTrust = pullRequestRoutingPermissions
+                .set(previous, prior)
+                .pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning("Could not restore pull request routing trust.", { error }),
+                  ),
+                );
           }
           entry = next.entry;
         }
-        // The newest catalog may refuse it (a Pen route another environment saved meanwhile).
-        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) return false;
+        // The newest catalog may refuse it (a Pen route another environment saved meanwhile);
+        // then nothing changed, and the trust given to the saved routes stands.
+        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) {
+          yield* restoreTrust;
+          return false;
+        }
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );

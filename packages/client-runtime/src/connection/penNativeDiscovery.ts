@@ -90,6 +90,18 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
       yield* closeLink(pin);
     }
     if (!policy.enabled || Option.isNone(gateway) || state.kind !== "ready") return;
+    // A machine blocked while its member was gone (or Pen machines were off) tries again now.
+    for (const { target, pin } of existing) {
+      if (!penPinIsCurrent(state, pin)) continue;
+      const current = yield* registry.state(target.environmentId).pipe(Effect.option);
+      const failure = Option.getOrUndefined(current)?.lastFailure;
+      if (
+        Option.getOrUndefined(current)?.phase === "blocked" &&
+        failure?._tag === "ConnectionBlockedError" &&
+        failure.reason === "configuration"
+      )
+        yield* registry.retryNow(target.environmentId);
+    }
     const activeGateway = gateway.value;
     yield* Effect.forEach(
       nativePenCandidates(state),

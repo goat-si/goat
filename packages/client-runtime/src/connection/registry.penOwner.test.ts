@@ -5,8 +5,16 @@ import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { vi } from "vite-plus/test";
 
-import { PenConnectionProfile, PenConnectionRegistration } from "./catalog.ts";
-import { PenConnectionTarget } from "./model.ts";
+import {
+  BearerConnectionProfile,
+  PenConnectionProfile,
+  PenConnectionRegistration,
+} from "./catalog.ts";
+import { BearerConnectionTarget, PenConnectionTarget } from "./model.ts";
+import {
+  makePullRequestRoutingPermissions,
+  PullRequestRoutingPermissions,
+} from "./pullRequestRoutingPermissions.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { makeHarness } from "./registry.testkit.ts";
 
@@ -53,5 +61,46 @@ it.effect("a registration the catalog refuses is not shown or counted as saved",
       );
       expect((yield* SubscriptionRef.get(registry.entries)).has(answered)).toBe(false);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
+
+it.effect("a Pen registration the catalog refuses leaves the trust given to the saved routes", () =>
+  Effect.gen(function* () {
+    const answered = EnvironmentId.make("answered");
+    const bearer = new BearerConnectionTarget({
+      environmentId: answered,
+      label: "Box",
+      connectionId: "bearer-answered",
+    });
+    const bearerProfile = new BearerConnectionProfile({
+      environmentId: answered,
+      label: "Box",
+      connectionId: bearer.connectionId,
+      httpBaseUrl: "https://box.example.test",
+      wsBaseUrl: "wss://box.example.test",
+    });
+    // The newest catalog refuses the write (another channel saved the member meanwhile) while
+    // this channel's view still shows no owner.
+    const harness = yield* makeHarness([bearer], [bearerProfile], [], {
+      refuseRegistration: (registration) => registration._tag === "PenConnectionRegistration",
+    });
+    const permissions = yield* makePullRequestRoutingPermissions({
+      read: Effect.succeed([]),
+      write: () => Effect.void,
+    });
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const live = (yield* SubscriptionRef.get(registry.entries)).get(answered);
+      if (live === undefined) throw new Error("the bearer environment is not listed");
+      yield* permissions.set(live, "read-write");
+      expect(yield* registry.register(new PenConnectionRegistration(routeOf(answered)))).toBe(
+        false,
+      );
+      expect(yield* permissions.get(live)).toBe("read-write");
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.provideService(PullRequestRoutingPermissions, permissions),
+      Effect.scoped,
+    );
   }),
 );

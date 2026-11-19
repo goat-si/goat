@@ -47,7 +47,12 @@ import {
   SshConnectionProfile,
   type ConnectionCatalogEntry,
 } from "./catalog.ts";
-import { PenConnectionTarget, SshConnectionTarget, penConnectionId } from "./model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PenConnectionTarget,
+  SshConnectionTarget,
+  penConnectionId,
+} from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 import { makePenNativeDiscovery } from "./penNativeDiscovery.ts";
@@ -119,7 +124,7 @@ it.effect("keeps routes during unavailable membership and closes only native rou
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,
@@ -187,7 +192,7 @@ it.effect("drops a descriptor arriving after leave or key rotation", () =>
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,
@@ -344,7 +349,7 @@ it.effect(
         reconnect: unused,
         setEnabled: unused,
         setCompatibility: unused,
-        state: unused,
+        state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
         stateChanges: unusedStream,
         run: unused,
         runStream: unusedStream,
@@ -447,7 +452,7 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,
@@ -531,7 +536,7 @@ it.effect("an open gate leaves a stored route whose profile names no Pen member"
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,
@@ -614,7 +619,7 @@ it.effect("a member's new Noise key keeps its stored route and updates the pin i
       reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
-      state: unused,
+      state: () => Effect.succeed(AVAILABLE_CONNECTION_STATE),
       stateChanges: unusedStream,
       run: unused,
       runStream: unusedStream,

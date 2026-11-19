@@ -200,6 +200,17 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRegister?.(registration) ?? Effect.void;
         if (options?.refuseRegistration?.(registration) === true) return false;
+        // As registerConnectionInCatalog: a Pen route another environment saved is not taken over.
+        if (
+          registration._tag === "PenConnectionRegistration" &&
+          (yield* Ref.get(storedTargets)).some(
+            (target) =>
+              target._tag === "PenConnectionTarget" &&
+              target.connectionId === registration.target.connectionId &&
+              target.environmentId !== registration.target.environmentId,
+          )
+        )
+          return false;
         yield* Ref.update(storedTargets, (current) =>
           replaceRoutes(current, registration.target.environmentId, routes),
         );
