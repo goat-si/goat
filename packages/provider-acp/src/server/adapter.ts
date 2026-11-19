@@ -1,4 +1,8 @@
-import { hasAcpDeferredBackgroundWork, acpTiming } from "./deferredBackground.ts";
+import {
+  hasAcpDeferredBackgroundWork,
+  idleReportedSubagents,
+  acpTiming,
+} from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
 import { prepareAcpAppContext, observeLateAcpCompaction } from "./acpAppContextEffect.ts";
@@ -223,14 +227,6 @@ import { acpPerTurnPromptUsage } from "./promptUsage.ts";
 export { acpPerTurnPromptUsage } from "./promptUsage.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
-
-/**
- * Emit first chunks and segment-close events immediately; coalesce later chunks into full-text snapshots.
- * This avoids quadratic output; scheduled flushes can run late under host load.
- */
-const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
-const ACP_SUBAGENT_TEXT_FLUSH_INTERVAL: Duration.Input = "400 millis";
-// Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
 import {
   MAX_RESUMABLE_TEXT_SEGMENTS,
@@ -1432,7 +1428,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         /**
          * Publishes a text change. A segment's first text emits at once so
          * live output starts immediately; later changes coalesce into one
-         * snapshot per ACP_TEXT_FLUSH_INTERVAL. Closing the segment emits its
+         * snapshot per acpTiming.ACP_TEXT_FLUSH_INTERVAL. Closing the segment emits its
          * final text and makes a pending flush a no-op.
          */
         const publishTextSegment = Effect.fnUntraced(function* (
@@ -1445,7 +1441,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (segment.dirty) return;
           segment.dirty = true;
           yield* emitTextSegment(context, kind, false, segment).pipe(
-            Effect.delay(ACP_TEXT_FLUSH_INTERVAL),
+            Effect.delay(acpTiming.ACP_TEXT_FLUSH_INTERVAL),
             Effect.forkIn(sessionScope),
           );
         });
@@ -1577,7 +1573,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   subagent.assistantFlushScheduled = false;
                 }).pipe(Effect.andThen(flushPendingSubagentAssistant(subagent))),
               )
-              .pipe(Effect.delay(ACP_SUBAGENT_TEXT_FLUSH_INTERVAL), Effect.forkIn(sessionScope));
+              .pipe(
+                Effect.delay(acpTiming.ACP_SUBAGENT_TEXT_FLUSH_INTERVAL),
+                Effect.forkIn(sessionScope),
+              );
             return;
           }
           subagent.pendingAssistantMessages.delete(nativeItemId);
@@ -3762,6 +3761,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             } else if (context.nativeThreadId === notification.sessionId) {
               if (update.sessionUpdate === "usage_update") {
                 context.replyOpen = false;
+                if (context.promptSettled)
+                  yield* idleReportedSubagents(context, flavor, emitSubagent);
                 yield* rearmDeferredFinalize(context);
               } else if (acpRootSessionUpdateIngestsOutput(notification)) {
                 context.replyOpen = true;
@@ -7335,6 +7336,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               context.promptSettled = true;
               context.promptSettledStatus = "completed";
+              yield* idleReportedSubagents(context, flavor, emitSubagent);
               if (drainedWakeCount === 0) {
                 if (continuationWasRequested && defersFinalizeForBackgroundWork) {
                   if (hasDeferredBackgroundWork(context)) {
@@ -7514,6 +7516,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       });
                       return;
                     }
+                    yield* idleReportedSubagents(context, flavor, emitSubagent);
+                    if (context.finalized) return;
                     if (
                       defersFinalizeForBackgroundWork &&
                       !context.interrupted &&

@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+import type { AcpAdapterV2SubagentUpdate } from "./adapterFlavor.ts";
 import type { ActiveAcpTurn } from "./adapter.ts";
 import type { AcpAdapterV2Flavor } from "./adapterFlavor.ts";
 import { acpSubagentStatusBlocksTurnSettlement } from "./acpSubagentStatus.ts";
@@ -23,7 +25,11 @@ export function hasAcpDeferredBackgroundWork(
     const status = toolStatus(tool.status);
     if (status === "pending" || status === "running") return true;
   }
-  if (flavor.subagentsIdleOnTurnCompletion === true) return false;
+  if (
+    flavor.subagentsIdleOnTurnCompletion === true &&
+    flavor.subagentsOutlivingPrompt === undefined
+  )
+    return false;
   return [...context.subagents.values()].some((subagent) =>
     acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
   );
@@ -34,7 +40,44 @@ export const acpTiming = {
   ACP_DEFERRED_FINALIZE_DEBOUNCE: "3000 millis",
   ACP_OPEN_REPLY_QUIET_LIMIT: "2 minutes",
   ACP_STOP_CONFIRM_TIMEOUT_MS: 10_000,
+  ACP_TEXT_FLUSH_INTERVAL: "50 millis",
+  ACP_SUBAGENT_TEXT_FLUSH_INTERVAL: "400 millis",
   ACP_LOADED_COMMANDS_WAIT: "2 seconds",
   ACP_PROMPT_INACTIVITY_SLICE_MILLIS: 60_000,
   ACP_HOST_SLEEP_TOLERANCE_MILLIS: 10_000,
 } as const;
+export const idleReportedSubagents = Effect.fn("AcpAdapterV2.idleReportedSubagents")(function* (
+  context: ActiveAcpTurn,
+  flavor: AcpAdapterV2Flavor,
+  emit: (context: ActiveAcpTurn, update: AcpAdapterV2SubagentUpdate) => Effect.Effect<void>,
+) {
+  if (flavor.subagentsOutlivingPrompt === undefined) return;
+  const nativeTaskId = (
+    subagent: typeof context.subagents extends Map<string, infer V> ? V : never,
+  ) => subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
+  const running = [...context.subagents.values()].filter((subagent) =>
+    acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
+  );
+  if (running.length === 0) return;
+  const atWork = yield* flavor.subagentsOutlivingPrompt({
+    sessionId: context.nativeThreadId,
+    nativeTaskIds: running.map(nativeTaskId),
+  });
+  if (context.finalized) return;
+  for (const subagent of running) {
+    if (
+      atWork.includes(nativeTaskId(subagent)) ||
+      !acpSubagentStatusBlocksTurnSettlement(subagent.task.status)
+    )
+      continue;
+    yield* emit(context, {
+      nativeTaskId: nativeTaskId(subagent),
+      prompt: subagent.task.prompt,
+      title: subagent.task.title,
+      model: subagent.task.model,
+      status: "idle",
+      childSessionId: subagent.childSessionId,
+      result: null,
+    });
+  }
+});
