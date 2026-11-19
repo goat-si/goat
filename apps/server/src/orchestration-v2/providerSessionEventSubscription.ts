@@ -1,6 +1,8 @@
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -29,33 +31,40 @@ export const makeProviderSessionEventSubscription = Effect.fn(
     updated.set(subscriberId, queue);
     return updated;
   });
-  const close = Ref.modify(subscribers, (current) => {
-    if (!current.has(subscriberId)) {
-      return [false, current] as const;
-    }
-    const updated = new Map(current);
-    updated.delete(subscriberId);
-    return [true, updated] as const;
-  }).pipe(
-    Effect.flatMap((removed) =>
-      removed
-        ? Queue.clear(queue).pipe(Effect.andThen(Queue.end(queue)), Effect.asVoid)
-        : Effect.void,
-    ),
-    // Detached so the consumer's run failure is not ordered behind release cleanup.
-    Effect.andThen(
-      Effect.suspend(() => {
-        const cleanup = subscriberReleaseCleanup.get(queue);
-        subscriberReleaseCleanup.delete(queue);
-        return cleanup === undefined ? Effect.void : Effect.forkDetach(cleanup);
-      }),
-    ),
-  );
+  const close = (awaitSettlement: boolean) =>
+    Ref.modify(subscribers, (current) => {
+      if (!current.has(subscriberId)) {
+        return [false, current] as const;
+      }
+      const updated = new Map(current);
+      updated.delete(subscriberId);
+      return [true, updated] as const;
+    }).pipe(
+      Effect.flatMap((removed) =>
+        removed
+          ? Queue.clear(queue).pipe(Effect.andThen(Queue.end(queue)), Effect.asVoid)
+          : Effect.void,
+      ),
+      Effect.andThen(
+        Effect.suspend(() => {
+          const cleanup = subscriberReleaseCleanup.get(queue);
+          subscriberReleaseCleanup.delete(queue);
+          if (cleanup === undefined) return Effect.void;
+          return Effect.flatMap(Effect.forkDetach(cleanup), (settlement) =>
+            awaitSettlement ? Effect.interruptible(Fiber.join(settlement)) : Effect.void,
+          );
+        }),
+      ),
+    );
   const events = Stream.fromQueue(queue).pipe(
     Stream.mapEffect((signal) =>
       signal.type === "event" ? Effect.succeed(signal.event) : Effect.failCause(signal.cause),
     ),
-    Stream.ensuring(close),
+    // A drained subscription completes after the release revisit settles its late writes.
+    Stream.onExit((exit) => close(!Exit.hasInterrupts(exit))),
   );
-  return { events, close } satisfies ProviderAdapter.ProviderAdapterV2EventSubscription;
+  return {
+    events,
+    close: close(false),
+  } satisfies ProviderAdapter.ProviderAdapterV2EventSubscription;
 });
