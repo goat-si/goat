@@ -264,7 +264,7 @@ export const layer: Layer.Layer<
               threadId: replaySource.threadId,
               runOrdinal: replaySource.ordinal,
             };
-      const nativeResume = resumeDelivery?.type === "native";
+      const nativeResume = resumeDelivery?.type === "native" && handoffs.length === 0;
       const privateBrief =
         !observeOnly &&
         !nativeResume &&
@@ -273,7 +273,11 @@ export const layer: Layer.Layer<
           ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
           : undefined;
       const turnMessage =
-        privateBrief === undefined ? providerMessage : { ...providerMessage, text: privateBrief };
+        privateBrief !== undefined
+          ? { ...providerMessage, text: privateBrief }
+          : resumeDelivery?.type === "native" && !nativeResume && providerMessage.text.trim() === ""
+            ? { ...providerMessage, text: "Continue where you left off." }
+            : providerMessage;
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
