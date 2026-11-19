@@ -1,3 +1,4 @@
+import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
 import { startPiConnection } from "./startConnection.ts";
 import { makeAsyncSubagents } from "./asyncSubagents.ts";
 import type {
@@ -462,21 +463,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const request = (record: PiRpcRecord, timeoutMs = PI_REQUEST_TIMEOUT_MS) =>
         connection.request(record, timeoutMs);
 
-      const nonNegativeInteger = (input: unknown, key: string): number | undefined => {
-        const value = recordNumber(input, key);
-        return value === undefined ? undefined : Math.max(0, Math.trunc(value));
-      };
-
-      const rememberModelContextWindow = (model: unknown): number | null => {
-        const provider = recordString(model, "provider");
-        const id = recordString(model, "id");
-        const capacity = nonNegativeInteger(model, "contextWindow");
-        if (provider !== undefined && id !== undefined && capacity !== undefined && capacity > 0) {
-          modelContextWindows.set(`${provider}/${id}`, capacity);
-          return capacity;
-        }
-        return null;
-      };
+      const rememberModelContextWindow = (model: unknown) =>
+        rememberPiModelContextWindow(modelContextWindows, model);
 
       const lifecycleRequest = Effect.fn("PiAdapter.lifecycleRequest")(
         function* (record: PiRpcRecord) {
