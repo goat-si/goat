@@ -122,6 +122,23 @@ describe("browser microphone lifecycle", () => {
     );
   });
 
+  it("hands retained capture samples to live streaming without another PCM copy", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmFrame = vi.fn();
+    const onPcmSamples = vi.fn((samples: Float32Array) => {
+      samples[0] = 0.5;
+    });
+    const start = mic.recorder.startRecording({ onPcmFrame, onPcmSamples });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmSamples).toHaveBeenCalledOnce();
+    expect(onPcmFrame).not.toHaveBeenCalled();
+    const payload = await mic.recorder.stopRecording();
+    const wav = Buffer.from(payload?.audioBase64 ?? "", "base64");
+    expect(wav.readInt16LE(44)).toBe(Math.round(0.5 * 32_767));
+  });
+
   it("does not flush a pending PCM fragment after cancellation", async () => {
     await using mic = fakeMicrophone();
     const onPcmFrame = vi.fn();

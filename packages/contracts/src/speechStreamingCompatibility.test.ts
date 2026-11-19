@@ -43,3 +43,9 @@ it("lets old and new peers decode server configuration with streaming capability
   expect(decodePrevious({ ...oldWire, speechStreamingV1: true })).toEqual(old);
   expect(decodeCurrent(oldWire)).toEqual(old);
 });
+
+it("lets old peers ignore the server's streaming-capable model catalog", () => {
+  const wire = { ...oldWire, speechStreamingV1: true, speechStreamingModelIds: ["fixture-model"] };
+  expect(decodeCurrent(wire)).toHaveProperty("speechStreamingModelIds", ["fixture-model"]);
+  expect(decodePrevious(wire)).toEqual(decodePrevious(oldWire));
+});

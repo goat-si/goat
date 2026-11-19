@@ -8,6 +8,7 @@ import { cn } from "../lib/utils";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { useEnvironment } from "../state/environments";
 import { useEnvironmentSpeechGrant } from "./voiceConsent";
+import { useClientSettings } from "../hooks/useSettings";
 
 export function useCommentSpeech(input: {
   environmentId: EnvironmentId;
@@ -18,6 +19,7 @@ export function useCommentSpeech(input: {
 }) {
   const ownerKey = useId();
   const grant = useEnvironmentSpeechGrant();
+  const transcribeAfterStop = useClientSettings((settings) => settings.speechTranscribeAfterStop);
   const selected = grant;
   const destinationId = selected?.environmentId ?? input.environmentId;
   const destinationLabel = useEnvironment(destinationId)?.label ?? "the selected environment";
@@ -34,6 +36,7 @@ export function useCommentSpeech(input: {
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
+    liveEnabled: !transcribeAfterStop,
     enabled:
       selected !== null && hasScope && Option.isSome(connection) && !proxied && !input.disabled,
     readDraft: () => {

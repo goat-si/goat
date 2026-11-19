@@ -42,3 +42,9 @@ it("matches the batch PCM encoder for common microphone rates and short clips", 
     }
   }
 });
+
+it("rejects input rates that could produce multiple frames per capture slice", () => {
+  expect(() => new StreamingPcmEncoder(7_999, () => {})).toThrow(
+    "Unsupported microphone sample rate",
+  );
+});

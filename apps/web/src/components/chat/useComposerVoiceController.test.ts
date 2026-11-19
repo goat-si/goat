@@ -94,6 +94,15 @@ function setup(
 }
 
 describe("composer voice controller", () => {
+  it("does not encode batch preview chunks while using an environment model", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({ localModelGrant: grant });
+    await session.controller.start();
+    expect(session.startRecording.mock.calls[0]?.[0].onStreamingChunk).toBeUndefined();
+    chooseEnvironmentSpeech(null);
+  });
   it("does not request PCM streaming for batch-only recording", async () => {
     using session = setup();
     await session.controller.start();
@@ -201,6 +210,32 @@ describe("composer voice controller", () => {
     expect(await session.controller.confirm()).toBe(true);
     expect(session.readDraft().text).toBe("hello live result");
     expect(session.transcribe).not.toHaveBeenCalled();
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("does not encode a batch WAV when live transcription succeeds", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const frameReceived = deferred<void>();
+    const encode = vi.fn(() => payload);
+    const stopRecordingDeferred = vi.fn(async () => ({ encode }));
+    const startLive = vi.fn(async () => ({
+      feed: async () => {
+        frameReceived.resolve();
+      },
+      finish: async () => "live result",
+      cancel: () => {},
+    }));
+    using session = setup({ localModelGrant: grant }, { startLive, stopRecordingDeferred });
+    await session.controller.start();
+    session.pcm(new Uint8Array([0, 0]));
+    await frameReceived.promise;
+    expect(await session.controller.confirm()).toBe(true);
+    expect(stopRecordingDeferred).toHaveBeenCalledOnce();
+    expect(encode).not.toHaveBeenCalled();
+    expect(session.stopRecording).not.toHaveBeenCalled();
+    expect(session.readDraft().text).toBe("hello live result");
     chooseEnvironmentSpeech(null);
   });
 

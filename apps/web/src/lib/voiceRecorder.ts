@@ -93,9 +93,14 @@ export interface VoiceRecordingPayload {
   readonly durationMs: number;
 }
 
+export interface VoiceRecordingCapture {
+  readonly encode: () => VoiceRecordingPayload | null;
+}
+
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
   readonly onPcmFrame?: (frame: Uint8Array) => void;
+  readonly onPcmSamples?: (samples: Float32Array, sampleRate: number) => void;
   readonly onPcmError?: () => void;
   readonly shouldEncodePcm?: () => boolean;
   readonly onLimitReached?: () => void;
@@ -242,7 +247,7 @@ export class BrowserVoiceRecorder {
       gain = context.createGain();
       gain.gain.value = 0;
       let pcmEncoder: StreamingPcmEncoder | null = null;
-      if (options.onPcmFrame) {
+      if (options.onPcmFrame && !options.onPcmSamples) {
         try {
           pcmEncoder = new StreamingPcmEncoder(context.sampleRate, options.onPcmFrame);
         } catch {
@@ -291,11 +296,14 @@ export class BrowserVoiceRecorder {
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
         if (options.shouldEncodePcm?.() === false) runtime.pcmEncoder = null;
-        try {
-          runtime.pcmEncoder?.push(mono);
-        } catch {
-          runtime.pcmEncoder = null;
-          runtime.pcmFailure?.();
+        else {
+          try {
+            if (options.onPcmSamples) options.onPcmSamples(mono, runtime.context.sampleRate);
+            else runtime.pcmEncoder?.push(mono);
+          } catch {
+            runtime.pcmEncoder = null;
+            runtime.pcmFailure?.();
+          }
         }
         if (options.onStreamingChunk) {
           runtime.streamingChunks.push(mono);
@@ -391,15 +399,19 @@ export class BrowserVoiceRecorder {
     return runtime;
   }
 
-  readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
+  readonly stopRecordingDeferred = async (): Promise<VoiceRecordingCapture | null> => {
     const runtime = await this.teardown();
     try {
       runtime?.pcmEncoder?.finish();
     } catch {
       runtime?.pcmFailure?.();
     }
-    return runtime ? encodePayload(runtime.chunks, runtime.context.sampleRate) : null;
+    if (!runtime || runtime.sampleCount === 0) return null;
+    return { encode: () => encodePayload(runtime.chunks, runtime.context.sampleRate) };
   };
+
+  readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> =>
+    (await this.stopRecordingDeferred())?.encode() ?? null;
 
   readonly cancelRecording = async (): Promise<void> => {
     await this.teardown();

@@ -1,7 +1,11 @@
 import { VOICE_STREAM_MAX_CHUNK_BYTES } from "@goat/contracts";
+import { StreamingPcmEncoder } from "./streamingPcmEncoder";
 
 const MAX_PENDING_AUDIO_BYTES = 15 * 32_000;
 const MAX_PENDING_AUDIO_FRAMES = 15;
+const MAX_PENDING_CAPTURE_SECONDS = 15;
+const MAX_PENDING_CAPTURE_CHUNKS = 4_096;
+const CAPTURE_SLICE_SAMPLES = 2_048;
 
 export interface LiveSpeechFrameSession {
   readonly feed: (bytes: Uint8Array) => Promise<void>;
@@ -12,7 +16,12 @@ export interface LiveSpeechFrameSession {
 export class LiveSpeechFramePump {
   private readonly abort = new AbortController();
   private readonly queued: Uint8Array[] = [];
+  private readonly capture: Array<{ readonly samples: Float32Array; offset: number }> = [];
   private queuedBytes = 0;
+  private captureSamples = 0;
+  private captureRate: number | null = null;
+  private encoder: StreamingPcmEncoder | null = null;
+  private encoderFinished = false;
   private session: LiveSpeechFrameSession | null = null;
   private draining: Promise<void> | null = null;
   private state: "starting" | "ready" | "failed" | "cancelled" | "finishing" = "starting";
@@ -39,6 +48,7 @@ export class LiveSpeechFramePump {
         this.session = session;
         this.state = "ready";
         this.drain();
+        this.drainCapture();
       },
       () => this.fail(),
     );
@@ -59,8 +69,54 @@ export class LiveSpeechFramePump {
     this.drain();
   }
 
+  pushSamples(samples: Float32Array, sampleRate: number) {
+    if (this.state !== "starting" && this.state !== "ready") return;
+    if (samples.length === 0) return;
+    if (
+      (this.captureRate !== null && this.captureRate !== sampleRate) ||
+      this.capture.length >= MAX_PENDING_CAPTURE_CHUNKS ||
+      this.captureSamples + samples.length > sampleRate * MAX_PENDING_CAPTURE_SECONDS
+    )
+      return this.fail();
+    if (!this.encoder) {
+      try {
+        this.encoder = new StreamingPcmEncoder(sampleRate, (frame) => {
+          this.push(frame);
+          return false;
+        });
+        this.captureRate = sampleRate;
+      } catch {
+        return this.fail();
+      }
+    }
+    this.capture.push({ samples, offset: 0 });
+    this.captureSamples += samples.length;
+    this.drainCapture();
+  }
+
+  private drainCapture() {
+    if (!this.session || !this.encoder || this.draining || this.state !== "ready") return;
+    while (this.capture.length > 0 && !this.draining && this.state === "ready") {
+      const next = this.capture[0];
+      if (!next) break;
+      const end = Math.min(next.offset + CAPTURE_SLICE_SAMPLES, next.samples.length);
+      let consumed: number;
+      try {
+        consumed = this.encoder.push(next.samples.subarray(next.offset, end));
+      } catch {
+        this.fail();
+        return;
+      }
+      if (this.state !== "ready") return;
+      this.captureSamples -= consumed;
+      next.offset += consumed;
+      if (next.offset === next.samples.length) this.capture.shift();
+    }
+  }
+
   private drain() {
-    if (!this.session || this.draining || this.state !== "ready") return;
+    if (!this.session || this.draining || this.state !== "ready" || this.queued.length === 0)
+      return;
     const session = this.session;
     const pending = (async () => {
       while (this.state === "ready" && this.queued.length > 0) {
@@ -76,6 +132,7 @@ export class LiveSpeechFramePump {
       () => {
         if (this.draining === pending) this.draining = null;
         this.drain();
+        this.drainCapture();
       },
       () => this.fail(),
     );
@@ -88,6 +145,9 @@ export class LiveSpeechFramePump {
     this.session?.cancel();
     this.queued.length = 0;
     this.queuedBytes = 0;
+    this.capture.length = 0;
+    this.captureSamples = 0;
+    this.encoder = null;
     this.onFailure();
   }
 
@@ -105,13 +165,34 @@ export class LiveSpeechFramePump {
       return null;
     }
     if (this.state !== "ready" || !this.session) return null;
-    if (this.draining) {
-      try {
-        await this.draining;
-      } catch {
+    while (this.state === "ready") {
+      this.drainCapture();
+      const pending = this.draining;
+      if (pending) {
+        try {
+          await pending;
+        } catch {
+          this.fail();
+          return null;
+        }
+        if (this.draining === pending) this.draining = null;
+        continue;
+      }
+      if (this.capture.length > 0) {
         this.fail();
         return null;
       }
+      if (this.encoder && !this.encoderFinished) {
+        this.encoderFinished = true;
+        try {
+          this.encoder.finish();
+        } catch {
+          this.fail();
+          return null;
+        }
+        continue;
+      }
+      break;
     }
     if (this.state !== "ready") return null;
     if (this.queued.length > 0) {
@@ -134,5 +215,8 @@ export class LiveSpeechFramePump {
     this.session?.cancel();
     this.queued.length = 0;
     this.queuedBytes = 0;
+    this.capture.length = 0;
+    this.captureSamples = 0;
+    this.encoder = null;
   }
 }

@@ -269,6 +269,7 @@ export const DestinationRailPreferences = Schema.Struct({
 export type DestinationRailPreferences = typeof DestinationRailPreferences.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
+  speechTranscribeAfterStop: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   goatBotTaskThreadsBesideChat: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1859,6 +1860,7 @@ export function requiredScopesForProjectMutation(
 }
 
 export const ClientSettingsPatch = Schema.Struct({
+  speechTranscribeAfterStop: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreadsBesideChat: Schema.optionalKey(Schema.Boolean),
   goatBotSuggestedHidden: Schema.optionalKey(Schema.Boolean),
   notificationMode: Schema.optionalKey(NotificationMode),

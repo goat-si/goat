@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import { LiveSpeechFramePump } from "./liveSpeechFramePump";
+import { encodeMonoPcm16Wav } from "@goat/contracts";
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -8,6 +9,87 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+it("streams retained capture samples without copying the startup backlog", async () => {
+  const opened = deferred<{
+    feed: (bytes: Uint8Array) => Promise<void>;
+    finish: () => Promise<string | null>;
+    cancel: () => void;
+  } | null>();
+  const firstFrame = deferred<void>();
+  const frames: Uint8Array[] = [];
+  const pump = new LiveSpeechFramePump(
+    () => opened.promise,
+    () => {},
+  );
+  const samples = new Float32Array(48_004).fill(0.25);
+  pump.pushSamples(samples, 48_000);
+  samples[0] = 0.5;
+  opened.resolve({
+    feed: async (frame) => {
+      frames.push(frame);
+      firstFrame.resolve();
+    },
+    finish: async () => "complete",
+    cancel: () => {},
+  });
+  pump.pushSamples(new Float32Array(2).fill(0.25), 48_000);
+  try {
+    await opened.promise;
+    expect(frames).toHaveLength(1);
+    await firstFrame.promise;
+    expect(await pump.finish()).toBe("complete");
+    const expected = encodeMonoPcm16Wav([samples, new Float32Array(2).fill(0.25)], 48_000, 16_000);
+    if (!expected) throw new Error("invalid fixture");
+    expect(Uint8Array.from(frames.flatMap((frame) => [...frame]))).toEqual(
+      expected.bytes.subarray(44),
+    );
+  } finally {
+    pump.cancel();
+  }
+});
+
+it("keeps unsent samples as capture references while a PCM frame is in flight", async () => {
+  const opened = deferred<{
+    feed: (bytes: Uint8Array) => Promise<void>;
+    finish: () => Promise<string | null>;
+    cancel: () => void;
+  } | null>();
+  const first = deferred<void>();
+  const firstStarted = deferred<void>();
+  const secondStarted = deferred<void>();
+  const frames: Uint8Array[] = [];
+  const pump = new LiveSpeechFramePump(
+    () => opened.promise,
+    () => {},
+  );
+  const samples = new Float32Array(96_000).fill(0.25);
+  pump.pushSamples(samples, 48_000);
+  opened.resolve({
+    feed: async (frame) => {
+      frames.push(frame);
+      if (frames.length === 1) {
+        firstStarted.resolve();
+        await first.promise;
+      } else secondStarted.resolve();
+    },
+    finish: async () => "complete",
+    cancel: () => {},
+  });
+  try {
+    await firstStarted.promise;
+    expect(frames).toHaveLength(1);
+    samples[48_000] = 0.5;
+    first.resolve();
+    await secondStarted.promise;
+    const view = new DataView(frames[1]!.buffer, frames[1]!.byteOffset, frames[1]!.byteLength);
+    expect(view.getInt16(0, true)).toBe(Math.round(0.5 * 32_767));
+    expect(await pump.finish()).toBe("complete");
+  } finally {
+    first.resolve();
+    pump.cancel();
+  }
+});
 
 it("sends frames captured during startup in order and waits for each acknowledgement", async () => {
   const opened = deferred<{

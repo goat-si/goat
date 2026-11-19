@@ -79,6 +79,7 @@ it("sends the complete original recording as a 24 kHz batch WAV after live disco
   const controller = new ComposerVoiceController(target, {
     startRecording: recorder.startRecording,
     stopRecording: recorder.stopRecording,
+    stopRecordingDeferred: recorder.stopRecordingDeferred,
     cancelRecording: recorder.cancelRecording,
     readDraft: () => draft,
     commitDraft: (text, selection) => {

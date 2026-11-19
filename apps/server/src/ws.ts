@@ -1,4 +1,5 @@
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
+import { speechStreamingCapabilities } from "./speech/SpeechCapabilities.ts";
 import {
   makeSpeechStreamRpcHandlers,
   ServerWsSpeechStreamRpcGroup,
@@ -1522,6 +1523,7 @@ export const layerWsRpc = (
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
+          ...speechStreamingCapabilities,
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           shellOlderSettled: true,
