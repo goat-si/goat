@@ -34,8 +34,10 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -74,6 +76,7 @@ const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
 const CLAUDE_BOOT_TIMEOUT = "5 minutes";
 // How often CLIs no agent scope holds have their process trees recorded, all from one table.
 const CLAUDE_DESCENDANT_POLL = "1 second";
+const CLAUDE_DESCENDANT_CLEANUP_TIMEOUT = "5 seconds";
 
 export {
   CLAUDE_CODE_PRESET_TOOLS,
@@ -484,7 +487,10 @@ export const layerQueryRunner: Layer.Layer<
 
     const hostEnvironment = yield* HostProcess.Environment;
     // The public open span covers both attempts.
-    const openQuery = Effect.fnUntraced(function* (input: ClaudeAgentSdkQueryOpenInput) {
+    const openQuery = Effect.fnUntraced(function* (
+      input: ClaudeAgentSdkQueryOpenInput,
+      preventRetry: () => void,
+    ) {
       const protocolLogger = makeClaudeAgentSdkProtocolLogger({
         nativeEventLogger,
         threadId: input.threadId,
@@ -547,6 +553,7 @@ export const layerQueryRunner: Layer.Layer<
         if (!answered) stderrTail = (stderrTail + text).slice(-2_048);
       };
       let refreshDescendants: Effect.Effect<void> = Effect.void;
+      let awaitDescendants: Effect.Effect<void> = Effect.void;
       const spawnProcess =
         options.spawnClaudeCodeProcess ??
         ((spawnOptions: ClaudeSpawnOptions) => {
@@ -562,8 +569,12 @@ export const layerQueryRunner: Layer.Layer<
             );
             if (unit === undefined && child.pid !== undefined) {
               const tracker = descendants.track(child.pid);
-              child.once("exit", () => runFork(tracker.stop));
+              const stopped = Deferred.makeUnsafe<void>();
+              child.once("exit", () =>
+                runFork(tracker.stop.pipe(Effect.ensuring(Deferred.succeed(stopped, undefined)))),
+              );
               refreshDescendants = tracker.refresh;
+              awaitDescendants = Deferred.await(stopped);
             }
             return child;
           }
@@ -653,6 +664,7 @@ export const layerQueryRunner: Layer.Layer<
             ).pipe(
               Effect.onError(() =>
                 Queue.shutdown(promptQueue).pipe(
+                  Effect.andThen(refreshDescendants),
                   // SDK disposal can return before process exit; await the owned child's exit before retrying.
                   Effect.andThen(
                     Effect.tryPromise({
@@ -664,6 +676,22 @@ export const layerQueryRunner: Layer.Layer<
                       },
                       catch: (cause) => queryRunnerError(cause, "close"),
                     }).pipe(Effect.timeout("10 seconds")),
+                  ),
+                  Effect.andThen(
+                    Effect.suspend(() => awaitDescendants).pipe(
+                      Effect.timeoutOption(CLAUDE_DESCENDANT_CLEANUP_TIMEOUT),
+                      Effect.flatMap((result) =>
+                        Option.isSome(result)
+                          ? Effect.void
+                          : Effect.sync(preventRetry).pipe(
+                              Effect.andThen(
+                                Effect.logWarning(
+                                  "Claude descendant cleanup is still running; not retrying query open",
+                                ),
+                              ),
+                            ),
+                      ),
+                    ),
                   ),
                   Effect.ensuring(
                     Effect.tryPromise({
@@ -864,15 +892,22 @@ export const layerQueryRunner: Layer.Layer<
       open: Effect.fn("ClaudeAgentSdkQueryRunner.open")(function* (
         input: ClaudeAgentSdkQueryOpenInput,
       ) {
-        return yield* openQuery(input).pipe(
+        let retryAllowed = true;
+        const preventRetry = () => {
+          retryAllowed = false;
+        };
+        return yield* openQuery(input, preventRetry).pipe(
           Effect.catchIf(
-            (error) => isClaudeMcpRegistrationTimeoutError(error.cause),
+            (error) => retryAllowed && isClaudeMcpRegistrationTimeoutError(error.cause),
             Effect.fnUntraced(function* () {
-              if (input.options.resume !== undefined) return yield* openQuery(input);
+              if (input.options.resume !== undefined) return yield* openQuery(input, preventRetry);
               const sessionId = yield* random
                 .uuidV4()
                 .pipe(Effect.mapError((cause) => queryRunnerError(cause, "allocateSessionId")));
-              return yield* openQuery({ ...input, options: { ...input.options, sessionId } });
+              return yield* openQuery(
+                { ...input, options: { ...input.options, sessionId } },
+                preventRetry,
+              );
             }),
           ),
         );
