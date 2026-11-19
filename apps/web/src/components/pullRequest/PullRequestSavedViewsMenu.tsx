@@ -1,7 +1,9 @@
 import { BookmarkIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "~/components/solar";
 import { useId, useState } from "react";
+import { msg, useMessages } from "gt-react";
 import {
   PULL_REQUEST_VIEW_NAME_MAX_LENGTH,
+  PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
   pullRequestViewNameError,
 } from "@goat/client-runtime/pull-request-saved-views";
 
@@ -27,6 +29,8 @@ import {
   type PullRequestListPreferences,
 } from "./pullRequestListPreferences";
 import {
+  decodeSavedViews,
+  isSavedView,
   EMPTY_PULL_REQUEST_SAVED_VIEWS,
   PULL_REQUEST_SAVED_VIEWS_KEY,
   PullRequestSavedViews,
@@ -41,11 +45,16 @@ export function PullRequestSavedViewsMenu({
   preferences: PullRequestListPreferences;
   onApply: (preferences: PullRequestListPreferences) => void;
 }) {
-  const [views, setViews] = useLocalStorage(
+  const m = useMessages();
+  const [rawViews, setViews] = useLocalStorage(
     PULL_REQUEST_SAVED_VIEWS_KEY,
     EMPTY_PULL_REQUEST_SAVED_VIEWS,
     PullRequestSavedViews,
   );
+  const views = decodeSavedViews(rawViews);
+  const atViewLimit =
+    views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT ||
+    rawViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ id?: string; name: string } | null>(null);
   const inputId = useId();
@@ -55,33 +64,45 @@ export function PullRequestSavedViewsMenu({
     views.find((view) => pullRequestViewMatches(view, preferences));
   if (selectedView && selectedId !== selectedView.id) setSelectedId(selectedView.id);
   const modified = selectedView !== undefined && !pullRequestViewMatches(selectedView, preferences);
-  const nameError = editor ? pullRequestViewNameError(editor.name, views, editor.id) : null;
+  const rawNameError = editor ? pullRequestViewNameError(editor.name, views, editor.id) : null;
+  const nameError =
+    rawNameError === "Enter a name for this view."
+      ? m(msg("Enter a name for this view."))
+      : rawNameError === "Use 80 characters or fewer."
+        ? m(msg("Use 80 characters or fewer."))
+        : rawNameError
+          ? m(msg("A view with this name already exists."))
+          : null;
 
   function persist(
     update: (current: ReadonlyArray<PullRequestSavedView>) => ReadonlyArray<PullRequestSavedView>,
   ) {
-    let written: ReadonlyArray<PullRequestSavedView> | undefined;
-    setViews((current) => {
-      written = update(current);
-      return written;
-    });
-    // The shared hook logs storage failures. Keep the editor open and explain when saving failed.
     try {
+      const current =
+        getLocalStorageItem(PULL_REQUEST_SAVED_VIEWS_KEY, PullRequestSavedViews) ?? [];
+      if (current.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
+        throw new Error("Too many saved views");
+      const written = update(decodeSavedViews(current));
+      if (!written.every(isSavedView)) throw new Error("Invalid saved view");
+      if (written.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
+        throw new Error("Too many saved views");
+      setViews(written);
       if (
-        written &&
         JSON.stringify(getLocalStorageItem(PULL_REQUEST_SAVED_VIEWS_KEY, PullRequestSavedViews)) ===
-          JSON.stringify(written)
-      ) {
+        JSON.stringify(written)
+      )
         return true;
-      }
     } catch {
-      // A browser policy can deny reads as well as writes.
+      // A failed read must not overwrite the stored value.
     }
     toastManager.add({
       type: "error",
-      title: "Could not save PR views",
-      description:
-        "Local storage is unavailable or full. Try again after freeing space or allowing storage.",
+      title: m(msg("Could not save PR views")),
+      description: m(
+        msg(
+          "Local storage is unavailable or full. Try again after freeing space or allowing storage.",
+        ),
+      ),
     });
     return false;
   }
@@ -105,8 +126,8 @@ export function PullRequestSavedViewsMenu({
       setEditor((current) => (current ? { name: current.name } : null));
       toastManager.add({
         type: "error",
-        title: "This saved view was removed",
-        description: "Your name has been kept. Save it as a new view or cancel.",
+        title: m(msg("This saved view was removed")),
+        description: m(msg("Your name has been kept. Save it as a new view or cancel.")),
       });
       return;
     }
@@ -123,16 +144,16 @@ export function PullRequestSavedViewsMenu({
             render={
               <MenuTrigger
                 render={<Button variant="outline" />}
-                aria-label="Saved pull request views"
+                aria-label={m(msg("Saved pull request views"))}
               />
             }
           >
             <BookmarkIcon aria-hidden className="size-4" />
-            <span className="max-w-40 truncate">{selectedView?.name ?? "Views"}</span>
-            {modified ? <span aria-label="Modified view">*</span> : null}
+            <span className="max-w-40 truncate">{selectedView?.name ?? m(msg("Views"))}</span>
+            {modified ? <span aria-label={m(msg("Modified view"))}>*</span> : null}
             <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
           </TooltipTrigger>
-          <TooltipPopup>{selectedView?.name ?? "Saved pull request views"}</TooltipPopup>
+          <TooltipPopup>{selectedView?.name ?? m(msg("Saved pull request views"))}</TooltipPopup>
         </Tooltip>
         <MenuPopup align="start">
           {views.map((view) => (
@@ -159,14 +180,16 @@ export function PullRequestSavedViewsMenu({
           ))}
           {views.length > 0 ? <MenuSeparator /> : null}
           <MenuItem
+            disabled={atViewLimit}
             onClick={() =>
               setEditor({
-                name: preferences.involvement === "reviewing" ? "PRs Requesting My Review" : "",
+                name:
+                  preferences.involvement === "reviewing" ? m(msg("PRs Requesting My Review")) : "",
               })
             }
           >
             <PlusIcon aria-hidden />
-            Save current view…
+            {atViewLimit ? m(msg("Maximum of 50 saved views")) : m(msg("Save current view…"))}
           </MenuItem>
           {selectedView ? (
             <>
@@ -182,11 +205,11 @@ export function PullRequestSavedViewsMenu({
                     )
                   }
                 >
-                  Update saved view
+                  {m(msg("Update saved view"))}
                 </MenuItem>
               ) : null}
               <MenuItem onClick={() => setEditor({ id: selectedView.id, name: selectedView.name })}>
-                Rename view…
+                {m(msg("Rename view…"))}
               </MenuItem>
               <MenuItem
                 variant="destructive"
@@ -195,7 +218,7 @@ export function PullRequestSavedViewsMenu({
                     setSelectedId(null);
                 }}
               >
-                Delete view
+                {m(msg("Delete view"))}
               </MenuItem>
             </>
           ) : null}
@@ -216,20 +239,22 @@ export function PullRequestSavedViewsMenu({
             }}
           >
             <DialogHeader>
-              <DialogTitle>{editor?.id ? "Rename PR view" : "Save PR view"}</DialogTitle>
+              <DialogTitle>
+                {editor?.id ? m(msg("Rename PR view")) : m(msg("Save PR view"))}
+              </DialogTitle>
               <DialogDescription>
-                Save your search, filters, and sort order on this device.
+                {m(msg("Save your search, filters, and sort order on this device."))}
               </DialogDescription>
             </DialogHeader>
             <DialogPanel>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={inputId}>View name</Label>
+                <Label htmlFor={inputId}>{m(msg("View name"))}</Label>
                 <Input
                   id={inputId}
                   autoFocus
                   value={editor?.name ?? ""}
                   maxLength={PULL_REQUEST_VIEW_NAME_MAX_LENGTH}
-                  placeholder="PRs Requesting My Review"
+                  placeholder={m(msg("PRs Requesting My Review"))}
                   aria-invalid={Boolean(editor?.name && nameError)}
                   aria-describedby={nameError && editor?.name ? errorId : undefined}
                   onChange={(event) =>
@@ -247,10 +272,10 @@ export function PullRequestSavedViewsMenu({
             </DialogPanel>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditor(null)}>
-                Cancel
+                {m(msg("Cancel"))}
               </Button>
               <Button type="submit" disabled={nameError !== null}>
-                Save
+                {m(msg("Save"))}
               </Button>
             </DialogFooter>
           </form>

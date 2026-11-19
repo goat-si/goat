@@ -144,3 +144,58 @@ describe("PullRequestSavedViewsMenu", () => {
     expect(screen.container.textContent).toContain("Other queue");
   });
 });
+
+it("keeps valid stored views when another entry is malformed", async () => {
+  using fixture = setup();
+  localStorage.setItem(
+    PULL_REQUEST_SAVED_VIEWS_KEY,
+    JSON.stringify([
+      { id: "valid", name: "Kept", preferences: reviewing },
+      { id: "broken", name: "Broken", preferences: { state: "invalid" } },
+    ]),
+  );
+  await using screen = await render(fixture.menu());
+  await openMenu(screen);
+  await choose("Save current view…");
+  await nameView("Another");
+  await submit();
+  expect(storedViews().map((view) => view.name)).toEqual(["Kept", "Another"]);
+});
+
+it("does not overwrite unreadable saved views", async () => {
+  using fixture = setup();
+  localStorage.setItem(PULL_REQUEST_SAVED_VIEWS_KEY, "not json");
+  await using screen = await render(fixture.menu());
+  await openMenu(screen);
+  await choose("Save current view…");
+  await nameView("Another");
+  await submit();
+  expect(localStorage.getItem(PULL_REQUEST_SAVED_VIEWS_KEY)).toBe("not json");
+});
+
+it("explains the saved-view count limit", async () => {
+  using fixture = setup();
+  localStorage.setItem(
+    PULL_REQUEST_SAVED_VIEWS_KEY,
+    JSON.stringify(
+      Array.from({ length: 50 }, (_, i) => ({
+        id: String(i),
+        name: `View ${i}`,
+        preferences: reviewing,
+      })),
+    ),
+  );
+  await using screen = await render(fixture.menu());
+  await openMenu(screen);
+  expect(document.body.textContent).toContain("Maximum of 50 saved views");
+});
+
+it("rejects a view with an oversized search without writing storage", async () => {
+  using fixture = setup();
+  await using screen = await render(fixture.menu({ ...reviewing, q: "x".repeat(201) }));
+  await openMenu(screen);
+  await choose("Save current view…");
+  await nameView("Too long");
+  await submit();
+  expect(localStorage.getItem(PULL_REQUEST_SAVED_VIEWS_KEY)).toBeNull();
+});
