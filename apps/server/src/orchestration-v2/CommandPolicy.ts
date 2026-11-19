@@ -429,7 +429,8 @@ const ensureNativeFork: CommandPolicyV2Shape["ensureNativeFork"] = (input) => {
 const ensureRollback: CommandPolicyV2Shape["ensureRollback"] = (input) => {
   if (
     !input.capabilities.threads.canRollbackThread ||
-    !input.capabilities.checkpointing.providerCanRollbackConversation
+    (!input.capabilities.checkpointing.providerCanRollbackConversation &&
+      !input.capabilities.context.canConsumeHandoffSummaries)
   ) {
     return Effect.fail(
       unsupported(input, "rollback", "providerInstanceId conversation rollback is unavailable"),

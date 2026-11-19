@@ -1,3 +1,4 @@
+import { normalizeChangedAcpCustomModels } from "./provider/goat/AcpCustomModelSettings.ts";
 import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as NodeUtil from "node:util";
@@ -832,7 +833,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Ref.get(currentSettingsRef).pipe(
-      Effect.flatMap(withDisposableStamp(update)),
+      Effect.flatMap((current) =>
+        withDisposableStamp(update)(current).pipe(
+          Effect.flatMap((next) => normalizeChangedAcpCustomModels(current, next, "test settings")),
+        ),
+      ),
       Effect.flatMap(normalizeServerSettings),
       Effect.tap(() => beforeCommit ?? Effect.void),
       Effect.tap((nextSettings) =>
@@ -1891,9 +1896,10 @@ const make = Effect.gen(function* () {
           cause: parseFailure.value,
         });
       }
-      const updated = clearRetargetedSettingsSecrets(
+      const updated = yield* normalizeChangedAcpCustomModels(
         current,
-        yield* withDisposableStamp(update)(current),
+        clearRetargetedSettingsSecrets(current, yield* withDisposableStamp(update)(current)),
+        settingsPath,
       );
       for (const [id, provider] of Object.entries(updated.secretProviders)) {
         if (

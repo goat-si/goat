@@ -1,4 +1,5 @@
 import type {
+  NodeId,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
@@ -71,6 +72,19 @@ export const makeProviderRunControls = (
             }),
           )
           .pipe(Effect.catchCause(() => Effect.succeed(false))),
+      loadUnsettledWork: (threadId: ThreadId, nodeIds: ReadonlyArray<NodeId>) =>
+        projectionStore
+          .getThreadRecords(threadId, ["subagents", "nodes", "turnItems"], {
+            nodeIds,
+            subagentIds: nodeIds,
+            turnItemStatuses: ["pending", "running", "waiting"],
+          })
+          .pipe(
+            Effect.catchTags({
+              ProjectionStoreThreadNotFoundError: () =>
+                Effect.succeed({ subagents: [], nodes: [], turnItems: [] }),
+            }),
+          ),
       loadRunInterruptReason: () =>
         projectionStore
           .getThreadRecords(input.threadId, ["turnItems"], {

@@ -101,6 +101,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly metadata: Pick<OrchestrationV2CloudTask, "url" | "title" | "progress">;
   }) => Effect.Effect<void, EventSinkV2Error>;
   readonly writeIfRunCurrent: (input: {
+    readonly expectedTurnItems?: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
@@ -148,6 +149,18 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   /** Commits only if the stored turn item still equals expected. */
   readonly writeIfTurnItemUnchanged: (input: {
     readonly expected: OrchestrationV2TurnItem;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
+  readonly writeIfSubagentUnchanged: (input: {
+    readonly expected: OrchestrationV2Subagent;
+    readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
+    readonly items?: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<
     {

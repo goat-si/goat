@@ -25,6 +25,8 @@ import * as Effect from "effect/Effect";
 import * as ContextHandoffService from "../ContextHandoffService.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import { missedTurnImages, missedTurnInputRuns } from "./MissedTurnInput.ts";
+import { contextBoundaryOrdinal } from "../ProviderContextBoundaries.ts";
+import { makeForkHistoryReader } from "../ForkHistoryReader.ts";
 
 export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
   const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
@@ -284,6 +286,8 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
           type: "provider_resume_fallback",
         });
         const createdAt = yield* DateTime.now;
+        const history = yield* projectionStore.getTurnStartHistory(threadId);
+        const boundary = contextBoundaryOrdinal({ runs: projection.runs, turnItems: history });
         const handoff = yield* contextHandoffService.prepareProviderHandoff({
           threadId: projection.thread.id,
           targetRunId: run.id,
@@ -295,14 +299,25 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
           coveredRunOrdinals: { from: 1, to: Math.max(1, run.ordinal - 1) },
           strategy: "full_thread_summary",
           runs: projection.runs,
-          items: (yield* projectionStore.getTurnStartHistory(threadId)).filter(
-            (item) =>
-              item.id !== replayedInput?.itemId &&
-              (item.runId === null ||
-                projection.runs.some(
-                  (source) => source.id === item.runId && source.ordinal < run.ordinal,
-                )),
-          ),
+          items: [
+            ...(boundary === 0
+              ? yield* makeForkHistoryReader(projectionStore).readInheritedHistory(
+                  projection.thread,
+                )
+              : []),
+            ...history.filter(
+              (item) =>
+                item.id !== replayedInput?.itemId &&
+                ((item.runId === null && boundary === 0) ||
+                  projection.runs.some(
+                    (source) =>
+                      source.id === item.runId &&
+                      source.ordinal >= boundary &&
+                      source.ordinal < run.ordinal &&
+                      source.status !== "rolled_back",
+                  )),
+            ),
+          ],
           createdAt,
         });
         return { handoff, transferId, createdAt };

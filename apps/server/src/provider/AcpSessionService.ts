@@ -1,6 +1,7 @@
 import {
   AcpRegistryOperationError,
   CommandId,
+  ThreadId,
   type AcpRegistryListSessionsInput,
   type AcpRegistryListSessionsResult,
   type AcpRegistryImportSessionInput,
@@ -20,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -66,6 +68,7 @@ const make = Effect.gen(function* () {
     yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const random = yield* SecureRandom.SecureRandom;
+  const sql = yield* SqlClient.SqlClient;
   const continuations = yield* makeAcpSessionContinuations();
   const continuationUnavailable = () =>
     new AcpRegistryOperationError({
@@ -125,6 +128,31 @@ const make = Effect.gen(function* () {
       nativeThreadId: input.sessionId,
     });
 
+  const findOwner = Effect.fn("AcpSessionService.findOwner")(function* (input: {
+    readonly driver: ProviderDriverKind;
+    readonly instanceId: ProviderInstanceId;
+    readonly sessionId: string;
+  }) {
+    const rows = yield* sql<{ readonly thread_id: string }>`
+      SELECT provider.thread_id FROM orchestration_v2_projection_provider_threads AS provider
+      JOIN (SELECT thread_id, deleted_at FROM orchestration_v2_projection_threads) AS thread ON thread.thread_id = provider.thread_id
+      WHERE provider.provider_instance_id = ${input.instanceId}
+        AND provider.driver = ${input.driver}
+        AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${input.sessionId}
+        AND thread.deleted_at IS NULL LIMIT 1
+    `.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AcpRegistryOperationError({
+            reason: "session_import_failed",
+            message: "Could not inspect ACP session ownership.",
+            cause,
+          }),
+      ),
+    );
+    return rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id);
+  });
+
   const annotateSessions = (
     instanceDriver: ProviderDriverKind,
     instanceId: ProviderInstanceId,
@@ -139,27 +167,31 @@ const make = Effect.gen(function* () {
           instanceId,
           sessionId: session.sessionId,
         });
-        return threadManagement.getThreadShell(threadId).pipe(
-          Effect.map((thread) => ({
-            ...session,
-            importedThreadId: thread === null ? null : threadId,
-            ...(page.canLoad &&
-            thread !== null &&
-            thread.projectId === projectId &&
-            AgentSessionImporter.isNativeHistoryPending({
-              historyOrigin: thread.historyOrigin,
-              hasRun: thread.latestRunId !== null,
-            })
-              ? { nativeHistoryPending: true }
-              : {}),
-          })),
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
-                reason: "session_import_failed",
-                message: "Could not inspect existing imported ACP sessions.",
-                cause,
-              }),
+        return findOwner({ driver: instanceDriver, instanceId, sessionId: session.sessionId }).pipe(
+          Effect.flatMap((owner) =>
+            threadManagement.getThreadShell(owner ?? threadId).pipe(
+              Effect.map((thread) => ({
+                ...session,
+                importedThreadId: thread === null ? null : (owner ?? threadId),
+                ...(page.canLoad &&
+                thread !== null &&
+                thread.projectId === projectId &&
+                AgentSessionImporter.isNativeHistoryPending({
+                  historyOrigin: thread.historyOrigin,
+                  hasRun: thread.latestRunId !== null,
+                })
+                  ? { nativeHistoryPending: true }
+                  : {}),
+              })),
+              Effect.mapError(
+                (cause) =>
+                  new AcpRegistryOperationError({
+                    reason: "session_import_failed",
+                    message: "Could not inspect existing imported ACP sessions.",
+                    cause,
+                  }),
+              ),
+            ),
           ),
         );
       },
@@ -252,6 +284,13 @@ const make = Effect.gen(function* () {
           instanceId: input.instanceId,
           sessionId: input.sessionId,
         });
+        const owner = yield* findOwner({
+          driver: instance.driverKind,
+          instanceId: input.instanceId,
+          sessionId: input.sessionId,
+        });
+        if (owner !== null && owner !== threadId)
+          return { threadId: owner, imported: false } as const;
         const existing = yield* threadManagement.getThreadShell(threadId).pipe(
           Effect.mapError(
             (cause) =>
@@ -388,6 +427,16 @@ const make = Effect.gen(function* () {
           instanceId: input.instanceId,
           sessionId: input.sessionId,
         });
+        const owner = yield* findOwner({
+          driver: instance.driverKind,
+          instanceId: input.instanceId,
+          sessionId: input.sessionId,
+        });
+        if (owner !== null)
+          return yield* new AcpRegistryOperationError({
+            reason: "session_delete_failed",
+            message: "Delete the imported GOAT thread before deleting its native ACP session.",
+          });
         const importedThread = yield* threadManagement.getThreadShell(threadId).pipe(
           Effect.mapError(
             (cause) =>

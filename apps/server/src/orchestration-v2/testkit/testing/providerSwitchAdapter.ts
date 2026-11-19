@@ -82,6 +82,7 @@ export function makeTestAdapter(input: {
   readonly backgroundTasksEndWithProcess?: true;
   readonly backgroundWork?: Ref.Ref<boolean>;
   readonly closedSessions?: Ref.Ref<ReadonlyArray<string>>;
+  readonly rollback?: "truncates" | "replaces_native_thread";
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId: input.instanceId,
@@ -408,8 +409,25 @@ export function makeTestAdapter(input: {
         respondToRuntimeRequest: () => Effect.void,
         readThreadSnapshot: () =>
           unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
-        rollbackThread: () =>
-          unimplemented(input.driver, "rollbackThread unused in provider switch test"),
+        rollbackThread: ({ providerThread }) =>
+          input.rollback === undefined
+            ? unimplemented(input.driver, "rollbackThread unused in provider switch test")
+            : Effect.succeed({
+                providerThread:
+                  input.rollback === "truncates" || providerThread.nativeThreadRef === null
+                    ? providerThread
+                    : {
+                        ...providerThread,
+                        nativeThreadRef: {
+                          ...providerThread.nativeThreadRef,
+                          nativeId: `${providerThread.nativeThreadRef.nativeId}:after-rollback`,
+                        },
+                        nativeConversationHeadRef: null,
+                      },
+                providerTurns: [],
+                messages: [],
+                runtimeRequests: [],
+              }),
         forkThread: () => unimplemented(input.driver, "forkThread unused in provider switch test"),
       };
       return runtime;

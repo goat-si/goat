@@ -301,3 +301,15 @@ describe("ServerSelfUpdateInput", () => {
     },
   );
 });
+
+it("keeps ACP structured model capability optional for older peers", () => {
+  const { supportsStructuredCustomModels: _ignored, ...oldFields } = ServerProvider.fields;
+  const oldDecode = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  const current = decodeServerProvider({
+    ...baseProviderSnapshot,
+    supportsStructuredCustomModels: true,
+  });
+  expect(current.supportsStructuredCustomModels).toBe(true);
+  expect(oldDecode(current).driver).toBe(current.driver);
+  expect(decodeServerProvider(baseProviderSnapshot).supportsStructuredCustomModels).toBeUndefined();
+});
