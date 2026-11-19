@@ -10,6 +10,7 @@ import {
   withoutAssistantCitationHash,
 } from "../../lib/assistantCitationNavigation";
 import {
+  closeAppPage,
   startMainAppLocationTracking,
   useCloseAppModal,
   useNavigateToMainApp,
@@ -53,6 +54,38 @@ async function settled(router: AnyRouter, navigation: Promise<void>) {
 }
 
 describe("main app return location", () => {
+  it("removes Settings from history through the close command path", async () => {
+    const otherThreadPath = "/environment-one/thread-two";
+    await using screen = await render(<ReturnControls />, { router: THREAD_PATH });
+    const router = screen.router!;
+    using _tracking = { [Symbol.dispose]: startMainAppLocationTracking(router) };
+
+    await settled(router, router.navigate({ href: otherThreadPath }));
+    await settled(router, router.navigate({ href: "/settings/general" }));
+    await closeAppPage(router);
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(otherThreadPath));
+    router.history.back();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(THREAD_PATH));
+  });
+
+  it("removes Settings entries from back and forward history when closed", async () => {
+    const otherThreadPath = "/environment-one/thread-two";
+    await using screen = await render(<ReturnControls />, { router: THREAD_PATH });
+    const router = screen.router!;
+    using _tracking = { [Symbol.dispose]: startMainAppLocationTracking(router) };
+
+    await settled(router, router.navigate({ href: otherThreadPath }));
+    await settled(router, router.navigate({ href: "/settings/general" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close modal" }));
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(otherThreadPath));
+    router.history.back();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(THREAD_PATH));
+    router.history.forward();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(otherThreadPath));
+    router.history.forward();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(otherThreadPath));
+  });
+
   it("preserves unrelated hashes and queries", () => {
     expect(withoutAssistantCitationHash("/thread?view=files#details")).toBe(
       "/thread?view=files#details",
