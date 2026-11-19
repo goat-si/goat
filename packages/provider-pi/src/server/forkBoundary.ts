@@ -12,7 +12,11 @@ export type PiForkBoundary =
       readonly turn: OrchestrationV2ProviderTurn;
       readonly target: OrchestrationV2ProviderTurn | null;
     }
-  | { readonly type: "nothing" }
+  | {
+      readonly type: "nothing";
+      readonly target?: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
+    }
   | {
       readonly type: "uncaptured";
       readonly turn: OrchestrationV2ProviderTurn;
@@ -43,7 +47,14 @@ export function piForkBoundary(input: {
     )
     .sort((a, b) => a.ordinal - b.ordinal)[0];
   const ref = boundary?.nativeTurnRef;
-  if (boundary === undefined || ref == null) return { type: "nothing" };
+  if (boundary === undefined || ref == null)
+    return {
+      type: "nothing",
+      target,
+      previous: input.providerThreadTurns
+        .filter((turn) => turn.ordinal < (target?.ordinal ?? 0) && turn.nativeTurnRef !== null)
+        .sort((a, b) => b.ordinal - a.ordinal)[0],
+    };
   return ref.strength === "strong" && ref.nativeId !== null
     ? { type: "entry", entryId: ref.nativeId, turn: boundary, target }
     : { type: "uncaptured", turn: boundary, target };

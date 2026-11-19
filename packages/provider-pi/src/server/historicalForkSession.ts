@@ -17,6 +17,7 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
     currentFile: string,
     boundary: Extract<PiForkBoundary, { type: "entry" }>,
     driver: ProviderDriverKind,
+    includeCurrent = false,
   ) {
     const fail = (detail: string) =>
       new ProviderAdapter.ProviderAdapterProtocolError({
@@ -46,7 +47,7 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
     const files = entries
       .filter((entry) => entry.type === "File" && entry.name.endsWith(".jsonl"))
       .map((entry) => path.join(directory, entry.name))
-      .filter((file) => file !== currentFile);
+      .filter((file) => includeCurrent || file !== currentFile);
     if (files.length > 256) return yield* fail("too many sibling session files");
     const matches: string[] = [];
     for (const file of files) {
@@ -85,10 +86,12 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
           entry.timestamp <= high
         );
       };
+      const tail = walkPiBranch(listing.entries, listing.leafId, boundary.entryId);
       if (
         inWindow(targetId, from, between) &&
         inWindow(boundary.entryId, between, to) &&
-        walkPiBranch(listing.entries, listing.leafId, boundary.entryId)?.reachedStop === true &&
+        tail?.reachedStop === true &&
+        (!includeCurrent || tail.userEntryIds.length === 0) &&
         walkPiBranch(listing.entries, boundary.entryId, targetId)?.reachedStop === true
       )
         matches.push(file);

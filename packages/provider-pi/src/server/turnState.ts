@@ -32,7 +32,10 @@ export interface ActivePiTurn {
   nextItemOrdinal: number;
   messageOrdinal: number;
   readonly streamItems: Map<string, PiStreamItemState>;
-  readonly toolArgs: Map<string, unknown>;
+  readonly toolArgs: Map<
+    string,
+    { readonly args: unknown; readonly name: string | undefined; active: boolean }
+  >;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
   readonly commandOutputBytes: Map<string, number>;
   interrupted: boolean;

@@ -111,22 +111,33 @@ export function piAskUserSingleSelectQuestion(
   questionId: string,
   title: string,
   event: PiRpcRecord,
-  toolArgs: ReadonlyMap<string, unknown>,
+  toolArgs: ReadonlyMap<
+    string,
+    { readonly args: unknown; readonly name: string | undefined; readonly active: boolean }
+  >,
 ):
   | { question: OrchestrationV2UserInputQuestion; customAnswerRoute: PiCustomAnswerRoute }
   | undefined {
   const lines = event["options"];
   if (!Array.isArray(lines) || lines.length < 2) return undefined;
   const sentinel = lines.at(-1);
-  if (typeof sentinel !== "string") return undefined;
-  for (const args of toolArgs.values()) {
+  if (sentinel !== `${lines.length}. Type something.`) return undefined;
+  for (const call of toolArgs.values()) {
+    if (!call.active || call.name !== "ask_user_question") continue;
+    const args = call.args;
     const questions = rpivDecoded(recordField(args, "questions"), Array.isArray);
     if (!Array.isArray(questions)) continue;
     for (const entry of questions) {
       const question = rpivDecoded(entry, Predicate.isObject);
       const text = rpivField(question, "question");
       const header = rpivField(question, "header");
-      if (recordField(question, "multiSelect") === true || !text?.trim()) continue;
+      if (
+        recordField(question, "multiSelect") === true ||
+        recordField(question, "allowCustomAnswer") === false ||
+        recordField(question, "custom") === false ||
+        !text?.trim()
+      )
+        continue;
       const prefix = header ? `[${header}] ` : "";
       if (!title.startsWith(`${prefix}${text}`)) continue;
       const encodedOptions = rpivDecoded(recordField(question, "options"), Array.isArray);
@@ -163,10 +174,15 @@ export function piAskUserSingleSelectQuestion(
   return undefined;
 }
 
+let pendingCustomAnswerTotal = 0;
+
 export class PiCustomAnswers {
   private readonly pending = new Map<string, string[]>();
+  private total = 0;
   clear() {
+    pendingCustomAnswerTotal -= this.total;
     this.pending.clear();
+    this.total = 0;
   }
   take(method: string, event: PiRpcRecord): string | undefined {
     const title =
@@ -177,10 +193,14 @@ export class PiCustomAnswers {
     if (prefix === undefined) return undefined;
     const values = this.pending.get(prefix) ?? [];
     const answer = values.shift();
+    if (answer !== undefined) {
+      this.total--;
+      pendingCustomAnswerTotal--;
+    }
     if (values.length === 0) this.pending.delete(prefix);
     return answer;
   }
-  route(route: PiCustomAnswerRoute | undefined, response: PiRpcRecord): PiRpcRecord {
+  route(route: PiCustomAnswerRoute | undefined, response: PiRpcRecord): PiRpcRecord | null {
     const value = response["value"];
     if (
       route === undefined ||
@@ -189,10 +209,37 @@ export class PiCustomAnswers {
       route.lines.includes(value)
     )
       return response;
+    const queued = this.pending.get(route.followUpTitlePrefix) ?? [];
+    if (
+      queued.length >= 8 ||
+      this.total >= 64 ||
+      pendingCustomAnswerTotal >= 256 ||
+      value.length > 16384
+    )
+      return null;
+    this.total++;
+    pendingCustomAnswerTotal++;
     this.pending.set(route.followUpTitlePrefix, [
       ...(this.pending.get(route.followUpTitlePrefix) ?? []),
       value,
     ]);
     return { value: route.sentinel };
   }
+}
+
+export function piToolCallArguments(
+  calls: Map<
+    string,
+    { readonly args: unknown; readonly name: string | undefined; active: boolean }
+  >,
+  phase: "start" | "update" | "end",
+  id: string,
+  name: string | undefined,
+  event: PiRpcRecord,
+): unknown {
+  if (phase === "start") calls.set(id, { args: event["args"], name, active: true });
+  const call = calls.get(id);
+  const args = event["args"] ?? call?.args;
+  if (phase === "end" && call !== undefined) call.active = false;
+  return args;
 }

@@ -97,6 +97,30 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
 ) {
+  if (
+    input.boundary.type === "nothing" &&
+    input.boundary.target != null &&
+    input.boundary.target.nativeThreadRef == null
+  ) {
+    const target = input.boundary.target;
+    const previous = input.boundary.previous;
+    const id = target.nativeTurnRef?.strength === "strong" ? target.nativeTurnRef.nativeId : null;
+    if (previous === undefined || id == null)
+      return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+        driver: input.driver,
+        detail: "Cannot recover Pi fork session: last legacy turn has no verifiable boundary",
+      });
+    const sourceFile = yield* findHistoricalForkSession(
+      input.sourceFile,
+      { type: "entry", entryId: id, turn: target, target: previous },
+      input.driver,
+      true,
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
+    return yield* forkPiSessionOnce({ ...input, sourceFile });
+  }
   const sourceFile =
     input.boundary.type === "nothing"
       ? input.sourceFile

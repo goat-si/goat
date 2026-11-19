@@ -39,6 +39,237 @@ export function registerPiModelAndRollbackChecks({
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
 }) {
+  /* oxlint-disable goat/no-em-dash-copy -- Matches the Pi extension protocol. */
+  it.effect("does not claim a matching dialog from an unrelated Pi tool", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const options = [
+        { label: "Yes", description: "Go" },
+        { label: "No", description: "Stop" },
+      ];
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "other",
+        toolName: "other_tool",
+        args: { questions: [{ question: "Choose?", options }] },
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "select",
+        id: "other-dialog",
+        title: "Choose?",
+        options: ["1. Yes \u2014 Go", "2. No \u2014 Stop", "3. Type something."],
+      });
+      const event = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
+        return assert.fail("expected request");
+      assert.equal(event.turnItem.questions[0]?.options.length, 3);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("rejects custom-answer overflow with a visible request error", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "ask",
+        toolName: "ask_user_question",
+        args: {
+          questions: [
+            {
+              question: "Choose?",
+              options: [
+                { label: "Yes", description: "Go" },
+                { label: "No", description: "Stop" },
+              ],
+            },
+          ],
+        },
+      });
+      for (let i = 0; i < 9; i++) {
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "select",
+          id: `select-${i}`,
+          title: "Choose?",
+          options: ["1. Yes \u2014 Go", "2. No \u2014 Stop", "3. Type something."],
+        });
+        const event = yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "user_input_request" &&
+            event.turnItem.status === "waiting",
+        );
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
+          return assert.fail("expected request");
+        const answer = runtime.respondToRuntimeRequest({
+          requestId: event.turnItem.requestId,
+          answers: { [`select-${i}`]: `custom-${i}` },
+        });
+        if (i < 8) {
+          yield* answer;
+          assert.equal(
+            (yield* fake.takeRequest("extension_ui_response"))["value"],
+            "3. Type something.",
+          );
+        } else {
+          const error = yield* Effect.flip(answer);
+          assert.include(String(error.cause), "Too many Pi custom answers");
+        }
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["current", "sibling", "ambiguous", "later-user"] as const)(
+    "verifies the last legacy turn against %s sessions",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const entry = (id: string, parentId: string | null, seconds: number) => ({
+          type: "message",
+          id,
+          parentId,
+          timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+          message: { role: "user" },
+        });
+        const content =
+          [{ type: "session", version: 3 }, entry("prior", null, 10), entry("last", "prior", 30)]
+            .map((record) => encodeJson(record))
+            .join("\n") + "\n";
+        const unrelated =
+          [{ type: "session", version: 3 }, entry("other", null, 30)]
+            .map((record) => encodeJson(record))
+            .join("\n") + "\n";
+        yield* fs.writeFileString(
+          `${dir}/current.jsonl`,
+          scenario === "sibling"
+            ? unrelated
+            : scenario === "later-user"
+              ? content + encodeJson(entry("later", "last", 50)) + "\n"
+              : content,
+        );
+        if (scenario === "sibling" || scenario === "ambiguous")
+          yield* fs.writeFileString(`${dir}/old.jsonl`, content);
+        const fake = yield* makeFakePi;
+        const forkFake = yield* makeFakePi;
+        const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+        const source = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        const turn = (ordinal: number) => ({
+          id: ProviderTurnId.make(`last-${ordinal}`),
+          providerThreadId: source.id,
+          nodeId: NodeId.make(`last-node-${ordinal}`),
+          runAttemptId: null,
+          nativeTurnRef: {
+            driver: PI_PROVIDER,
+            nativeId: ordinal === 1 ? "prior" : "last",
+            strength: "strong" as const,
+          },
+          ordinal,
+          status: "completed" as const,
+          startedAt: DateTime.makeUnsafe((ordinal === 1 ? 5 : 20) * 1000),
+          completedAt: DateTime.makeUnsafe((ordinal === 1 ? 20 : 40) * 1000),
+        });
+        forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+        fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+        const fork = runtime.forkThread({
+          sourceProviderThread: {
+            ...source,
+            nativeThreadRef: {
+              driver: PI_PROVIDER,
+              nativeId: `${dir}/current.jsonl`,
+              strength: "strong",
+            },
+          },
+          sourceProviderTurns: [turn(1), turn(2)],
+          providerTurnId: turn(2).id,
+          targetThreadId: ThreadId.make("last-legacy"),
+        });
+        if (scenario === "ambiguous" || scenario === "later-user") {
+          const error = yield* Effect.flip(fork);
+          assert.include(
+            String(error.cause),
+            scenario === "ambiguous"
+              ? "multiple matching sibling sessions"
+              : "no verified sibling session",
+          );
+        } else {
+          yield* fork;
+          const args = forkFake.lastSpawn().args;
+          assert.equal(
+            args[args.indexOf("--fork") + 1],
+            `${dir}/${scenario === "current" ? "current" : "old"}.jsonl`,
+          );
+        }
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  /* oxlint-enable goat/no-em-dash-copy */
+  it.effect("refuses an unverified last legacy turn after a Pi session change", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = {
+        id: ProviderTurnId.make("legacy-last"),
+        providerThreadId: source.id,
+        nodeId: NodeId.make("legacy-node"),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId: "old-entry", strength: "strong" as const },
+        ordinal: 1,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe(1000),
+        completedAt: DateTime.makeUnsafe(2000),
+      };
+      forkFake.queueState({ sessionFile: "/fake/incorrect-fork.jsonl" });
+      const failure = yield* Effect.flip(
+        runtime.forkThread({
+          sourceProviderThread: {
+            ...source,
+            nativeThreadRef: {
+              driver: PI_PROVIDER,
+              nativeId: "/fake/new-session.jsonl",
+              strength: "strong",
+            },
+          },
+          sourceProviderTurns: [turn],
+          providerTurnId: turn.id,
+          targetThreadId: ThreadId.make("legacy-last-fork"),
+        }),
+      );
+      assert.include(String(failure.cause), "Cannot recover Pi fork session");
+      assert.isFalse(forkFake.allRequests().some((request) => request.type === "fork"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("forks a historical Pi turn from its recorded session", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

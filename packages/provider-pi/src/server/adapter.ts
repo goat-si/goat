@@ -43,6 +43,7 @@ import {
   piUiResponse,
   piAskUserSingleSelectQuestion,
   PiCustomAnswers,
+  piToolCallArguments,
 } from "./extensionDialog.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
@@ -109,6 +110,7 @@ export interface PiAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
+
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
@@ -266,6 +268,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           closed = true;
+          customAnswers.clear();
           sessionEntity = { ...sessionEntity, extensionStatuses: [] };
           pendingWake = null;
           if (pendingPromptResponsesDrained !== null)
@@ -883,10 +886,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             });
           return;
         }
-        if (phase === "start") {
-          turn.toolArgs.set(toolCallId, event["args"]);
-        }
-        const args = event["args"] ?? turn.toolArgs.get(toolCallId);
+        const args = piToolCallArguments(turn.toolArgs, phase, toolCallId, toolName, event);
         const emittedAt = yield* DateTime.now;
         const startedAt = turn.toolStartedAt.get(toolCallId) ?? emittedAt;
         turn.toolStartedAt.set(toolCallId, startedAt);
@@ -2565,7 +2565,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             contextWindow = rememberModelContextWindow(restoredModel);
             appliedModel = null;
             const updatedAt = yield* DateTime.now;
-            sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
+            sessionEntity = {
+              ...sessionEntity,
+              model: PI_INHERIT_MODEL_SLUG,
+              updatedAt,
+            };
             yield* emit({
               type: "provider_session.updated",
               driver,
@@ -3070,6 +3074,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               pending.customAnswerRoute,
               piUiResponse(pending, requestInput.decision, requestInput.answers),
             );
+            if (response === null) return yield* protocolError("Too many Pi custom answers");
             yield* connection.send({
               type: "extension_ui_response",
               id: pending.nativeRequestId,
