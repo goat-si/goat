@@ -66,6 +66,16 @@ export function memoryPreview(text: string) {
   return preview;
 }
 
+export function memorySelectionPreview(item: import("@goat/contracts").MemoryItem | undefined) {
+  return item?.status === "active" && item.localAvailability.exposure === "visible"
+    ? memoryPreview(item.payload.text)
+    : undefined;
+}
+
+export function memoryHiddenSelectionLabel(memoryId: MemoryId) {
+  return `Memory ${memoryId.slice(-8)} · Text hidden`;
+}
+
 export function memoryScopeLabel(scope: MemoryScope) {
   return scope.kind === "user" ? "User" : scope.kind === "project" ? "Project" : "Thread";
 }

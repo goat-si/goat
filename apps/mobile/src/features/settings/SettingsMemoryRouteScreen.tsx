@@ -963,6 +963,7 @@ function ScopedMemoryBrowser({
       }
       ListFooterComponent={
         <>
+          {batch.hiddenRows}
           {!page || AsyncResult.isFailure(result) ? (
             <Action label="Refresh memories" onPress={() => registry.refresh(atom)} />
           ) : null}

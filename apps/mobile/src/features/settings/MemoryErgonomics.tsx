@@ -10,6 +10,8 @@ import type {
 } from "@goat/contracts";
 import {
   memoryForgetRequest,
+  memoryHiddenSelectionLabel,
+  memorySelectionPreview,
   memoryMoveCandidate,
   memoryMoveCandidateCurrent,
   type MemoryMoveCandidate,
@@ -119,13 +121,13 @@ export function useMobileMemoryBatch(
   if (previous.key !== key) set(state);
   const patch = (update: Partial<BatchState>) =>
     set((current) => (current.key === key ? { ...current, ...update } : current));
-  function toggle(item: MemoryItem) {
+  function toggle(memoryId: MemoryId, item?: MemoryItem) {
     const selected = new Map(state.selected);
-    if (!selected.delete(item.memoryId)) {
-      if (selected.size >= MEMORY_FORGET_SELECTION_LIMIT) return;
+    if (!selected.delete(memoryId)) {
+      if (!item || selected.size >= MEMORY_FORGET_SELECTION_LIMIT) return;
       const request = memoryForgetRequest(item, operationId());
       if (!request) return;
-      selected.set(item.memoryId, { forget: request, move: memoryMoveCandidate(item) });
+      selected.set(memoryId, { forget: request, move: memoryMoveCandidate(item) });
     }
     patch({ selected });
   }
@@ -157,19 +159,36 @@ export function useMobileMemoryBatch(
       .filter((candidate) => memoryMoveCandidateCurrent(candidate, items))
       .map(({ memoryId }) => memoryId),
   );
+  const selecting = allowed && state.selecting;
+  function selectionRow(memoryId: MemoryId, item?: MemoryItem) {
+    const checked = state.selected.has(memoryId);
+    const hidden = memoryHiddenSelectionLabel(memoryId);
+    if (
+      !checked &&
+      (!item ||
+        item.status === "forgotten" ||
+        item.localAvailability.reasons.includes("forget_pending"))
+    )
+      return <Copy>{hidden}</Copy>;
+    const preview = memorySelectionPreview(item);
+    return (
+      <SettingsSwitchRow
+        key={memoryId}
+        label={preview === undefined ? hidden : `Select memory ${memoryId.slice(-8)}`}
+        {...(preview === undefined ? {} : { subtitle: preview })}
+        disabled={state.busy}
+        value={checked}
+        onValueChange={() => toggle(memoryId, item)}
+      />
+    );
+  }
+  const missing = selecting
+    ? [...state.selected.keys()].filter((id) => !items.some((item) => item.memoryId === id))
+    : [];
   return {
-    selecting: allowed && state.selecting,
-    row: (item: MemoryItem) =>
-      item.status !== "forgotten" && !item.localAvailability.reasons.includes("forget_pending") ? (
-        <SettingsSwitchRow
-          label={`Select memory ${item.memoryId.slice(-8)}`}
-          disabled={state.busy}
-          value={state.selected.has(item.memoryId)}
-          onValueChange={() => toggle(item)}
-        />
-      ) : (
-        <Copy>Forgotten memory</Copy>
-      ),
+    selecting,
+    row: (item: MemoryItem) => selectionRow(item.memoryId, item),
+    hiddenRows: missing.map((id) => selectionRow(id)),
     controls: !allowed ? null : (
       <>
         <Action

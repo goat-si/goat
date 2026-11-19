@@ -45,6 +45,8 @@ import {
   memorySearchInput,
   memoryProjectScope,
   memoryPreview,
+  memoryHiddenSelectionLabel,
+  memorySelectionPreview,
   memoryScopeLabel,
   presentMemoryPage,
 } from "@goat/client-runtime/memory-browsing";
@@ -773,7 +775,9 @@ function ScopedMemoryRecords({
             renderItem={({ item }) => (
               <SettingsRow
                 title={
-                  item.status === "active" ? (
+                  batch.selecting ? (
+                    (memorySelectionPreview(item) ?? memoryHiddenSelectionLabel(item.memoryId))
+                  ) : item.status === "active" ? (
                     memoryPreview(item.payload.text)
                   ) : item.status === "forgotten" ? (
                     <span className="text-muted-foreground">Forgotten memory</span>
@@ -806,6 +810,7 @@ function ScopedMemoryRecords({
             )}
           />
         )}
+        {batch.hiddenRows}
         {cursor || value?.nextCursor ? (
           <SettingsRow
             title="Browse memories"

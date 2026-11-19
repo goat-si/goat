@@ -279,18 +279,22 @@ vi.mock("../features/settings/components/SettingsActionRow", () => ({
 vi.mock("../features/settings/components/SettingsSwitchRow", () => ({
   SettingsSwitchRow: (props: {
     label: string;
+    subtitle?: string;
     value: boolean;
     onValueChange: (value: boolean) => void;
     disabled?: boolean;
   }) => (
-    <button
-      disabled={props.disabled}
-      role="switch"
-      aria-checked={props.value}
-      onClick={() => props.onValueChange(!props.value)}
-    >
-      {props.label}
-    </button>
+    <div>
+      <button
+        disabled={props.disabled}
+        role="switch"
+        aria-checked={props.value}
+        onClick={() => props.onValueChange(!props.value)}
+      >
+        {props.label}
+      </button>
+      {props.subtitle}
+    </div>
   ),
 }));
 vi.mock("../components/ui/Menu", () => ({

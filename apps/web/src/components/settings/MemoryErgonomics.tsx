@@ -17,6 +17,7 @@ import {
 } from "@goat/contracts";
 import {
   memoryForgetRequest,
+  memoryHiddenSelectionLabel,
   memoryMoveCandidate,
   memoryMoveCandidateCurrent,
   type MemoryMoveCandidate,
@@ -134,13 +135,13 @@ export function useWebMemoryBatch(
   if (previous.key !== key) set(state);
   const patch = (update: Partial<BulkState>) =>
     set((current) => (current.key === key ? { ...current, ...update } : current));
-  function toggle(item: MemoryItem) {
+  function toggle(memoryId: MemoryId, item?: MemoryItem) {
     const selected = new Map(state.selected);
-    if (!selected.delete(item.memoryId)) {
-      if (selected.size >= MEMORY_FORGET_SELECTION_LIMIT) return;
+    if (!selected.delete(memoryId)) {
+      if (!item || selected.size >= MEMORY_FORGET_SELECTION_LIMIT) return;
       const request = memoryForgetRequest(item, MemoryOperationId.make(randomUUID()));
       if (!request) return;
-      selected.set(item.memoryId, { forget: request, move: memoryMoveCandidate(item) });
+      selected.set(memoryId, { forget: request, move: memoryMoveCandidate(item) });
     }
     patch({ selected });
   }
@@ -172,22 +173,33 @@ export function useWebMemoryBatch(
       .filter((candidate) => memoryMoveCandidateCurrent(candidate, items))
       .map(({ memoryId }) => memoryId),
   );
+  const selecting = allowed && state.selecting;
+  function selectionControl(memoryId: MemoryId, item?: MemoryItem) {
+    const checked = state.selected.has(memoryId);
+    if (!checked && (!item || item.status === "forgotten" || !presentSelectable(item))) return null;
+    return (
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={state.busy}
+          aria-label={`Select memory ${memoryId.slice(-8)}`}
+          onChange={() => toggle(memoryId, item)}
+        />
+        Select
+      </label>
+    );
+  }
+  const missing = selecting
+    ? [...state.selected.keys()].filter((id) => !items.some((item) => item.memoryId === id))
+    : [];
   return {
-    selecting: allowed && state.selecting,
+    selecting,
     rowState: state,
-    row: (item: MemoryItem) =>
-      state.selecting && item.status !== "forgotten" && presentSelectable(item) ? (
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={state.selected.has(item.memoryId)}
-            disabled={state.busy}
-            aria-label={`Select memory ${item.memoryId.slice(-8)}`}
-            onChange={() => toggle(item)}
-          />
-          Select
-        </label>
-      ) : null,
+    row: (item: MemoryItem) => selectionControl(item.memoryId, item),
+    hiddenRows: missing.map((id) => (
+      <SettingsRow key={id} title={memoryHiddenSelectionLabel(id)} control={selectionControl(id)} />
+    )),
     controls: !allowed ? null : (
       <>
         <SettingsRow
