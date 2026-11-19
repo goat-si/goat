@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useGT } from "gt-react";
 import { type ReactNode, useSyncExternalStore } from "react";
 
 import { cn } from "~/lib/utils";
@@ -82,6 +83,7 @@ export function SidebarUpdateCapsule({
   readonly icon: ReactNode;
   readonly onRestart?: () => Promise<void>;
 }) {
+  const gt = useGT();
   const machines = useUpdateRunMachineViews(run);
   const hasActiveMachine = machines.some(
     ({ status }) =>
@@ -150,7 +152,7 @@ export function SidebarUpdateCapsule({
               "rounded-full text-xs font-medium tabular-nums ring-1 ring-current/22 ring-inset",
           )}
         >
-          {restartSeconds !== null ? `${restartSeconds}s` : icon}
+          {restartSeconds !== null ? gt("{seconds}s", { seconds: restartSeconds }) : icon}
         </span>
       </div>
       <PopoverPopup side="top" align="end" padding="compact" width="sm">
