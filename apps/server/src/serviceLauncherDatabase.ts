@@ -4,7 +4,6 @@ import { copyDatabaseFile, runCp, syncDirectory } from "./serviceLauncherCopy.ts
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
@@ -15,7 +14,6 @@ import {
   serverOwnerLogPath,
   tryAcquireServerOwnerLock,
 } from "./serverOwnerLockFile.ts";
-import { prepareSqliteBackupDestination } from "./persistence/sqliteCopyOnWrite.ts";
 import { replaceFileDurably } from "./serviceUnitRepoint.ts";
 import { livePreLockServerOwner, tryAcquireLegacyServerOwnerLock } from "./serviceLauncherOwner.ts";
 
@@ -74,12 +72,10 @@ async function statDatabaseFiles(dbPath: string): Promise<ReadonlyArray<NodeFS.S
   return stats;
 }
 
-// oxlint-disable-next-line goat/no-global-process-runtime -- The standalone launcher runs before Effect.
-const launcherPlatform = () => NodeOS.platform();
-
 // cp -c silently copies across volumes; require one device matching the APFS system volume's filesystem type.
 async function backupCanClone(dbPath: string, backupRoot: string): Promise<boolean> {
-  const platform = launcherPlatform();
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone launcher has no Effect runtime.
+  const platform = process.platform;
   if (platform === "darwin") {
     const [backupDirectory, backupFs, systemFs] = await Promise.all([
       NodeFSP.stat(backupRoot),
@@ -92,22 +88,18 @@ async function backupCanClone(dbPath: string, backupRoot: string): Promise<boole
     );
   }
   if (platform !== "linux") return false;
-  const directory = await NodeFSP.mkdtemp(NodePath.join(backupRoot, ".clone-probe-")).catch(
-    () => undefined,
-  );
-  if (directory === undefined) return false;
+  const probe = NodePath.join(backupRoot, `.clone-probe-${NodeCrypto.randomUUID()}`);
   try {
-    const mainTarget = await restoreTarget(dbPath);
     for (const suffix of DB_FILE_SUFFIXES) {
-      const source = `${mainTarget}${suffix}`;
+      const source = `${dbPath}${suffix}`;
       if (suffix !== "" && !(await pathExists(source))) continue;
-      if (!(await prepareSqliteBackupDestination(platform, source, directory))) return false;
-      const destination = databaseBackupFile(directory, suffix);
-      if (!(await runCp(["--reflink=always", source, destination]))) return false;
+      if (!(await runCp(["--reflink=always", source, `${probe}${suffix}`]))) return false;
     }
     return true;
   } finally {
-    await NodeFSP.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    for (const suffix of DB_FILE_SUFFIXES) {
+      await NodeFSP.rm(`${probe}${suffix}`, { force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -218,19 +210,14 @@ export async function backupDatabase(
 
     const backupDir = databaseBackupDir(baseDir, pending.id);
     const stagingDir = `${backupDir}.staging`;
-    await NodeFSP.mkdir(NodePath.dirname(stagingDir), { recursive: true, mode: 0o700 });
-    await NodeFSP.mkdir(stagingDir, { mode: 0o700 });
+    await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
     const files = new Set<DatabaseSuffix>();
-    const platform = launcherPlatform();
     for (const suffix of DB_FILE_SUFFIXES) {
       signal.throwIfAborted();
       const source = `${mainTarget}${suffix}`;
       if (suffix !== "" && !(await pathExists(source))) continue;
       const destination = databaseBackupFile(stagingDir, suffix);
-      const canClone = await prepareSqliteBackupDestination(platform, source, stagingDir);
-      signal.throwIfAborted();
-      if (canClone) await copyDatabaseFile(source, destination, signal);
-      else await NodeFSP.copyFile(source, destination);
+      await copyDatabaseFile(source, destination, signal);
       await syncFile(destination);
       files.add(suffix);
     }
