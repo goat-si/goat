@@ -63,6 +63,7 @@ export function layerTestFor(state: {
   backgroundWorkEnabled?: boolean;
   automaticFetchInterval?: Effect.Effect<Duration.Duration>;
   beforeRemoteStatus?: Effect.Effect<void, GitManagerError>;
+  onRemoteStatusComplete?: (cwd: string) => Effect.Effect<void>;
   beforeLocalStatus?: Effect.Effect<void>;
   branchRead?: () => Effect.Effect<string | null>;
   headPath?: string;
@@ -128,7 +129,7 @@ export function layerTestFor(state: {
                 }
               : null,
           ),
-        remoteStatus: (_input, options) =>
+        remoteStatus: (input, options) =>
           Effect.suspend(() => {
             return (state.beforeRemoteStatus ?? Effect.void).pipe(
               Effect.andThen(
@@ -138,6 +139,7 @@ export function layerTestFor(state: {
                   return state.currentRemoteStatus;
                 }),
               ),
+              Effect.tap(() => state.onRemoteStatusComplete?.(input.cwd) ?? Effect.void),
               Effect.tap(() =>
                 state.remoteStatusError ? Effect.fail(state.remoteStatusError) : Effect.void,
               ),

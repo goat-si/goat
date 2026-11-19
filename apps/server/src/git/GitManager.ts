@@ -1,3 +1,4 @@
+import { toPullRequestInfo } from "./gitManagerPrInfo.ts";
 import { makePullRequestWorktreeLifecycle } from "./pullRequestWorktreeLifecycle.ts";
 import {
   isPullRequestWorktreeLocalBranchName,
@@ -93,7 +94,6 @@ import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import type { ChangeRequest } from "@goat/contracts";
 import {
   type CommitAndBranchSuggestion,
   formatCommitMessage,
@@ -103,11 +103,15 @@ import {
   sanitizeProgressText,
 } from "./commitMessage.ts";
 import {
+  parseRepositoryNameWithOwnerFromRemoteUrl,
   matchesBranchHeadContext,
   parseRepositoryOwnerLogin,
   resolveHeadRepositoryNameWithOwner,
 } from "./pullRequestHeadIdentity.ts";
-export { matchesBranchHeadContext } from "./pullRequestHeadIdentity.ts";
+export {
+  matchesBranchHeadContext,
+  parseRepositoryNameWithOwnerFromRemoteUrl,
+} from "./pullRequestHeadIdentity.ts";
 import { makeRefreshNewPullRequestWorktree } from "./pullRequestWorktreeRefresh.ts";
 
 export interface GitActionProgressReporter {
@@ -266,46 +270,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
-}
-
-export function parseRepositoryNameWithOwnerFromRemoteUrl(
-  url: string | null,
-  provider?: Pick<
-    SourceControlProvider.SourceControlProvider["Service"],
-    "repositoryNameFromRemoteUrl"
-  >,
-): string | null {
-  const trimmed = url?.trim() ?? "";
-  if (trimmed.length === 0) return null;
-  return (
-    provider?.repositoryNameFromRemoteUrl?.(trimmed) ??
-    SourceControlProvider.repositoryPathFromRemoteUrl(trimmed)
-  );
-}
-
-function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
-  return {
-    number: summary.number,
-    title: summary.title,
-    url: summary.url,
-    baseRefName: summary.baseRefName,
-    headRefName: summary.headRefName,
-    ...(summary.headSha !== undefined ? { headSha: summary.headSha } : {}),
-    state: summary.state ?? "open",
-    ...(summary.isDraft === true ? { isDraft: true } : {}),
-    closedAt: summary.closedAt ?? null,
-    mergedAt: summary.mergedAt ?? null,
-    updatedAt: summary.updatedAt,
-    ...(summary.isCrossRepository !== undefined
-      ? { isCrossRepository: summary.isCrossRepository }
-      : {}),
-    ...(summary.headRepositoryNameWithOwner !== undefined
-      ? { headRepositoryNameWithOwner: summary.headRepositoryNameWithOwner }
-      : {}),
-    ...(summary.headRepositoryOwnerLogin !== undefined
-      ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
-      : {}),
-  };
 }
 
 function headBranchProbe(
@@ -2022,6 +1986,7 @@ export const make = Effect.gen(function* () {
     fallbackBranch: string | null,
     threadId: ThreadId | undefined,
     emit: GitActionProgressEmitter,
+    pushRemoteRef?: { readonly remoteName: string; readonly upstreamRef: string },
   ) {
     const provider = yield* sourceControlProvider(cwd);
     const terms = sourceControlDefinitions.get(provider.kind).changeRequest;
@@ -2042,10 +2007,12 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const headContext = yield* resolveBranchHeadContext(cwd, {
-      branch,
-      upstreamRef: details.upstreamRef,
-    });
+    // A configured push remote receives the commits while the branch keeps
+    // tracking its upstream, so the PR head is the push remote's branch.
+    const headContext = yield* resolveBranchHeadContext(
+      cwd,
+      pushRemoteRef ? { branch, ...pushRemoteRef } : { branch, upstreamRef: details.upstreamRef },
+    );
 
     const existing = yield* findOpenPr(cwd, headContext);
     if (existing) {
@@ -2121,6 +2088,16 @@ export const make = Effect.gen(function* () {
         cwd,
         baseRefName: baseBranch,
         headSelector: headContext.preferredHeadSelector,
+        ...(provider.kind === "gitlab" &&
+        headContext.isCrossRepository &&
+        headContext.headRepositoryNameWithOwner
+          ? {
+              source: {
+                repository: headContext.headRepositoryNameWithOwner,
+                refName: headContext.headBranch,
+              },
+            }
+          : {}),
         title: generated.title,
         bodyFile,
       })
@@ -2809,12 +2786,26 @@ export const make = Effect.gen(function* () {
       > {
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
         const wantsCommit = isCommitAction(input.action);
+        const upToDateBranch =
+          input.action === "create_pr" &&
+          initialStatus.hasUpstream &&
+          initialStatus.aheadCount === 0
+            ? initialStatus.branch
+            : null;
+        // A current upstream says nothing about a separate push remote, which may lack HEAD.
+        const pushTarget = upToDateBranch
+          ? yield* gitCore
+              .resolvePushTarget(input.cwd, { branch: upToDateBranch, hasUpstream: true })
+              .pipe(Effect.orElseSucceed(() => null))
+          : null;
         const wantsPush =
           input.action === "push" ||
           input.action === "commit_push" ||
           input.action === "commit_push_pr" ||
           (input.action === "create_pr" &&
-            (!initialStatus.hasUpstream || initialStatus.aheadCount > 0));
+            (!initialStatus.hasUpstream ||
+              initialStatus.aheadCount > 0 ||
+              pushTarget?.viaPushRemote === true));
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
 
         if (input.featureBranch && !wantsCommit) {
@@ -2969,6 +2960,9 @@ export const make = Effect.gen(function* () {
                     currentBranch,
                     input.threadId,
                     progress.emit,
+                    "pushRemote" in push && push.pushRemote && push.upstreamBranch
+                      ? { remoteName: push.pushRemote, upstreamRef: push.upstreamBranch }
+                      : undefined,
                   ),
                 ),
               )
