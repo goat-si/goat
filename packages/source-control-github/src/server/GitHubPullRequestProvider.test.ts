@@ -774,6 +774,30 @@ describe("getChangeRequestActivity dismissed reviews", () => {
       ),
     ),
   );
+  it.effect.each([
+    { activityTruncated: true, threadsTruncated: false, expected: true },
+    { activityTruncated: false, threadsTruncated: true, expected: true },
+    { activityTruncated: false, threadsTruncated: false, expected: false },
+  ])(
+    "reports truncated comments when either source is incomplete",
+    ({ activityTruncated, threadsTruncated, expected }) =>
+      readActivity.pipe(
+        Effect.map((activity) => expect(activity.commentsTruncated).toBe(expected)),
+        Effect.provide(
+          Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+            getPullRequestActivity: () =>
+              Effect.succeed({
+                author: null,
+                comments: [],
+                commits: [],
+                truncated: activityTruncated,
+              }),
+            listReviewThreadComments: () =>
+              Effect.succeed({ ...threadComments, truncated: threadsTruncated }),
+          }),
+        ),
+      ),
+  );
 });
 
 describe("loginAvatarUrl", () => {
