@@ -10,7 +10,11 @@ import { vi } from "vite-plus/test";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import { CaptureEventQueue } from "./ClaudeAdapterV2.observations.testkit.ts";
 import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
-import { claudeSdkFrame, WAKE_NATIVE_SESSION } from "./ClaudeWakeFrames.testkit.ts";
+import {
+  claudeSdkFrame,
+  makeResultFrame,
+  WAKE_NATIVE_SESSION,
+} from "./ClaudeWakeFrames.testkit.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 
 vi.mock("effect/Queue", async (importOriginal) => {
@@ -104,6 +108,37 @@ it.effect("ignores an in-flight GOAT rename echo and persists only the confirmed
       yield* Deferred.succeed(finish, undefined);
       yield* Fiber.join(starting);
       yield* harness.awaitEventsRecorded;
+      const thread = harness.events.findLast((entry) => entry.type === "provider_thread.updated");
+      assert.equal(
+        thread?.type === "provider_thread.updated"
+          ? thread.providerThread.nativeMetadata?.title
+          : undefined,
+        "My title",
+      );
+    }).pipe(Effect.provide(layerClaudeAdapterTest)),
+  ),
+);
+
+it.effect("retains the confirmed native title after the turn finishes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions();
+      const turn = makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("rename-persist"),
+        text: "Hello",
+        attachments: [],
+      });
+      yield* harness.runtime.startTurn({
+        ...turn,
+        appThread: { ...turn.appThread, title: "My title" },
+      });
+      yield* harness.offerAndWait(
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000701", result: "Done" }),
+      );
+      yield* harness.awaitTerminal(1);
       const thread = harness.events.findLast((entry) => entry.type === "provider_thread.updated");
       assert.equal(
         thread?.type === "provider_thread.updated"

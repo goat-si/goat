@@ -5,6 +5,7 @@ import {
 } from "./ClaudeTaskResultFrames.ts";
 import {
   applyClaudeSessionTitle,
+  makeAppliedClaudeTitles,
   claudeReportedSessionTitle,
   type ClaudeSessionTitleState,
 } from "./ClaudeSessionTitles.ts";
@@ -2629,6 +2630,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             bypassCache.availability,
           );
         });
+        const appliedTitles = makeAppliedClaudeTitles();
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const missingNativeThreads = new Set<string>();
         const pdfBudgets = new Map<string, ReturnType<typeof makeClaudeAttachmentBudget>>();
@@ -2849,6 +2851,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) => {
           if (event.type === "provider_thread.updated") {
+            const appliedTitle = appliedTitles.get(
+              event.providerThread.nativeThreadRef?.nativeId ?? "",
+            );
+            if (appliedTitle !== undefined)
+              event = {
+                ...event,
+                providerThread: {
+                  ...event.providerThread,
+                  nativeMetadata: { ...event.providerThread.nativeMetadata, title: appliedTitle },
+                },
+              };
             const budget = pdfBudgets.get(event.providerThread.nativeThreadRef?.nativeId ?? "");
             if (budget !== undefined) {
               event = {
@@ -3004,8 +3017,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (nativeThreadId === undefined || nativeThreadId === null) {
               return;
             }
+            const title = appliedTitles.get(nativeThreadId);
+            const remembered =
+              title === undefined
+                ? providerThread
+                : {
+                    ...providerThread,
+                    nativeMetadata: { ...providerThread.nativeMetadata, title },
+                  };
             yield* Ref.update(lastProviderThreadByNativeThread, (current) =>
-              new Map(current).set(nativeThreadId, providerThread),
+              new Map(current).set(nativeThreadId, remembered),
             );
           });
 
@@ -6887,6 +6908,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const title = context.nativeSessionTitle;
             context.nativeSessionTitle = undefined;
             liveQuery.titleState.appliedTitle = title;
+            appliedTitles.set(liveQuery.nativeThreadId, title);
             const previous = (yield* Ref.get(lastProviderThreadByNativeThread)).get(
               liveQuery.nativeThreadId,
             );
@@ -9124,7 +9146,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const context: ClaudeLiveQueryContext = {
             modelCatalog: catalog,
             titleState: {
-              appliedTitle: turnInput.providerThread.nativeMetadata?.title ?? undefined,
+              appliedTitle: appliedTitles.get(nativeThreadId),
               pendingTitle: undefined,
             },
             environment: launch.environment,
@@ -9329,6 +9351,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
             // A queued turn's snapshot can predate another task's exit.
             const owedWakeTasks = yield* owedWakeTasksForNativeThread(nativeThreadId);
+            const storedTitle = turnInput.providerThread.nativeMetadata?.title;
+            if (appliedTitles.get(nativeThreadId) === undefined && storedTitle != null)
+              appliedTitles.set(nativeThreadId, storedTitle);
             yield* rememberProviderThread(
               owedWakeTasks.length === 0
                 ? turnInput.providerThread
@@ -9412,6 +9437,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 turnInput.appThread.title,
               )
             ) {
+              appliedTitles.set(nativeThreadId, turnInput.appThread.title);
               const previous = (yield* Ref.get(lastProviderThreadByNativeThread)).get(
                 nativeThreadId,
               );

@@ -42,3 +42,19 @@ export function claudeReportedSessionTitle(message: unknown): string | undefined
   const title: unknown = Reflect.get(message, "title");
   return typeof title === "string" && title.trim().length > 0 ? title.trim() : undefined;
 }
+
+const MAX_APPLIED_CLAUDE_TITLES = 1000;
+export function makeAppliedClaudeTitles() {
+  const titles = new Map<string, string>();
+  return {
+    get: (nativeThreadId: string) => titles.get(nativeThreadId),
+    set(nativeThreadId: string, title: string) {
+      titles.delete(nativeThreadId);
+      titles.set(nativeThreadId, title);
+      if (titles.size > MAX_APPLIED_CLAUDE_TITLES) {
+        const oldest = titles.keys().next().value;
+        if (oldest !== undefined) titles.delete(oldest);
+      }
+    },
+  };
+}
