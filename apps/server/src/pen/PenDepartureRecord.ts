@@ -1,6 +1,7 @@
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -19,25 +20,21 @@ export type PenDepartureRecord = typeof PenDepartureRecord.Type;
 
 const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(PenDepartureRecord));
 const encode = Schema.encodeEffect(Schema.fromJsonString(PenDepartureRecord));
-const PENDING: PenDepartureRecord = { left: true };
 
 export const make = Effect.fn("PenDepartureRecord.make")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join((yield* ServerConfig).stateDir, "pen-member-sessions.json");
-  // No file is a first run. A file that cannot be read or decoded may have held a departure, so it
-  // counts as one: revoking member sessions once costs less than keeping a departed one.
-  const initial: PenDepartureRecord | undefined = (yield* fs
-    .exists(file)
-    .pipe(Effect.orElseSucceed(() => true)))
-    ? yield* fs.readFileString(file).pipe(
-        Effect.flatMap(decode),
-        Effect.tapCause((cause) =>
-          Effect.logWarning("pen.memberSessions.record.unreadable", cause),
-        ),
-        Effect.orElseSucceed(() => PENDING),
-      )
-    : undefined;
+  // Written atomically, so a damaged file came from outside GOAT; like no file, it revokes nothing.
+  const initial = yield* fs.readFileString(file).pipe(
+    Effect.flatMap(decode),
+    Effect.tapError((error) =>
+      error._tag === "PlatformError" && error.reason._tag === "NotFound"
+        ? Effect.void
+        : Effect.logWarning("pen.memberSessions.record.unreadable", error),
+    ),
+    Effect.option,
+  );
   /** Undefined removes the record. A failed write leaves this run correct, only a restart blind. */
   const write = Effect.fn("PenDepartureRecord.write")(function* (
     record: PenDepartureRecord | undefined,
@@ -52,5 +49,5 @@ export const make = Effect.fn("PenDepartureRecord.make")(function* () {
       Effect.catchCause((cause) => Effect.logWarning("pen.memberSessions.record.failed", cause)),
     );
   });
-  return { initial, write };
+  return { initial: Option.getOrUndefined(initial), write };
 });

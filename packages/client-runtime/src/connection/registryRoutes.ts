@@ -1,7 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import type { ConnectionCatalogEntry, ConnectionProfile, ConnectionRoute } from "./catalog.ts";
+import {
+  PenConnectionRegistration,
+  type ConnectionCatalogEntry,
+  type ConnectionProfile,
+  type ConnectionRoute,
+} from "./catalog.ts";
 import type { ConnectionTarget } from "./model.ts";
 import type * as ConnectionProfileStore from "./profileStore.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
@@ -31,6 +36,22 @@ export function withHiddenRoutes(
   for (const { index, route } of hidden) routes.splice(Math.min(index, routes.length), 0, route);
   return routes;
 }
+
+/** The hidden Pen routes that can be saved again on their own: each with its own profile. */
+export function hiddenPenRegistrations(hidden: ReadonlyArray<HiddenRoute> = []) {
+  return hidden.flatMap(({ route: { target, profile } }) =>
+    target._tag === "PenConnectionTarget" &&
+    Option.isSome(profile) &&
+    profile.value._tag === "PenConnectionProfile"
+      ? [new PenConnectionRegistration({ target, profile: profile.value })]
+      : [],
+  );
+}
+
+export const hiddenRouteOf = (registration: PenConnectionRegistration, index: number) => ({
+  index,
+  route: { target: registration.target, profile: Option.some(registration.profile) },
+});
 
 /** A saved environment's live entry holds only the routes the Pen gate shows; none, no entry. */
 export function savedCatalogEntry(loaded: ReadonlyArray<ConnectionRoute>, enabled: boolean) {

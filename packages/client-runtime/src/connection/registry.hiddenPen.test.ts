@@ -29,18 +29,23 @@ const penProfile = new PenConnectionProfile({
 });
 
 it.effect(
-  "removing the last route the closed Pen gate shows takes the environment off the list and keeps its saved Pen route and data",
+  "removing the last route the closed Pen gate shows removes the environment as on dev and keeps only its saved Pen route",
   () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness([BEARER_TARGET, pen], [BEARER_PROFILE, penProfile]);
+      const harness = yield* makeHarness([BEARER_TARGET, pen], [BEARER_PROFILE, penProfile], [], {
+        initialDisabled: [environmentId],
+      });
       yield* Effect.gen(function* () {
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
         expect((yield* SubscriptionRef.get(registry.entries)).has(environmentId)).toBe(true);
         yield* registry.removeRoute(environmentId, connectionRouteId(BEARER_TARGET));
         expect((yield* SubscriptionRef.get(registry.entries)).has(environmentId)).toBe(false);
         expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([pen]);
-        expect(yield* Ref.get(harness.ownedDataClears)).toEqual([]);
-        expect(yield* Ref.get(harness.cacheClears)).toEqual([]);
+        expect((yield* Ref.get(harness.storedProfiles)).get(penId)).toEqual(penProfile);
+        // Drafts, the outbox, cached data and the off switch go, as when the environment is removed.
+        expect(yield* Ref.get(harness.ownedDataClears)).toEqual([environmentId]);
+        expect(yield* Ref.get(harness.cacheClears)).toEqual([environmentId]);
+        expect([...(yield* Ref.get(harness.storedDisabled))]).toEqual([]);
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
 );
@@ -81,9 +86,10 @@ it.effect.each(["after its last shown route is removed", "after a restart"] as c
         if (when !== "after a restart")
           yield* registry.removeRoute(environmentId, connectionRouteId(BEARER_TARGET));
         yield* registry.register(bearerAgain);
-        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual(
-          when === "after a restart" ? [pen, BEARER_TARGET] : [BEARER_TARGET, pen],
-        );
+        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+          pen,
+          BEARER_TARGET,
+        ]);
         expect((yield* Ref.get(harness.storedProfiles)).has(penId)).toBe(true);
         const live = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
         expect(

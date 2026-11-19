@@ -251,6 +251,12 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
           next.delete(environmentId);
           return next;
         });
+        // As removeConnectionFromCatalog: a removed environment keeps no off switch.
+        yield* Ref.update(storedDisabled, (current) => {
+          const next = new Set(current);
+          next.delete(environmentId);
+          return next;
+        });
       }),
     setEnabled: (environmentId, enabled) =>
       Ref.update(storedDisabled, (current) => {

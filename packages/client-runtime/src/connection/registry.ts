@@ -19,6 +19,7 @@ import {
   type ConnectionRegistration,
   type ConnectionRoute,
   type PlatformConnectionRegistration,
+  type PenConnectionRegistration,
   type PrimaryConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
@@ -42,6 +43,8 @@ import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
 import {
   type HiddenRoute,
+  hiddenPenRegistrations,
+  hiddenRouteOf,
   loadCatalogRoute,
   savedCatalogEntry,
   splitHiddenRoutes,
@@ -759,6 +762,7 @@ export const make = Effect.gen(function* () {
   /** Callers hold its lease lock. */
   const removeLocked = Effect.fn("EnvironmentRegistry.removeLocked")(function* (
     environmentId: EnvironmentId,
+    options?: { readonly keepHiddenRoutes?: boolean },
   ) {
     if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
       return yield* new PlatformEnvironmentRemovalError({
@@ -768,9 +772,15 @@ export const make = Effect.gen(function* () {
     const entry = yield* getEntry(environmentId);
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
+    const kept = options?.keepHiddenRoutes
+      ? hiddenPenRegistrations(hiddenRoutes.get(environmentId))
+      : [];
     yield* registrations.remove(environmentId);
     hiddenRoutes.delete(environmentId);
-    yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
+    // The environment goes as on dev; a route the closed Pen gate hides stays saved, alone.
+    if (kept.length > 0) yield* saveHiddenRoutes(environmentId, kept);
+    else
+      yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
     yield* Effect.all(
@@ -790,6 +800,21 @@ export const make = Effect.gen(function* () {
 
     yield* forkSshTeardown(entry);
   });
+
+  const saveHiddenRoutes = (
+    environmentId: EnvironmentId,
+    kept: ReadonlyArray<PenConnectionRegistration>,
+  ) => {
+    const targets = kept.map((registration) => registration.target as PersistedConnectionTarget);
+    hiddenRoutes.set(environmentId, kept.map(hiddenRouteOf));
+    return Effect.forEach(kept, (registration) => registrations.register(registration, targets), {
+      discard: true,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not keep a hidden Pen route.", { environmentId, error }),
+      ),
+    );
+  };
 
   const remove = Effect.fn("EnvironmentRegistry.remove")(function* (environmentId: EnvironmentId) {
     return yield* withLeaseLock(environmentId, removeLocked(environmentId));
@@ -952,26 +977,12 @@ export const make = Effect.gen(function* () {
         const route = routes.find((candidate) => connectionRouteId(candidate.target) === routeId);
         if (route === undefined) return;
         const remaining = routesAfterRemoving(routes, routeId);
-        if (remaining.length > 0) yield* replaceRoutesLocked(entry, remaining);
-        else if (hiddenRoutes.has(environmentId)) yield* retireLocked(environmentId);
-        else return yield* removeLocked(environmentId);
+        if (remaining.length === 0)
+          return yield* removeLocked(environmentId, { keepHiddenRoutes: true });
+        yield* replaceRoutesLocked(entry, remaining);
         yield* forkSshDisconnect(environmentId, route);
       }),
     );
-  });
-
-  /** Only Pen routes the closed gate hides are left: saved with the environment's data, off the list. */
-  const retireLocked = Effect.fn("EnvironmentRegistry.retireLocked")(function* (
-    environmentId: EnvironmentId,
-  ) {
-    const hidden = hiddenRoutes.get(environmentId) ?? [];
-    yield* forgetRoutingTrust(environmentId, "set-connection-routes");
-    yield* registrations.setRoutes(
-      environmentId,
-      hidden.map(({ route }) => route.target as PersistedConnectionTarget),
-    );
-    yield* closeServiceScope(environmentId);
-    yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
   });
 
   const reorderRoutes = Effect.fn("EnvironmentRegistry.reorderRoutes")(function* (

@@ -208,13 +208,13 @@ it.effect("a departure a restart cut short is still revoked once this machine is
   }).pipe(Effect.provide(layer)),
 );
 
-it.effect("a damaged departure record counts as a departure not yet revoked", () =>
+it.effect("a damaged departure record revokes nothing on its own", () =>
   Effect.gen(function* () {
     const sessions = yield* SessionStore;
     const config = yield* Config.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const a = yield* sessions.issue({ penMemberNode: id("a") });
-    // A stop in the middle of a write by an older build left half a record.
+    // Writes are atomic, so only something outside GOAT leaves half a record.
     yield* fs.makeDirectory(config.stateDir, { recursive: true });
     yield* fs.writeFileString(`${config.stateDir}/pen-member-sessions.json`, '{"mesh":"');
     const { apply } = yield* PenMemberSessions.make().pipe(
@@ -230,7 +230,7 @@ it.effect("a damaged departure record counts as a departure not yet revoked", ()
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       ),
-    ).toBe(false);
-    expect(yield* sessions.listPenMemberSessions).toEqual([]);
+    ).toBe(true);
+    expect(yield* sessions.listPenMemberSessions).toHaveLength(1);
   }).pipe(Effect.provide(layer)),
 );
