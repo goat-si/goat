@@ -1,3 +1,4 @@
+import { providerSession } from "./CodexSessionProjection.ts";
 import { codexItemStatus, codexNativeItemRef, codexUserMessageText, providerTurnStatusToTerminal, codexPlanStepStatus } from "./CodexItemProjection.ts";
 import { type CodexWebSearchItem, trimText, webSearchPatterns, nonEmptyText, normalizeCodexCause } from "./CodexWebSearch.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
@@ -109,7 +110,6 @@ import type {
   OrchestrationV2CommandAction,
   OrchestrationV2ProviderFailure,
   OrchestrationV2ProviderRetry,
-  OrchestrationV2ProviderSession,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderTurn,
   OrchestrationV2PlanStep,
@@ -122,7 +122,6 @@ import type {
   ProviderRequestKind,
   ProviderThreadId,
   ProviderTurnId,
-  ProviderInstanceId,
   RuntimeMode,
   RuntimeRequestId,
   ThreadId,
@@ -358,27 +357,6 @@ const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicTool
   };
   return output === undefined ? projection : { ...projection, output };
 });
-
-function providerSession(input: {
-  readonly providerSessionId: OrchestrationV2ProviderSession["id"];
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly cwd: string | null;
-  readonly model: string;
-  readonly now: DateTime.Utc;
-}): OrchestrationV2ProviderSession {
-  return {
-    id: input.providerSessionId,
-    driver: CODEX_PROVIDER,
-    providerInstanceId: input.providerInstanceId,
-    status: "ready",
-    cwd: input.cwd ?? process.cwd(),
-    model: input.model,
-    capabilities: CodexProviderCapabilitiesV2,
-    createdAt: input.now,
-    updatedAt: input.now,
-    lastError: null,
-  };
-}
 
 const getNativeThreadId = Effect.fn("CodexAdapterV2.getNativeThreadId")(function* (
   providerThread: OrchestrationV2ProviderThread,
