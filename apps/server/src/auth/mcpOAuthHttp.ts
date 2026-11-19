@@ -2,6 +2,8 @@ import {
   AuthMcpApprovalError,
   AuthMcpAuthorizationRequest,
   AuthMcpClientAccess,
+  AuthMcpClientRegistration,
+  AuthMcpRegistrationError,
   AuthMcpWorkspaceTerminalScope,
   EnvironmentHttpApi,
 } from "@goat/contracts";
@@ -36,6 +38,9 @@ const noStore = HttpEffect.appendPreResponseHandler((_request, response) =>
 
 const requestUrls = Effect.map(HttpServerRequest.HttpServerRequest, McpOAuth.requestUrls);
 const decodeAuthorizationRequest = Schema.decodeEffect(AuthMcpAuthorizationRequest);
+const decodeClientRegistration = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(AuthMcpClientRegistration),
+);
 
 /**
  * An unverified client or redirect is reported, never redirected; any other problem goes back to
@@ -73,8 +78,18 @@ export const layer = HttpApiBuilder.group(
         .handle("authorizationServer", () =>
           requestUrls.pipe(Effect.map(McpOAuth.authorizationServerMetadata)),
         )
-        .handle("register", ({ payload }) =>
-          oauth.register(payload).pipe(
+        .handleRaw("register", ({ request }) =>
+          request.text.pipe(
+            Effect.orDie,
+            Effect.flatMap(decodeClientRegistration),
+            Effect.mapError(
+              (cause) =>
+                new AuthMcpRegistrationError({
+                  error: "invalid_client_metadata",
+                  error_description: `Invalid client metadata: ${cause.message}`,
+                }),
+            ),
+            Effect.flatMap(oauth.register),
             Effect.map((client) => ({
               client_id: client.clientId,
               client_name: client.name,
