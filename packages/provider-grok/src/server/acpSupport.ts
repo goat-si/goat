@@ -234,6 +234,7 @@ export const makeGrokAcpRuntime = Effect.fn("GrokAcpSupport.makeGrokAcpRuntime")
       authMethodId: resolveGrokAuthMethodId(input.environment),
       cancelMeta: { ...input.cancelMeta, ...GROK_ACP_CANCEL_META },
       initializeMeta: GROK_ACP_INITIALIZE_META,
+      sessionLoadReplayIdleReadiness: true,
       ...grokAcpRuntimeProcessOwnership(processGroupPlatform),
     }),
   );

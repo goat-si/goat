@@ -147,11 +147,10 @@ it.effect.each(
                   if (timing === "after delivery") return;
                   yield* Deferred.succeed(steerEntered, undefined);
                   yield* Deferred.await(rejectSteer);
-                  return yield* new ProviderAdapter.ProviderAdapterSteerRunError({
+                  return yield* new ProviderAdapter.ProviderAdapterSteerDeclinedError({
                     driver,
                     providerThreadId: turn.providerThread.id,
                     providerTurnId: turn.providerTurnId,
-                    cause: "turn already completed",
                   });
                 }),
               interruptTurn: () => Effect.void,

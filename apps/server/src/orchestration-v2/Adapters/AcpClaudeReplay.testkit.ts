@@ -152,6 +152,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
       }).pipe(Effect.andThen(Queue.offer(offered, undefined)), Effect.asVoid),
   };
   const instanceId = ProviderInstanceId.make("claude-lifecycle");
+  const outgoing = yield* Queue.unbounded<unknown>();
   let onTermination: NonNullable<
     AcpSessionRuntime.AcpSessionRuntimeOptions["onTermination"]
   > = () => Effect.die("Runtime has not started");
@@ -173,7 +174,17 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
     ...(continuationEnabled ? { continuationRequests } : {}),
     makeRuntime: (runtimeInput: Parameters<typeof replayRuntime>[0]) => {
       onTermination = runtimeInput.onTermination;
-      return replayRuntime(runtimeInput);
+      return replayRuntime({
+        ...runtimeInput,
+        protocolLogging: {
+          logIncoming: false,
+          logOutgoing: true,
+          logger: (event) =>
+            event.stage === "raw" && typeof event.payload === "string"
+              ? Queue.offer(outgoing, JSON.parse(event.payload)).pipe(Effect.asVoid)
+              : Effect.void,
+        },
+      });
     },
   };
   const adapter = yield* makeAcpRegistryAdapterV2(adapterOptions).pipe(
@@ -283,6 +294,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
     terminal,
     offers,
     offered,
+    outgoing,
     terminate: () =>
       onTermination(
         new EffectAcpErrors.AcpTransportError({

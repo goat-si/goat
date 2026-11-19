@@ -275,7 +275,7 @@ it.effect("a mint before the settings rename succeeds and after the rename refus
         }),
       remove: (path, options) =>
         Effect.gen(function* () {
-          if (hold && path.includes("settings.json.")) {
+          if (hold && path.includes("goat-write-")) {
             hold = false;
             yield* Deferred.succeed(cleanupEntered, undefined);
             yield* Deferred.await(releaseCleanup);

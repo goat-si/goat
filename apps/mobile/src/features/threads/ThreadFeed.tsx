@@ -127,11 +127,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Image as ExpoImage } from "expo-image";
-import { useResolveClassNames } from "uniwind";
 import { useReduceMotionEnabled } from "../../lib/appState";
-import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
-import { assetImageSource } from "../../lib/assetImageSource";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { MessageImageGalleryScope } from "./MessageImageGalleryScope";
 import { readMobileMediaConnection, routeMobileMediaUrl } from "../../lib/environmentMediaUri";
@@ -235,7 +231,8 @@ import { nextSettleAnchorId } from "./turn-settle";
 import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
-import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
+import { assetEnvironment } from "../../state/assets";
+import { MessageAttachmentImage } from "./MessageAttachmentImage";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { readEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { projectEnvironment } from "../../state/projects";
@@ -351,80 +348,6 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-}
-
-function MessageAttachmentImage(props: {
-  readonly environmentId: EnvironmentId;
-  readonly attachmentId: string;
-  readonly name: string;
-  readonly mimeType: string;
-  readonly className: string;
-  readonly onPressPreview: (source: FilePreviewSource) => void;
-}) {
-  const withGallery = useFilePreviewGallery();
-  const sourceIdentifier = useId();
-  const resource = useMemo(
-    () => ({
-      _tag: "attachment" as const,
-      attachmentId: props.attachmentId,
-      fileName: props.name,
-      mimeType: props.mimeType,
-    }),
-    [props.attachmentId, props.name, props.mimeType],
-  );
-  const uri = useAssetUrl(props.environmentId, resource);
-  const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, resource);
-  const retriedImage = useRef(false);
-  const imageStyle = useResolveClassNames(props.className);
-
-  if (uri === null) {
-    return (
-      <View className={`${props.className} items-center justify-center`}>
-        <AppActivityIndicator />
-      </View>
-    );
-  }
-
-  return (
-    <PresentationSource identifier={sourceIdentifier}>
-      <Pressable
-        accessibilityRole="imagebutton"
-        accessibilityLabel={`Open ${props.name}`}
-        onPress={() =>
-          props.onPressPreview(
-            withGallery({
-              kind: "image",
-              environmentId: props.environmentId,
-              resource,
-              name: props.name,
-              sourceIdentifier,
-              actionsSource: {
-                name: props.name,
-                mimeType: props.mimeType,
-                environmentId: props.environmentId,
-                resource,
-              },
-            }),
-          )
-        }
-      >
-        <ExpoImage
-          source={assetImageSource(props.environmentId, resource, uri)}
-          cachePolicy="memory-disk"
-          style={imageStyle}
-          contentFit="cover"
-          onLoad={() => {
-            retriedImage.current = false;
-          }}
-          onError={() => {
-            if (retriedImage.current) return;
-            retriedImage.current = true;
-            void refreshAssetUrl();
-          }}
-        />
-      </Pressable>
-    </PresentationSource>
-  );
 }
 
 function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {

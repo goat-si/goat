@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Scheduler from "effect/Scheduler";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 import { admissionSqlError, makeReaderAdmission, READER_LANE_AGING_MS } from "./readerAdmission.ts";
@@ -69,9 +70,14 @@ export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(o
     });
   // Cancelling a read retires its slot's worker; the slot returns only after that cancellation finishes.
   const use = <A, E, R2>(body: (connection: Connection) => Effect.Effect<A, E, R2>) =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.flatMap(acquireLease(restore), (held) =>
-        Effect.ensuring(restore(Effect.flatMap(connection(held.index), body)), held.release),
+    Effect.scoped(
+      Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(
+          Effect.acquireRelease(acquireLease(restore), (held) => held.release).pipe(
+            Effect.provideService(Scheduler.PreventSchedulerYield, true),
+          ),
+          (held) => restore(Effect.flatMap(connection(held.index), body)),
+        ),
       ),
     );
   return { acquireLease, connection, use };

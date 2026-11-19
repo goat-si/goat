@@ -264,12 +264,14 @@ export function delegatedTaskResultRun(
 /** The provider never accepted this continuation's prompt, so starting it again repeats nothing. */
 export function continuationFailedBeforePrompt(
   run: Pick<OrchestrationV2Run, "status" | "activeAttemptId" | "restartContinuationOfRunId">,
-  providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>,
+  attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "inputDelivery">>,
 ): boolean {
   return (
     run.status === "failed" &&
     run.restartContinuationOfRunId !== undefined &&
-    !providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)
+    attempts.some(
+      (attempt) => attempt.id === run.activeAttemptId && attempt.inputDelivery === "unsent",
+    )
   );
 }
 
@@ -280,11 +282,11 @@ export function continuationStartRetryDelayMs(
   run: OrchestrationV2Run,
   projection: {
     readonly runs: ReadonlyArray<OrchestrationV2Run>;
-    readonly providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>;
+    readonly attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "inputDelivery">>;
     readonly turnItems: Parameters<typeof latestRootProviderFailure>[1];
   },
 ): number | undefined {
-  if (!continuationFailedBeforePrompt(run, projection.providerTurns)) return;
+  if (!continuationFailedBeforePrompt(run, projection.attempts)) return;
   // These fail the same way however often they start.
   const failureClass = latestRootProviderFailure(run, projection.turnItems)?.class;
   if (
@@ -296,7 +298,7 @@ export function continuationStartRetryDelayMs(
   let failedStarts = 0;
   for (
     let current: OrchestrationV2Run | undefined = run;
-    current !== undefined && continuationFailedBeforePrompt(current, projection.providerTurns);
+    current !== undefined && continuationFailedBeforePrompt(current, projection.attempts);
     current = projection.runs.find(
       (candidate) => candidate.id === current?.restartContinuationOfRunId,
     )

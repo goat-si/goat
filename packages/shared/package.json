@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./pullRequestAnchor": {
+      "types": "./src/pullRequestAnchor.ts",
+      "import": "./src/pullRequestAnchor.ts"
+    },
     "./memoryGenerationCapabilities": {
       "types": "./src/memoryGenerationCapabilities.ts",
       "import": "./src/memoryGenerationCapabilities.ts"
@@ -262,6 +266,10 @@
     "./commandActions": {
       "types": "./src/commandActions.ts",
       "import": "./src/commandActions.ts"
+    },
+    "./commandOutput": {
+      "types": "./src/commandOutput.ts",
+      "import": "./src/commandOutput.ts"
     },
     "./terminalOutput": {
       "types": "./src/terminalOutput.ts",

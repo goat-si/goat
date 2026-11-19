@@ -28,6 +28,7 @@ import { useMediaActions } from "../../state/mediaActions";
 import type { MediaActionsSource } from "../../lib/mediaActionsSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import { WorkspaceMutationIdContext } from "./workspaceMutationIdContext";
+import { filePreviewSourceIdentifier } from "../../lib/filePreviewGallery";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
 import { routedActionsSource, useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
 import {
@@ -95,6 +96,7 @@ const svgDocumentAtom = Atom.family((uri: string) =>
 export function ThreadMarkdownImageView(props: {
   readonly uri: string | null;
   readonly sourceKey: string;
+  readonly sourceIdentifier?: string;
   readonly cacheKey?: string | undefined;
   readonly unavailable: boolean;
   readonly unavailableDetail?: string | undefined;
@@ -106,7 +108,8 @@ export function ThreadMarkdownImageView(props: {
   readonly onRetry?: () => Promise<string | null>;
 }) {
   const withGallery = useFilePreviewGallery();
-  const sourceIdentifier = useId();
+  const localSourceIdentifier = useId();
+  const sourceIdentifier = props.sourceIdentifier || localSourceIdentifier;
   const mediaActions = useMediaActions(props.actionsSource);
   const contextWidth = useContext(MarkdownImageAvailableWidthContext);
   const [measuredWidth, setMeasuredWidth] = useState(0);
@@ -356,6 +359,11 @@ export function ThreadMarkdownImage(props: {
           : undefined
       }
       sourceKey={sourceKey}
+      sourceIdentifier={filePreviewSourceIdentifier({
+        kind: "image",
+        environmentId: props.environmentId,
+        resource: props.resource,
+      })}
       unavailable={assetUrl._tag === "Failure"}
       onRetry={async () => {
         const url = await refreshAssetUrl();
@@ -415,6 +423,10 @@ export function ThreadMarkdownDirectImage(props: {
     <ThreadMarkdownImageView
       uri={routed.uri}
       sourceKey={routed.uri ?? props.uri}
+      sourceIdentifier={filePreviewSourceIdentifier({
+        kind: "image",
+        uri: routed.uri ?? props.uri,
+      })}
       format={
         /\.svg(?:[?#]|$)/i.test(props.uri) || props.uri.startsWith("data:image/svg+xml")
           ? "svg"

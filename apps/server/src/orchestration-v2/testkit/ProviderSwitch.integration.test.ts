@@ -1,3 +1,5 @@
+import { waitForIdle } from "./providerSwitchWaitForIdle.ts";
+import { importedFailureScenario } from "./providerSwitchImportedFailure.ts";
 import { refusalCases } from "./providerRefusalCases.testkit.ts";
 import { vi } from "vite-plus/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -24,7 +26,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import { CommandPolicyCapabilityUnsupportedError } from "../CommandPolicy.ts";
@@ -35,13 +36,9 @@ import {
 } from "../Adapters/CodexAdapterV2.ts";
 import { AcpProviderCapabilitiesV2 } from "@goat/provider-acp/server/adapter";
 import * as EventSink from "../EventSink.ts";
-import * as EventStore from "../EventStore.ts";
-import * as LegacyV1ThreadImporter from "../legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as EffectOutbox from "../EffectOutbox.ts";
-import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
-import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import { ContextHandoffBudgetError, makeProviderFailure } from "@goat/provider-core/server/failure";
 import {
@@ -52,10 +49,8 @@ import {
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { type CapturedTurn, makeTestAdapter } from "./testing/providerSwitchAdapter.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
-import { waitForIdle } from "./providerSwitchWaitForIdle.ts";
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
 const threadId = ThreadId.make("thread:provider-switch");
 const projectId = ProjectId.make("project:provider-switch");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
@@ -82,6 +77,7 @@ describe("orchestration v2 provider switching", () => {
     "imported-prior-images-fallback",
     "prior-images-telemetry-native",
     "prior-images-unsent-native",
+    "prior-images-unsent-tight-native",
     "prior-images-legacy-replacement-native",
     "delivery-write-failure",
   ] as const)("preserves handoffs through %s", (scenario) =>
@@ -175,7 +171,11 @@ describe("orchestration v2 provider switching", () => {
                 : scenario === "large-current-input" || priorImages || exhaustedTarget
                   ? {
                       getModelContextWindow: () =>
-                        scenario.includes("target-tight") ? 25_121 : 32_000,
+                        scenario.includes("target-tight")
+                          ? 25_121
+                          : scenario === "prior-images-unsent-native"
+                            ? 48_000
+                            : 32_000,
                     }
                   : {}),
             ...(scenario.endsWith("-native") || scenario === "large-current-input"
@@ -597,7 +597,7 @@ describe("orchestration v2 provider switching", () => {
               turnUsageScenario ||
               scenario.startsWith("imported") ||
               scenario.includes("telemetry") ||
-              scenario.includes("unsent") ||
+              (scenario.includes("unsent") && !scenario.includes("unsent-tight")) ||
               replaceNative;
             const sourceText =
               `${replaceNative ? "Another" : "New"} source constraint ` + "q".repeat(9_000);
@@ -621,7 +621,16 @@ describe("orchestration v2 provider switching", () => {
               );
             } else {
               assert.notInclude(context, "q".repeat(9_000));
-              assert.isAbove(handoff.delivery!.omittedItemIds!.length, 0);
+              if (scenario.includes("unsent-tight")) {
+                assert.include(
+                  projection.contextHandoffs.flatMap(
+                    (record) => record.delivery?.omittedItemIds ?? [],
+                  ),
+                  sourceItem.id,
+                );
+              } else {
+                assert.isAbove(handoff.delivery!.omittedItemIds!.length, 0);
+              }
             }
             const latestRun = projection.runs.at(-1)!;
             const latestAttempt = projection.attempts.find(
@@ -636,6 +645,9 @@ describe("orchestration v2 provider switching", () => {
               else
                 assert.deepEqual(target.contextUsage, { usedTokens: 37_321, maxTokens: 258_400 });
               assert.lengthOf((yield* Ref.get(capturedTurns)).at(-1)!.attachments, 2);
+            }
+            if (scenario.includes("unsent")) {
+              assert.deepEqual((yield* Ref.get(capturedTurns)).at(-1)?.attachments, [screenshot]);
             }
             if (replaceNative) assert.equal(yield* Ref.get(generation), 2);
             return;
@@ -1258,11 +1270,13 @@ describe("orchestration v2 provider switching", () => {
 
   it.live.each(refusalCases)(
     "keeps the native session after turns refused for %s",
-    ([, refusalCause]) =>
+    ([, refusalCause, recovery]) =>
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* checkpointWorkspace("refused-start-keeps-native");
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const failResumeOnce = yield* Ref.make(false);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
           const refuseStarts = yield* Ref.make(0);
           const generation = yield* Ref.make(0);
           const registry = ProviderAdapterRegistry.layerFromAdapters([
@@ -1275,12 +1289,23 @@ describe("orchestration v2 provider switching", () => {
               capturedTurns,
               refuseStarts,
               refusalCause,
+              refuseAfterSubmitFence: recovery === "ambiguous",
+              failResumeOnce,
+              ...(recovery === "inject" ? { injectedHistory } : {}),
               nativeThreadGeneration: generation,
             }),
           ]);
           yield* Effect.gen(function* () {
             const orchestrator = yield* Orchestrator.OrchestratorV2;
             const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const missedImage: ChatAttachment = {
+              type: "image",
+              id: "refused-start-image",
+              name: "screenshot.png",
+              mimeType: "image/png",
+              sizeBytes: 100_000,
+            };
+            const acceptedImage = { ...missedImage, id: "accepted-start-image" };
             const run = Effect.fn("run")(function* (ordinal: number) {
               yield* orchestrator.dispatch({
                 type: "message.dispatch",
@@ -1290,7 +1315,7 @@ describe("orchestration v2 provider switching", () => {
                 createdBy: "user",
                 creationSource: "web",
                 text: `Request ${ordinal}`,
-                attachments: [],
+                attachments: ordinal === 1 ? [acceptedImage] : ordinal === 2 ? [missedImage] : [],
                 modelSelection: CLAUDE_MODEL_SELECTION,
                 dispatchMode: { type: "start_immediately" },
               });
@@ -1321,17 +1346,42 @@ describe("orchestration v2 provider switching", () => {
               worktreePath: null,
             });
             assert.equal(yield* run(1), "completed");
-            yield* Ref.set(refuseStarts, 2);
+            const recoveredAt = recovery === "ambiguous" ? 3 : 4;
+            yield* Ref.set(refuseStarts, recoveredAt - 2);
             assert.equal(yield* run(2), "failed");
-            assert.equal(yield* run(3), "failed");
-            assert.equal(yield* run(4), "completed");
+            if (recoveredAt === 4) assert.equal(yield* run(3), "failed");
+            if (recovery === "lost") {
+              const sessionId = (yield* orchestrator.getThreadProjection(threadId))
+                .providerThreads[0]?.providerSessionId;
+              assert.isNotNull(sessionId);
+              assert.isDefined(sessionId);
+              yield* orchestrator.dispatch({
+                type: "provider-session.detach",
+                commandId: CommandId.make("refused-start:detach"),
+                threadId,
+                providerSessionId: sessionId!,
+              });
+              yield* worker.drain();
+              yield* Ref.set(failResumeOnce, true);
+            }
+            assert.equal(yield* run(recoveredAt), "completed");
 
             const turns = yield* Ref.get(capturedTurns);
             assert.equal(turns.length, 2);
-            assert.equal(yield* Ref.get(generation), 1);
-            assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
-            assert.include(turns[1]?.text, "Request 2");
-            assert.include(turns[1]?.text, "Request 3");
+            assert.equal(yield* Ref.get(generation), recovery === "lost" ? 2 : 1);
+            if (recovery !== "lost")
+              assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
+            const delivered = `${turns[1]?.text}${JSON.stringify(yield* Ref.get(injectedHistory))}`;
+            if (recovery === "ambiguous") {
+              assert.notInclude(delivered, "Request 2");
+              assert.deepEqual(turns[1]?.attachments, []);
+            } else {
+              assert.include(delivered, "Request 2");
+              assert.include(delivered, "Request 3");
+              assert.deepEqual(turns[1]?.attachments, [missedImage]);
+            }
+            assert.equal(yield* run(recoveredAt + 1), "completed");
+            assert.deepEqual((yield* Ref.get(capturedTurns)).at(-1)?.attachments, []);
           }).pipe(
             Effect.provide(
               ProviderReplayHarness.layerWithRegistry(
@@ -2528,6 +2578,7 @@ describe("orchestration v2 provider switching", () => {
           if (restored?.type === "turn-item.updated") {
             assert.deepEqual(restored.payload, {
               ...queuedItem,
+              ordinal: 2_000_001,
               status: "failed",
               completedAt: restored.occurredAt,
               updatedAt: restored.occurredAt,
@@ -2595,292 +2646,162 @@ describe("orchestration v2 provider switching", () => {
     ),
   );
 
-  const importedFailureScenario = (queueBeforeFailure: boolean) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const importedThreadId = ThreadId.make("thread:provider-switch:legacy-import");
-        const importedProjectId = ProjectId.make("project:provider-switch:legacy-import");
-        const failedPrompt = "This first provider attempt should fail.";
-        const recoveryPrompt = "What was the imported release marker?";
-        const cwd = yield* checkpointWorkspace("provider-switch-legacy-import");
-        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-        const firstTurnStarted = yield* Deferred.make<void>();
-        const releaseFirstTurn = yield* Deferred.make<void>();
-        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
-          makeTestAdapter({
-            instanceId: ProviderInstanceId.make("codex"),
-            driver: CODEX_DRIVER,
-            capabilities: CodexProviderCapabilitiesV2,
-            modelSelection: CODEX_MODEL_SELECTION,
-            responseByRunOrdinal: {},
-            capturedTurns,
-            failedRunOrdinals: new Set([1]),
-            ...(queueBeforeFailure ? { holdFirstTurn: firstTurnStarted, releaseFirstTurn } : {}),
-          }),
-          makeTestAdapter({
-            instanceId: ProviderInstanceId.make("claudeAgent"),
-            driver: CLAUDE_DRIVER,
-            capabilities: ClaudeProviderCapabilitiesV2,
-            modelSelection: CLAUDE_MODEL_SELECTION,
-            responseByRunOrdinal: { 2: "The imported release marker is violet." },
-            capturedTurns,
-          }),
-        ]);
-        const layerDatabase = SqlitePersistence.layerMemory;
-        const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
-        const layerProjectionStoreProvided = ProjectionStore.layer.pipe(
-          Layer.provideMerge(layerDatabase),
-        );
-        const layerStoresProvided = Layer.mergeAll(
-          layerDatabase,
-          layerEventStoreProvided,
-          layerProjectionStoreProvided,
-        );
-        const layerEventSinkProvided = EventSink.layer.pipe(Layer.provide(layerStoresProvided));
-        const layerImporterProvided = LegacyV1ThreadImporter.layer.pipe(
-          Layer.provide(Layer.mergeAll(layerStoresProvided, layerEventSinkProvided)),
-        );
-        const layerMaintenanceProvided = ProjectionMaintenance.layer.pipe(
-          Layer.provide(layerStoresProvided),
-        );
-        const layerOrchestratorProvided = ProviderReplayHarness.layerWithRegistry(
-          {
-            name: "provider-switch-legacy-import",
-            runtimePolicyOverride: {
-              cwd,
-              approvalPolicy: "never",
-              sandboxPolicy: {
-                type: "readOnly",
-                access: { type: "fullAccess" },
-                networkAccess: false,
-              },
-            },
-          },
-          layerRegistry,
-          { databaseLayer: layerDatabase },
-        );
-        const layerTest = Layer.mergeAll(
-          layerStoresProvided,
-          layerImporterProvided,
-          layerMaintenanceProvided,
-          layerOrchestratorProvided,
-        );
-
-        const projection = yield* Effect.gen(function* () {
-          const sql = yield* SqlClient.SqlClient;
-          const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-          const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-
-          yield* sql`
-        INSERT INTO projection_projects (
-          project_id,
-          title,
-          workspace_root,
-          default_model_selection_json,
-          scripts_json,
-          created_at,
-          updated_at,
-          deleted_at
-        ) VALUES (
-          ${importedProjectId},
-          'Imported provider switch project',
-          ${cwd},
-          '{"instanceId":"codex","model":"gpt-5.4"}',
-          '[]',
-          '2026-01-01T00:00:00.000Z',
-          '2026-01-01T00:00:00.000Z',
-          NULL
-        )
-      `;
-          yield* sql`
-        INSERT INTO projection_threads (
-          thread_id,
-          project_id,
-          title,
-          model_selection_json,
-          runtime_mode,
-          interaction_mode,
-          branch,
-          worktree_path,
-          latest_turn_id,
-          created_at,
-          updated_at,
-          archived_at,
-          settled_override,
-          settled_at,
-          deleted_at
-        ) VALUES (
-          ${importedThreadId},
-          ${importedProjectId},
-          'Imported provider switch thread',
-          '{"instanceId":"codex","model":"gpt-5.4"}',
-          'full-access',
-          'default',
-          'main',
-          ${cwd},
-          NULL,
-          '2026-01-01T00:00:00.000Z',
-          '2026-01-01T00:00:00.000Z',
-          NULL,
-          NULL,
-          NULL,
-          NULL
-        )
-      `;
-          yield* sql`
-        INSERT INTO projection_thread_messages (
-          message_id,
-          thread_id,
-          turn_id,
-          role,
-          text,
-          attachments_json,
-          is_streaming,
-          created_at,
-          updated_at
-        ) VALUES
-          (
-            'message:provider-switch:legacy-import:user',
-            ${importedThreadId},
-            NULL,
-            'user',
-            'Remember that the imported release marker is violet.',
-            '[]',
-            0,
-            '2026-01-01T01:00:00.000Z',
-            '2026-01-01T01:00:00.000Z'
-          ),
-          (
-            'message:provider-switch:legacy-import:assistant',
-            ${importedThreadId},
-            NULL,
-            'assistant',
-            'I will remember violet.',
-            '[]',
-            0,
-            '2026-01-01T01:01:00.000Z',
-            '2026-01-01T01:01:00.000Z'
-          )
-      `;
-
-          yield* importer.reconcileShells;
-          yield* maintenance.rebuild;
-          yield* importer.ensureTranscript(importedThreadId);
-
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:provider-switch:legacy-import:failed"),
-            threadId: importedThreadId,
-            messageId: MessageId.make("message:provider-switch:legacy-import:failed"),
-            text: failedPrompt,
-            attachments: [],
-            modelSelection: CODEX_MODEL_SELECTION,
-            dispatchMode: { type: "start_immediately" },
-          });
-          if (queueBeforeFailure) {
-            yield* Deferred.await(firstTurnStarted);
-          } else {
-            yield* waitForIdle(importedThreadId);
-          }
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:provider-switch:legacy-import:recovery"),
-            threadId: importedThreadId,
-            messageId: MessageId.make("message:provider-switch:legacy-import:recovery"),
-            text: recoveryPrompt,
-            attachments: [],
-            modelSelection: CLAUDE_MODEL_SELECTION,
-            dispatchMode: {
-              type: queueBeforeFailure ? "queue_after_active" : "start_immediately",
-            },
-          });
-          if (queueBeforeFailure) {
-            const queued = yield* orchestrator.getThreadProjection(importedThreadId);
-            assert.deepEqual(
-              queued.runs.map((run) => run.status),
-              ["running", "queued"],
-            );
-            assert.deepEqual(
-              queued.contextHandoffs.map((handoff) => handoff.targetRunId),
-              [queued.runs[0]?.id],
-            );
-            yield* Deferred.succeed(releaseFirstTurn, undefined);
-            yield* orchestrator.streamStoredEvents.pipe(
-              Stream.filter(
-                (event) =>
-                  event.event.type === "run.updated" &&
-                  event.event.runId === queued.runs[1]?.id &&
-                  event.event.payload.status === "completed",
-              ),
-              Stream.runHead,
-            );
-            yield* worker.drain();
-          } else {
-            yield* waitForIdle(importedThreadId);
-          }
-          const beforeRebuild = yield* orchestrator.getThreadProjection(importedThreadId);
-          for (const attempt of beforeRebuild.attempts) {
-            const nativeId = beforeRebuild.providerThreads.find(
-              (thread) => thread.id === attempt.providerThreadId,
-            )?.nativeThreadRef?.nativeId;
-            assert.isDefined(nativeId);
-            assert.equal(attempt.nativeThreadId, nativeId);
-          }
-          yield* maintenance.rebuild;
-          const rebuilt = yield* orchestrator.getThreadProjection(importedThreadId);
-          assert.deepEqual(rebuilt.attempts, beforeRebuild.attempts);
-          return rebuilt;
-        }).pipe(Effect.provide(layerTest));
-
-        const turns = yield* Ref.get(capturedTurns);
-        assert.deepEqual(
-          projection.runs.map((run) => [run.providerInstanceId, run.status]),
-          [
-            ["codex", "failed"],
-            ["claudeAgent", "completed"],
-          ],
-        );
-        assert.sameDeepMembers(
-          projection.contextHandoffs.map((handoff) => [
-            handoff.targetRunId,
-            handoff.strategy,
-            handoff.status,
-          ]),
-          [
-            [projection.runs[0]?.id, "manual_context", "ready"],
-            [projection.runs[1]?.id, "manual_context", "ready"],
-            [projection.runs[1]?.id, "full_thread_summary", "ready"],
-          ],
-        );
-        const recoveryHandoff = projection.contextHandoffs.find(
-          (handoff) => handoff.id === projection.runs[1]?.contextHandoffId,
-        );
-        assert.equal(recoveryHandoff?.strategy, "full_thread_summary");
-        assert.include(recoveryHandoff?.summaryText ?? "", failedPrompt);
-        if (queueBeforeFailure) {
-          const handoffItem = projection.turnItems.find(
-            (item) => item.type === "handoff" && item.runId === projection.runs[1]?.id,
-          );
-          assert.equal(
-            handoffItem?.type === "handoff" ? handoffItem.contextHandoffId : null,
-            recoveryHandoff?.id,
-          );
-        }
-        assert.include(turns[1]?.text ?? "", "Context handoff (manual_context):");
-        assert.include(turns[1]?.text ?? "", "imported release marker is violet");
-        assert.include(turns[1]?.text ?? "", "I will remember violet.");
-        assert.include(turns[1]?.text ?? "", recoveryPrompt);
-        assert.include(turns[1]?.text ?? "", failedPrompt);
-      }),
-    );
   it.live(
     "reissues imported v1 context when a queued provider starts after the first provider fails",
     () => importedFailureScenario(true),
+  );
+
+  it.live.each([
+    "immediately",
+    "behind a running turn",
+    "after a cancelled queued switch",
+  ] as const)(
+    "hands a portable fork's inherited conversation to a provider switched %s",
+    (variant) =>
+      Effect.gen(function* () {
+        const queued = variant !== "immediately";
+        const cancelled = variant === "after a cancelled queued switch";
+        const key = cancelled ? "cancelled" : queued ? "queued" : "immediate";
+        const cwd = yield* checkpointWorkspace(`fork-switch-history-${key}`);
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: { 1: "The release marker is violet." },
+            capturedTurns,
+          }),
+          makeTestAdapter({
+            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+            driver: CLAUDE_DRIVER,
+            capabilities: ClaudeProviderCapabilitiesV2,
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            ...(queued ? { holdFirstTurn: started, releaseFirstTurn: release } : {}),
+          }),
+        ]);
+        const sourceThreadId = ThreadId.make(`thread:fork-switch-history:${key}:source`);
+        const forkThreadId = ThreadId.make(`thread:fork-switch-history:${key}:fork`);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const send = (threadId: ThreadId, name: string, modelSelection: ModelSelection) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:fork-switch-history:${key}:${name}`),
+              threadId,
+              messageId: MessageId.make(`message:fork-switch-history:${key}:${name}`),
+              text: `Prompt ${name}`,
+              attachments: [],
+              modelSelection,
+              dispatchMode: { type: "start_immediately" },
+            });
+          const settle = (threadId: ThreadId) =>
+            worker.drain().pipe(
+              Effect.andThen(waitForIdle(threadId)),
+              Effect.tap(() => worker.drain()),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`command:fork-switch-history:${key}:create`),
+            threadId: sourceThreadId,
+            projectId,
+            title: "Fork switch history",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* send(sourceThreadId, "source", CODEX_MODEL_SELECTION);
+          const source = yield* settle(sourceThreadId);
+          yield* orchestrator.dispatch({
+            type: "thread.fork",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`command:fork-switch-history:${key}:fork`),
+            sourceThreadId,
+            targetThreadId: forkThreadId,
+            sourcePoint: { type: "run", runId: source.runs[0]!.id },
+            title: "Fork",
+          });
+          // A first turn on another provider resolves the fork through portable context.
+          yield* send(forkThreadId, "fork-claude", CLAUDE_MODEL_SELECTION);
+          if (queued) {
+            yield* Deferred.await(started);
+            yield* send(
+              forkThreadId,
+              cancelled ? "fork-codex-cancelled" : "fork-codex",
+              CODEX_MODEL_SELECTION,
+            );
+            if (cancelled) {
+              // The cancelled run leaves its reserved Codex row behind without a native thread.
+              const pending = (yield* orchestrator.getThreadProjection(forkThreadId)).runs.at(-1)!;
+              yield* orchestrator.dispatch({
+                type: "queued-run.cancel",
+                commandId: CommandId.make(`command:fork-switch-history:${key}:cancel`),
+                threadId: forkThreadId,
+                runId: pending.id,
+              });
+            }
+            yield* Deferred.succeed(release, undefined);
+            if (cancelled) {
+              yield* settle(forkThreadId);
+              yield* send(forkThreadId, "fork-codex", CODEX_MODEL_SELECTION);
+            }
+          } else {
+            yield* settle(forkThreadId);
+            yield* send(forkThreadId, "fork-codex", CODEX_MODEL_SELECTION);
+          }
+          yield* settle(forkThreadId);
+          yield* send(forkThreadId, "fork-claude-again", CLAUDE_MODEL_SELECTION);
+          yield* settle(forkThreadId);
+
+          const turns = yield* Ref.get(capturedTurns);
+          const turnFor = (name: string) =>
+            turns.find((turn) => turn.text.endsWith(`Prompt ${name}`))!.text;
+          const switched = turnFor("fork-codex");
+          // The switched provider gets the conversation the fork shows, oldest first.
+          assert.include(switched, "Prompt source");
+          const positions = ["Prompt source", "release marker is violet", "Prompt fork-claude"].map(
+            (text) => switched.indexOf(text),
+          );
+          assert.deepEqual(
+            positions,
+            positions.toSorted((a, b) => a - b),
+          );
+          // Claude already saw the inherited rows, so its return only carries the Codex run.
+          const returned = turnFor("fork-claude-again");
+          assert.include(returned, "Prompt fork-codex");
+          assert.notInclude(returned, "Prompt source");
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: `fork-switch-history-${key}`,
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: {
+                    type: "readOnly",
+                    access: { type: "fullAccess" },
+                    networkAccess: false,
+                  },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
+      }),
   );
 });

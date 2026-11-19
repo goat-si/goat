@@ -109,6 +109,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("node.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
     sessionScoped: Schema.optional(Schema.Boolean),
@@ -126,6 +127,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("turn_item.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     turnItem: OrchestrationV2TurnItem,
     /** Persist recovered activity independently of a run subscription. */
@@ -164,6 +166,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("plan.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     plan: OrchestrationV2PlanArtifact,
   }),
@@ -274,6 +277,15 @@ export class ProviderAdapterThreadInUseError extends Schema.TaggedError<Provider
 /**
  * The user sent `/compact` to a driver whose session has no native compaction.
  */
+export class ProviderResumeUnsupportedError extends Schema.TaggedError<ProviderResumeUnsupportedError>()(
+  "ProviderResumeUnsupportedError",
+  { driver: ProviderDriverKind, providerThreadId: ProviderThreadId },
+) {
+  override get message(): string {
+    return "This provider cannot resume without a new message. Send a message to continue.";
+  }
+}
+
 export class ProviderCompactionUnsupportedError extends Schema.TaggedError<ProviderCompactionUnsupportedError>()(
   "ProviderCompactionUnsupportedError",
   {
@@ -481,6 +493,7 @@ export const ProviderAdapterV2Error = Schema.Union([
   ProviderAdapterRollbackThreadError,
   ProviderAdapterForkThreadError,
   ProviderAdapterTurnStartError,
+  ProviderResumeUnsupportedError,
   ProviderAdapterSteerRunUnsupportedError,
   ProviderAdapterSteerRunError,
   ProviderAdapterSteerDeclinedError,
@@ -524,7 +537,17 @@ export type ProviderAdapterV2CloudTaskMetadata = Pick<
   "url" | "title" | "progress"
 >;
 
+export interface ProviderInputDelivery {
+  readonly begin: () => Effect.Effect<boolean, ProviderAdapterTurnStartError>;
+  readonly submitted: () => Effect.Effect<void>;
+  readonly skipped: () => Effect.Effect<void>;
+  readonly accepted: () => Effect.Effect<void>;
+  /** A continuation attached to work the provider was already running. */
+  readonly inherited: () => Effect.Effect<void>;
+}
+
 export interface ProviderAdapterV2TurnInput {
+  readonly inputDelivery?: ProviderInputDelivery;
   readonly memoryContext?: MemoryContextSnapshot;
   /** Process-local admission callback; never persisted or sent to a provider. */
   readonly refreshMemoryContext?: () => Effect.Effect<
@@ -551,6 +574,7 @@ export interface ProviderAdapterV2TurnInput {
   readonly nativeThreadHasTurns?: boolean;
   readonly providerTurnOrdinal: number;
   readonly restartContinuationOfRunId?: RunId;
+  readonly resume?: true;
   readonly attemptId: RunAttemptId;
   readonly rootNodeId: NodeId;
   readonly providerThread: OrchestrationV2ProviderThread;
@@ -560,6 +584,24 @@ export interface ProviderAdapterV2TurnInput {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
+}
+
+export type ProviderAdapterV2ResumeTurnInput = Omit<
+  ProviderAdapterV2TurnInput,
+  "message" | "resume"
+> & {
+  readonly messageId: MessageId;
+};
+
+export function resumeTurnInput(
+  input: ProviderAdapterV2ResumeTurnInput,
+): ProviderAdapterV2TurnInput {
+  const { messageId, ...turn } = input;
+  return {
+    ...turn,
+    resume: true,
+    message: { messageId, text: "", attachments: [], createdBy: "user", creationSource: "server" },
+  };
 }
 
 export interface ProviderAdapterV2SteerInput {
@@ -681,6 +723,7 @@ export type ProviderAdapterV2SubagentOutcome = {
 export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed" | "outdated";
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly tracksInputDelivery?: true;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;
@@ -745,6 +788,10 @@ export interface ProviderAdapterV2SessionRuntime {
   ) => Effect.Effect<boolean, ProviderAdapterV2Error>;
   readonly startTurn: (
     input: ProviderAdapterV2TurnInput,
+  ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /** Resume local provider work with no new prompt. */
+  readonly resumeInterruptedTurn?: (
+    input: ProviderAdapterV2ResumeTurnInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
   /** Attach observation to saved work. Never submit a prompt or create a task. */
   readonly resumeTurn?: (

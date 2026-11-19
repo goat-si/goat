@@ -154,11 +154,8 @@ function resolveCommandEditorArgs(
     case "direct-path":
       return [target];
     case "goto":
-      return Option.isSome(parsedTarget)
-        ? ["--goto", target]
-        : isDirectory
-          ? ["--new-window", target]
-          : [target];
+      if (isDirectory) return ["--new-window", target];
+      return Option.isSome(parsedTarget) ? ["--goto", target] : [target];
     case "line-column":
       return Option.match(parsedTarget, {
         onNone: () => [target],

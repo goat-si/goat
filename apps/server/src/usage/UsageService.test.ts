@@ -1,3 +1,7 @@
+import { registerPhysicalSourceTests } from "./usagePhysicalSource.testkit.ts";
+import { registerUsageRetentionTests } from "./usageRetention.testkit.ts";
+import { registerRateAliasTests } from "./usageRateAliases.testkit.ts";
+import { seedCodexHistory } from "./codexUsageHistory.testkit.ts";
 import { cursorSource, cursorSources, totalOutputTokens } from "./UsageAssertions.testkit.ts";
 import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
 import { registerPiHistoryTest } from "./usagePiHistory.testkit.ts";
@@ -182,6 +186,7 @@ export const layerService = (input: {
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
     Layer.provideMerge(Layer.succeed(HostProcess.Hostname, input.hostname ?? "usage-test-host")),
+    Layer.provideMerge(Layer.succeed(HostProcess.HomeDirectory, input.home)),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
       Layer.succeed(
@@ -297,194 +302,78 @@ const writeCursorLogin = (home: string) =>
     await NodeFSP.writeFile(authPath, "{}");
   });
 
-export const seedCodexHistory = (input: {
-  id: string;
-  nativeTurnId?: string;
-  sessionId?: string;
-  model?: string;
-  options?: readonly { id: string; value: string | boolean }[];
-}) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const { id } = input;
-    const selection = {
-      instanceId: "codex",
-      model: input.model ?? "gpt-6-astra",
-      options: input.options ?? [{ id: "serviceTier", value: "priority" }],
-    };
-    const run = {
-      id: `run-${id}`,
-      activeAttemptId: `attempt-${id}`,
-      status: "running",
-      modelSelection: selection,
-    };
-    yield* sql`INSERT INTO orchestration_v2_projection_run_attempts ${sql.insert({
-      attempt_id: run.activeAttemptId,
-      thread_id: `thread-${id}`,
-      run_id: run.id,
-      attempt_ordinal: 1,
-      root_node_id: `node-${id}`,
-      provider: "codex",
-      provider_thread_id: `provider-thread-${id}`,
-      provider_turn_id: `turn-${id}`,
-      status: "completed",
-      payload_json: encodeUnknownJsonString({ nativeThreadId: input.sessionId ?? "session" }),
-    })}`;
-    yield* sql`INSERT INTO orchestration_v2_projection_provider_turns ${sql.insert({
-      provider_turn_id: `turn-${id}`,
-      thread_id: `thread-${id}`,
-      provider_thread_id: `provider-thread-${id}`,
-      node_id: `node-${id}`,
-      run_attempt_id: run.activeAttemptId,
-      ordinal: 1,
-      status: "completed",
-      payload_json: encodeUnknownJsonString({
-        nativeTurnRef: { driver: "codex", nativeId: input.nativeTurnId ?? id, strength: "strong" },
-      }),
-    })}`;
-    const changedSelection = {
-      ...selection,
-      options: [{ id: "serviceTier", value: "ultrafast" }],
-    };
-    // These selections disagree so reading the current projection or the wrong event is visible.
-    yield* sql`INSERT INTO orchestration_v2_projection_runs ${sql.insert({
-      run_id: run.id,
-      thread_id: `thread-${id}`,
-      ordinal: 1,
-      provider: "codex",
-      provider_thread_id: `provider-thread-${id}`,
-      status: "completed",
-      requested_at: "2026-08-01T10:00:00Z",
-      payload_json: encodeUnknownJsonString({
-        ...run,
-        status: "completed",
-        modelSelection: { ...selection, options: [] },
-      }),
-    })}`;
-    for (const [index, payload] of [
-      { ...run, activeAttemptId: "earlier-attempt", modelSelection: changedSelection },
-      { ...run, status: "queued", modelSelection: changedSelection },
-      run,
-      { ...run, modelSelection: changedSelection },
-    ].entries()) {
-      yield* sql`INSERT INTO orchestration_events ${sql.insert({
-        event_id: `event-${id}-${index}`,
-        aggregate_kind: "thread",
-        stream_id: `thread-${id}`,
-        stream_version: index + 1,
-        event_type: "run.updated",
-        occurred_at: "2026-08-01T10:00:00Z",
-        actor_kind: "system",
-        metadata_json: "{}",
-        application_event_version: 2,
-        payload_json: encodeUnknownJsonString(payload),
-      })}`;
-    }
-  });
-
-describe("Codex usage history", () => {
-  const historyLayer = CodexUsageHistory.layer.pipe(Layer.provideMerge(Sqlite.layerMemory));
-  const request = (nativeTurnId: string) => ({
-    sessionId: "session",
-    nativeTurnId,
-    model: "gpt-6-astra",
-  });
-
-  it.effect("resolves a batch from each attempt's first running selection", () =>
-    Effect.gen(function* () {
-      yield* seedCodexHistory({ id: "fast" });
-      yield* seedCodexHistory({
-        id: "ultrafast",
-        options: [{ id: "serviceTier", value: "ultrafast" }],
-      });
-      yield* seedCodexHistory({ id: "legacy-option", options: [{ id: "fastMode", value: true }] });
-      yield* seedCodexHistory({ id: "standard", options: [] });
-      const requests = ["fast", "ultrafast", "legacy-option", "standard", "fast"].map(request);
-      const history = yield* CodexUsageHistory.CodexUsageHistory;
-      const resolved = yield* history.resolve(requests);
-      assert.strictEqual(resolved.size, requests.length);
-      assert.deepStrictEqual(
-        requests.map((item) => resolved.get(item)),
-        ["fast", "ultrafast", "fast", "standard", "fast"],
-      );
-    }).pipe(Effect.provide(historyLayer)),
-  );
-
-  it.effect("leaves ambiguous, mismatched, and missing V2 evidence unresolved", () =>
-    Effect.gen(function* () {
-      for (const id of [
-        "valid",
-        "duplicate-model",
-        "duplicate-session",
-        "imported",
-        "v1-event",
-        "queued",
-        "missing-selection",
-      ]) {
-        yield* seedCodexHistory({ id });
-      }
-      yield* seedCodexHistory({
-        id: "second-model",
-        nativeTurnId: "duplicate-model",
-        model: "other-model",
-      });
-      yield* seedCodexHistory({
-        id: "second-session",
-        nativeTurnId: "duplicate-session",
-        sessionId: "other-session",
-      });
-      yield* seedCodexHistory({ id: "wrong-model", model: "other-model" });
-      yield* seedCodexHistory({ id: "wrong-session", sessionId: "other-session" });
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE orchestration_v2_projection_provider_turns
-        SET run_attempt_id = NULL WHERE provider_turn_id = 'turn-imported'`;
-      yield* sql`DELETE FROM orchestration_v2_projection_run_attempts WHERE attempt_id = 'attempt-imported'`;
-      yield* sql`UPDATE orchestration_events SET application_event_version = 1
-        WHERE stream_id = 'thread-v1-event'`;
-      yield* sql`UPDATE orchestration_events
-        SET payload_json = json_set(payload_json, '$.status', 'queued')
-        WHERE stream_id = 'thread-queued'`;
-      yield* sql`UPDATE orchestration_events
-        SET payload_json = json_remove(payload_json, '$.modelSelection')
-        WHERE event_id = 'event-missing-selection-2'`;
-      const requests = [
-        "valid",
-        "duplicate-model",
-        "duplicate-session",
-        "wrong-model",
-        "wrong-session",
-        "missing-turn",
-        "imported",
-        "v1-event",
-        "queued",
-        "missing-selection",
-      ].map(request);
-      const history = yield* CodexUsageHistory.CodexUsageHistory;
-      const resolved = yield* history.resolve(requests);
-      assert.deepStrictEqual([...resolved], [[requests[0], "fast"]]);
-    }).pipe(Effect.provide(historyLayer)),
-  );
-
-  it.effect(
-    "reports SQL failures through the typed channel and can resolve again after repair",
-    () =>
-      Effect.gen(function* () {
-        yield* seedCodexHistory({ id: "retry" });
-        const history = yield* CodexUsageHistory.CodexUsageHistory;
-        const sql = yield* SqlClient.SqlClient;
-        const input = request("retry");
-        yield* sql`ALTER TABLE orchestration_events RENAME TO unavailable_events`;
-        const error = yield* Effect.flip(history.resolve([input]));
-        assert.instanceOf(error, CodexUsageHistory.CodexUsageHistoryReadError);
-        assert.strictEqual(error.requestedTurnCount, 1);
-        yield* sql`ALTER TABLE unavailable_events RENAME TO orchestration_events`;
-        assert.strictEqual((yield* history.resolve([input])).get(input), "fast");
-      }).pipe(Effect.provide(historyLayer)),
-  );
-});
-
 describe("UsageService", () => {
+  it.effect("keeps pricing metadata paired with the rates used during a concurrent refresh", () =>
+    Effect.gen(function* () {
+      const { home, settings } = yield* setup;
+      const sessions = NodePath.join(home, "codex", "sessions");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(sessions, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(sessions, "session.jsonl"),
+          [
+            { type: "session_meta", payload: { id: "session", model_provider: "openai" } },
+            { type: "turn_context", payload: { model: "gpt-6-astra", turn_id: "turn" } },
+            {
+              type: "event_msg",
+              timestamp: "2026-08-01T10:00:00Z",
+              payload: {
+                type: "token_count",
+                info: { last_token_usage: { input_tokens: 0, output_tokens: 1 } },
+              },
+            },
+          ]
+            .map((record) => encodeUnknownJsonString(record))
+            .join("\n") + "\n",
+        );
+      });
+      let rate = 0;
+      yield* Effect.gen(function* () {
+        const resolving = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const service = yield* UsageService.make.pipe(
+          Effect.provideService(CodexUsageHistory.CodexUsageHistory, {
+            resolve: () =>
+              Deferred.succeed(resolving, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(new Map()),
+              ),
+          }),
+        );
+        const initialPricing = yield* service.refreshRates;
+        yield* TestClock.adjust(61_000);
+        const pending = yield* service.readSummary(WINDOW).pipe(Effect.forkChild);
+        yield* Deferred.await(resolving);
+        yield* service.refreshRates;
+        yield* Deferred.succeed(release, undefined);
+        const original = yield* Fiber.join(pending);
+        assert.strictEqual(original.buckets[0]?.costUsd, 1);
+        assert.strictEqual(original.pricing.fetchedAt, initialPricing.fetchedAt);
+        const updated = yield* service.readSummary(WINDOW);
+        assert.strictEqual(updated.buckets[0]?.costUsd, 2);
+        assert.notStrictEqual(updated.pricing.fetchedAt, initialPricing.fetchedAt);
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "concurrent-rates",
+            home,
+            settings,
+            ratesResponse: () =>
+              Effect.succeed(
+                Response.json({
+                  "gpt-6-astra": { input_cost_per_token: 0, output_cost_per_token: ++rate },
+                }),
+              ),
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   registerCompressedRolloutTest(setup, layerService);
+  registerPhysicalSourceTests(setup, layerService, claudeLine);
+  registerUsageRetentionTests(setup, layerService, claudeLine);
+  registerRateAliasTests(setup, layerService, claudeLine);
 
   it.effect("keeps the first host identity across recreation and explicit override removal", () =>
     Effect.gen(function* () {
@@ -2022,6 +1911,34 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("keeps default-home history after the default account moves to a custom home", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const defaultHome = NodePath.join(home, "default-claude");
+      const defaultProjects = NodePath.join(defaultHome, "projects", "proj");
+      yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(transcript, claudeLine(1, 5));
+        await NodeFSP.mkdir(defaultProjects, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(defaultProjects, "earlier.jsonl"),
+          claudeLine(2, 7, "claude-fable-5", "earlier-session"),
+        );
+      });
+      const summary = yield* UsageService.make.pipe(
+        Effect.flatMap((service) => service.readSummary(WINDOW)),
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-default-home-test",
+            home,
+            environment: { CLAUDE_CONFIG_DIR: defaultHome },
+            settings,
+          }),
+        ),
+      );
+      assert.strictEqual(totalOutputTokens(summary), 12);
+    }),
+  );
+
   it.effect(
     "uses explicit account settings before environment and default homes, then refreshes them",
     () =>
@@ -2985,6 +2902,56 @@ describe("UsageService", () => {
         assert.deepStrictEqual(cached.buckets, summary.buckets);
         assert.strictEqual(requests.length, 2);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("refetches cached rates early for a model they do not list", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-02T00:00:00Z"));
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          transcript,
+          claudeLine(1, 5, "claude-new-model") + claudeLine(2, 5, "claude-unknown-model"),
+        ),
+      );
+      const requests: string[] = [];
+      let ratesDocument: Record<string, unknown> = {
+        "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+      };
+      const serviceLayer = layerService({
+        prefix: "usage-service-unlisted-model-test",
+        home,
+        settings,
+        onRatesFetch: (request) => requests.push(request.url),
+        ratesResponse: () => Effect.succeed(Response.json(ratesDocument)),
+      });
+      const newModelCost = (summary: UsageSummary) =>
+        summary.buckets.find((bucket) => bucket.model === "claude-new-model")?.costUsd;
+
+      // Rates fetched for this scan are fresh: no second request for the models they lack.
+      const first = yield* (yield* UsageService.make.pipe(
+        Effect.provide(serviceLayer),
+      )).readSummary(WINDOW);
+      assert.strictEqual(newModelCost(first), 0);
+      assert.strictEqual(requests.length, 1);
+
+      // An hour later LiteLLM lists the new model; a restarted server starts from the cached table.
+      ratesDocument = {
+        ...ratesDocument,
+        "claude-new-model": { input_cost_per_token: 2e-5, output_cost_per_token: 1e-4 },
+      };
+      yield* TestClock.adjust(Duration.hours(1));
+      const service = yield* UsageService.make.pipe(Effect.provide(serviceLayer));
+      const refreshed = yield* service.readSummary(WINDOW);
+      assert.strictEqual(refreshed.pricing.status, "fresh");
+      assert.closeTo(newModelCost(refreshed) ?? -1, 10 * 2e-5 + 5 * 1e-4, 1e-12);
+      assert.strictEqual(requests.length, 2);
+
+      // A model the fresh table still lacks does not refetch again before the TTL.
+      yield* TestClock.adjust(Duration.hours(1));
+      yield* service.readSummary(WINDOW);
+      assert.strictEqual(requests.length, 2);
+    }),
   );
 
   it.effect("does not orphan an in-flight scan when its first caller is interrupted", () =>

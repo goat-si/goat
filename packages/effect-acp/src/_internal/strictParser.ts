@@ -32,15 +32,15 @@ export const makeStrictNdJsonRpcParser = () => {
         if (fragment.length > 0) fragments.push(fragment);
         if (index < lines.length - 1) {
           const line = fragments.join("");
-          // Every message in a batch line is charged the whole line.
+          fragments = [];
+          pendingCharacters = 0;
+          if (line.trim() === "") continue;
           decoded.push(
             ...codec.decode(line).map((message) => ({
               message: message as RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
               lineLength: line.length,
             })),
           );
-          fragments = [];
-          pendingCharacters = 0;
         }
       }
       return decoded;
@@ -95,6 +95,33 @@ function normalizeOutgoingFrame(frame: unknown): unknown {
       code: error.code,
       message: error.message,
       ...(error.data === undefined ? {} : { data: error.data }),
+    },
+  };
+}
+
+export const isProtocolError = Schema.is(AcpSchema.Error);
+
+/**
+ * Effect RPC's JSON-RPC codec treats a standard JSON-RPC error object as a
+ * defect unless it carries Effect's private `_tag: "Cause"` envelope.
+ */
+export function normalizeAcpJsonRpcError(
+  message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
+): RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded {
+  if (message._tag !== "Exit" || message.exit._tag !== "Failure") return message;
+  const [failure] = message.exit.cause;
+  if (
+    message.exit.cause.length !== 1 ||
+    failure?._tag !== "Die" ||
+    !isProtocolError(failure.defect)
+  ) {
+    return message;
+  }
+  return {
+    ...message,
+    exit: {
+      _tag: "Failure",
+      cause: [{ _tag: "Fail", error: failure.defect }],
     },
   };
 }

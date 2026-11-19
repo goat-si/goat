@@ -1,3 +1,6 @@
+import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
+import * as TestClock from "effect/testing/TestClock";
 import type * as NodeOS from "node:os";
 import { describe, expect, it } from "@effect/vitest";
 import * as NetAddress from "effect/net/NetAddress";
@@ -6,6 +9,7 @@ import {
   acceptsPrivateNetworkConnection,
   formatHeadlessServeOutput,
   loopbackUrlHostForAddress,
+  makePrivateNetworkConnectionHandler,
   renderTerminalQrCode,
   resolveHeadlessConnectionString,
 } from "./startupAccess.ts";
@@ -104,4 +108,61 @@ describe("acceptsPrivateNetworkConnection", () => {
     expect(accepts("169.254.10.1", "169.254.10.2")).toBe(false);
     expect(accepts(undefined, "192.168.1.31")).toBe(false);
   });
+});
+
+it("keeps a routable Linux bridge in a private-network pairing URL", () => {
+  const options = {
+    interfaces: {
+      "ve-container": [ipv4("10.11.0.1")],
+      "vb-container": [ipv4("10.12.0.1")],
+      "vz-container": [ipv4("10.13.0.1")],
+      vmbr0: [ipv4("192.168.2.1")],
+    },
+    privateNetworkOnly: true,
+    platform: "linux" as const,
+  };
+  expect(resolveHeadlessConnectionString("0.0.0.0", 3773, options)).toBe("http://192.168.2.1:3773");
+  expect(resolveHeadlessConnectionString("0.0.0.0", 3773, { ...options, platform: "win32" })).toBe(
+    "http://10.11.0.1:3773",
+  );
+});
+
+it.effect("closes public connections and bounds rejection logs across a flood", () => {
+  const warnings: Array<ReadonlyArray<unknown>> = [];
+  return Effect.gen(function* () {
+    const handle = yield* makePrivateNetworkConnectionHandler;
+    let destroyed = 0;
+    const destroy = () => {
+      destroyed++;
+    };
+    handle({ localAddress: "192.168.1.2", remoteAddress: "192.168.1.3", destroy });
+    expect(destroyed).toBe(0);
+    const denied = { localAddress: "192.168.1.2", remoteAddress: "203.0.113.7", destroy };
+    for (let n = 0; n < 40; n++) handle(denied);
+    expect(destroyed).toBe(40);
+    expect(warnings).toEqual([
+      [
+        "closed a connection outside the private network",
+        { localAddress: "192.168.1.2", remoteAddress: "203.0.113.7" },
+      ],
+    ]);
+    yield* TestClock.adjust("1 minute");
+    handle({ localAddress: "192.168.1.2", destroy });
+    expect(destroyed).toBe(41);
+    expect(warnings[1]).toEqual([
+      "closed a connection outside the private network",
+      { localAddress: "192.168.1.2", remoteAddress: undefined, closedSinceLastLog: 39 },
+    ]);
+  }).pipe(
+    Effect.provide(
+      Logger.layer(
+        [
+          Logger.make(({ logLevel, message }) => {
+            if (logLevel === "Warn") warnings.push([message].flat());
+          }),
+        ],
+        { mergeWithExisting: false },
+      ),
+    ),
+  );
 });

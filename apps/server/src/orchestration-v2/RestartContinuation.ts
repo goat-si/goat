@@ -245,7 +245,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       !source ||
       !(
         isRestartContinuationSource(source, projection.providerTurns) ||
-        continuationFailedBeforePrompt(source, projection.providerTurns) ||
+        continuationFailedBeforePrompt(source, projection.attempts) ||
         (survivor &&
           source.status === "starting" &&
           source.restartContinuationOfRunId !== undefined)

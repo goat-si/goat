@@ -1,3 +1,10 @@
+import * as HostProcess from "@goat/shared/HostProcess";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- WebSocket negotiation uses the original Node upgrade request.
+import * as NodeHttp from "node:http";
+import * as ServerConfig from "../config.ts";
+import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
+import { isLoopbackHost, isPrivateNetworkAddress } from "../startupAccess.ts";
+import { DESKTOP_BOOTSTRAP_SUBJECT } from "./PairingGrantStore.ts";
 import {
   type EnvironmentAuthInvalidError,
   type EnvironmentInternalError,
@@ -20,6 +27,47 @@ import * as Lifetime from "./SessionSocketLifetime.ts";
 export { layerFor as rpcAuthorization } from "./proxiedCallPolicy.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./http.ts";
 import { requestUrl } from "../requestUrl.ts";
+
+const proxyHeaders = [
+  "forwarded",
+  "via",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+];
+
+const omitLocalDesktopCompression = Effect.fn("HubRpcSocket.omitLocalDesktopCompression")(
+  function* (
+    request: HttpServerRequest.HttpServerRequest,
+    session: EnvironmentAuth.AuthenticatedSession,
+  ) {
+    if (
+      session.subject !== DESKTOP_BOOTSTRAP_SUBJECT ||
+      !(request.source instanceof NodeHttp.IncomingMessage) ||
+      !DESKTOP_RENDERER_ORIGINS.some((origin) => origin === request.headers.origin) ||
+      proxyHeaders.some((header) => request.headers[header] !== undefined)
+    )
+      return;
+    const config = yield* ServerConfig.ServerConfig;
+    if (config.mode !== "desktop") return;
+    const { localAddress, remoteAddress } = request.source.socket;
+    if (localAddress === undefined || remoteAddress === undefined) return;
+    const loopback = [localAddress, remoteAddress].every((address) =>
+      isLoopbackHost(address.replace(/^::ffff:/iu, "")),
+    );
+    const platform = yield* HostProcess.Platform;
+    const env = yield* HostProcess.Environment;
+    // WSL NAT connects from the Windows host over private addresses instead of loopback.
+    const wsl = platform === "linux" && (env.WSL_DISTRO_NAME || env.WSL_INTEROP);
+    if (
+      loopback ||
+      (wsl && isPrivateNetworkAddress(localAddress) && isPrivateNetworkAddress(remoteAddress))
+    ) {
+      delete request.source.headers["sec-websocket-extensions"];
+    }
+  },
+);
 
 export const layer = <E, R>(
   rpc: (
@@ -57,7 +105,10 @@ export const layer = <E, R>(
           failEnvironmentInternal("internal_error", error),
         ),
       );
-      return yield* Lifetime.run(session, rpc(session)).pipe(
+      return yield* Lifetime.run(
+        session,
+        Effect.andThen(omitLocalDesktopCompression(request, session), rpc(session)),
+      ).pipe(
         Effect.catchIf(
           (error) => Predicate.isTagged(error, "SessionCredentialVerificationError"),
           (error) => failEnvironmentInternal("internal_error", error),

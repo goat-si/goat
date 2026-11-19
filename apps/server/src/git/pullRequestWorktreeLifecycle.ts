@@ -36,8 +36,6 @@ export const makePullRequestWorktreeLifecycle = Effect.fn(
     return (yield* git.resolveCommit({ cwd: path, revision: "HEAD" })).commitSha;
   });
   return {
-    isAt: (cwd: string, path: string, branch: string, expectedHead: string) =>
-      verify(cwd, path, branch).pipe(Effect.map((head) => head === expectedHead)),
     verifyReusable: Effect.fn("GitManager.verifyReusablePullRequestWorktree")(function* (
       cwd: string,
       path: string,
@@ -102,13 +100,26 @@ export const makePullRequestWorktreeLifecycle = Effect.fn(
       yield* verify(cwd, created.worktree.path, branch);
       return { ...created, pinnedHead: head.commitSha };
     }),
-    finish: (cwd: string, path: string) =>
-      pending
-        .clear(path, cwd)
-        .pipe(
-          Effect.mapError((cause) =>
-            failure(cwd, `Could not finish the worktree at ${path}: ${cause.message}`, cause),
-          ),
-        ),
+    finishSetup: (cwd: string, branch: string) =>
+      Effect.fn("GitManager.finishPullRequestWorktreeSetup")(function* <E>(
+        created: { readonly worktree: { readonly path: string }; readonly pinnedHead: string },
+        targetHead: string | null,
+        setup: (path: string) => Effect.Effect<void, E>,
+      ) {
+        const path = created.worktree.path;
+        const beforeSetup =
+          (yield* verify(cwd, path, branch)) === (targetHead ?? created.pinnedHead);
+        if (beforeSetup) yield* setup(path);
+        const isOnPullRequestHead =
+          targetHead !== null && beforeSetup && (yield* verify(cwd, path, branch)) === targetHead;
+        yield* pending
+          .clear(path, cwd)
+          .pipe(
+            Effect.mapError((cause) =>
+              failure(cwd, `Could not finish the worktree at ${path}: ${cause.message}`, cause),
+            ),
+          );
+        return isOnPullRequestHead;
+      }),
   };
 });

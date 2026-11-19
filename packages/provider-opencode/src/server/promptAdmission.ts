@@ -1,7 +1,30 @@
+import * as DateTime from "effect/DateTime";
+import * as Random from "effect/Random";
+import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import { isOpenCodeRuntimeError } from "./OpenCodeRuntime.ts";
 import * as Effect from "effect/Effect";
 import type { ActiveOpenCodeTurn } from "./adapterState.ts";
+
+export const makeOpenCodeMessageId = Effect.fnUntraced(function* (
+  clock: Ref.Ref<{ readonly epochMillis: number; readonly counter: number }>,
+) {
+  const epochMillis = DateTime.toEpochMillis(yield* DateTime.now);
+  const counter = yield* Ref.modify(clock, (previous) => {
+    const next = previous.epochMillis === epochMillis ? previous.counter + 1 : 1;
+    return [next, { epochMillis, counter: next }] as const;
+  });
+  const encodedTime = BigInt.asUintN(48, BigInt(epochMillis) * 0x1000n + BigInt(counter))
+    .toString(16)
+    .padStart(12, "0");
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  const random = (yield* Effect.forEach(Array.from({ length: 28 }), () =>
+    Random.nextIntBetween(0, alphabet.length - 1),
+  ))
+    .map((index) => alphabet[index])
+    .join("");
+  return `msg_${encodedTime}${random}`;
+});
 
 type OpenCodeAdmissionSignal =
   | "accepted"

@@ -40,6 +40,7 @@ import {
   settlePullRequestOverrides,
 } from "./pullRequestList.logic";
 import { pullRequestGroups } from "./pullRequestListGroups.logic";
+import { preferredPullRequestEntries } from "./pullRequestListTargets";
 import {
   readPullRequestListPreferences,
   writePullRequestListPreferences,
@@ -206,6 +207,46 @@ describe("pull request involvement filtering", () => {
 describe("ranking what a search found", () => {
   const row = (overrides: Partial<PullRequestListEntry> & { number?: number }) =>
     entry({ number: 1, ...overrides });
+
+  it("keeps fallback rows in Others while account groups load and after they settle", () => {
+    const fallback = row({
+      author: { login: "Bilal", name: null, avatarUrl: null },
+      viewerReviewRequested: true,
+    });
+    const preferred = entry({
+      number: 2,
+      projectId: "preferred-project" as ProjectId,
+      viewerReviewRequested: true,
+    });
+    const input = {
+      known: [fallback, preferred],
+      baseline: undefined,
+      providers: [],
+      viewers: VIEWERS,
+      involvement: "all" as const,
+      localFilters: {},
+      hasLocalFilters: false,
+      text: "",
+      answeredLocally: true,
+      baselineEmpty: false,
+      held: undefined,
+      partitionsWanted: true,
+      isPreferredEntry: preferredPullRequestEntries([
+        { environmentId: preferred.environmentId, projectIds: [preferred.projectId] },
+      ]),
+    };
+    const pending = pullRequestGroups({ ...input, authored: undefined, reviewing: undefined });
+    const settled = pullRequestGroups({ ...input, authored: [fallback], reviewing: [preferred] });
+    const expected = [
+      ["reviewRequested", [preferred.number]],
+      ["others", [fallback.number]],
+    ];
+    for (const { groups } of [pending, settled]) {
+      expect(groups.map(({ key, entries }) => [key, entries.map(({ number }) => number)])).toEqual(
+        expected,
+      );
+    }
+  });
 
   it.each([
     ["welcome wizard", "Add the welcome wizard"],

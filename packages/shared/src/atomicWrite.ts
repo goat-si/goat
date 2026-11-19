@@ -52,7 +52,7 @@ export const writeFileStringAtomically = (input: {
             yield* Effect.acquireRelease(
               fs.makeTempDirectory({
                 directory: targetDirectory,
-                prefix: `${path.basename(targetPath)}.`,
+                prefix: "goat-write-",
               }),
               (directory) =>
                 fs.remove(directory, { recursive: true }).pipe(Effect.ignore({ log: true })),

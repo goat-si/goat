@@ -82,6 +82,7 @@ export const makeFakeCloudAdapter = Effect.fnUntraced(function* (
       },
       nativeConversationHeadRef: null,
     });
+    yield* input.inputDelivery?.submitted() ?? Effect.void;
     yield* Ref.set(current, input);
     yield* publish({
       type: "provider_turn.updated",

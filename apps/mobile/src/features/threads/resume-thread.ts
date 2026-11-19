@@ -92,6 +92,7 @@ export async function resumeThread<E>(
         message: {
           messageId: input.messageId,
           role: "user",
+          // Older servers still use the prompt from this command.
           text: "Continue where you left off.",
           attachments: [],
         },

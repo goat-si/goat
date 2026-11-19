@@ -1,3 +1,4 @@
+import { placeholderThreadTitle } from "../../orchestration-v2/threadTitleGenerationEffect.ts";
 import type { OrchestratorMcpDelegateTaskInput } from "@goat/contracts";
 
 export function threadTitle(input: {
@@ -7,7 +8,7 @@ export function threadTitle(input: {
   readonly index: number;
 }): string {
   const detail = input.title?.trim() || input.prompt?.trim();
-  if (!detail) return `${input.parentTitle} thread ${input.index + 1}`;
+  if (!detail) return placeholderThreadTitle(input.parentTitle, input.index);
   if (detail.length <= 80) return detail;
   let end = 77;
   const previous = detail.charCodeAt(end - 1);

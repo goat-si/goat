@@ -582,7 +582,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               });
           }
           const controlCwd = yield* options.resolveControlCwd;
-          // Read-only probes cannot deliver a prompt; their failure is a local rejection.
           yield* cli
             .readiness(current, controlCwd)
             .pipe(
@@ -593,7 +592,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             );
           if (nativeId) {
             const prior = thread.cloudTask!;
-            // Base intentionally passes status submitting for this run. It is not a prior-run rejection here.
             thread = {
               ...thread,
               cloudTask: {
@@ -628,6 +626,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               yield* settle(i, reply.failure);
               return "settled" as const;
             }
+            yield* i.inputDelivery?.submitted() ?? Effect.void;
             const retained = withoutFailureEvidence(prior);
             delete retained.prUrl;
             delete retained.branch;
@@ -758,6 +757,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                       : undefined,
                   )
                   .pipe(Effect.ensuring(recordTrust));
+                yield* i.inputDelivery?.submitted() ?? Effect.void;
                 const now = yield* DateTime.now;
                 thread = {
                   ...thread,

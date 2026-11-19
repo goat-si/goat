@@ -11,6 +11,7 @@ import {
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import { buildDraftThreadRouteParams } from "../../threadRoutes";
+import type { DraftCheckoutPullRequest } from "../../composerDraftCheckoutPullRequest";
 import { type DraftThreadEnvMode, useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { openPullRequestThreadDialog } from "./ChatOverlayHosts";
 interface PullRequestDraftThreadInput {
@@ -62,6 +63,7 @@ export function usePullRequestDraftThread(input: PullRequestDraftThreadInput) {
     branch: string;
     worktreePath: string | null;
     envMode: DraftThreadEnvMode;
+    checkoutPullRequest: DraftCheckoutPullRequest;
   }) => {
     if (!activeProject) {
       throw new Error("No active project is available for this pull request.");
@@ -125,11 +127,14 @@ export function usePullRequestDraftThread(input: PullRequestDraftThreadInput) {
   const handlePreparedPullRequestThread = async (input: {
     branch: string;
     worktreePath: string | null;
+    pullRequestUrl: string;
   }) => {
+    // The draft carries the pull request until its first send makes it a thread, which links it.
     await openOrReuseProjectDraftThread({
       branch: input.branch,
       worktreePath: input.worktreePath,
       envMode: input.worktreePath ? "worktree" : "local",
+      checkoutPullRequest: { url: input.pullRequestUrl, branch: input.branch },
     });
   };
   const handlePreparedPullRequestThreadStable = useStableCallback(handlePreparedPullRequestThread);

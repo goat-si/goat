@@ -32,6 +32,7 @@ export interface AcpAdapterV2RuntimeInput {
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
   readonly sessionLaunch?: unknown;
@@ -109,6 +110,7 @@ export interface AcpAdapterV2ExtensionContext {
  * the agent's reply stays on `cause`.
  */
 export interface AcpAdapterV2Flavor {
+  readonly preferHttpMcp?: boolean;
   readonly buildPrompt?: (input: {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
@@ -226,6 +228,9 @@ export interface AcpAdapterV2Flavor {
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => AcpPermissionDisposition;
+  readonly answerablePermissionOptions?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+  ) => ReadonlyArray<EffectAcpSchema.PermissionOption>;
   readonly approvalOptions?: (
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => ReadonlyArray<ProviderApprovalOption>;
@@ -301,6 +306,7 @@ export interface AcpAdapterV2Flavor {
   readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
   readonly preserveRuntimeOnSettledInterrupt?: boolean;
   readonly enablePostSettleContinuation?: boolean;
+  readonly requireForegroundWakeTransition?: boolean;
   /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */
   readonly followAgentWorkState?: boolean;
   /**

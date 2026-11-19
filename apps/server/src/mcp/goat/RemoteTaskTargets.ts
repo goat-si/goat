@@ -130,7 +130,7 @@ export const makeRemoteTaskTargets = (deps: RemoteTaskTargetDeps) => {
           failure("provider_unavailable", "Provider capabilities are unavailable."),
         ),
       );
-    if (!isCloudExecution(capabilities)) return;
+    if (!isCloudExecution(capabilities)) return false;
     yield* permissions.requireCloudApproval(
       scope,
       yield* permissions.require(scope, "cloud.launch"),
@@ -155,6 +155,7 @@ export const makeRemoteTaskTargets = (deps: RemoteTaskTargetDeps) => {
         ...(branch === null ? {} : { branch }),
       })
       .pipe(Effect.mapError((error) => failure("invalid_request", error.message)));
+    return true;
   });
 
   const ensureCloudCancellationSupported = Effect.fnUntraced(function* (

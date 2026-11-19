@@ -46,13 +46,8 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { normalizeModelMetricLabel } from "../observability/Attributes.ts";
-import {
-  providerSessionsTotal,
-  providerTurnDuration,
-  providerTurnsTotal,
-  withMetrics,
-} from "../observability/Metrics.ts";
+import { providerTurnMetrics } from "./ProviderTurnMetrics.ts";
+import { providerSessionsTotal, withMetrics } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -963,7 +958,7 @@ export const layerWithOptions = (
 
       const {
         readReleasedProviderThreads,
-        writeReleasedToolCallEvents,
+        writeReleasedProcessTaskEvents,
         writeReleasedBackgroundWorkEvents,
       } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
 
@@ -1122,10 +1117,10 @@ export const layerWithOptions = (
                   if (input.cancelIdleFiber !== false) {
                     yield* cancelIdleFiber(entry.idleFiber);
                   }
-                  // Queued events can persist tool calls after the release-time scan.
+                  // Queued events can persist tasks after the release-time scan.
                   const afterDrain = Effect.forEach(
                     releasedProviderThreads,
-                    (thread) => writeReleasedToolCallEvents(thread, releasedAt),
+                    (thread) => writeReleasedProcessTaskEvents(thread, releasedAt),
                     { discard: true },
                   ).pipe(logReleaseFailure(input.providerSessionId));
                   if (input.gracefulSubscribers === true) {
@@ -1954,16 +1949,6 @@ export const layerWithOptions = (
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
         const subscribeEvents = makeEventSubscription(eventSubscribers);
-        const turnMetrics = (operation: string, model?: string) =>
-          withMetrics({
-            counter: providerTurnsTotal,
-            ...(operation === "send" ? { timer: providerTurnDuration } : {}),
-            attributes: {
-              provider: runtime.driver,
-              operation,
-              modelFamily: normalizeModelMetricLabel(model),
-            },
-          });
         const trackTurn = (
           input: Pick<
             ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -2032,6 +2017,7 @@ export const layerWithOptions = (
               ),
             ),
           );
+        const { resumeInterruptedTurn } = runtime;
         return {
           ...runtime,
           // Pi replaces its session snapshot as metadata changes.
@@ -2143,8 +2129,15 @@ export const layerWithOptions = (
           startTurn: (input) =>
             trackTurn(
               input,
-              runtime.startTurn(input).pipe(turnMetrics("send", input.modelSelection.model)),
+              runtime
+                .startTurn(input)
+                .pipe(providerTurnMetrics(runtime.driver, "send", input.modelSelection.model)),
             ),
+          ...(resumeInterruptedTurn === undefined
+            ? {}
+            : {
+                resumeInterruptedTurn: (input) => trackTurn(input, resumeInterruptedTurn(input)),
+              }),
           ...(runtime.resumeTurn === undefined
             ? {}
             : {
@@ -2152,19 +2145,25 @@ export const layerWithOptions = (
               }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input).pipe(turnMetrics("steer"))),
+              Effect.andThen(
+                runtime.steerTurn(input).pipe(providerTurnMetrics(runtime.driver, "steer")),
+              ),
             ),
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(interruptWithWatchdog(runtime, input).pipe(turnMetrics("interrupt"))),
+              Effect.andThen(
+                interruptWithWatchdog(runtime, input).pipe(
+                  providerTurnMetrics(runtime.driver, "interrupt"),
+                ),
+              ),
             ),
           respondToRuntimeRequest: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
               Effect.andThen(
                 runtime
                   .respondToRuntimeRequest(input)
-                  .pipe(turnMetrics("runtime-request-response")),
+                  .pipe(providerTurnMetrics(runtime.driver, "runtime-request-response")),
               ),
             ),
         };

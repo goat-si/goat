@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { PROJECT_ID, makeHarness } from "./handlers.testkit.ts";
+import { bytesOf, READ_BUDGET_BYTES } from "./readBudget.ts";
 
 describe("pull request reads within the budget", () => {
   it.effect(
@@ -150,6 +151,107 @@ describe("pull request reads within the budget", () => {
           .call("goat_pull_request_search", { state: "open", query: "many" })
           .pipe(Effect.flip);
         expect(many._tag).toBe("PullRequestReadTooLargeError");
+      }),
+  );
+});
+
+describe("GitLab overview threads in the activity read", () => {
+  it.effect("leaves room for the overview omission count before fitting the last thread", () =>
+    Effect.gen(function* () {
+      const activity = {
+        reviewers: [],
+        comments: [],
+        commentCount: 0,
+        commentsTruncated: false,
+        reviewThreads: [],
+        commits: [],
+        reactions: [],
+        overviewThreads: [],
+      };
+      const thread = {
+        id: "overview",
+        path: null,
+        line: null,
+        side: "right" as const,
+        isResolved: false,
+        isOutdated: false,
+        comments: [],
+      };
+      let threadId = thread.id;
+      const harness = yield* makeHarness({
+        service: {
+          activity: () =>
+            Effect.succeed({ ...activity, overviewThreads: [{ ...thread, id: threadId }] }),
+        },
+      });
+      const target = { url: "https://github.com/sample-tools/goat/pull/12" };
+      const read = yield* harness.call("goat_pull_request_activity", target);
+      const { overviewThreadsOmitted: _omitted, ...reply } = read;
+      const count = 999_999_999;
+      const shell = {
+        ...reply,
+        activity: { ...read.activity, overviewThreads: [] },
+        commentsOmitted: count,
+        reviewThreadsOmitted: count,
+        commitsOmitted: count,
+        reviewersOmitted: count,
+        reactionsOmitted: count,
+      };
+      threadId += "x".repeat(READ_BUDGET_BYTES - bytesOf(shell) - bytesOf(thread) - 1);
+      const full = yield* harness.call("goat_pull_request_activity", target);
+      expect(full.activity.overviewThreads).toHaveLength(0);
+      expect(full.overviewThreadsOmitted).toBe(1);
+    }),
+  );
+
+  it.effect(
+    "fits overview threads into the read's budget, counts those left out, and omits the list when there is none",
+    () =>
+      Effect.gen(function* () {
+        const thread = (id: string) => ({
+          id,
+          path: null,
+          line: null,
+          side: "right" as const,
+          isResolved: false,
+          isOutdated: false,
+          comments: [
+            {
+              id: `${id}-note`,
+              author: null,
+              body: "x".repeat(200 * 1024),
+              createdAt: "2026-10-01T00:00:00.000Z",
+              url: null,
+            },
+          ],
+        });
+        const base = {
+          comments: [],
+          commentCount: 0,
+          commentsTruncated: false,
+          reviewThreads: [],
+          commits: [],
+        };
+        let overview = true;
+        const harness = yield* makeHarness({
+          service: {
+            activity: () =>
+              Effect.succeed(
+                overview ? { ...base, overviewThreads: [thread("o1"), thread("o2")] } : base,
+              ),
+          },
+        });
+        // The read does not depend on the host; the harness project is a GitHub checkout.
+        const target = { url: "https://github.com/sample-tools/goat/pull/12" };
+        const read = yield* harness.call("goat_pull_request_activity", target);
+        expect(read.activity.overviewThreads?.map(({ id }) => id)).toEqual(["o1"]);
+        expect(read.overviewThreadsOmitted).toBe(1);
+        expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(256 * 1024);
+
+        overview = false;
+        const plain = yield* harness.call("goat_pull_request_activity", target);
+        expect(plain.activity).not.toHaveProperty("overviewThreads");
+        expect(plain).not.toHaveProperty("overviewThreadsOmitted");
       }),
   );
 });

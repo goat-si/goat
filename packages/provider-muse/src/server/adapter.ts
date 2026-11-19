@@ -1967,7 +1967,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             lastRunOrdinal: turnInput.runOrdinal,
           });
           yield* updateSession("running");
-          // Compaction cannot join a running wake, so the wake stays held for its continuation.
           const held = compact ? undefined : wake;
           if (held) yield* clearWake;
           if (continuation && !held) return yield* finish(turn, "completed");
@@ -2022,6 +2021,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               );
               return yield* protocolError("Muse admitted the turn under an unexpected identity");
             }
+            yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
           }
         }).pipe(
           Effect.onError((cause) => {

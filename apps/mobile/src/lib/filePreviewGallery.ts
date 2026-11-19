@@ -13,6 +13,13 @@ export function filePreviewKey(source: FilePreviewItem): string {
   return source.uri;
 }
 
+export function filePreviewSourceIdentifier(source: FilePreviewItem): string {
+  return (
+    source.sourceIdentifier ??
+    ("uri" in source && /^data:/i.test(source.uri) ? "" : `preview:${filePreviewKey(source)}`)
+  );
+}
+
 export function filePreviewGallery(source: FilePreviewSource, group: readonly FilePreviewItem[]) {
   if (source.kind !== "image") return [source];
   const selectedKey = filePreviewKey(source);
@@ -30,7 +37,8 @@ export function filePreviewGallery(source: FilePreviewSource, group: readonly Fi
 }
 
 export function filePreviewName(source: FilePreviewItem): string {
-  const uriName = "uri" in source ? source.uri.split(/[?#]/)[0]?.split("/").pop() : undefined;
+  const uri = "uri" in source ? source.uri : undefined;
+  const uriName = uri && !/^data:/i.test(uri) ? uri.split(/[?#]/)[0]?.split("/").pop() : undefined;
   const name =
     source.name ?? ("attachment" in source ? source.attachment.name : uriName) ?? "Preview";
   const extension = /\.(png|jpe?g|gif|webp|heic|heif|avif|svg|pdf|docx?|xlsx?|pptx?|txt|rtf)$/i;

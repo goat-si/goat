@@ -19,6 +19,7 @@ import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 import * as LogRedaction from "./LogRedaction.ts";
 import * as Metrics from "./Metrics.ts";
+import * as OtlpExportFailures from "./OtlpExportFailures.ts";
 import { makeLocalSpanPolicy } from "./tracePolicy.ts";
 import * as HeapAttribution from "./HeapAttribution.ts";
 
@@ -70,7 +71,7 @@ export const layer = Layer.unwrap(
                 exportInterval: `${traces.exportIntervalMs} millis`,
                 headers: traces.headers,
                 resource,
-              });
+              }).pipe(Effect.provide(OtlpExportFailures.layer("traces")));
 
         const tracer = yield* makeLocalFileTracer({
           filePath: config.serverTracePath,
@@ -104,7 +105,10 @@ export const layer = Layer.unwrap(
             exportInterval: `${metrics.exportIntervalMs} millis`,
             headers: metrics.headers,
             resource,
-          }).pipe(Layer.provide(SharedObservability.layerOtlpSerialization(metrics.protocol)));
+          }).pipe(
+            Layer.provide(OtlpExportFailures.layer("metrics")),
+            Layer.provide(SharedObservability.layerOtlpSerialization(metrics.protocol)),
+          );
 
     const layerOtelWarnings = Layer.effectDiscard(
       Effect.forEach(config.otelEnvironment.warnings, (warning) => Effect.logWarning(warning)),

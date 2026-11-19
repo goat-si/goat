@@ -1,6 +1,6 @@
 import * as ServerConfig from "../config.ts";
 import { NodeHttpPlatform } from "@effect/platform-node";
-import { guestSessionCookieName, ThreadId } from "@goat/contracts";
+import { GUEST_MESSAGE_MAX_LENGTH, guestSessionCookieName, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -148,4 +148,25 @@ it.effect("refuses overlapping guest uploads before staging the second multipart
       assert.equal(extractions, 1);
     }).pipe(Effect.provide(Layer.merge(layerTest, NodeHttpPlatform.layer)));
   }).pipe(Effect.scoped),
+);
+
+it.effect("keeps a multi-line form message within the length limit as the guest typed it", () =>
+  Effect.gen(function* () {
+    // At the limit with LF, over it once each line break is counted as CRLF.
+    const lines = Array.from({ length: 50 }, () => "x".repeat(79));
+    const text = lines.join("\n").padEnd(GUEST_MESSAGE_MAX_LENGTH, "x");
+    const form = new FormData();
+    form.append("shareId", "share-1");
+    form.append("text", text);
+    const request = HttpServerRequest.fromWeb(
+      new Request("http://localhost/api/guest/messages?share=share-1", {
+        method: "POST",
+        body: form,
+      }),
+    );
+    const submission = yield* readSubmission(Effect.void).pipe(
+      Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+    );
+    assert.strictEqual(submission?.fields.text, text);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

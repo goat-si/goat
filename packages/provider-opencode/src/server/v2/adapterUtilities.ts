@@ -1,5 +1,6 @@
+import { INVENTORY_TIMEOUT } from "./connectionConstants.ts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
-import type { OpenCodeEvent } from "@opencode/client/effect";
+import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client/effect";
 import type {
   OrchestrationV2UserInputQuestion,
   OrchestrationV2ProviderThread,
@@ -188,3 +189,29 @@ export const executionEnd = (type: string) =>
   type === "session.execution.succeeded" ||
   type === "session.execution.failed" ||
   type === "session.execution.interrupted";
+
+export const availableSkillMentions = Effect.fn("OpenCode2Adapter.availableSkillMentions")(
+  function* <E, R>(
+    mentions: ReadonlyArray<string>,
+    listSkills: Effect.Effect<Set<string>>,
+    readModels: Effect.Effect<unknown, E, R>,
+  ) {
+    const known = yield* listSkills;
+    if (mentions.some((name) => !known.has(name))) {
+      // OpenCode answers model inventory after its directory scan completes.
+      yield* readModels;
+      for (const name of yield* listSkills) known.add(name);
+    }
+    return mentions.filter((name) => known.has(name));
+  },
+);
+
+export const listDirectorySkills = (
+  client: OpenCodeClient,
+  location: { readonly directory: string },
+) =>
+  client.skill.list({ location }).pipe(
+    Effect.timeout(INVENTORY_TIMEOUT),
+    Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),
+    Effect.orElseSucceed(() => new Set<string>()),
+  );

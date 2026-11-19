@@ -26,6 +26,8 @@ import {
   type PullRequestMergeMethod,
   type PullRequestRef,
   type RepositoryIdentity,
+  type PullRequestConversationThread,
+  pullRequestConversationThreads,
   type PullRequestReviewThread,
   type PullRequestState,
   type PullRequestUpdateMethod,
@@ -35,13 +37,12 @@ import {
   type VcsRef,
 } from "@goat/contracts";
 import {
-  legacyThreadPullRequestKey,
-  resolveThreadCurrentPullRequestLink,
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+export { threadPullRequestPanelTarget } from "./threadPullRequestPanelTarget";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
@@ -213,33 +214,6 @@ export function pullRequestPanelContext(
     legacy.number === surface.number
     ? "thread"
     : "page";
-}
-
-export function threadPullRequestPanelTarget(thread: {
-  readonly projectId: string;
-  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
-  readonly linkedPullRequest?: ThreadLinkedPullRequest | null | undefined;
-  readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
-}) {
-  const current = resolveThreadCurrentPullRequestLink(thread.pullRequests ?? []);
-  const legacy = thread.linkedPullRequest;
-  if (
-    current !== null &&
-    legacy != null &&
-    threadPullRequestKeysEqual(current, legacyThreadPullRequestKey(legacy))
-  ) {
-    return legacy;
-  }
-  if (current !== null) {
-    return {
-      projectId: thread.projectId,
-      host: current.host,
-      repository: current.repository,
-      number: current.number,
-      url: current.url,
-    };
-  }
-  return legacy ?? thread.branchPullRequest ?? null;
 }
 
 export function pullRequestHandoffLabels(inThisThread: boolean) {
@@ -483,7 +457,10 @@ export interface PullRequestReplyAvailability {
 
 export interface PullRequestTimelineThread
   extends
-    Pick<PullRequestReviewThread, "path" | "line" | "isResolved" | "isOutdated">,
+    Pick<
+      PullRequestConversationThread,
+      "id" | "path" | "line" | "isResolved" | "isOutdated" | "canResolve"
+    >,
     PullRequestReplyAvailability {
   readonly replies: ReadonlyArray<PullRequestTimelineEvent>;
 }
@@ -548,12 +525,12 @@ export type PullRequestConversationItem =
       readonly createdAt: string;
       readonly root: PullRequestComment;
       readonly replies: ReadonlyArray<PullRequestComment>;
-      readonly thread: PullRequestReviewThread;
+      readonly thread: PullRequestConversationThread;
     } & PullRequestReplyAvailability);
 
 export function pullRequestConversationItems(
   comments: ReadonlyArray<PullRequestComment>,
-  reviewThreads: ReadonlyArray<PullRequestReviewThread>,
+  reviewThreads: ReadonlyArray<PullRequestConversationThread>,
 ): ReadonlyArray<PullRequestConversationItem> {
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
   const claimed = new Set<string>();
@@ -614,7 +591,7 @@ export function pullRequestConversationItemComments(
 
 export function isPullRequestCommentFinished(
   comment: PullRequestComment,
-  thread?: PullRequestReviewThread,
+  thread?: PullRequestConversationThread,
 ): boolean {
   return (
     thread?.isResolved === true || pullRequestReviewOutcome(comment.reviewState) === "dismissed"
@@ -638,7 +615,7 @@ export function buildPullRequestTimeline(
     PullRequestDetailView,
     "provider" | "createdAt" | "author" | "commits" | "comments" | "mergedAt" | "closedAt"
   > &
-    Partial<Pick<PullRequestDetailView, "reviewThreads">>,
+    Partial<Pick<PullRequestDetailView, "reviewThreads" | "overviewThreads">>,
 ): ReadonlyArray<PullRequestTimelineEvent> {
   const term = sourceControlClients.get(detail.provider).changeRequest.singular;
   return [
@@ -674,11 +651,16 @@ export function buildPullRequestTimeline(
       reviewState: null,
       reactions: [],
     })),
-    ...pullRequestConversationItems(detail.comments, detail.reviewThreads ?? []).map((item) => {
+    ...pullRequestConversationItems(
+      detail.comments,
+      pullRequestConversationThreads({ ...detail, reviewThreads: detail.reviewThreads ?? [] }),
+    ).map((item) => {
       if (item.kind === "comment") return commentTimelineEvent(item.comment);
       return {
         ...commentTimelineEvent(item.root),
         thread: {
+          id: item.thread.id,
+          ...(item.thread.canResolve === undefined ? {} : { canResolve: item.thread.canResolve }),
           path: item.thread.path,
           line: item.thread.line,
           isResolved: item.thread.isResolved,

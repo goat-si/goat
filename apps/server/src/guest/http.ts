@@ -228,9 +228,10 @@ export const readSubmission = Effect.fn("GuestHttp.readSubmission")(function* (
     }),
   );
   if (invalidFields) return null;
-  const body = yield* decodeSubmit({ shareId: fields.shareId, text: fields.text ?? "" }).pipe(
-    Effect.option,
-  );
+  const body = yield* decodeSubmit({
+    shareId: fields.shareId,
+    text: fields.text?.replaceAll("\r\n", "\n") ?? "",
+  }).pipe(Effect.option);
   return body._tag === "None" ? null : { fields: body.value, uploads };
 });
 

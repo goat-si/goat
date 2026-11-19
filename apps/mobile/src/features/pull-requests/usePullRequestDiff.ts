@@ -27,6 +27,8 @@ export type PullRequestParams = {
   readonly repository: string;
   readonly number: number;
   readonly host?: string;
+  readonly navigationUrl?: string;
+  readonly navigationId?: number;
   readonly initialSummary?: PullRequestListEntry | PullRequestSummary;
 };
 

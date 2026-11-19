@@ -57,7 +57,7 @@ it.effect("reuses an item's position without attempting another allocation inser
         runId: RunId.make("run:moved"),
         runOrdinal: 2,
       }),
-      first,
+      2_000_001,
     );
     assert.equal(
       yield* positions.allocate({ ...input, threadId: ThreadId.make("thread:other") }),
@@ -114,5 +114,47 @@ it.effect("inserts a saved Cursor Task step between its reserved live neighbours
     assert.equal((yield* positions.normalize(saved)).ordinal, saved.ordinal);
     assert.equal((yield* positions.normalize({ ...before, ordinal: 1 })).ordinal, before.ordinal);
     assert.equal((yield* positions.normalize(row("collision", after.ordinal))).ordinal, 1127);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps a pending steer's submission position when a preferred ordinal is supplied", () =>
+  Effect.gen(function* () {
+    const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+    const steer = {
+      id: TurnItemId.make("item:pending-steer"),
+      threadId: ThreadId.make("thread:queued-steering"),
+      runId: RunId.make("run:steer-target"),
+      ordinal: 0,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: now,
+      type: "user_message",
+      status: "pending",
+      inputIntent: "steer",
+      messageId: MessageId.make("message:pending-steer"),
+      createdBy: "user",
+      creationSource: "web",
+      text: "Queued steering input",
+      attachments: [],
+    } satisfies import("@goat/contracts").OrchestrationV2TurnItem;
+    const submitted = yield* positions.normalize(steer, 2);
+    const promoted = { ...submitted, runId: RunId.make("run:queued-steer") };
+    const request = {
+      ...TurnItemPositionStore.positionRequest(promoted),
+      runOrdinal: 3,
+      preferredOrdinal: 3_000_050,
+    };
+    assert.equal(yield* positions.allocate(request), submitted.ordinal);
+    assert.equal(
+      (yield* positions.normalize({ ...promoted, status: "completed" }, 3)).ordinal,
+      3_000_001,
+    );
   }).pipe(Effect.provide(layerTest)),
 );

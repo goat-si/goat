@@ -1,3 +1,4 @@
+import * as Semaphore from "effect/Semaphore";
 // @effect-diagnostics nodeBuiltinImport:off -- unit names and RAM size come from the host.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -201,16 +202,33 @@ export const make = Effect.gen(function* () {
           slice,
           ...properties,
         ]);
-        if (result._tag === "None" || result.value.code !== 0) {
-          yield* Effect.logWarning("Could not set resource limits on an agents slice", {
-            slice,
-            properties,
-            stderr: result._tag === "Some" ? result.value.stderr.trim() : undefined,
-          });
-        }
+        if (result._tag === "Some" && result.value.code === 0) return true;
+        yield* Effect.logWarning("Could not set resource limits on an agents slice", {
+          slice,
+          properties,
+          stderr: result._tag === "Some" ? result.value.stderr.trim() : undefined,
+        });
+        return false;
       });
-      const limits = agentSliceMemoryLimits(NodeOS.totalmem());
-      yield* setProperties(AGENT_SLICE, [`MemoryHigh=${limits.high}`, `MemoryMax=${limits.max}`]);
+      let appliedTotal: number | undefined;
+      const limitsLock = yield* Semaphore.make(1);
+      const applyMemoryLimits = limitsLock.withPermits(1)(
+        Effect.gen(function* () {
+          const total = NodeOS.totalmem();
+          const limits = agentSliceMemoryLimits(total);
+          if (
+            appliedTotal !== total &&
+            (yield* setProperties(AGENT_SLICE, [
+              `MemoryHigh=${limits.high}`,
+              `MemoryMax=${limits.max}`,
+            ]))
+          ) {
+            appliedTotal = total;
+          }
+          return limits;
+        }),
+      );
+      const limits = yield* applyMemoryLimits;
       for (const { slice, tasksMax } of AGENTS_PARENT_LIMITS)
         yield* setProperties(slice, ["CPUWeight=10", "IOWeight=10", `TasksMax=${tasksMax}%`]);
       yield* Effect.logInfo("Agent scopes are on", {
@@ -223,6 +241,7 @@ export const make = Effect.gen(function* () {
         systemctl,
         runtimeDir,
         supportsOomPolicy,
+        applyMemoryLimits,
       };
     }),
   );
@@ -418,6 +437,7 @@ export const make = Effect.gen(function* () {
       if (resolved === null) return { command, args };
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved, args });
+      yield* scope.applyMemoryLimits;
       const unit = `goat-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
       // A continuing shared scope cannot attribute a tool's OOM to one thread.
       // Clear the launch thread's previous scope instead.

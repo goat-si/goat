@@ -17,6 +17,9 @@ import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterFailureReason } from "./ProviderAdapter.ts";
 import * as Schema from "effect/Schema";
 
+/** Upper bound on one uninterrupted series of provider-native retries. */
+export const PROVIDER_RETRY_BUDGET_MS = 10 * 60 * 1000;
+
 export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
   "ContextHandoffBudgetError",
   {},
@@ -125,6 +128,7 @@ function curatedCauseMessages(cause: unknown): {
         case "ProviderSetupError":
         case "ProviderRestartRequiredError":
         case "ProviderCliMissingError":
+        case "ProviderResumeUnsupportedError":
         case "ProviderCompactionUnsupportedError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
         // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.
