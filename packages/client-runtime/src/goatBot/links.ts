@@ -1,3 +1,4 @@
+import { parseUrl } from "@goat/shared/parseUrl";
 /** A run of bot text: plain words, or a web address to open. */
 export type GoatBotTextPart =
   | { readonly kind: "text"; readonly text: string }
@@ -35,7 +36,7 @@ export function splitGoatBotTextLinks(text: string): ReadonlyArray<GoatBotTextPa
   let cursor = 0;
   for (const match of text.matchAll(URL_PATTERN)) {
     const url = trimUrl(match[0]);
-    if (!URL.canParse(url)) continue;
+    if (parseUrl(url) === null) continue;
     const start = match.index;
     if (start > cursor) parts.push({ kind: "text", text: text.slice(cursor, start) });
     parts.push({ kind: "link", text: url, url });

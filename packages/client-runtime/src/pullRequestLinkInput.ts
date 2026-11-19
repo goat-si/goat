@@ -1,3 +1,4 @@
+import { parseUrl } from "@goat/shared/parseUrl";
 import type { RepositoryIdentity } from "@goat/contracts";
 import { canonicalizeGitCafePullRequestUrl } from "@goat/source-control-definitions/registry";
 
@@ -31,8 +32,8 @@ export function parsePullRequestReference(
   }
 
   if (provider?.kind === "github") {
-    const url = URL.parse(normalizedInput);
-    const base = URL.parse(provider.baseUrl);
+    const url = parseUrl(normalizedInput);
+    const base = parseUrl(provider.baseUrl);
     if (
       url &&
       base &&
