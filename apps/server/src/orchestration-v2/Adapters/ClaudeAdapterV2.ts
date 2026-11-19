@@ -607,6 +607,7 @@ export function makeClaudeQueryOptions(input: {
   readonly canUseTool?: CanUseTool;
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly onElicitation?: ClaudeQueryOptions["onElicitation"];
+  readonly onStop?: NonNullable<ClaudeQueryOptions["hooks"]>["Stop"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
@@ -717,6 +718,7 @@ export function makeClaudeQueryOptions(input: {
         : { settings: effectiveQuerySettings }),
     ...(input.onUserDialog === undefined ? {} : { onUserDialog: input.onUserDialog }),
     ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
+    ...(input.onStop === undefined ? {} : { hooks: { Stop: input.onStop } }),
     ...(input.supportedDialogKinds === undefined
       ? {}
       : { supportedDialogKinds: input.supportedDialogKinds }),
@@ -9150,6 +9152,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             canUseTool,
             onUserDialog,
             onElicitation,
+            onStop: [
+              {
+                hooks: [
+                  () =>
+                    runPromise(
+                      Effect.gen(function* () {
+                        if (goalsByNativeThread.get(nativeThreadId)?.status !== "active") return {};
+                        const pendingWake = (yield* mcpSessions.read(turnInput.threadId))
+                          ?.hasPendingWake;
+                        return pendingWake !== undefined && (yield* pendingWake)
+                          ? { continue: false }
+                          : {};
+                      }),
+                    ),
+                ],
+              },
+            ],
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
             flagEnvironment: openedSubagentPolicy.environment,
