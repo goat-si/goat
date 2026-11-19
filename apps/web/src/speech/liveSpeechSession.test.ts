@@ -41,6 +41,36 @@ it("keeps the latest live preview and falls back after a feed failure", async ()
   expect(transport.finish).not.toHaveBeenCalled();
 });
 
+it("keeps the preview and falls back when the websocket disconnects", async () => {
+  let event: Parameters<LiveSpeechTransport["subscribe"]>[1] | undefined;
+  let disconnected: (() => void) | undefined;
+  const onFailure = vi.fn();
+  const previews: string[] = [];
+  const transport: LiveSpeechTransport = {
+    start: vi.fn(async () => ({ streamId: "fixture" })),
+    subscribe: vi.fn(async (_id, onEvent, onDisconnect) => {
+      event = onEvent;
+      disconnected = onDisconnect;
+      return () => {};
+    }),
+    feed: vi.fn(async () => {}),
+    finish: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {}),
+  };
+  const session = await startLiveSpeechSession({
+    transport,
+    locale: "en",
+    canSend: () => true,
+    onPreview: (text) => previews.push(text),
+    onFailure,
+  });
+  event?.({ type: "partial", revision: 1, committed: "kept", tentative: " preview" });
+  disconnected?.();
+  expect(onFailure).toHaveBeenCalledOnce();
+  expect(previews).toEqual(["kept preview"]);
+  expect(await session?.finish()).toBeNull();
+});
+
 it("does not send another frame after the device grant is revoked", async () => {
   let allowed = true;
   const transport: LiveSpeechTransport = {
