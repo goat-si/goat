@@ -2,10 +2,12 @@
 import * as NodeFS from "node:fs";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import { GitCommandError } from "@goat/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-import { isLinkedWorktree } from "./worktreeRemoval.ts";
+import { isLinkedWorktree, removeLinkedWorktree } from "./worktreeRemoval.ts";
 import {
   git,
   initRepoWithCommit,
@@ -13,6 +15,54 @@ import {
   makeTmpDir,
   writeTextFile,
 } from "./testing/gitFixture.ts";
+
+it.effect("reports a failed annex link restoration and preserves the backup", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const worktree = path.join(yield* makeTmpDir(), "annex-restore");
+    yield* driver.createWorktree({
+      cwd,
+      path: worktree,
+      refName: initialBranch,
+      newRefName: "annex-restore",
+    });
+    const gitFile = path.join(worktree, ".git");
+    const admin = yield* git(worktree, ["rev-parse", "--absolute-git-dir"]);
+    yield* fs.remove(gitFile);
+    yield* fs.symlink(admin, gitFile);
+    let backup = "";
+    const failingFs = FileSystem.FileSystem.of({
+      ...fs,
+      rename: (from, to) => {
+        if (to === gitFile && path.basename(from) === "git-link") {
+          backup = from;
+          return fs.rename(`${from}-missing`, to);
+        }
+        return fs.rename(from, to);
+      },
+    });
+    const result = yield* removeLinkedWorktree({
+      operation: "test",
+      cwd,
+      worktreePath: worktree,
+      force: false,
+      execute: driver.execute,
+      run: () =>
+        Effect.fail(
+          new GitCommandError({ operation: "test", command: "git", cwd, detail: "refused" }),
+        ),
+    }).pipe(Effect.provideService(FileSystem.FileSystem, failingFs), Effect.result);
+    assert.isTrue(Result.isFailure(result));
+    if (Result.isFailure(result)) assert.include(result.failure.detail, backup);
+    assert.isNotEmpty(backup);
+    assert.isTrue(yield* fs.exists(backup));
+    assert.isTrue(NodeFS.lstatSync(backup).isSymbolicLink());
+  }).pipe(Effect.provide(layerTest)),
+);
 
 it.effect("keeps the annex symlink on refusal and removes a verified annex worktree", () =>
   Effect.gen(function* () {

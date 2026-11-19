@@ -96,6 +96,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
+import { makeCachedGitConfigReader } from "../vcs/gitConfigReadCache.ts";
 import { makeCheckedOutPullRequest } from "./checkedOutPullRequest.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
@@ -327,7 +328,9 @@ function toPullRequestHeadRemoteInfo(pr: {
 
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
-  const readRemoteUrl = (cwd: string, name: string) => readFirstFetchUrl(gitCore, cwd, name);
+  const readRemoteUrl = yield* makeCachedGitConfigReader((cwd, name) =>
+    readFirstFetchUrl(gitCore, cwd, name),
+  );
   const checkedOutPullRequest = makeCheckedOutPullRequest(gitCore);
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
