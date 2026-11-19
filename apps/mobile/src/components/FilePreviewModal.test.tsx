@@ -256,3 +256,33 @@ it("passes a resolved iOS document to Quick Look even when the gallery is availa
     await act(async () => root.unmount());
   }
 });
+
+it("uses explicit open attempts when the caller keeps the same source object", async () => {
+  harness.progressive = false;
+  harness.finished = false;
+  harness.refresh.mockReset().mockResolvedValue("https://signed.test/attachment.png");
+  const source: FilePreviewItem = {
+    kind: "image",
+    environmentId: EnvironmentId.make("environment"),
+    resource: { _tag: "media-file", threadId: ThreadId.make("thread"), path: "attachment.png" },
+  };
+  const root = createRoot(document.createElement("div"));
+  const render = (attemptId: number) =>
+    act(async () =>
+      root.render(
+        <FilePreviewModal source={source} attemptId={attemptId} onRequestClose={() => {}} />,
+      ),
+    );
+  try {
+    await render(1);
+    await render(2);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    harness.finished = true;
+    await render(2);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    await render(3);
+    expect(harness.refresh).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

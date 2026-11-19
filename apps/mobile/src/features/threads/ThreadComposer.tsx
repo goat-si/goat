@@ -212,7 +212,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
 
-  const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
+  const [file, setFile] = useState({ source: null as FilePreviewSource | null, attemptId: 0 });
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
   const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerDraftKey = props.draftKey ?? composerOwnerKey;
@@ -409,16 +409,16 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const onPressPreview = (source: FilePreviewSource) => {
     wasExpandedBeforePreviewRef.current = isFocused;
     setPreviewVideo(null);
-    setPreviewFile(
-      (current) =>
-        current ?? {
-          ...source,
-          gallery: filePreviewGallery(source, composerImageGallery(draftAttachments)),
-        },
-    );
+    setFile((current) => ({
+      source: current.source ?? {
+        ...source,
+        gallery: filePreviewGallery(source, composerImageGallery(draftAttachments)),
+      },
+      attemptId: current.attemptId + 1,
+    }));
   };
   const closePreview = () => {
-    setPreviewFile(null);
+    setFile((current) => ({ ...current, source: null }));
     setPreviewVideo(null);
     if (wasExpandedBeforePreviewRef.current) {
       setTimeout(() => {
@@ -429,7 +429,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
 
   const onPressVideo = (attachment: DraftComposerFileAttachment, sourceIdentifier: string) => {
     wasExpandedBeforePreviewRef.current = isFocused;
-    setPreviewFile(null);
+    setFile((current) => ({ ...current, source: null }));
     setPreviewVideo((current) => current ?? { type: "local", attachment, sourceIdentifier });
   };
 
@@ -1059,7 +1059,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       </Animated.View>
 
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />
-      <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
+      <FilePreviewModal {...file} onRequestClose={closePreview} />
     </Animated.View>
   );
 };

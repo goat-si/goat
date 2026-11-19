@@ -8,7 +8,7 @@ import {
   clampFileAttachmentUploadBytes,
   formatAttachmentSize,
 } from "@goat/client-runtime/state/attachments";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Platform, View } from "react-native";
 
 import {
@@ -68,7 +68,13 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
     environmentId,
     attachment: localAttachment,
   });
-  const [nativeOpen, setNativeOpen] = useState(false);
+  const [nativePreview, setNativeOpen] = useReducer(
+    ({ attemptId }: { attemptId: number }, open: boolean) => ({
+      open,
+      attemptId: open ? attemptId + 1 : attemptId,
+    }),
+    { open: false, attemptId: 0 },
+  );
   const nativeKind = nativeViewerKind(document.kind);
   const [nativeViewer, setNativeViewer] = useState<"pending" | "open" | "unavailable" | null>(
     nativeKind ? "pending" : null,
@@ -302,9 +308,10 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
           setNativeOpen(true);
         }}
       />
-      {nativeOpen && nativeSource ? (
+      {nativePreview.open && nativeSource ? (
         <FilePreviewModal
           source={nativeSource}
+          attemptId={nativePreview.attemptId}
           onRequestClose={handleNativeClose}
           onOpenError={handleNativeOpenError}
         />

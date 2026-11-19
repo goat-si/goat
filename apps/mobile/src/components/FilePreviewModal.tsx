@@ -224,6 +224,7 @@ function ResolvedFilePreview(props: {
 
 export function FilePreviewModal(props: {
   readonly source: FilePreviewSource | null;
+  readonly attemptId?: number;
   readonly onRequestClose: () => void;
 
   readonly onOpenError?: (error: unknown) => void;
@@ -266,18 +267,22 @@ export function FilePreviewModal(props: {
   const activeSource = isFocused ? props.source : null;
   const [opening, setOpening] = useState<{
     readonly source: FilePreviewSource | null;
+    readonly attemptId: number | undefined;
     readonly generation: number;
     readonly isFinished: (() => boolean) | null;
-  }>({ source: activeSource, generation: 0, isFinished: null });
-  if (opening.source !== activeSource) {
+  }>({ source: activeSource, attemptId: props.attemptId, generation: 0, isFinished: null });
+  const newAttempt = opening.attemptId !== props.attemptId;
+  if (opening.source !== activeSource || newAttempt) {
     const sameItem =
       opening.source !== null &&
       activeSource !== null &&
       filePreviewKey(opening.source) === filePreviewKey(activeSource);
     // UIKit can expose the thumbnail before its close callback reaches JS.
-    const keepOpening = sameItem && !opening.isFinished?.();
+    const requestedAgain = props.attemptId === undefined || newAttempt;
+    const keepOpening = sameItem && (!requestedAgain || !opening.isFinished?.());
     setOpening({
       source: activeSource,
+      attemptId: props.attemptId,
       generation: opening.generation + (keepOpening ? 0 : 1),
       isFinished: keepOpening ? opening.isFinished : null,
     });
