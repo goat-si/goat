@@ -43,4 +43,5 @@ export class VcsStatusBroadcaster extends Context.Service<
       input: VcsStatusSubscriptionInput,
     ) => Stream.Stream<VcsStatusStreamEvent, GitManagerServiceError>;
   }
+  // @effect-diagnostics-next-line deterministicKeys:off -- Preserve the service key across the move.
 >()("goat/vcs/VcsStatusBroadcaster") {}
