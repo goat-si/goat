@@ -28,6 +28,7 @@ import {
   type FakeDriver,
 } from "../../test/fakeEnvironment";
 import { act, fakeTimers, render } from "../../test/render";
+import "../index.css";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -43,6 +44,31 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   ...(await original()),
   trackRpcRequestSent: () => {},
 }));
+
+it("opens a side chat as a full thread when its dedicated button is used", async () => {
+  const parent = threadWithHistory("side-parent", 1);
+  const side = threadWithHistory("side-child", 1);
+  using _environment = installFakeEnvironment([
+    parent,
+    { ...side, shell: { sideChatOf: parent.id } },
+  ]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${parent.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+  await page.getByRole("button", { name: "Toggle side chat" }).click();
+  const open = page.getByRole("button", { name: "Open side chat as a full thread" });
+  await expect.element(open).toBeEnabled();
+  await open.click();
+  await vi.waitFor(() =>
+    expect(router.state.location.pathname).toBe(`/${ENVIRONMENT_ID}/${side.id}`),
+  );
+});
 
 it("suppresses middle-click paste on chat space while preserving editable and link actions", async () => {
   const thread = threadWithHistory("thread-middle-click", 1);

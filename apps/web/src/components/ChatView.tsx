@@ -250,7 +250,6 @@ import {
 } from "../state/environments";
 import {
   resolveThreadDetailRef,
-  readThreadShell,
   useEnvironmentSupportsServerBrowser,
   useProject,
   useQuietThreadProjection,
@@ -300,7 +299,7 @@ import {
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { SideChatSurface } from "./sideChat/SideChatSurface";
-import { canOpenSideChat, resolveSideChatOpen } from "./sideChat/sideChat.logic";
+import { canOpenSideChat } from "./sideChat/sideChat.logic";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -405,7 +404,6 @@ import { useGlobalAgentStore } from "../globalAgentStore";
 import type { DraftSshDestination } from "../composerDraftStore";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
-
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
@@ -867,7 +865,7 @@ export default function ChatView(props: ChatViewProps) {
   const onOpenScopedThread = (ref: ScopedThreadRef) => {
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(resolveSideChatOpen(ref, readThreadShell(ref))),
+      params: buildThreadRouteParams(ref),
     });
   };
   const workflowOpening =
@@ -3420,7 +3418,9 @@ export default function ChatView(props: ChatViewProps) {
               parentThreadLink={parentThreadLink}
               launcherThreadLink={launcherThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
-              onOpenScopedThread={onOpenScopedThread}
+              onOpenScopedThread={(ref) =>
+                void onOpenRelatedThreadStable(ref.threadId, { environmentId: ref.environmentId })
+              }
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
