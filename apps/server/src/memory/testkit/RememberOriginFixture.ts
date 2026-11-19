@@ -278,6 +278,8 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
   if (scenario === "pre-activation") {
     yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS + 1);
     yield* compactor.compact(principal());
+  } else if (scenario === "offline floor-2") {
+    yield* compactor.compactIfNeeded(principal());
   }
 
   const checkReplica = Effect.gen(function* () {

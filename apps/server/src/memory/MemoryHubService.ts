@@ -1,5 +1,4 @@
 import { withOriginCatchupPage } from "./MemoryOriginReplication.ts";
-import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
 import { projectPushReceipt } from "./MemoryTailAdmission.ts";
 import { MemoryHubSettingsSnapshot, readSettingsView } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
@@ -153,13 +152,12 @@ export const make = Effect.gen(function* () {
   const join: MemoryHubService["Service"]["join"] = Effect.fn("MemoryHubService.join")(
     function* (input, principal) {
       const request = yield* decode(M.MemoryHubJoinInput, input);
-      return yield* store.transact(
+      const joined = yield* store.transact(
         Effect.gen(function* () {
           const hub = yield* authorize(principal, request.memorySpaceId, request.environmentId);
           yield* negotiate(principal, request.features);
-          const retention = yield* prepareJoinRetention(store, principal, hub.hubEnvironmentId);
-          if (!retention.checkpointId || !retention.causalBoundary)
-            return yield* new M.MemoryHubError({ code: "bootstrap_required" });
+          const retention = yield* store.readHubRetentionTx(principal.memorySpaceId);
+          if (!retention.checkpointId || !retention.causalBoundary) return null;
           const handle = yield* store.prepareHubCheckpointTx({
             authority: authority(principal),
             checkpointId: retention.checkpointId,
@@ -177,6 +175,9 @@ export const make = Effect.gen(function* () {
           };
         }),
       );
+      if (joined) return joined;
+      yield* activity.notify;
+      return yield* new M.MemoryHubError({ code: "bootstrap_required" });
     },
   );
   const push: MemoryHubService["Service"]["push"] = Effect.fn("MemoryHubService.push")(
