@@ -1,3 +1,4 @@
+import { terminalGridCellAt } from "./terminalGridCellAt";
 import { isTerminalCopyShortcut, isTerminalPasteShortcut } from "./surfaceShortcuts";
 export { isTerminalCopyShortcut } from "./surfaceShortcuts";
 import { resolveEventKeys } from "@goat/shared/keybindings";
@@ -80,28 +81,6 @@ function terminalScrollbarOffsetAtPointer(
   if (travel === 0) return 0;
   const thumbTop = Math.max(0, Math.min(pointerY - pointerOffset, travel));
   return Math.round((thumbTop / travel) * geometry.maxOffset);
-}
-
-function terminalGridCellAt(options: {
-  bounds: { left: number; top: number };
-  clientX: number;
-  clientY: number;
-  cols: number;
-  rows: number;
-  metrics: Pick<GhosttyCellMetrics, "width" | "height">;
-  padding: number;
-  originY: number;
-}): { x: number; y: number } | null {
-  const { bounds, clientX, clientY, cols, rows, metrics, padding, originY } = options;
-  const gridX = clientX - bounds.left - padding;
-  const gridY = clientY - bounds.top - originY;
-  if (gridX < 0 || gridY < 0 || gridX >= cols * metrics.width || gridY >= rows * metrics.height) {
-    return null;
-  }
-  return {
-    x: Math.floor(gridX / metrics.width),
-    y: Math.floor(gridY / metrics.height),
-  };
 }
 
 /** Primes native and Electron menu copy from the focused textarea; canvas has no DOM selection. */
@@ -440,6 +419,8 @@ export class GhosttyTerminalSurface {
     this.requestedFontFamily = options.font?.family;
     this.fontSize = terminalFontSize(options.font?.size);
     this.installEvents();
+    // The input is mounted before the core loads, so focus can land before the listeners.
+    this.focused = document.activeElement === input;
     this.watchDevicePixelRatio();
     this.reducedMotionMedia?.addEventListener("change", this.onReducedMotionChange);
     document.fonts.addEventListener("loadingdone", this.onFontsLoaded);
@@ -996,18 +977,26 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onFocus = () => {
-    this.focused = true;
+    this.setFocused(true);
     this.cursorOn = true;
     this.requestRender();
   };
 
   private readonly onBlur = () => {
-    this.focused = false;
+    this.setFocused(false);
     this.pasteShortcutGesture = null;
     this.refreshHoveredLink();
     this.cursorOn = true;
     this.requestRender();
   };
+
+  // DOM focus events can repeat without a change; report only real transitions.
+  private setFocused(focused: boolean): void {
+    if (this.focused === focused) return;
+    this.focused = focused;
+    const data = this.core.encodeFocus(focused);
+    if (data.length > 0) this.options.onData(data);
+  }
 
   private readonly onDevicePixelRatioChange = () => {
     this.watchDevicePixelRatio();
