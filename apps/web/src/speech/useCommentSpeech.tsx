@@ -101,6 +101,15 @@ export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof us
               : `Recording on ${speech.destinationLabel}…`}
         </p>
       ) : null}
+      {voice.isVoiceActive && voice.streamingPreviewText ? (
+        <p
+          aria-live="polite"
+          aria-atomic="true"
+          className={cn(lineClassName, "text-muted-foreground")}
+        >
+          {voice.streamingPreviewText}
+        </p>
+      ) : null}
     </>
   );
 }
