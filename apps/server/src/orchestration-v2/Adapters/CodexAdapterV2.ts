@@ -5417,6 +5417,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           function* (input: {
             readonly context: ActiveCodexTurnContext;
             readonly status: OrchestrationV2ProviderTurn["status"];
+            readonly completedAt?: DateTime.Utc;
             readonly failureMessage?: string;
             readonly failureErrorInfo?: CodexErrorInfo;
             readonly providerRetry?: ActiveCodexProviderRetry;
@@ -5477,7 +5478,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ? {
                         ...failure,
                         resetAt: failureResetAt(failure, yield* Ref.get(rateLimitSnapshot), {
-                          failedAt: yield* DateTime.now,
+                          failedAt: input.completedAt ?? (yield* DateTime.now),
                           zone: codexTimeZone(sessionEnvironment),
                         }),
                       }
@@ -5579,6 +5580,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly context: ActiveCodexTurnContext;
             readonly nativeTurnId: string;
             readonly status: OrchestrationV2ProviderTurn["status"];
+            readonly completedAt?: DateTime.Utc;
             readonly failureMessage?: string;
             readonly failureErrorInfo?: CodexErrorInfo;
             readonly providerRetry?: ActiveCodexProviderRetry;
