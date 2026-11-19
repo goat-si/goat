@@ -76,11 +76,21 @@ export class GitHubCliFailedError extends Schema.TaggedError<GitHubCliFailedErro
   }
 }
 
+export class GitHubCliTimeoutError extends Schema.TaggedError<GitHubCliTimeoutError>()(
+  "GitHubCliTimeoutError",
+  { host: Schema.String, timeoutMs: Schema.Number, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `The GitHub CLI did not hand over a credential for ${this.host} within ${this.timeoutMs / 1000} seconds. The server may be overloaded; try again.`;
+  }
+}
+
 export type GitHubCredentialUnavailableError =
   | GitHubCliMissingError
   | GitHubNotSignedInError
   | GitHubHostDisabledError
-  | GitHubCliFailedError;
+  | GitHubCliFailedError
+  | GitHubCliTimeoutError;
 
 export class GitHubCredentials extends Context.Service<
   GitHubCredentials,
@@ -167,7 +177,9 @@ export const make = Effect.gen(function* () {
             : // gh exits non-zero with "no oauth token" when it has no login for the host.
               error._tag === "VcsProcessExitError"
               ? new GitHubNotSignedInError({ host, ...(account === undefined ? {} : { account }) })
-              : new GitHubCliFailedError({ host, cause: error }),
+              : error._tag === "VcsProcessTimeoutError"
+                ? new GitHubCliTimeoutError({ host, timeoutMs: error.timeoutMs, cause: error })
+                : new GitHubCliFailedError({ host, cause: error }),
         ),
         Effect.map((output) => output.stdout.trim()),
         Effect.filterOrFail(
@@ -228,7 +240,10 @@ export const make = Effect.gen(function* () {
       Exit.isSuccess(exit)
         ? TOKEN_TTL
         : Exit.findErrorOption(exit).pipe(
-              Option.exists((error) => error._tag === "GitHubCliFailedError"),
+              Option.exists(
+                (error) =>
+                  error._tag === "GitHubCliFailedError" || error._tag === "GitHubCliTimeoutError",
+              ),
             )
           ? Duration.zero
           : MISSING_TTL,
