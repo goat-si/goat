@@ -29,6 +29,7 @@ import { collectComposerPromptInlineTokens } from "../../composer-editor-mention
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { pendingDraftWork } from "./pendingDraftWork";
+import { countPreparingComposerImages } from "./preparingComposerImages";
 import {
   previewAnnotationContextRecord,
   reviewCommentContextRecord,
@@ -451,6 +452,16 @@ export function useComposerStash(input: {
         type: "info",
         title: "Still bringing attached context into this message.",
         description: "Stash again once its chip resolves.",
+      });
+      return;
+    }
+    // The snapshot only holds compressed images; a still-compressing one would land in the
+    // emptied composer instead of travelling with this entry.
+    if (countPreparingComposerImages(attachmentTargetKey) > 0) {
+      toastManager.add({
+        type: "info",
+        title: "Still compressing a pasted image.",
+        description: "Stash again once it finishes compressing.",
       });
       return;
     }
