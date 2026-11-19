@@ -16,3 +16,14 @@ export const sameMarkdownSource = (previous: MarkdownSourceProps, next: Markdown
   previous.remarkPlugins === next.remarkPlugins &&
   previous.rehypePlugins === next.rehypePlugins &&
   previous.shared === next.shared;
+
+const combinedPlugins = new WeakMap<PluggableList, WeakMap<PluggableList, PluggableList>>();
+
+export function withExtraPlugins(shared: PluggableList, extra: PluggableList): PluggableList {
+  if (extra.length === 0) return shared;
+  let byShared = combinedPlugins.get(extra);
+  if (!byShared) combinedPlugins.set(extra, (byShared = new WeakMap()));
+  let combined = byShared.get(shared);
+  if (!combined) byShared.set(shared, (combined = [...shared, ...extra]));
+  return combined;
+}
