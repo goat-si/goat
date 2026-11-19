@@ -231,7 +231,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       return Option.match(current.data, {
         onNone: () => Effect.void,
         onSome: (projection) =>
-          shouldPersistThread(projection, current.history)
+          !current.history.expanded
             ? persist(
                 snapshotToPersist(
                   snapshotSequence,
