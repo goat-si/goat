@@ -1,5 +1,6 @@
 import { isSideChatThread } from "@goat/contracts";
 import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
+import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
 import type { Thread } from "../../types";
 
 export function topLevelThreadCandidates<T extends Thread>(
@@ -13,5 +14,7 @@ export function topLevelThreadCandidates<T extends Thread>(
       !isSideChatThread(thread) &&
       thread.lineage.relationshipToParent !== "subagent",
   );
-  return foldLaunchedThreads({ visible, all: threads, now }).roots;
+  return foldLaunchedThreads({ visible, all: threads, now }).roots.filter(
+    (thread) => thread.settledOverride !== "settled" && !effectiveSnoozed(thread, { now }),
+  );
 }
