@@ -29,7 +29,7 @@ import {
 } from "./agentScope.ts";
 
 const GiB = 1024 ** 3;
-const mockMemory = vi.hoisted(() => ({ total: 16 * 1024 ** 3 }));
+const mockMemory = vi.hoisted(() => ({ total: 16 * 1024 ** 3, swapKb: 2 * 1024 ** 2 }));
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   totalmem: () => mockMemory.total,
@@ -147,7 +147,9 @@ const withFakeSystemd = <A, E>(
       Effect.provideService(FileSystem.FileSystem, {
         ...fileSystem,
         readFileString: (path, encoding) =>
-          fileSystem.readFileString(path.replace("/sys/fs/cgroup", cgroupRoot), encoding),
+          path === "/proc/meminfo"
+            ? Effect.sync(() => `SwapTotal: ${mockMemory.swapKb} kB\n`)
+            : fileSystem.readFileString(path.replace("/sys/fs/cgroup", cgroupRoot), encoding),
         writeFileString: (path, data, options) =>
           fileSystem.writeFileString(path.replace("/sys/fs/cgroup", cgroupRoot), data, options),
       }),
@@ -381,12 +383,16 @@ describe("AgentScope service", () => {
           yield* Effect.all([launch, launch, launch], { concurrency: "unbounded" });
           const grown = [`MemoryHigh=${16 * GiB}`, `MemoryMax=${18 * GiB}`];
           expect(limits()).toEqual([initial, grown, grown, grown]);
+          mockMemory.swapKb = 0;
+          yield* launch;
+          expect(limits().at(-1)).toEqual(["MemoryHigh=infinity", `MemoryMax=${18 * GiB}`]);
         }),
       { memoryLimitStatus: () => status },
     ).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           mockMemory.total = 16 * GiB;
+          mockMemory.swapKb = 2 * 1024 ** 2;
         }),
       ),
     );

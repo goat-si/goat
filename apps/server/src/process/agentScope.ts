@@ -46,9 +46,9 @@ const GiB = 1024 ** 3;
  * working. Small machines still give agents at least half of RAM before
  * throttling and three quarters before a kill.
  */
-function agentSliceMemoryLimits(totalBytes: number) {
+function agentSliceMemoryLimits(totalBytes: number, hasSwap: boolean) {
   return {
-    high: Math.max(totalBytes - 6 * GiB, Math.floor(totalBytes / 2)),
+    high: hasSwap ? Math.max(totalBytes - 6 * GiB, Math.floor(totalBytes / 2)) : "infinity",
     max: Math.max(totalBytes - 4 * GiB, Math.floor(totalBytes * 0.75)),
   };
 }
@@ -211,19 +211,25 @@ export const make = Effect.gen(function* () {
         return false;
       });
       let appliedTotal: number | undefined;
+      let appliedSwap: boolean | undefined;
       const limitsLock = yield* Semaphore.make(1);
       const applyMemoryLimits = limitsLock.withPermits(1)(
         Effect.gen(function* () {
           const total = NodeOS.totalmem();
-          const limits = agentSliceMemoryLimits(total);
+          const hasSwap = yield* fileSystem.readFileString("/proc/meminfo").pipe(
+            Effect.map((text) => /^SwapTotal:\s*0 kB$/m.exec(text) === null),
+            Effect.orElseSucceed(() => true),
+          );
+          const limits = agentSliceMemoryLimits(total, hasSwap);
           if (
-            appliedTotal !== total &&
+            (appliedTotal !== total || appliedSwap !== hasSwap) &&
             (yield* setProperties(AGENT_SLICE, [
               `MemoryHigh=${limits.high}`,
               `MemoryMax=${limits.max}`,
             ]))
           ) {
             appliedTotal = total;
+            appliedSwap = hasSwap;
           }
           return limits;
         }),
