@@ -523,4 +523,31 @@ export function registerPiToolChecks({
       assert.equal(fake.lastSpawn().env.T3CODE_THREAD_ID, THREAD_ID);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("attaches image preview paths to completed Pi reads", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, thread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "read-image",
+        toolName: "read",
+        args: { path: "/workspace/shot.png" },
+        result: { content: [{ type: "text", text: "image" }] },
+      });
+      const event = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+      );
+      if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+        return yield* Effect.die("Expected read item");
+      assert.equal(event.turnItem.viewedImagePath, "/workspace/shot.png");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }

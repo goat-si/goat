@@ -1,3 +1,4 @@
+import { piViewedImagePath } from "./viewedImagePath.ts";
 import { tokenUsageFromStats } from "./tokenUsage.ts";
 import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
 import { makeEarlyNativeWork } from "./earlyNativeWork.ts";
@@ -977,6 +978,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
         }
         const output = piToolOutput(resultRecord, toolName);
+        const viewedImagePath = piViewedImagePath(toolName, args);
         yield* emit({
           type: "turn_item.updated",
           driver,
@@ -988,6 +990,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             toolName,
             input: args ?? {},
             ...(output === undefined ? {} : { output }),
+            ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
           },
         });
         if (toolName === "subagent") {
