@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 
+import * as CodexRpc from "./_generated/meta.gen.ts";
 import * as CodexError from "./errors.ts";
 import { JsonRpcId, JsonRpcResponseEnvelope } from "./_internal/shared.ts";
 const isJsonRpcId = Schema.is(JsonRpcId);
@@ -341,7 +342,20 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
                 );
               }
 
-              return handler(request).pipe(
+              return Effect.suspend(() => handler(request)).pipe(
+                Effect.catchDefect(() =>
+                  Effect.logError("Codex request handler failed").pipe(
+                    Effect.annotateLogs({
+                      method:
+                        request.method in CodexRpc.SERVER_REQUEST_PARAMS
+                          ? request.method
+                          : "unknown",
+                    }),
+                    Effect.andThen(
+                      Effect.fail(CodexError.CodexAppServerRequestError.internalError()),
+                    ),
+                  ),
+                ),
                 Effect.matchEffect({
                   onFailure: (error) =>
                     respondError(
@@ -486,20 +500,37 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
                           duration: EXIT_STATUS_GRACE,
                           orElse: () => Effect.succeed(ended),
                         }),
+                        Effect.catchDefect((cause) =>
+                          Effect.succeed(
+                            new CodexError.CodexAppServerTransportError({
+                              operation: "read-input-stream",
+                              cause,
+                            }),
+                          ),
+                        ),
                       );
                 }),
             }),
           ),
       }),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : handleTermination(() =>
+              Effect.succeed(normalizeIncomingError(Cause.squash(cause), "read-input-stream")),
+            ),
+      ),
       Effect.forkScoped,
     );
 
     yield* Stream.fromQueue(outgoing).pipe(
       Stream.run(options.stdio.stdout()),
-      Effect.catch((error) =>
-        handleTermination(() =>
-          Effect.succeed(normalizeIncomingError(error, "write-output-stream")),
-        ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : handleTermination(() =>
+              Effect.succeed(normalizeIncomingError(Cause.squash(cause), "write-output-stream")),
+            ),
       ),
       Effect.forkScoped,
     );
