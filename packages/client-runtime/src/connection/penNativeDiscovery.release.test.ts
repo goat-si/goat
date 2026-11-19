@@ -99,6 +99,7 @@ const discover = <E>(
       removeRoute: unused,
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
+      setPenLive: unused,
       retryNow: (environmentId) => Effect.sync(() => void options.retried?.push(environmentId)),
       reconnect: unused,
       setEnabled: unused,
