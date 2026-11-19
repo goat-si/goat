@@ -1081,7 +1081,16 @@ export const layer: Layer.Layer<
             terminal.status !== "completed" &&
             !childTurnsContinue(terminal)
           ) {
-            return true;
+            if (terminal.status !== "failed" || (yield* Ref.get(providerThreadOwnerLost))) {
+              return true;
+            }
+            if (input.session.hasPendingBackgroundWorkForThread !== undefined) {
+              const pending = yield* input.session
+                .hasPendingBackgroundWorkForThread(yield* Ref.get(latestProviderThread))
+                .pipe(Effect.catchCause(() => Effect.succeed(false)));
+              if (pending) return false;
+            }
+            return !(rootSnapshotPendingWork && (yield* pendingSnapshotHold.holds()));
           }
           // Newly owned items depend on adapters emitting a non-terminal event before the root
           // terminal. Owner loss (a newer run claimed lastRunOrdinal) must not close this stream
@@ -1373,7 +1382,9 @@ export const layer: Layer.Layer<
           if (event.type === "provider_thread.updated") {
             if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
               yield* Ref.set(latestProviderThread, event.providerThread);
-              rootSnapshotPendingWork = event.pendingBackgroundWork === true;
+              rootSnapshotPendingWork =
+                event.pendingBackgroundWork === true ||
+                (event.providerThread.pendingBackgroundTasks?.length ?? 0) > 0;
             } else if (event.providerThread.id !== input.providerThread.id) {
               if (event.pendingBackgroundWork === true) {
                 const id = event.providerThread.id;
