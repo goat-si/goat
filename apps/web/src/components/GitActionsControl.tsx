@@ -144,7 +144,7 @@ interface RunGitActionWithToastInput {
   filePaths?: string[];
 }
 
-export default function GitActionsControl({
+function CheckoutGitActionsControl({
   presentation = "toolbar",
   gitCwd,
   activeThreadRef,
@@ -1343,4 +1343,11 @@ export default function GitActionsControl({
       </Dialog>
     </>
   );
+}
+
+export default function GitActionsControl(
+  props: React.ComponentProps<typeof CheckoutGitActionsControl>,
+) {
+  const checkoutKey = JSON.stringify([props.activeThreadRef?.environmentId ?? null, props.gitCwd]);
+  return <CheckoutGitActionsControl key={checkoutKey} {...props} />;
 }
