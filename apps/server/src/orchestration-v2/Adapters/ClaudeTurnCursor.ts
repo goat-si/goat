@@ -12,3 +12,9 @@ export const claudeTurnCursor = (turn: OrchestrationV2ProviderTurn): string | nu
     ? ref.nativeId
     : null;
 };
+
+export const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
+  turn.status === "completed" ||
+  turn.status === "interrupted" ||
+  turn.status === "failed" ||
+  turn.status === "cancelled";

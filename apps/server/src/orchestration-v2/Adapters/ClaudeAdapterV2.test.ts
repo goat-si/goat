@@ -2024,6 +2024,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* start("/unrestricted");
         assert.equal(harness.getOpenedOptions()?.permissionMode, "bypassPermissions");
         assert.equal(harness.getOpenedOptions()?.allowDangerouslySkipPermissions, true);
+        const removal = yield* Effect.promise(() =>
+          harness.getOpenedOptions()!.canUseTool!(
+            "Bash",
+            { command: "rm -rf target" },
+            {
+              signal: new AbortController().signal,
+              toolUseID: "removal-check",
+              requestId: "removal-check",
+              decisionReason: "Claude Code can't rule out a dangerous removal.",
+            },
+          ),
+        );
+        assert.equal(removal.behavior, "deny");
         // Forwarded asks (including ask rules and settings fallback) still need a decision
         // before queued init/status frames arrive.
         for (const { phase, frame } of [
