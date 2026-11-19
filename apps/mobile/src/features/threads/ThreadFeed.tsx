@@ -1,4 +1,4 @@
-import { feedHeaderHidden } from "./thread-feed-landing";
+import { feedHasLanded, feedHeaderHidden } from "./thread-feed-landing";
 import { initialFeedViewportWidth } from "./thread-feed-initial-width";
 import { worktreeSetupPresentation } from "./worktree-setup-state";
 import { HumanHandoffCard } from "./HumanHandoffCard";
@@ -2456,6 +2456,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   };
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
+    reportLanding(loadedListKeyRef.current === listMountKey);
     // Re-arm follow only at the actual end; the broader threshold can reclaim upward drags during streaming.
     const listState = listRef.current?.getState();
     if (listState) {
@@ -2475,6 +2476,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const handleScrollBeginDrag = () => {
     clearUserScrollSettle();
     userScrollSessionRef.current = true;
+    setLandedListKey(listMountKey);
     cancelReflow();
     // Pause before the first scroll event. Otherwise a stream update can run
     // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
@@ -2523,6 +2525,10 @@ export const ThreadFeed = memo(function ThreadFeed({
   // the jump unfolds a run hiding the message and stops following the end, so
   // the committed list holds the target row with end maintenance off.
   const [loadedListKey, setLoadedListKey] = useState<string | null>(null);
+  const [landedListKey, setLandedListKey] = useState<string | null>(null);
+  const landingFallback = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
   const { jumpToMessageId } = props;
   const jumpReady = !!jumpToMessageId && loadedListKey === `${feedThreadKey}:filled`;
   const presentedFeed = appendGuestPendingMessages(
@@ -2553,7 +2559,17 @@ export const ThreadFeed = memo(function ThreadFeed({
   // current overlay height before the scroll integration's next reaction;
   // on Android the declarative contentInset floor covers this same window.
   const listMountKey = `${feedThreadKey}:${presentedFeed.some((entry) => entry.type !== "thinking") ? "filled" : "empty"}`;
-  const settling = feedHeaderHidden(presentedFeed.length > 0, loadedListKey === listMountKey);
+  const settling = feedHeaderHidden(presentedFeed.length > 0, landedListKey === listMountKey);
+  // oxlint-disable-next-line goat/react-effect-budget -- A remounted list must cancel its pending reveal fallback.
+  useEffect(
+    () => () => {
+      if (landingFallback.current?.key === listMountKey) {
+        clearTimeout(landingFallback.current.timer);
+        landingFallback.current = null;
+      }
+    },
+    [listMountKey],
+  );
   const { contentInsetEndAdjustment } = props;
   const attachList = (list: LegendListRef | null) => {
     listRef.current = list;
@@ -2564,6 +2580,22 @@ export const ThreadFeed = memo(function ThreadFeed({
     ? presentedFeed.findIndex((entry) => entry.type === "message" && entry.id === jumpToMessageId)
     : null;
   const followsEnd = endFollowEnabled && !jumpReady;
+  const reportLanding = (loaded: boolean) => {
+    const state = listRef.current?.getState();
+    if (
+      state &&
+      feedHasLanded({
+        loaded,
+        distanceFromEnd: Math.max(0, state.contentLength - state.scrollLength - state.scroll),
+        followsEnd,
+        jumping: !!jumpToMessageId,
+      })
+    ) {
+      setLandedListKey(listMountKey);
+      if (landingFallback.current !== null) clearTimeout(landingFallback.current.timer);
+      landingFallback.current = null;
+    }
+  };
   const landJump = useEffectEvent((index: number) => {
     if (index !== -1) {
       setEndFollow(false);
@@ -3063,7 +3095,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             ref={attachList}
             // LegendList cannot see adjustedContentInset; remount so initial positioning waits for UIKit attachment.
             key={listMountKey}
-            style={{ flex: 1 }}
+            style={settling ? { flex: 1, opacity: 0 } : { flex: 1 }}
             // RN 0.81+ drops inset-area touches (facebook/react-native#54123), making blank post-send space unscrollable.
             applyWorkaroundForContentInsetHitTestBug
             {...(Platform.OS === "ios" ? { ScrollViewComponent: ThreadFeedScrollView } : {})}
@@ -3155,10 +3187,17 @@ export const ThreadFeed = memo(function ThreadFeed({
             onLoad={() => {
               loadedListKeyRef.current = listMountKey;
               setLoadedListKey(listMountKey);
+              if (landingFallback.current !== null) clearTimeout(landingFallback.current.timer);
+              landingFallback.current = {
+                key: listMountKey,
+                timer: setTimeout(() => setLandedListKey(listMountKey), 1000),
+              };
+              reportLanding(true);
             }}
             // Row positions start below the header; the reflow anchor converts between them.
             onMetricsChange={(metrics) => {
               listHeaderSizeRef.current = metrics.headerSize;
+              reportLanding(loadedListKeyRef.current === listMountKey);
             }}
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
