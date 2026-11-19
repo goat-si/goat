@@ -82,3 +82,19 @@ export function appendToolContentText(content: unknown, text: string): unknown[]
   }
   return next;
 }
+
+export const TOOL_CALL_CONTENT_MAX_CHARS = 8_000;
+export const TOOL_CALL_CONTENT_TRUNCATION_MARKER = "[Earlier output truncated]\n\n";
+
+/** The tail to keep, or undefined when the text fits or an adapter already bounded it. */
+export function retainedToolCallOutputTail(text: string): string | undefined {
+  if (
+    text.length <= TOOL_CALL_CONTENT_MAX_CHARS ||
+    (text.startsWith(TOOL_CALL_CONTENT_TRUNCATION_MARKER) &&
+      text.length <= TOOL_CALL_CONTENT_MAX_CHARS + TOOL_CALL_CONTENT_TRUNCATION_MARKER.length)
+  ) {
+    return undefined;
+  }
+  // A tail starting inside a surrogate pair is invalid Unicode.
+  return text.slice(-TOOL_CALL_CONTENT_MAX_CHARS).replace(/^[\uDC00-\uDFFF]/u, "");
+}
