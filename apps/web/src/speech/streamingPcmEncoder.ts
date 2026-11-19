@@ -1,4 +1,4 @@
-import { VOICE_STREAM_SAMPLE_RATE_HZ } from "@goat/contracts";
+import { VOICE_STREAM_MAX_AUDIO_BYTES, VOICE_STREAM_SAMPLE_RATE_HZ } from "@goat/contracts";
 
 const FRAME_BYTES = VOICE_STREAM_SAMPLE_RATE_HZ * 2;
 const MIN_INPUT_SAMPLE_RATE_HZ = 8_000;
@@ -54,7 +54,10 @@ export class StreamingPcmEncoder {
   }
 
   private drain(final: boolean) {
-    const target = Math.max(1, Math.round(this.inputCount / this.ratio));
+    const target = Math.min(
+      VOICE_STREAM_MAX_AUDIO_BYTES / 2,
+      Math.max(1, Math.round(this.inputCount / this.ratio)),
+    );
     while (this.outputCount < target) {
       const source = this.outputCount * this.ratio;
       const leftIndex = Math.floor(source);

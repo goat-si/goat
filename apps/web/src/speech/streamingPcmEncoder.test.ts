@@ -1,6 +1,16 @@
 import { expect, it } from "vite-plus/test";
-import { encodeMonoPcm16Wav } from "@goat/contracts";
+import { encodeMonoPcm16Wav, VOICE_STREAM_MAX_AUDIO_BYTES } from "@goat/contracts";
 import { StreamingPcmEncoder } from "./streamingPcmEncoder";
+
+it("caps live audio at five minutes when the last capture buffer crosses the limit", () => {
+  let bytes = 0;
+  const encoder = new StreamingPcmEncoder(16_000, (frame) => {
+    bytes += frame.byteLength;
+  });
+  encoder.push(new Float32Array(VOICE_STREAM_MAX_AUDIO_BYTES / 2 + 256));
+  encoder.finish();
+  expect(bytes).toBe(VOICE_STREAM_MAX_AUDIO_BYTES);
+});
 
 it("resamples continuously across input chunks and flushes the final partial frame", () => {
   const input = Float32Array.from({ length: 4_411 }, (_, index) => Math.sin(index / 19) * 0.5);
