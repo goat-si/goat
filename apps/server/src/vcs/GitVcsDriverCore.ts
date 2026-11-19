@@ -1,4 +1,4 @@
-import { makeRemoteRefContainsHead } from "./gitPushDestinationChecks.ts";
+import { makeRemoteRefContainsHead, pushesOnlyToFetchUrl } from "./gitPushDestinationChecks.ts";
 import { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 export { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
@@ -2299,30 +2299,38 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const destination = yield* resolvePushDestination(cwd, branch, details.hasUpstream);
     if (hasNoLocalDelta && details.hasUpstream && destination?.upstream?.remoteName !== ".") {
       if (!destination?.pushRemote) {
-        return {
-          status: "skipped_up_to_date" as const,
-          branch,
-          ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
-        };
-      }
-      const { pushRemote, branchName } = destination;
-      const pushRemoteRef = `${pushRemote}/${branchName}`;
-      // The local ref can be stale when the branch was deleted or rewound elsewhere.
-      const pushRemoteHasHead = yield* fetchRemoteTrackingBranch({
-        cwd,
-        remoteName: pushRemote,
-        remoteBranch: branchName,
-      }).pipe(
-        Effect.andThen(remoteRefContainsHead(cwd, pushRemoteRef)),
-        Effect.orElseSucceed(() => false),
-      );
-      if (pushRemoteHasHead) {
-        return {
-          status: "skipped_up_to_date" as const,
-          branch,
-          upstreamBranch: pushRemoteRef,
-          pushRemote,
-        };
+        if (
+          !destination ||
+          (yield* pushesOnlyToFetchUrl(runGitStdout, cwd, destination.remoteName))
+        ) {
+          return {
+            status: "skipped_up_to_date" as const,
+            branch,
+            ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
+          };
+        }
+      } else {
+        const { pushRemote, branchName } = destination;
+        const pushRemoteRef = `${pushRemote}/${branchName}`;
+        // The local ref can be stale when the branch was deleted or rewound elsewhere.
+        const pushRemoteHasHead =
+          (yield* pushesOnlyToFetchUrl(runGitStdout, cwd, pushRemote)) &&
+          (yield* fetchRemoteTrackingBranch({
+            cwd,
+            remoteName: pushRemote,
+            remoteBranch: branchName,
+          }).pipe(
+            Effect.andThen(remoteRefContainsHead(cwd, pushRemoteRef)),
+            Effect.orElseSucceed(() => false),
+          ));
+        if (pushRemoteHasHead) {
+          return {
+            status: "skipped_up_to_date" as const,
+            branch,
+            upstreamBranch: pushRemoteRef,
+            pushRemote,
+          };
+        }
       }
     } else if (hasNoLocalDelta) {
       const comparableBaseBranch = yield* resolveBaseBranchForNoUpstream(cwd, branch).pipe(
@@ -2338,7 +2346,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
         // The configured diff base can contain HEAD while the publish branch is still behind.
         if (
-          yield* remoteRefContainsHead(cwd, `${destination.remoteName}/${destination.branchName}`)
+          (yield* remoteRefContainsHead(
+            cwd,
+            `${destination.remoteName}/${destination.branchName}`,
+          )) &&
+          (yield* pushesOnlyToFetchUrl(runGitStdout, cwd, destination.remoteName))
         ) {
           return {
             status: "skipped_up_to_date" as const,

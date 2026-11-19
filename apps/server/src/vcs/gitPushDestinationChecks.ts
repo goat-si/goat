@@ -23,3 +23,36 @@ export function makeRemoteRefContainsHead(
 
   return remoteRefContainsHead;
 }
+
+export const pushesOnlyToFetchUrl = Effect.fn("GitVcsDriver.pushesOnlyToFetchUrl")(
+  function* (
+    runGitStdout: (
+      operation: string,
+      cwd: string,
+      args: readonly string[],
+    ) => Effect.Effect<string, GitCommandError>,
+    cwd: string,
+    remoteName: string,
+  ) {
+    const [fetchUrl, pushUrls] = yield* Effect.all([
+      runGitStdout("GitVcsDriver.pushesOnlyToFetchUrl.fetchUrl", cwd, [
+        "remote",
+        "get-url",
+        "--",
+        remoteName,
+      ]),
+      runGitStdout("GitVcsDriver.pushesOnlyToFetchUrl.pushUrls", cwd, [
+        "remote",
+        "get-url",
+        "--push",
+        "--all",
+        "--",
+        remoteName,
+      ]),
+    ]);
+    return (
+      fetchUrl.endsWith("\n") && !fetchUrl.slice(0, -1).includes("\n") && pushUrls === fetchUrl
+    );
+  },
+  Effect.orElseSucceed(() => false),
+);
