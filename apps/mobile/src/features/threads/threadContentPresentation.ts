@@ -1,3 +1,4 @@
+import type { EnvironmentThreadStatus } from "@goat/client-runtime/state/threads";
 import { type EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 
 export type ThreadContentPresentation =
@@ -44,4 +45,13 @@ export function projectThreadContentPresentation(input: {
     title: "Messages not cached",
     detail: "Reconnect this environment to load the conversation.",
   };
+}
+
+export function threadSyncStatusLabel(
+  status: EnvironmentThreadStatus,
+  presentation: ThreadContentPresentation["kind"],
+): string | null {
+  if (status !== "empty" && status !== "cached" && status !== "synchronizing") return null;
+  if (presentation === "ready") return "Syncing messages…";
+  return presentation === "loading" ? "Loading messages…" : null;
 }
