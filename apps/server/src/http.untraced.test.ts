@@ -68,3 +68,41 @@ it.effect("keeps signed asset and upload URLs out of HTTP server spans", () =>
     expect(serverSpans).toEqual(["GET", "GET", "GET"]);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("starts an independent root trace for each incoming request", () =>
+  Effect.gen(function* () {
+    const requestSpans: Array<Tracer.NativeSpan> = [];
+    const layerTracer = Layer.succeed(
+      Tracer.Tracer,
+      Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          if (options.kind === "server") requestSpans.push(span);
+          return span;
+        },
+      }),
+    );
+    const routes = Layer.effectDiscard(
+      Effect.gen(function* () {
+        yield* (yield* HttpRouter.HttpRouter).add(
+          "GET",
+          "/api/environment",
+          HttpServerResponse.empty(),
+        );
+      }),
+    );
+    const services = yield* Layer.build(
+      HttpRouter.serve(routes, { disableListenLog: true, disableLogger: true }).pipe(
+        ServerHttp.withRootRequestSpans,
+        Layer.provideMerge(layerTestLoopback),
+      ),
+    ).pipe(Effect.withSpan("server.lifetime"), Effect.provide(layerTracer));
+    const client = Context.get(services, HttpClient.HttpClient);
+    for (let i = 0; i < 2; i++)
+      yield* client
+        .execute(HttpClientRequest.get("/api/environment"))
+        .pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
+    expect(requestSpans.map((span) => span.parent._tag)).toEqual(["None", "None"]);
+    expect(new Set(requestSpans.map((span) => span.traceId)).size).toBe(2);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

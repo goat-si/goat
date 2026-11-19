@@ -17,6 +17,7 @@ import { isDevProxiedPath } from "@goat/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@goat/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@goat/shared/observability";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as ByteSize from "effect/ByteSize";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { cast } from "effect/Function";
 import {
   HttpClient,
@@ -554,6 +556,16 @@ export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) =>
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(untracedRequest);
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
+
+export const withRootRequestSpans = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
+  Layer.fromBuild((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.updateContext(
+        (context: Context.Context<R>) =>
+          Context.omit(Tracer.ParentSpan)(context) as Context.Context<R>,
+      ),
+    ),
+  );
 
 export const layerAssetRoute = HttpRouter.add(
   "GET",
