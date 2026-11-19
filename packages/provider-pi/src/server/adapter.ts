@@ -15,7 +15,7 @@ import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
-import { piForkBoundary, type PiForkBoundary } from "./forkBoundary.ts";
+import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 import { piQuestion, piUiResponse } from "./extensionDialog.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
