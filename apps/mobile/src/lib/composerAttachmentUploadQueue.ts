@@ -241,12 +241,22 @@ export function createComposerAttachmentUploadQueue(options: {
     );
 
   const scope = Scope.makeUnsafe();
+  const stateOwners = new Map<string, object>();
   const uploads = Effect.runSync(
     Scope.provide(scope)(
       RcMap.make({
         lookup: Effect.fn("ComposerAttachmentUploads.lookup")(function* (key: UploadKey) {
+          const owner = {};
+          stateOwners.set(key.id, owner);
           setState(key.id, { status: "uploading", progress: 0 });
-          yield* Effect.addFinalizer(() => Effect.sync(() => setState(key.id, undefined)));
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              if (stateOwners.get(key.id) === owner) {
+                stateOwners.delete(key.id);
+                setState(key.id, undefined);
+              }
+            }),
+          );
           const fiber = yield* Effect.forkScoped(transfer(key, transfers.get(key.id)));
           transfers.set(key.id, fiber);
           running.add(fiber);
@@ -286,23 +296,30 @@ export function createComposerAttachmentUploadQueue(options: {
     }
   }
 
+  function retryFailed(environmentId: EnvironmentId, attachmentId: string) {
+    const id = composerAttachmentUploadKey(environmentId, attachmentId);
+    if (states[id]?.status !== "failed") return;
+    Effect.runSync(RcMap.invalidate(uploads, new UploadKey(id, null)));
+    release(id);
+    sync(requested);
+  }
+
   return {
     sync,
     /** Uploads the attachment, joining its running upload when there is one. */
     upload(
       request: ComposerAttachmentUploadRequest,
     ): Effect.Effect<string, ComposerAttachmentUploadError> {
-      return disposed
-        ? Effect.fail(uploadError(new Error("Upload cancelled.")))
-        : RcMap.get(uploads, UploadKey.of(request)).pipe(Effect.flatMap(Fiber.join), Effect.scoped);
+      return Effect.suspend(() => {
+        if (disposed) return Effect.fail(uploadError(new Error("Upload cancelled.")));
+        retryFailed(request.environmentId, request.attachment.id);
+        return RcMap.get(uploads, UploadKey.of(request)).pipe(
+          Effect.flatMap(Fiber.join),
+          Effect.scoped,
+        );
+      });
     },
-    retry(environmentId: EnvironmentId, attachmentId: string) {
-      const id = composerAttachmentUploadKey(environmentId, attachmentId);
-      if (states[id]?.status !== "failed") return;
-      Effect.runSync(RcMap.invalidate(uploads, new UploadKey(id, null)));
-      release(id);
-      sync(requested);
-    },
+    retry: retryFailed,
     async settled() {
       while (running.size > 0) {
         await Effect.runPromise(Fiber.awaitAll([...running]));
