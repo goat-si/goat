@@ -6514,9 +6514,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const launch = taskLaunches.remember(
               message.task_id,
               message.tool_use_id,
-              message.tool_use_id === undefined || input.activeContext === null
+              message.tool_use_id === undefined
                 ? undefined
-                : findToolCall(input.activeContext, message.tool_use_id),
+                : (input.activeContext?.toolCalls.get(message.tool_use_id) ??
+                    subagentToolCalls.get(message.tool_use_id)),
             );
             if (message.is_backgrounded === false) return false;
             yield* upsertPendingBackgroundTask(input.nativeThreadId, {
