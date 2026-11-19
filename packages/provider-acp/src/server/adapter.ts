@@ -20,6 +20,7 @@ import {
   acpTurnStartShouldPreserveContinuation,
   acpPostSettleMonitorPromptShouldSuppress,
   acpCompletedTurnShouldTerminalizeTool,
+  isAcpMonitorChatter,
 } from "./wakeEvidence.ts";
 export {
   acpPostSettleWakeEvidence,
@@ -4167,10 +4168,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               for (const lateBackgroundMutation of lateBackgroundMutations) {
                 yield* applyLateBackgroundMutation(notification.sessionId, lateBackgroundMutation);
               }
-              const lateMonitorChatter =
-                /<monitor-event\b/i.test(text) ||
-                /Monitor\s+["']?[0-9a-f-]{8,}["']?\s+ended/i.test(text);
-              if (lateBackgroundMutations.length === 0 && !lateMonitorChatter) {
+              if (lateBackgroundMutations.length === 0 && !isAcpMonitorChatter(text)) {
                 yield* appendLoadedHistory(
                   notification,
                   update.sessionUpdate === "user_message_chunk"
