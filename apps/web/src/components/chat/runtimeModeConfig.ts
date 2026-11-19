@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import type { RuntimeMode } from "@goat/contracts";
 import {
   type IconComponent,
@@ -12,25 +13,31 @@ export const runtimeModeConfig: Record<
   { label: string; description: string; icon: IconComponent }
 > = {
   "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
+    label: msg("Supervised"),
+    description: msg("Ask before commands and file changes."),
     icon: LockIcon,
   },
   "auto-accept-edits": {
-    label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
+    label: msg("Auto-accept edits"),
+    description: msg("Auto-approve edits, ask before other actions."),
     icon: PenLineIcon,
   },
   auto: {
-    label: "Auto",
-    description: "Supported providers approve routine actions; others still ask.",
+    label: msg("Auto"),
+    description: msg("Supported providers approve routine actions; others still ask."),
     icon: SparklesIcon,
   },
   "full-access": {
-    label: "Full access",
-    description: "Allow commands and edits without prompts.",
+    label: msg("Full access"),
+    description: msg("Allow commands and edits without prompts."),
     icon: ShieldAlertIcon,
   },
 };
 
 export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
+
+const options = runtimeModeOptions.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
+
+export function getCompatibleRuntimeModeOptions(supported: readonly RuntimeMode[] | undefined) {
+  return supported?.length ? options.filter(({ mode }) => supported.includes(mode)) : options;
+}

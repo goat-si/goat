@@ -1,24 +1,29 @@
+import { useGT } from "gt-react";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 /** Snooze menu choices and the usage-limit stop behavior, side by side in General settings. */
 export function SnoozeSettingsSections() {
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
     <>
-      <SettingsSection id="snooze" title="Snooze">
+      <SettingsSection id="snooze" title={gt("Snooze")}>
         <SnoozePresetsRow />
       </SettingsSection>
 
-      <SettingsSection id="usage-limits" title="Usage limits">
+      <SettingsSection id="usage-limits" title={gt("Usage limits")}>
         <SettingsRow
           serverScoped
-          {...searchableSetting("auto-resume-limited-threads")}
-          description="Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread."
+          {...setting("auto-resume-limited-threads")}
+          description={gt(
+            "Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread.",
+          )}
           settingKeys={["autoResumeLimitedThreads"]}
           control={
             <ScopedSwitch
@@ -27,14 +32,16 @@ export function SnoozeSettingsSections() {
               onCheckedChange={(checked) =>
                 updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
               }
-              aria-label="Resume after usage limits"
+              aria-label={gt("Resume after usage limits")}
             />
           }
         />
         <SettingsRow
           serverScoped
-          {...searchableSetting("snooze-limited-threads")}
-          description="Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset."
+          {...setting("snooze-limited-threads")}
+          description={gt(
+            "Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset.",
+          )}
           settingKeys={["snoozeLimitedThreads"]}
           control={
             <ScopedSwitch
@@ -43,7 +50,7 @@ export function SnoozeSettingsSections() {
               onCheckedChange={(checked) =>
                 updateSettings({ snoozeLimitedThreads: Boolean(checked) })
               }
-              aria-label="Snooze until limits reset"
+              aria-label={gt("Snooze until limits reset")}
             />
           }
         />
