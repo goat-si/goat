@@ -227,6 +227,32 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("retains a queued Copilot answer through a full wake buffer before admission", () =>
+    Effect.gen(function* () {
+      const session = yield* openWakeReplay([
+        wakeEvent("assistant.turn_start"),
+        wakeText("agent_message_chunk", "Queued native answer."),
+        wakeMarker("continuation requested before burst"),
+        ...Array.from({ length: 300 }, (_, index) =>
+          wakeText("agent_thought_chunk", `<queued-wake-thought-${index}>`),
+        ),
+        wakeEvent("assistant.idle"),
+        wakeMarker("burst drained before admission"),
+      ]);
+      yield* session.runtime.startTurn(session.turnInput(1));
+      yield* session.throughMarker("continuation requested before burst");
+      assert.lengthOf(session.offers, 1);
+      yield* session.throughMarker("burst drained before admission");
+      assert.lengthOf(session.offers, 1);
+      yield* session.runtime.startTurn(session.turnInput(2, { continuation: true }));
+      const continuation = yield* session.until((event) => event.type === "turn.terminal");
+      const replayed = JSON.stringify(continuation);
+      assert.include(replayed, "Queued native answer.");
+      assert.notInclude(replayed, "<queued-wake-thought-0>");
+      assert.include(replayed, "<queued-wake-thought-299>");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("never steers Copilot by cancelling its prompt", () =>
     Effect.gen(function* () {
       const steering = Effect.fn("steering")(function* (config: Record<string, unknown>) {

@@ -3700,15 +3700,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             (update.sessionUpdate === "agent_message_chunk" ||
               update.sessionUpdate === "agent_thought_chunk");
           // Grok re-prompts for each post-settle monitor event; retaining them would replay the whole burst.
+          const resultBearing = acpPostSettleContinuationOfferEvidence(notification, flavor);
           let buffered = false;
           if (
             !alreadyHandledToolUpdate &&
             !isInTurnHandledAgentChatter &&
             acpPostSettleWakeShouldBuffer(notification, backgroundWorkRunning)
           ) {
-            buffered = yield* wakeBuffer.append(notification);
+            buffered = yield* wakeBuffer.append(notification, resultBearing);
           }
-          if (!acpPostSettleContinuationOfferEvidence(notification, flavor)) {
+          if (!resultBearing) {
             return {
               buffered,
               offerContinuation: false,
@@ -4010,7 +4011,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 update.sessionUpdate === "user_message_chunk" ||
                 (update.sessionUpdate === "state_update" && update.state === "running"))
             ) {
-              if (yield* wakeBuffer.append(notification)) {
+              if (
+                yield* wakeBuffer.append(
+                  notification,
+                  acpPostSettleContinuationOfferEvidence(notification, flavor),
+                )
+              ) {
                 yield* offerContinuationRun(notification.sessionId);
               }
               return;
@@ -4272,7 +4278,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.isProviderWakeNotification?.(notification) === true
           ) {
             if (hasDeferredBackgroundWork(context)) {
-              yield* wakeBuffer.append(notification);
+              yield* wakeBuffer.append(
+                notification,
+                acpPostSettleContinuationOfferEvidence(notification, flavor),
+              );
               return;
             }
             yield* finalizeTurn(context, context.promptSettledStatus ?? "completed");
