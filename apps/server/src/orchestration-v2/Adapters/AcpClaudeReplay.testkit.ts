@@ -129,6 +129,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   continuationEnabled = true,
   agentId: string | Record<string, unknown> = "claude-acp",
   replacementEntries?: ReadonlyArray<unknown>,
+  runtimeMode: "approval-required" | "full-access" = "approval-required",
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -209,7 +210,6 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   );
   const threadId = ThreadId.make("thread-claude-lifecycle");
   const modelSelection = { instanceId, model: "default" } as const;
-  const runtimeMode = "approval-required";
   const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
     runtimeMode,
     interactionMode: "default",

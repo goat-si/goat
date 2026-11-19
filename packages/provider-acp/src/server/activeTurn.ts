@@ -120,6 +120,7 @@ export interface ActiveAcpTurn {
   readonly promptWireSettled: Deferred.Deferred<void, never>;
   promptUsage: EffectAcpSchema.Usage | undefined;
   backgroundFinalizeGeneration: number;
+  replyOpen: boolean;
   lastProgressAt: number;
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
