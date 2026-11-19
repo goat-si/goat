@@ -720,7 +720,7 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       const agentPath = path.join(directory, "agent.mjs");
       const modelsPath = path.join(directory, "models.json");
       yield* fileSystem.writeFileString(agentPath, fakeAgentSource);
-      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model"]));
+      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model", "other-model"]));
       const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
 
       const instance = yield* AcpRegistryDriver.create({
@@ -753,7 +753,7 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
           Stream.runHead,
         );
 
-      const probed = yield* waitForModels(["old-model"]).pipe(
+      const probed = yield* waitForModels(["old-model", "other-model"]).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       yield* instance.snapshot.refresh;
@@ -762,7 +762,10 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
         identity.instanceId,
         normalizeAcpRegistryLiveConfiguration([], undefined, {
           currentModelId: "old-model",
-          availableModels: [{ modelId: "old-model", name: "old-model" }],
+          availableModels: [
+            { modelId: "old-model", name: "old-model" },
+            { modelId: "session-model", name: "session-model" },
+          ],
         }),
       );
       yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model", "new-model"]));

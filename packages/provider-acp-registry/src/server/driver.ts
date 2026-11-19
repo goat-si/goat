@@ -53,6 +53,10 @@ import {
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import { probeFingerprint } from "./probeFingerprint.ts";
+import {
+  acpRegistryProbeTtlMs,
+  updateAcpRegistryEnrichmentCache as updateEnrichmentCache,
+} from "./enrichmentCache.ts";
 import { modelsFromDiscovery } from "./discoveredModels.ts";
 import { makeAcpRegistryLearnedModels, type LearnedModelsCheck } from "./learnedModels.ts";
 import { environmentText, untilEnvironmentHolds } from "./environmentCheck.ts";
@@ -67,8 +71,9 @@ import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
-// Cache only successful authenticated probes so sign-in changes remain visible.
-const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
+export const updateAcpRegistryEnrichmentCache = (
+  input: Parameters<typeof updateEnrichmentCache>[0],
+) => updateEnrichmentCache(input, applyAcpRegistryLiveConfiguration);
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
@@ -163,30 +168,59 @@ export function applyAcpRegistryLiveConfiguration(
   // session/load may omit models (Kimi returns `{}`); keep the probed list
   // and apply any live option descriptors to it.
   const probedModels = provider.models.filter((model) => !model.isCustom);
-  const discovery =
-    configuration.models.length > 0
-      ? configuration
-      : {
-          ...configuration,
-          models: probedModels.map((model) => ({
-            id: model.slug,
-            name: model.name,
-            description: null,
-          })),
-          currentModelId: probedModels.find((model) => model.isDefault)?.slug ?? null,
-        };
+  // An explicit model select is authoritative; a lone fallback can be provisional.
+  const liveCatalogIsProvisional =
+    configuration.models.length === 1 &&
+    configuration.modelsFromModelSelect === false &&
+    probedModels.length > 1;
+  const useLiveCatalog =
+    configuration.models.length > 1 ||
+    (configuration.models.length === 1 && !liveCatalogIsProvisional);
+  const selectedProbedModelId =
+    configuration.currentModelId !== null &&
+    probedModels.some((model) => model.slug === configuration.currentModelId)
+      ? configuration.currentModelId
+      : (probedModels.find((model) => model.isDefault)?.slug ?? null);
+  const discovery = useLiveCatalog
+    ? configuration
+    : {
+        ...configuration,
+        models: probedModels.map((model) => ({
+          id: model.slug,
+          name: model.name,
+          description: null,
+        })),
+        currentModelId: selectedProbedModelId,
+      };
   return {
     ...snapshot,
     status: provider.enabled ? "ready" : provider.status,
     models:
-      configuration.models.length === 0 && configuration.configOptions.length === 0
-        ? provider.models
+      !useLiveCatalog && configuration.configOptions.length === 0
+        ? withAcpRegistryDefaultModel(provider.models, selectedProbedModelId)
         : modelsFromDiscovery(
             discovery,
             customModels,
             previousModels.filter((model) => !model.isCustom),
           ),
   };
+}
+
+function withAcpRegistryDefaultModel(
+  models: ReadonlyArray<ServerProviderModel>,
+  currentModelId: string | null,
+): ReadonlyArray<ServerProviderModel> {
+  if (currentModelId === null) return models;
+  let changed = false;
+  const next = models.map((model) => {
+    if (model.isCustom) return model;
+    const isDefault = model.slug === currentModelId;
+    if ((model.isDefault ?? false) === isDefault) return model;
+    changed = true;
+    const { isDefault: _previous, ...rest } = model;
+    return isDefault ? { ...rest, isDefault: true } : rest;
+  });
+  return changed ? next : models;
 }
 
 function applyAcpRegistryUrlAuthAction(
@@ -545,6 +579,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       readonly entry: {
         readonly provider: ServerProvider;
         readonly key: string;
+        readonly environmentKey: string;
         readonly expiresAt: number;
       } | null;
     }>({ generation: 0, entry: null });
@@ -588,6 +623,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       }
       const enriched = yield* enrichProvider(environment);
       if (enriched.status === "ready" && key !== null) {
+        const completedAt = yield* Clock.currentTimeMillis;
         yield* Ref.update(enrichmentCache, (current) =>
           current.generation === cacheState.generation
             ? {
@@ -595,7 +631,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 entry: {
                   provider: enriched,
                   key,
-                  expiresAt: now + PROBE_SUCCESS_TTL_MS,
+                  environmentKey: acpRegistryEnvironmentKey(
+                    acpRegistrySessionEnvironment(effectiveConfig, environment),
+                  ),
+                  expiresAt: completedAt + acpRegistryProbeTtlMs(enriched),
                 },
               }
             : current,
@@ -680,7 +719,42 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 Effect.flatMap((current) =>
                   currentEnvironment.pipe(
                     Effect.flatMap((environment) =>
-                      applyLiveConfiguration(current, configuration, environment, undefined),
+                      applyLiveConfiguration(current, configuration, environment, undefined).pipe(
+                        Effect.tap(() => {
+                          const key = acpRegistryEnvironmentKey(
+                            acpRegistrySessionEnvironment(effectiveConfig, environment),
+                          );
+                          if (
+                            configuration.environmentKey !== undefined &&
+                            configuration.environmentKey !== key
+                          ) {
+                            return Effect.void;
+                          }
+                          return Clock.currentTimeMillis.pipe(
+                            Effect.flatMap((now) =>
+                              Ref.update(enrichmentCache, (cache) => {
+                                const updated = updateAcpRegistryEnrichmentCache({
+                                  cache,
+                                  configuration,
+                                  customModels: effectiveConfig.customModels,
+                                  environmentKey: key,
+                                  now,
+                                });
+                                return cache.entry === null || updated.entry === null
+                                  ? { generation: updated.generation, entry: null }
+                                  : {
+                                      generation: updated.generation,
+                                      entry: {
+                                        ...updated.entry,
+                                        key: cache.entry.key,
+                                        environmentKey: cache.entry.environmentKey,
+                                      },
+                                    };
+                              }),
+                            ),
+                          );
+                        }),
+                      ),
                     ),
                   ),
                 ),
