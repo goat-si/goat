@@ -1,6 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { createModelSelection } from "@goat/shared/model";
+import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import { resolveMemoryModelSelection, supportsMemoryGeneration } from "@goat/shared/serverSettings";
 import { useContext, useState } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -106,7 +106,14 @@ export function MemoryGenerationSettings({
                     triggerAriaLabel="Memory model"
                     disabled={!allowed}
                     onInstanceModelChange={(instanceId, model) =>
-                      save({ memoryModelSelection: createModelSelection(instanceId, model) })
+                      save({
+                        memoryModelSelection: pickModelSelection(
+                          settings.memoryModelSelection,
+                          instanceId,
+                          model,
+                          selection,
+                        ),
+                      })
                     }
                   />
                   <TraitsPicker

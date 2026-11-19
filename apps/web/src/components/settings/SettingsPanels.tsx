@@ -21,7 +21,7 @@ import {
   type ResponseStreamingMode,
   SidebarProjectSortOrder,
 } from "@goat/contracts/settings";
-import { createModelSelection } from "@goat/shared/model";
+import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
@@ -1293,7 +1293,14 @@ export function GeneralSettingsPanel() {
                       });
                       return;
                     }
-                    saveTextGenerationModel(createModelSelection(instanceId, model));
+                    saveTextGenerationModel(
+                      pickModelSelection(
+                        mixedTextGenerationModel ? null : settings.textGenerationModelSelection,
+                        instanceId,
+                        model,
+                        mixedTextGenerationModel ? null : textGenerationModelSelection,
+                      ),
+                    );
                   }}
                 />
                 {textGenInstanceEntry ? (

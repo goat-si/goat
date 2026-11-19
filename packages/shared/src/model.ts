@@ -541,6 +541,17 @@ export function createModelSelection(
   return selections.length > 0 ? { ...base, options: selections } : base;
 }
 
+export function pickModelSelection(
+  current: ModelSelection | null | undefined,
+  instanceId: ProviderInstanceId,
+  model: string,
+  fallback?: ModelSelection | null,
+): ModelSelection {
+  if (current?.instanceId === instanceId && current.model === model) return current;
+  if (fallback?.instanceId === instanceId && fallback.model === model) return fallback;
+  return createModelSelection(instanceId, model);
+}
+
 export function resolvePromptInjectedEffort(
   caps: ModelCapabilities,
   rawEffort: string | null | undefined,

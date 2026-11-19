@@ -5,7 +5,7 @@ import {
   type ProviderInstanceId,
   type WorktreeSubmodules,
 } from "@goat/contracts";
-import { createModelSelection } from "@goat/shared/model";
+import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -220,7 +220,14 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   });
               }}
               onInstanceModelChange={(instanceId, model) =>
-                setModel(createModelSelection(instanceId, model))
+                setModel(
+                  pickModelSelection(
+                    mixedModel ? null : settings.defaultModelSelection,
+                    instanceId,
+                    model,
+                    mixedModel ? null : selection,
+                  ),
+                )
               }
             />
             {!mixedModel && !presentation.providerNote && !effortDisabledReason && activeEntry ? (
