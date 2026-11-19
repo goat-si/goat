@@ -368,23 +368,31 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(signInStep()).not.toBeNull();
   });
 
-  it("creates Oh My Pi with its approval arguments on the selected environment", async () => {
+  it.each([
+    {
+      label: "Oh My Pi",
+      id: "acpRegistry_oh_my_pi",
+      command: "omp",
+      args: ["acp", "--approval-mode", "always-ask"],
+    },
+    { label: "MiniMax Code", id: "acpRegistry_minimax_code", command: "mcode", args: ["acp"] },
+  ])("creates $label on the selected environment", async ({ label, id, command, args }) => {
     await using fixture = setup();
     await fixture.render();
-    await click("Use Oh My Pi");
+    await click(`Use ${label}`);
     await click("Next");
     await click("Add and set up");
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
-      instanceId: "acpRegistry_oh_my_pi",
+      instanceId: id,
       instance: {
         driver: "acpRegistry",
         enabled: true,
-        displayName: "Oh My Pi",
+        displayName: label,
         config: {
           source: "local",
-          commandPath: "omp",
-          commandArgs: ["acp", "--approval-mode", "always-ask"],
+          commandPath: command,
+          commandArgs: args,
         },
       },
     });

@@ -10,4 +10,15 @@ export const ACP_LOCAL_PRESETS = [
     installHint: "curl -fsSL https://omp.sh/install | sh",
     docsUrl: "https://github.com/can1357/oh-my-pi",
   },
+  {
+    id: "minimax-code",
+    label: "MiniMax Code",
+    command: "mcode",
+    args: ["acp"],
+    // MiniMax Code's ACP Registry icon, inlined for locally installed agents.
+    iconUrl:
+      "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M2%203h3l3%205%203-5h3v10h-2V6.5l-4%206-4-6V13H2V3Z%22%2F%3E%3C%2Fsvg%3E",
+    installHint: "npm install -g @minimax-ai/code",
+    docsUrl: "https://github.com/MiniMax-AI/minimax-code",
+  },
 ] as const;
