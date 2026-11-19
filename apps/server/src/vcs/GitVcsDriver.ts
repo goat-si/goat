@@ -40,6 +40,7 @@ import {
   type WorktreeSubmodules,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { privateCheckpointObjects } from "./checkpointPrivateObjects.ts";
 import { workTreeProbeResult } from "./gitRepositoryProbe.ts";
 import {
   makeGitVcsDriverCore,
@@ -878,6 +879,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly previousCheckpointRef?: VcsDriver.VcsCaptureCheckpointInput["previousCheckpointRef"];
   }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
+    // Git batch fsync nests a temporary object store and can lose private bulk packs.
+    const privateDurableWrite = [...durableWrite, "-c", "core.fsyncMethod=fsync"];
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
       const paths = yield* execute({
         operation,
@@ -904,7 +907,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
     const indexId = yield* random.uuidV4().pipe(Effect.orDie);
     const tempIndexPath = path.join(gitCommonDir, `goat-checkpoint-index-${indexId}`);
+    const { env: objectEnv, publish } = yield* privateCheckpointObjects(
+      fileSystem,
+      path,
+      gitCommonDir,
+      input.cwd,
+      operation,
+    );
     const commitEnv: NodeJS.ProcessEnv = {
+      ...objectEnv,
       GIT_INDEX_FILE: tempIndexPath,
       GIT_AUTHOR_NAME: "GOAT",
       GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
@@ -1256,7 +1267,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               args: [
                 "--literal-pathspecs",
                 ...indexConfig,
-                ...durableWrite,
+                ...privateDurableWrite,
                 ...stageConfig,
                 "add",
                 ...(sparseCheckout ? ["--sparse"] : []),
@@ -1278,7 +1289,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           // Preserve absent skipped entries, but capture present nonignored files outside the cone.
           args: [
             ...indexConfig,
-            ...durableWrite,
+            ...privateDurableWrite,
             ...stageConfig,
             "add",
             ...(sparseCheckout ? ["--sparse"] : []),
@@ -1326,6 +1337,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                     GIT_COMMON_DIR: undefined,
                     GIT_INDEX_FILE: undefined,
                     GIT_OBJECT_DIRECTORY: undefined,
+                    GIT_QUARANTINE_PATH: undefined,
                     GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
                   };
                   const exclusions: Array<string> = [];
@@ -1356,7 +1368,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const writeTreeResult = yield* execute({
         operation,
         cwd: input.cwd,
-        args: [...indexConfig, ...durableWrite, "write-tree"],
+        args: [...indexConfig, ...privateDurableWrite, "write-tree"],
         env: commitEnv,
       });
       const treeOid = writeTreeResult.stdout.trim();
@@ -1377,6 +1389,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation,
         cwd: input.cwd,
         args: ["ls-tree", "-r", "-z", treeOid],
+        env: commitEnv,
         maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
       });
       const complete =
@@ -1395,7 +1408,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         headMark,
         headMoves,
         indexConfig,
-        durableWrite,
+        durableWrite: privateDurableWrite,
         commitEnv,
       });
       // HEAD is the first parent so listAuthoredPaths can see how HEAD moved between checkpoints.
@@ -1403,7 +1416,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation,
         cwd: input.cwd,
         args: [
-          ...durableWrite,
+          ...privateDurableWrite,
           "commit-tree",
           treeOid,
           ...(capturedHead === null ? [] : ["-p", capturedHead]),
@@ -1432,6 +1445,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             operation,
             cwd: input.cwd,
             args: ["ls-tree", "-r", "--name-only", "-z", treeOid],
+            env: commitEnv,
             maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
           })
         : undefined;
@@ -1443,12 +1457,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const addedUntrackedPaths = [...new Set([...untrackedBefore, ...untrackedAfter])].filter(
         (name) => capturedPaths.has(name),
       );
+      yield* publish();
       if (input.strict) {
         // Hold HEAD's ref lock through publication so the captured parent stays current.
         const published = yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...durableWrite, "update-ref", "--stdin"],
+          args: [...privateDurableWrite, "update-ref", "--stdin"],
           stdin: `start\nverify HEAD ${capturedHead}\ncreate ${input.ref} ${commitOid}\nprepare\ncommit\n`,
           allowNonZeroExit: true,
         });
@@ -1471,12 +1486,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...durableWrite, "update-ref", input.ref, commitOid],
+          args: [...privateDurableWrite, "update-ref", input.ref, commitOid],
         });
       }
       return { snapshotRef: input.ref, commitOid, addedUntrackedPaths, complete };
     }).pipe(Effect.ensuring(cleanupTempIndex));
-  });
+  }, Effect.scoped);
 
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: (input) =>
