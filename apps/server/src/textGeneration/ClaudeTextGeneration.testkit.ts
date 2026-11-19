@@ -79,6 +79,7 @@ export function withFakeClaudeEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     argsMustContain?: string;
+    expectedTools?: string;
     settingsMustContain?: string;
     expectPrivateSettings?: boolean;
     settingsTempRoot?: string;
@@ -110,6 +111,7 @@ export function withFakeClaudeEnv<A, E, R>(
       GOAT_FAKE_CLAUDE_CHECK_SETTINGS_MODE:
         input.expectPrivateSettings && pathDelimiter !== ";" ? "1" : undefined,
       GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN: input.argsMustContain,
+      GOAT_FAKE_CLAUDE_EXPECTED_TOOLS: input.expectedTools,
       GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN: input.argsMustNotContain,
       GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN: input.stdinMustContain,
       GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,

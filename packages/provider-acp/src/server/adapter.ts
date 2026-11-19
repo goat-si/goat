@@ -718,6 +718,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         });
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
+        const configuredPolicyMode = yield* Ref.make<string | undefined>(undefined);
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
@@ -6291,6 +6292,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               selection.value === ACP_EMPTY_OPTION_VALUE ? { ...selection, value: "" } : selection,
             );
           const configOptions = yield* runtime.getConfigOptions;
+          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
+          const modeLocked = flavor.lockSessionModeToPolicy && policyMode !== undefined;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
           const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
             ACP_SESSION_MODE_OPTION_ID,
@@ -6320,6 +6323,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // Advertised values union models; skip per-model rejections instead of failing session open.
             const option = configOptions.find((candidate) => candidate.id === selection.id);
             if (
+              modeLocked &&
+              (selection.id === ACP_SESSION_MODE_OPTION_ID || option?.category === "mode")
+            )
+              continue;
+            if (
               option !== undefined &&
               option.type === "select" &&
               typeof selection.value === "string"
@@ -6342,12 +6350,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }),
             );
           }
-          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
           if (policyMode !== undefined) {
             yield* runtime.setMode(policyMode);
           }
           const modeState = yield* runtime.getModeState;
           if (
+            !modeLocked &&
             modeSelection !== undefined &&
             typeof modeSelection.value === "string" &&
             modeState?.availableModes.some((mode) => mode.id === modeSelection.value) === true &&
@@ -6398,6 +6406,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const nativeBuild = nativeBuildConfigurationBySessionId.get(startResult.sessionId);
             if (nativeBuild !== undefined) {
               if (
+                !modeLocked &&
                 nativeBuild.modeId !== undefined &&
                 effectiveModeState?.currentModeId !== nativeBuild.modeId &&
                 effectiveModeState?.availableModes.some(
@@ -6410,7 +6419,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 const option = effectiveConfigOptions.find(
                   (candidate) => candidate.type === "select" && candidate.id === saved.id,
                 );
-                if (option === undefined || option.type !== "select") continue;
+                if (
+                  option === undefined ||
+                  option.type !== "select" ||
+                  (modeLocked && option.category === "mode")
+                )
+                  continue;
                 const choices = option.options.flatMap((entry) =>
                   "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
                 );
@@ -6422,6 +6436,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
           }
           yield* validateModelSelection(modelSelection);
+          yield* Ref.set(configuredPolicyMode, flavor.sessionModeForPolicy?.(runtimePolicy));
           yield* (
             flavor.onSessionConfigurationUpdate?.(
               yield* runtime.getConfigOptions,
@@ -7065,7 +7080,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (
                 configuredSelection === null ||
                 !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
-                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode
+                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||
+                (yield* Ref.get(configuredPolicyMode)) !==
+                  flavor.sessionModeForPolicy?.(turnInput.runtimePolicy)
               ) {
                 const currentSessionSetup = yield* Ref.get(activeSessionSetup);
                 if (currentSessionSetup === null) {
