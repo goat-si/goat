@@ -77,6 +77,9 @@ describe("OpenCode replay fixtures", () => {
         const state = yield* Ref.make(emptyState);
         const nativeEvents = yield* Queue.unbounded<unknown>();
         const root = { id: "root", time: { created: 1, updated: 1 } };
+        const rootIdle = { type: "session.idle", properties: { sessionID: root.id } };
+        const wakeIdle = { ...rootIdle };
+        const wakeIdleConsumed = yield* Deferred.make<void>();
         const abortRoot = Promise.withResolvers<AbortSignal>();
         const abortChild = Promise.withResolvers<AbortSignal>();
         const unanswered = Promise.withResolvers<never>();
@@ -87,7 +90,17 @@ describe("OpenCode replay fixtures", () => {
           mcp: { add: async () => ({ data: true }) },
           event: {
             subscribe: async () => ({
-              stream: Stream.toAsyncIterable(Stream.fromQueue(nativeEvents)),
+              stream: {
+                async *[Symbol.asyncIterator]() {
+                  for await (const event of Stream.toAsyncIterable(
+                    Stream.fromQueue(nativeEvents),
+                  )) {
+                    yield event;
+                    // The adapter pulls again only after handling the previous event.
+                    if (event === wakeIdle) Deferred.doneUnsafe(wakeIdleConsumed, Effect.void);
+                  }
+                },
+              },
             }),
           },
           session: {
@@ -193,10 +206,12 @@ describe("OpenCode replay fixtures", () => {
             Stream.runHead,
             Effect.forkChild,
           );
-          const settleRoot = Queue.offer(nativeEvents, {
-            type: "session.idle",
-            properties: { sessionID: root.id },
-          }).pipe(Effect.andThen(Fiber.join(terminal)));
+          const settleRoot = Queue.offer(nativeEvents, rootIdle).pipe(
+            Effect.andThen(Fiber.join(terminal)),
+          );
+          const settleWake = Queue.offer(nativeEvents, wakeIdle).pipe(
+            Effect.andThen(Deferred.await(wakeIdleConsumed)),
+          );
           const held = scenario === "held-wake" || scenario === "held-wake-settled";
           const settlesDuringAbort =
             scenario === "root-settled" || scenario === "held-wake-settled";
@@ -234,7 +249,8 @@ describe("OpenCode replay fixtures", () => {
             })
             .pipe(Effect.result, Effect.forkChild);
           const rootSignal = yield* Effect.promise(() => abortRoot.promise);
-          if (settlesDuringAbort) yield* settleRoot;
+          const settleDuringStop = held ? settleWake : settleRoot;
+          if (settlesDuringAbort) yield* settleDuringStop;
           if (wake !== undefined)
             assert.isTrue(Option.isNone(yield* wake.dispatchIfCurrent!(Effect.void)));
           yield* TestClock.adjust("10 seconds");
@@ -248,7 +264,7 @@ describe("OpenCode replay fixtures", () => {
               "failure._tag": "ProviderAdapterInterruptTimeoutError",
               "failure.timeoutMs": 10_000,
             });
-            yield* settleRoot;
+            yield* settleDuringStop;
           }
           const childSignal = yield* Effect.promise(() => abortChild.promise);
           const replacement = yield* start(2).pipe(Effect.forkChild);
