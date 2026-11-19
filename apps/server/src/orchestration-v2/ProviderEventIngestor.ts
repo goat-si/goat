@@ -34,7 +34,7 @@ import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@goat/shared/AgentScope";
-import { withCommandActions } from "./ProviderEventCommandActions.ts";
+import { withCommandActions, compactUndefined } from "./ProviderEventCommandActions.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -277,10 +277,6 @@ export class ProviderEventIngestorV2 extends Context.Service<
   ProviderEventIngestorV2,
   ProviderEventIngestorV2Shape
 >()("goat/orchestration-v2/ProviderEventIngestor/ProviderEventIngestorV2") {}
-
-function compactUndefined<T extends Record<string, unknown>>(record: T): T {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
-}
 
 const decodeDomainEvent = Schema.decodeUnknownEffect(OrchestrationV2DomainEvent);
 

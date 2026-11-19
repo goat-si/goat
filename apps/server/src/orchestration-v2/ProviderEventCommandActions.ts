@@ -15,3 +15,7 @@ export function withCommandActions(item: OrchestrationV2TurnItem): Orchestration
     ? item
     : { ...item, commandActions };
 }
+
+export function compactUndefined<T extends Record<string, unknown>>(record: T): T {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
+}
