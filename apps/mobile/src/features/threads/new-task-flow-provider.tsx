@@ -8,7 +8,6 @@ import type {
   ProviderInteractionMode,
   ProviderOptionSelection,
   RuntimeMode,
-  ServerProvider,
 } from "@goat/contracts";
 import {
   CommandId,
@@ -25,7 +24,6 @@ import { pipe } from "effect/Function";
 import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
-import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import {
   buildModelOptions,
   groupByProvider,
@@ -86,11 +84,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { type VcsRef } from "@goat/client-runtime/state/vcs";
-import {
-  buildHomeProjectScopes,
-  sortHomeProjectScopes,
-  type HomeProjectScope,
-} from "../home/homeThreadList";
+import { buildHomeProjectScopes, sortHomeProjectScopes } from "../home/homeThreadList";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 import {
   resolvePendingTaskInteractionMode,
@@ -102,99 +96,15 @@ import {
   resolveNewTaskDraftWorkspace,
 } from "./new-task-context-presentation";
 import { isSameRepository, resolveEnvironmentProjectMatch } from "./new-task-project-selection";
-import { type UnopenableRouteDraft, useNewTaskRouteFlow } from "./use-new-task-route-flow";
+import { useNewTaskRouteFlow } from "./use-new-task-route-flow";
 import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
 import { findQueuedPendingTask, pendingTaskDraftKey } from "./new-task-pending-task";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
-type WorkspaceMode = "local" | "worktree";
+import type { NewTaskFlowContextValue, WorkspaceMode } from "./new-task-flow-types";
 
 // Track ownership across providers so old unmount flushes cannot drop newer drafts or drain locks.
 let activeEditingMessageId: string | null = null;
-
-type NewTaskFlowContextValue = {
-  readonly activeNewTask: { readonly pendingKey: string | null } | null;
-  readonly projectScopes: ReadonlyArray<HomeProjectScope>;
-  readonly selectedEnvironmentId: EnvironmentId | null;
-  readonly selectedProjectKey: string | null;
-  readonly selectedModelKey: string | null;
-  readonly workspaceMode: WorkspaceMode;
-  readonly isGitRepo: boolean;
-  readonly isGitRepoKnown: boolean;
-  readonly canChooseWorkspace: boolean;
-  /** Where the draft's agent will run: the selected worktree, else the project root. */
-  readonly workspaceCwd: string | null;
-  readonly resolveWorkspaceSelection: (
-    selection: ComposerDraftWorkspaceSelection | undefined,
-  ) => ComposerDraftWorkspaceSelection;
-  readonly selectedBranchName: string | null;
-  readonly selectedWorktreePath: string | null;
-  readonly startFromOrigin: boolean;
-  readonly pullRequestReference: string | undefined;
-  readonly draftKey: string | null;
-  readonly editingPendingTask: QueuedThreadMessage | null;
-  readonly prompt: string;
-  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
-  readonly submitting: boolean;
-  readonly branchesLoading: boolean;
-  readonly availableBranches: ReadonlyArray<VcsRef>;
-  readonly currentCheckoutBranchName: string | null;
-  readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
-  readonly planModeEnabled: boolean;
-  readonly expandedProvider: string | null;
-  readonly environments: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly environmentLabel: string;
-  }>;
-  readonly selectedProject: EnvironmentProject | null;
-  readonly isScratchDraft: boolean;
-  readonly modelOptions: ReadonlyArray<ModelOption>;
-  readonly selectedModel: ModelSelection | null;
-  readonly selectedModelOption: ModelOption | null;
-  readonly selectedProviderStatus: ServerProvider | null;
-  readonly providerGroups: ReadonlyArray<ProviderGroup>;
-  readonly flowKey: string;
-  readonly unopenableRouteDraft: UnopenableRouteDraft | null;
-  readonly setProject: (project: EnvironmentProject) => void;
-  readonly getSelectedProjectKey: () => string | null;
-  readonly selectEnvironment: (environmentId: EnvironmentId) => void;
-  readonly switchEnvironment: (environmentId: EnvironmentId) => Promise<boolean>;
-  readonly switchingToEnvironmentId: EnvironmentId | null;
-  readonly setSelectedModelKey: (
-    key: string | null,
-    options?: ReadonlyArray<ProviderOptionSelection>,
-  ) => void;
-  readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
-  readonly selectBranch: (branch: VcsRef) => void;
-  readonly setStartFromOrigin: (value: boolean) => void;
-  readonly beginEditingPendingTask: (messageId: string) => boolean;
-  readonly finishEditingPendingTask: () => void;
-  readonly cancelEditingPendingTask: () => void;
-  readonly buildPendingTaskMessage: (
-    metadata: TurnCommandMetadata,
-    options?: {
-      readonly currentCheckoutBranch?: string | null;
-    },
-  ) => QueuedThreadMessage | null;
-  readonly setPrompt: (value: string) => void;
-  readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
-  /** Appends draft attachments; returns how many the live cap rejected. */
-  readonly appendAttachments: (
-    attachments: ReadonlyArray<DraftComposerAttachment>,
-    insertion?: ComposerDraftInsertion,
-  ) => number;
-  readonly removeAttachment: (imageId: string) => void;
-  readonly clearAttachments: () => void;
-  readonly setSubmitting: (value: boolean) => void;
-  readonly loadBranches: () => void;
-  readonly setRuntimeMode: (value: RuntimeMode) => void;
-  readonly setInteractionMode: (value: ProviderInteractionMode) => void;
-  readonly setSelectedModelOptions: (
-    value: ReadonlyArray<ProviderOptionSelection> | undefined,
-  ) => void;
-  readonly setExpandedProvider: (value: string | null) => void;
-};
 
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
@@ -243,7 +153,20 @@ export function NewTaskFlowProvider(
   const setExpandedProvider = (expandedProvider: string | null) => updateFlow({ expandedProvider });
   const setEditingPendingTask = (editingPendingTask: QueuedThreadMessage | null) =>
     updateFlow({ editingPendingTask });
-  const selectedEnvironmentId = selectedEnvironmentIdOverride ?? projects[0]?.environmentId ?? null;
+  const draftStamp = useComposerDraft(activeDraftKey).project;
+  const stampedProject =
+    editingPendingTask || !draftStamp
+      ? undefined
+      : projects.find(
+          (project) =>
+            project.environmentId === draftStamp.environmentId &&
+            project.id === draftStamp.projectId,
+        );
+  const selectedEnvironmentId =
+    stampedProject?.environmentId ??
+    selectedEnvironmentIdOverride ??
+    projects[0]?.environmentId ??
+    null;
   const editor = useMemo(
     () => ({
       flowKey,
@@ -285,7 +208,8 @@ export function NewTaskFlowProvider(
   const selectedProject =
     routeFlow.pending || routeFlow.unopenableRouteDraft !== null
       ? null
-      : (projectsForEnvironment.find(
+      : (stampedProject ??
+        projectsForEnvironment.find(
           (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
         ) ??
         // Pin queued edits to their original project when its shell is missing; fallback would silently retarget them.
@@ -315,6 +239,7 @@ export function NewTaskFlowProvider(
       props.routeDraftId !== undefined ||
       props.routePendingTaskId !== undefined ||
       activeDraftKey !== null ||
+      readFlow().draftKey !== null ||
       editingPendingTask !== null ||
       selectedProject === null
     ) {
@@ -329,6 +254,7 @@ export function NewTaskFlowProvider(
   }, [
     activeDraftKey,
     editingPendingTask,
+    readFlow,
     selectedProject,
     props.active,
     props.routeDraftId,

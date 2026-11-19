@@ -34,6 +34,7 @@ const reactTests = [
   "src/features/pull-requests/usePullRequestList.pending.test.tsx",
   "src/features/pull-requests/usePullRequestActivityFilter.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
+  "src/features/threads/new-task-flow-provider.project-stamp.test.tsx",
   "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/git/GitCommitSheet.test.tsx",

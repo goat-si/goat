@@ -1,3 +1,8 @@
+import { useQueuedMessageWaitReason } from "../../state/threadOutboxWaitReasons";
+import {
+  retryQueuedMessage,
+  UPLOAD_RETRY_EXHAUSTED_REASON,
+} from "../../state/threadOutboxRetryRequests";
 import { resolveThreadListRowStatus } from "@goat/client-runtime/state/thread-list-priority";
 import { ThreadRowMenu } from "./thread-row-menu";
 import { usePendingDraftBranch } from "./use-pending-draft-branch";
@@ -133,6 +138,10 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   const sidebarPane = props.pane === "sidebar";
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, props.selected ?? false);
   const isDraft = pendingTask.kind === "draft";
+  const waitReason = useQueuedMessageWaitReason(
+    pendingTask.kind === "pending" ? pendingTask.message.messageId : undefined,
+  );
+  const uploadFailed = waitReason === UPLOAD_RETRY_EXHAUSTED_REASON;
   const deleteLabel = isDraft ? "Discard" : "Delete";
   const handleDelete = useCallback(
     () => onDeletePendingTask(pendingTask),
@@ -196,10 +205,22 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
               sidebarPane && "text-drawer-foreground-muted",
             )}
           >
-            Sends on reconnect
+            {uploadFailed ? "Upload failed" : "Sends on reconnect"}
           </Text>
         )}
       </View>
+      {uploadFailed && pendingTask.kind === "pending" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Retry upload"
+          onPress={(event) => {
+            event.stopPropagation();
+            retryQueuedMessage(pendingTask.message.messageId);
+          }}
+        >
+          <Text className="text-xs text-primary-text">Retry</Text>
+        </Pressable>
+      ) : null}
       <Text
         className={cn(
           "mt-1 text-base font-goat-medium text-foreground",
