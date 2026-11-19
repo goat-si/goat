@@ -3595,11 +3595,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
         ),
     );
-
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
       function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
         const fallbackClasses = options.fallbackClasses ?? [];
         const failureClasses = [...new Set(["usage_limit", ...fallbackClasses])];
+        const fallbackCandidates =
+          fallbackClasses.length === 0
+            ? sql``
+            : sql`UNION
+          SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
+          WHERE failure.type = 'error' AND failure.status = 'failed' AND json_valid(failure.payload_json)
+            AND json_extract(failure.payload_json, '$.failure.class') IN ${sql.in(fallbackClasses)}`;
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly run_id: string;
@@ -3643,16 +3649,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             LIMIT 1
           )
           WHERE t.deleted_at IS NULL
-            -- The sweep runs every scheduler tick. Without this list the latest-run
-            -- lookup above sorts every run of every thread, tens of milliseconds
-            -- for one long thread; only threads with a relevant failure qualify.
+            -- Restrict each scheduler sweep to threads with a relevant failure.
             AND t.thread_id IN (
               SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
               WHERE failure.type = 'error' AND failure.status = 'failed'
-                AND json_extract(failure.payload_json, '$.failure.class') IN ${sql.in(failureClasses)}
+                AND CASE WHEN json_valid(failure.payload_json) THEN json_extract(failure.payload_json, '$.failure.class') = 'usage_limit' ELSE 0 END
+              ${fallbackCandidates}
             )
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+            AND json_valid(item.payload_json)
             AND (
               (
                 json_extract(item.payload_json, '$.failure.class') IN ${sql.in(fallbackClasses)}
