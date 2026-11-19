@@ -1,3 +1,4 @@
+import { rememberDraftImage } from "../lib/sentImageHandoff";
 import { FilePreviewGallery, useFilePreviewGallery } from "./FilePreviewGallery";
 import { composerImageGallery } from "../lib/composerImageGallery";
 import { LEGACY_COMPOSER_PREVIEW_DIRECTORY } from "@goat/contracts/legacyT3Names";
@@ -199,6 +200,14 @@ function ComposerImageAttachment(
           style={style}
           className="bg-subtle"
           resizeMode="cover"
+          onLoad={({ nativeEvent: { source } }) => {
+            if (props.environmentId && previewUri !== null) {
+              rememberDraftImage(props.environmentId, attachment.id, {
+                uri: previewUri,
+                aspectRatio: source.width / source.height,
+              });
+            }
+          }}
         />
       </Pressable>
     </PresentationSource>

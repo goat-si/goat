@@ -1,4 +1,5 @@
 import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
+import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
 import {
   compactionLabel,
   isFileAttachment,
@@ -1303,7 +1304,7 @@ function renderFeedEntry(
             ) : null}
             {bubbleBodyVisible ? (
               <View className={cn("gap-2 px-3.5 pb-2.5", foldRowId === null && "pt-2.5")}>
-                {entry.pendingMessage?.attachments.map((attachment) =>
+                {entry.pendingMessage?.attachments.map((attachment, index) =>
                   attachment.type === "image" && attachment.uploadedAttachmentId ? (
                     <MessageAttachmentImage
                       key={attachment.id}
@@ -1312,6 +1313,15 @@ function renderFeedEntry(
                       name={attachment.name}
                       mimeType={attachment.mimeType}
                       className="h-[140px] w-[180px] rounded-[14px]"
+                      handoff={sentImageHandoff(
+                        props.environmentId,
+                        message.id,
+                        index,
+                        attachment.id,
+                      )}
+                      onImageLoad={(image) =>
+                        rememberSentImage(props.environmentId, message.id, index, image)
+                      }
                       onPressPreview={props.onPressPreview}
                     />
                   ) : attachment.type === "image" ? (
@@ -1330,6 +1340,12 @@ function renderFeedEntry(
                     >
                       <Image
                         source={{ uri: attachment.previewUri }}
+                        onLoad={({ nativeEvent: { source } }) =>
+                          rememberSentImage(props.environmentId, message.id, index, {
+                            uri: attachment.previewUri,
+                            aspectRatio: source.width / source.height,
+                          })
+                        }
                         style={{ width: 180, height: 140, borderRadius: 14 }}
                       />
                     </Pressable>
@@ -1348,6 +1364,11 @@ function renderFeedEntry(
                           attachmentId={attachment.id}
                           name={attachment.name}
                           mimeType={attachment.mimeType}
+                          handoff={sentImageHandoff(
+                            props.environmentId,
+                            message.id,
+                            attachments.indexOf(attachment),
+                          )}
                           className={
                             inlineAttachmentIds.size
                               ? "h-24 w-24 rounded-[14px] bg-user-bubble-foreground/15"
