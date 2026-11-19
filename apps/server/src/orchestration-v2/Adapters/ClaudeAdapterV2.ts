@@ -474,6 +474,7 @@ export const ClaudeProviderCapabilitiesV2 = {
     canRollbackThread: true,
     canForkThread: true,
     canForkFromTurn: true,
+    canForkWhileSourceRunning: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
   },
@@ -996,10 +997,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
       return boundaryNativeId;
     }
 
-    const terminalTurnsAfterBoundary = sourceTurns
-      .slice(boundaryIndex + 1)
-      .filter(isTerminalProviderTurn);
-    if (terminalTurnsAfterBoundary.length === 0) {
+    if (sourceTurns.length === boundaryIndex + 1) {
       return yield* getNativeConversationHeadId(input.sourceProviderThread);
     }
 
@@ -10607,7 +10605,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           forkThread: Effect.fn("ClaudeAdapterV2.forkThread")(
             function* (forkInput) {
               const currentTurn = yield* Ref.get(activeTurn);
-              if (currentTurn !== null) {
+              const boundary = forkInput.sourceProviderTurns?.find(
+                (turn) => turn.id === forkInput.providerTurnId,
+              );
+              if (currentTurn !== null && boundary?.status !== "completed") {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,
                   detail: `Cannot fork Claude provider thread ${forkInput.sourceProviderThread.id} while provider turn ${currentTurn.providerTurnId} is active.`,
@@ -10615,8 +10616,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
 
               const sourceNativeThreadId = yield* getNativeThreadId(forkInput.sourceProviderThread);
-              yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               const upToMessageId = yield* resolveClaudeForkUpToMessageId(forkInput);
+              if (currentTurn !== null && upToMessageId === undefined) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail:
+                    "Cannot fork a running Claude session without a completed boundary cursor.",
+                });
+              }
+              if (currentTurn === null) yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               // A moved project still has its transcript under the original cwd.
               // Let the SDK find the session by ID within this Claude home.
               const forkOptions: ForkSessionOptions =
