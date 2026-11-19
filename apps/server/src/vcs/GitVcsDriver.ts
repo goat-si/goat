@@ -46,6 +46,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { privateCheckpointObjects } from "./checkpointPrivateObjects.ts";
+import { mapCheckpointStorageError } from "./checkpointStorageError.ts";
 import { workTreeProbeResult } from "./gitRepositoryProbe.ts";
 import {
   makeGitVcsDriverCore,
@@ -908,7 +909,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       gitCommonDir,
       input.cwd,
       operation,
-    );
+    ).pipe(Effect.mapError(mapCheckpointStorageError));
     const commitEnv: NodeJS.ProcessEnv = {
       ...objectEnv,
       GIT_INDEX_FILE: tempIndexPath,
@@ -1452,7 +1453,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const addedUntrackedPaths = [...new Set([...untrackedBefore, ...untrackedAfter])].filter(
         (name) => capturedPaths.has(name),
       );
-      yield* publish();
+      yield* publish().pipe(Effect.mapError(mapCheckpointStorageError));
       if (input.strict) {
         // Hold HEAD's ref lock through publication so the captured parent stays current.
         const published = yield* execute({

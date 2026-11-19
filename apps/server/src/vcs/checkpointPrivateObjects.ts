@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { VcsCheckpointStorageError } from "@goat/contracts";
+import { VcsCheckpointStorageError } from "./checkpointStorageError.ts";
 import { quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 
 // The enclosing capture span owns this scope and its temporary objects.
@@ -22,15 +22,13 @@ export const privateCheckpointObjects = Effect.fnUntraced(function* (
         ),
       ),
     (directory) =>
-      fileSystem
-        .remove(directory, { recursive: true, force: true })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Could not remove private checkpoint objects", {
-              reason: cause.reason._tag,
-            }),
-          ),
+      fileSystem.remove(directory, { recursive: true, force: true }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not remove private checkpoint objects", {
+            reason: cause.reason._tag,
+          }),
         ),
+      ),
   );
   yield* fileSystem
     .makeDirectory(path.join(privateObjects, "pack"))

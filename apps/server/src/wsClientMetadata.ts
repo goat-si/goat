@@ -8,7 +8,7 @@ import {
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import { requestUrl } from "./requestUrl.ts";
 
 const isClientSurface = Schema.is(ClientSurface);

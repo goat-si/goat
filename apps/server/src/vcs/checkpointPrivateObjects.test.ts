@@ -252,8 +252,8 @@ it.effect.each(["failure", "interrupt"] as const)(
           const error = Cause.findErrorOption(result.value.cause);
           assert.isTrue(
             Option.isSome(error) &&
-              error.value._tag === "VcsCheckpointStorageError" &&
-              error.value.stage === "publish",
+              error.value._tag === "VcsProcessExitError" &&
+              error.value.detail === "Could not publish checkpoint objects.",
           );
         }
       }
