@@ -1,4 +1,5 @@
 import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
+import { deduplicateComposerAttachments } from "./composerAttachmentDedup";
 import { useAtomValue } from "@effect/atom-react";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./modelPickPending";
 import { sameDrafts } from "./draftEquality";
@@ -1273,7 +1274,7 @@ export function appendComposerDraftText(draftKey: string, value: string): void {
 /** Restore with allowOverflow to preserve every attachment after failed sends. */
 export function appendComposerDraftAttachments(
   draftKey: string,
-  attachments: ReadonlyArray<DraftComposerAttachment>,
+  incoming: ReadonlyArray<DraftComposerAttachment>,
   options?: {
     readonly allowOverflow?: boolean;
     readonly appendReference?: boolean;
@@ -1281,16 +1282,22 @@ export function appendComposerDraftAttachments(
     readonly maxAttachments?: number;
   },
 ): number {
-  if (attachments.length === 0) {
+  if (incoming.length === 0) {
     return 0;
   }
   let rejected: ReadonlyArray<DraftComposerAttachment> = [];
   let removed: ReadonlyArray<DraftComposerAttachment> = [];
+  let duplicates: ReadonlyArray<DraftComposerAttachment> = [];
   updateComposerDrafts((current) => {
     const existing = normalizeDraft(current[draftKey]);
     const retained = options?.appendReference
       ? draftWithoutInsertionSelection(draftKey, existing, options.insertion)
       : existing;
+    const result = options?.allowOverflow
+      ? { attachments: incoming, duplicates: [] }
+      : deduplicateComposerAttachments(retained.attachments, incoming);
+    const { attachments } = result;
+    duplicates = result.duplicates;
     const remaining = options?.allowOverflow
       ? attachments.length
       : Math.max(
@@ -1334,7 +1341,7 @@ export function appendComposerDraftAttachments(
       [draftKey]: draft,
     };
   });
-  scheduleUnusedComposerAttachmentCleanup([...rejected, ...removed]);
+  scheduleUnusedComposerAttachmentCleanup([...rejected, ...removed, ...duplicates]);
   return rejected.length;
 }
 
