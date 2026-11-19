@@ -17,19 +17,21 @@ import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
+import {
+  harnessFailure,
+  handleHarnessFailure,
+  writeHarnessFailure,
+} from "./acpMockHarnessFailure.ts";
+import {
+  advertisedCommandNames,
+  loadedCommandNames,
+  copilotModeId,
+  modeOptionCategory,
+} from "./acpMockAvailableCommands.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
 const copilotModesProfile = process.env.GOAT_ACP_COPILOT_MODES === "1";
-const copilotModeId = (name: string) =>
-  `https://agentclientprotocol.com/protocol/session-modes#${name}`;
-const modeOptionCategory = process.env.GOAT_ACP_MODE_OPTION_CATEGORY ?? "mode";
-// Comma-separated command names the mock advertises, so `/compact` support is testable.
-const advertisedCommandNames = (process.env.GOAT_ACP_AVAILABLE_COMMANDS ?? "")
-  .split(",")
-  .map((name) => name.trim())
-  .filter((name) => name.length > 0);
-const loadedCommandNames = process.env.GOAT_ACP_LOADED_COMMANDS?.split(",").filter(Boolean);
 const emitToolCalls = process.env.GOAT_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.GOAT_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
@@ -1061,6 +1063,8 @@ const program = Effect.gen(function* () {
       ) {
         return yield* Effect.sync(() => process.exit(23));
       }
+      if (harnessFailure)
+        return yield* handleHarnessFailure(finishPrompt(requestedSessionId, "end_turn"));
 
       if (clientFsProbePath !== undefined && clientFsProbeLogPath !== undefined) {
         const probes = [
@@ -2462,7 +2466,6 @@ const program = Effect.gen(function* () {
       }
 
       if (emitXAiPlanMdWrite) {
-        // isGrokPlanMarkdownPath requires Grok's session layout.
         const planRoot = process.env.GOAT_ACP_PLAN_ROOT ?? "/tmp/mock-home/.grok";
         const planPath = `${planRoot}/sessions/${requestedSessionId}/plan.md`;
         const planBody = "# Mock plan\n\n- Write the feature\n- Add a test\n- Ship it\n";
@@ -2710,7 +2713,9 @@ const program = Effect.gen(function* () {
             typeof params === "object" && params !== null ? Reflect.get(params, "code") : undefined;
           process.exit(typeof code === "number" ? code : 19);
         })
-      : Effect.void,
+      : method === "_test/harness-failure"
+        ? writeHarnessFailure
+        : Effect.void,
   );
   return yield* Effect.never;
 }).pipe(
