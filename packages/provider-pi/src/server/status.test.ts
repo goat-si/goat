@@ -195,7 +195,7 @@ describe("PiProvider", () => {
             startupDialog: true,
             version: profile === undefined ? "0.84.3" : "5.1.40",
             observe: (command) => {
-              launches.push([...command.args]);
+              launches.push(command.args.map(String));
             },
           },
         );
@@ -218,7 +218,7 @@ describe("PiProvider", () => {
         const spawner = yield* piDiscoverySpawner({ models: [] }, undefined, undefined, {
           startupDialog: true,
           observe: (command) => {
-            launches.push([...command.args]);
+            launches.push(command.args.map(String));
           },
         });
         yield* checkPiProviderStatus({ ...settings, launchArgs: flag }).pipe(
