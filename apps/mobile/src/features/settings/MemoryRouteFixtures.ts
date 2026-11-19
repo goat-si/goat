@@ -332,23 +332,25 @@ export async function exerciseMemoryMove(
       return;
     }
     if (batch === "missing receipt") {
-      const original = attempts.get(uncertainId ?? "")?.[0];
+      if (!uncertainId) throw new Error("Expected a selected memory");
+      const original = attempts.get(uncertainId)?.[0];
       await act(() => vi.advanceTimersByTimeAsync(61_000));
       expect(view.container.textContent).not.toContain("Synthetic move item 211");
       await submit();
       expect(receiptLookups).toMatchObject([{ memoryId: uncertainId, operationId: original }]);
-      expect(attempts.get(uncertainId ?? "")).toEqual([original, original]);
+      expect(attempts.get(uncertainId)).toEqual([original, original]);
       expect.soft(view.container.textContent).toContain("No move receipt was found");
       await act(async () => {
         await h.signal({
           kind: "invalidate",
           memorySpaceId: nativeSpace,
+          memoryId: uncertainId,
           projectionWatermark: 2,
         });
       });
       expect(view.container.textContent).toContain("Synthetic move item 211");
       await submit();
-      expect(attempts.get(uncertainId ?? "")).toEqual([original, original, original]);
+      expect(attempts.get(uncertainId)).toEqual([original, original, original]);
       expect(receiptLookups).toHaveLength(1);
       expect(view.container.textContent).toContain("Memory 00000211 · Moved.");
       return;
