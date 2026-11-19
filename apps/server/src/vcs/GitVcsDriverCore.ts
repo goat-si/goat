@@ -29,6 +29,7 @@ import { statusUpstreamRefreshFailureCooldown } from "./statusRefreshCooldown.ts
 import { availableWorktreePath } from "./availableWorktreePath.ts";
 import { selectUntrackedWithinLimit } from "./untrackedSize.ts";
 import { gitSupportsPathspecFromFile } from "./gitVersion.ts";
+import { VcsAutomaticFetchInterval } from "./vcsBackgroundPolicy.ts";
 import {
   parseReviewNumstat,
   REVIEW_DIFF_ARGS,
@@ -438,6 +439,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const digest = yield* Digest.Digest;
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
+  const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
   const statusFetches = new Map<string, Fiber.Fiber<void, GitCommandError>>();
   const statusFetchProcesses = yield* Semaphore.make(4);
 
@@ -1160,6 +1162,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refreshStatusUpstreamIfStale = Effect.fn("refreshStatusUpstreamIfStale")(function* (
     cwd: string,
   ) {
+    if (Duration.isZero(yield* automaticFetchInterval)) return;
     const headRef = yield* runGitStdout(
       "GitVcsDriver.refreshStatusUpstreamIfStale.headRef",
       cwd,
