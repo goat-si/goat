@@ -1,3 +1,4 @@
+import { initialFeedViewportWidth } from "./thread-feed-initial-width";
 import { worktreeSetupPresentation } from "./worktree-setup-state";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import type { MarkdownLinkHandlers, MarkdownStyleSet } from "./AssistantMarkdownBlocks";
@@ -1914,7 +1915,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   });
   const settledPaneWidth = useWorkspaceSettledContentWidth();
   const [measuredViewportWidth, setViewportWidth] = useState(() =>
-    props.layoutVariant === "split" ? 0 : windowWidth,
+    initialFeedViewportWidth(props.layoutVariant === "split", settledPaneWidth, windowWidth),
   );
   const viewportWidth =
     settledPaneWidth !== null ? Math.round(settledPaneWidth) : measuredViewportWidth;
