@@ -11,6 +11,8 @@ export function threadListV2RowAccessibilityLabel(input: {
   readonly thread: Pick<EnvironmentThreadShell, "title" | "worktreePath" | "branch">;
   readonly hasQueuedMessages?: boolean;
   readonly providerName?: string | null;
+  readonly statusLabel?: string;
+  readonly timeLabel?: string;
   readonly isRegeneratingTitle: boolean;
 }): string {
   const { thread } = input;
@@ -18,5 +20,5 @@ export function threadListV2RowAccessibilityLabel(input: {
   const worktreeLabel = thread.worktreePath?.trim()
     ? `, in ${folder ? `worktree ${folder}` : "a worktree"}${thread.branch ? ` (${thread.branch})` : ""}`
     : "";
-  return `${thread.title}${input.providerName ? `, ${input.providerName}` : ""}${input.hasQueuedMessages ? ", messages queued to send" : ""}${input.isRegeneratingTitle ? ", regenerating title" : ""}${worktreeLabel}`;
+  return `${thread.title}${input.statusLabel ? `, ${input.statusLabel}` : ""}${input.timeLabel ? `, ${input.timeLabel}` : ""}${input.providerName ? `, ${input.providerName}` : ""}${input.hasQueuedMessages ? ", messages queued to send" : ""}${input.isRegeneratingTitle ? ", regenerating title" : ""}${worktreeLabel}`;
 }

@@ -456,6 +456,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     hasQueuedMessages: props.hasQueuedMessages,
     isRegeneratingTitle,
     providerName: providerNameLabel,
+    statusLabel: showsWoke
+      ? "Woke"
+      : (statusLabel?.label ??
+        (status === "waiting" ? "Waiting" : status === "working" ? "Working" : undefined)),
+    timeLabel: snoozedRow ? (props.snoozeWakeLabelText ?? props.timeLabel) : props.timeLabel,
   });
   const timeLabel = props.timeLabel;
 
@@ -1271,6 +1276,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ThreadRowMenu
+            accessibilityLabel={rowAccessibilityLabel}
             actions={[
               ...(thread.branch
                 ? [
