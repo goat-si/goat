@@ -459,10 +459,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const executedMigrations = yield* Effect.gen(function* () {
     yield* assertMemoryMigrationsCompatible(migrationEntries);
-    const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+    const previewMigrations = includesV2 && announced ? yield* reconcileV2PreviewMigration() : [];
     // GOAT ledgers move before the V2 check, which would otherwise read GOAT's
     // old ids as upstream migrations the migrator skips.
-    const goatMigrations = yield* reconcileGoatMigrationIds(migrationEntries);
+    const goatMigrations = announced ? yield* reconcileGoatMigrationIds(migrationEntries) : [];
     if (includesV2) {
       yield* assertV2MigrationsCanRun(toMigrationInclusive);
     }

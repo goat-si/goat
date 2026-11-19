@@ -181,6 +181,10 @@ describe("V2 preview upgrade", () => {
         [164, "MemoryOriginCatchup"],
         [165, "MemorySuggestionQuota"],
         [166, "ScheduledTaskFirstBindIntent"],
+        [167, "QueuedTurnInputIndexJsonValid"],
+        [168, "TurnItemMessageOrdinalIndex"],
+        [169, "TurnItemInlineWorkOutput"],
+        [170, "RepairStaleTitleRegeneration"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -372,6 +376,10 @@ describe("V2 preview upgrade", () => {
         [164, "MemoryOriginCatchup"],
         [165, "MemorySuggestionQuota"],
         [166, "ScheduledTaskFirstBindIntent"],
+        [167, "QueuedTurnInputIndexJsonValid"],
+        [168, "TurnItemMessageOrdinalIndex"],
+        [169, "TurnItemInlineWorkOutput"],
+        [170, "RepairStaleTitleRegeneration"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
