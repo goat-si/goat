@@ -156,7 +156,11 @@ export interface AcpAdapterV2Flavor {
   >["_meta"];
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
+    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => EffectAcpSchema.SessionNotification;
+  readonly releaseRuntime?: (
+    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+  ) => Effect.Effect<void>;
   readonly onAvailableCommandsUpdate?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
   ) => Effect.Effect<void>;

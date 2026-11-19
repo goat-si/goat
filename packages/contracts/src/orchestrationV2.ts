@@ -1057,6 +1057,7 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   nodeId: NodeId,
   runAttemptId: Schema.NullOr(RunAttemptId),
   nativeTurnRef: Schema.NullOr(OrchestrationV2ProviderRef),
+  nativeThreadRef: Schema.optional(OrchestrationV2ProviderRef),
   ordinal: PositiveInt,
   status: Schema.Literals([
     "pending",

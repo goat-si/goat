@@ -135,6 +135,8 @@ import { makeFolderReplacedNotifier } from "./folderReplacedTerminals.ts";
 import { enqueueProcessEvent } from "./processEventQueue.ts";
 import { normalizeChildCommandName } from "./childCommandName.ts";
 import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
+import { toSessionKey } from "./terminalSessionKey.ts";
+import { truncateTerminalWireLabel } from "./terminalWireLabel.ts";
 
 export {
   TerminalCwdError,
@@ -169,7 +171,6 @@ const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-const MAX_TERMINAL_LABEL_LENGTH = 128;
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
 
@@ -410,11 +411,6 @@ type DrainProcessEventAction =
 interface TerminalManagerState {
   sessions: Map<string, TerminalSessionState>;
   killFibers: Map<PtyAdapter.PtyProcess, Fiber.Fiber<void, never>>;
-}
-
-function truncateTerminalWireLabel(value: string): string {
-  if (value.length <= MAX_TERMINAL_LABEL_LENGTH) return value;
-  return value.slice(0, MAX_TERMINAL_LABEL_LENGTH);
 }
 
 function terminalWireLabel(session: TerminalSessionState): string {
@@ -669,10 +665,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   });
   return processTableSnapshotFromProcesses(processes);
 });
-
-function toSessionKey(threadId: string, terminalId: string): string {
-  return `${threadId}\u0000${terminalId}`;
-}
 
 interface TerminalManagerOptions {
   logsDir: string;
@@ -949,14 +941,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
   };
 
-  const legacyHistoryPath = (threadId: string) =>
-    path.join(logsDir, `${legacySafeThreadId(threadId)}.log`);
+  const legacyHistoryName = (threadId: string) => `${legacySafeThreadId(threadId)}.log`;
+  const hasLegacyHistoryName = (threadId: string) =>
+    !legacySafeThreadId(threadId).toLowerCase().startsWith("terminal_");
 
   const historyPaths = (threadId: string, terminalId: string) => [
     ...new Set([
       historyPath(threadId, terminalId),
       encodedHistoryPath(threadId, terminalId),
-      ...(terminalId === DEFAULT_TERMINAL_ID ? [legacyHistoryPath(threadId)] : []),
+      ...(terminalId === DEFAULT_TERMINAL_ID && hasLegacyHistoryName(threadId)
+        ? [path.join(logsDir, legacyHistoryName(threadId))]
+        : []),
     ]),
   ];
 
@@ -1391,7 +1386,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* Effect.forEach(
       entries.filter(
         (name) =>
-          name === `${legacySafeThreadId(threadId)}.log` ||
+          (hasLegacyHistoryName(threadId) && name === legacyHistoryName(threadId)) ||
           threadParts.some((part) => name === `${part}.log` || name.startsWith(`${part}_`)),
       ),
       (name) =>
@@ -2780,7 +2775,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     session.pendingProcessEventIndex = 0;
     session.processEventDrainRunning = false;
     const eventStamp = advanceEventSequence(session);
-    yield* persistHistory(input.threadId, terminalId, session.history);
+    yield* persistWorker.enqueue(toSessionKey(input.threadId, terminalId), {
+      history: session.history,
+      immediate: true,
+    });
     yield* publishEvent({
       type: "cleared",
       threadId: input.threadId,

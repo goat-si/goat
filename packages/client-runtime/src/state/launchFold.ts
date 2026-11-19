@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@goat/contracts";
+import { isSideChatThread, type EnvironmentId } from "@goat/contracts";
 import {
   foldsUnderLauncher,
   isRemoteDelegatedChild,
@@ -13,7 +13,8 @@ import {
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
-import { effectiveSnoozed } from "./threadSettled.ts";
+import { effectiveSnoozed, threadWokeAt } from "./threadSettled.ts";
+import { hasUnseenCompletion, isThreadWoke } from "./threadListPriority.ts";
 import { threadLastPromptAt } from "./threadSort.ts";
 
 export type { LaunchAttention, LaunchChildState, LaunchLift };
@@ -398,3 +399,36 @@ export const foldedKeysIn = (
   sections: ReadonlyMap<string, FoldedSection>,
   section: FoldedSection,
 ) => [...sections].flatMap(([key, value]) => (value === section ? [key] : []));
+
+/** The same launch grouping as the sidebar, before palette ranking and message matching. */
+export function paletteListedThreads<T extends EnvironmentThreadShell>(
+  threads: readonly T[],
+  now: string,
+  hiddenParentKeys: ReadonlySet<string> = new Set(),
+): readonly T[] {
+  const visible = threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.deletedAt === null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      !isSideChatThread(thread),
+  );
+  const groupable = visible.filter((thread) => !hiddenParentKeys.has(keyOf(thread)));
+  const delegated = new Map<string, LaunchAttention>();
+  for (const thread of groupable) {
+    if (thread.pendingSubagentRequest === "approval") delegated.set(keyOf(thread), "approval");
+    else if (thread.pendingSubagentRequest === "user_input") delegated.set(keyOf(thread), "input");
+  }
+  const fold = foldLaunchedThreads({
+    visible: groupable,
+    all: threads,
+    now,
+    delegatedAttentionByKey: delegated,
+    unseen: (thread) =>
+      !effectiveSnoozed(thread, { now }) &&
+      (hasUnseenCompletion(thread) ||
+        isThreadWoke(threadWokeAt(thread, { now }), thread.lastVisitedAt ?? undefined)),
+  });
+  const folded = new Set(fold.folded.map(keyOf));
+  return visible.filter((thread) => !folded.has(keyOf(thread)));
+}

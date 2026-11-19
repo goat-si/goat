@@ -1,3 +1,4 @@
+import { parseUrl } from "@goat/shared/parseUrl";
 import {
   makeProviderSettingsSchema,
   SourceControlProviderKind,
@@ -106,7 +107,7 @@ export const definition = defineSourceControl({
   reviewSummaryRequired: () => false,
   checkoutCommandArgument: () => null,
   isChangeRequestReference: (reference) => {
-    const url = URL.parse(reference);
+    const url = parseUrl(reference);
     return (
       url !== null &&
       isBitbucketHost(url.hostname) &&

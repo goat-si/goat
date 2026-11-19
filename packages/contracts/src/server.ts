@@ -574,6 +574,7 @@ export const ServerConfig = Schema.Struct({
    * answering. Clients do not cache it, since it describes the host at connect.
    */
   lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
+  serverTime: Schema.optionalKey(Schema.Unknown),
   /**
    * Windows only, and only once the server has checked; absent means nothing to report.
    */

@@ -126,6 +126,7 @@ export function assignProjectsToEnvironments(
   environmentIds: ReadonlyArray<EnvironmentId>,
   preferredEnvironmentId?: EnvironmentId | null,
   hostAvailability?: PullRequestHostAvailability,
+  unreachableEnvironmentIds: ReadonlySet<EnvironmentId> = new Set(),
 ): Map<EnvironmentId, ProjectId[]> {
   const rank = new Map(environmentIds.map((id, index) => [id, index] as const));
   const owner = new Map<string, AssignableProject>();
@@ -139,6 +140,8 @@ export function assignProjectsToEnvironments(
       );
     return availability?.hosts.get(host)?.configured === false;
   };
+  const cost = (project: AssignableProject) =>
+    (unreachableEnvironmentIds.has(project.environmentId) ? 2 : 0) + (unreadable(project) ? 1 : 0);
   for (const project of projects) {
     const key = repositoryKey(project);
     if (!key) continue;
@@ -149,10 +152,10 @@ export function assignProjectsToEnvironments(
       owner.set(key, project);
       continue;
     }
-    const currentUnreadable = unreadable(current);
-    const candidateUnreadable = unreadable(project);
-    if (currentUnreadable !== candidateUnreadable) {
-      if (currentUnreadable) owner.set(key, project);
+    const currentCost = cost(current);
+    const candidateCost = cost(project);
+    if (currentCost !== candidateCost) {
+      if (candidateCost < currentCost) owner.set(key, project);
       continue;
     }
     if (current.environmentId === preferredEnvironmentId) continue;
@@ -192,6 +195,7 @@ export function pullRequestProjectQueries(
   projects: ReadonlyArray<AssignableProject>,
   environmentIds: ReadonlyArray<EnvironmentId>,
   hostAvailability?: PullRequestHostAvailability,
+  unreachableEnvironmentIds?: ReadonlySet<EnvironmentId>,
 ): ReadonlyArray<{
   readonly environmentId: EnvironmentId;
   readonly projectIds?: ReadonlyArray<ProjectId>;
@@ -201,6 +205,7 @@ export function pullRequestProjectQueries(
     environmentIds,
     environmentIds[0],
     hostAvailability,
+    unreachableEnvironmentIds,
   );
   const totals = new Map<EnvironmentId, number>();
   for (const project of projects)

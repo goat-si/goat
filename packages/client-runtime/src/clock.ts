@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@goat/contracts";
 // @effect-diagnostics globalTimers:off globalDate:off - Render clocks for React hooks, outside an Effect runtime.
 
 /**
@@ -69,6 +70,47 @@ export const minuteTick: ClockStore<string> = makeTickStore(
   () => new Date().toISOString().slice(0, 16),
   60_000,
 );
+
+const serverClockSamples = new Map<EnvironmentId, { token: symbol; offset: number }>();
+
+export function beginServerClockSample(environmentId: EnvironmentId): symbol {
+  const token = Symbol();
+  serverClockSamples.delete(environmentId);
+  if (serverClockSamples.size >= 256) {
+    const oldest = serverClockSamples.keys().next().value;
+    if (oldest !== undefined) serverClockSamples.delete(oldest);
+  }
+  serverClockSamples.set(environmentId, { token, offset: 0 });
+  return token;
+}
+
+export function endServerClockSample(environmentId: EnvironmentId, token: symbol): void {
+  if (serverClockSamples.get(environmentId)?.token === token)
+    serverClockSamples.delete(environmentId);
+}
+
+export function recordServerClockSample(
+  environmentId: EnvironmentId,
+  token: symbol,
+  value: unknown,
+  requestedAtMs: number,
+  receivedAtMs: number,
+): void {
+  if (serverClockSamples.get(environmentId)?.token !== token) return;
+  const serverTimeMs = typeof value === "string" ? Date.parse(value) : NaN;
+  const offset = !Number.isFinite(serverTimeMs)
+    ? 0
+    : serverTimeMs > receivedAtMs
+      ? serverTimeMs - receivedAtMs
+      : serverTimeMs < requestedAtMs
+        ? serverTimeMs - requestedAtMs
+        : 0;
+  serverClockSamples.set(environmentId, { token, offset });
+}
+
+export function toServerClock(environmentId: EnvironmentId, clientMs: number): number {
+  return clientMs + (serverClockSamples.get(environmentId)?.offset ?? 0);
+}
 
 export interface DeadlineStore extends ClockStore<boolean> {
   /**

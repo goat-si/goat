@@ -138,8 +138,8 @@ export const layer: Layer.Layer<
                           runtimeMode: projection.thread.runtimeMode,
                           interactionMode: projection.thread.interactionMode,
                           workspace:
-                            currentSession?.cwd ??
                             projection.thread.worktreePath ??
+                            currentSession?.cwd ??
                             "<unresolved-workspace>",
                           capabilities:
                             negotiatedCapabilities ?? currentInstance.value.capabilities,

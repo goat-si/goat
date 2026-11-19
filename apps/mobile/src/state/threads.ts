@@ -1,3 +1,4 @@
+import { clearDeletedThreadDraft } from "./clearDeletedThreadDraft";
 import { createDecisionInboxAtoms } from "@goat/client-runtime/state/decision-inbox";
 import { createChildThreadApprovalsAtom } from "@goat/client-runtime/state/thread-requests";
 import { useAtomValue } from "@effect/atom-react";
@@ -48,7 +49,10 @@ export const threadEnvironment = createThreadEnvironmentAtoms(
   connectionAtomRuntime,
   threadFamilies.snapshotAtom,
 );
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
+export const environmentThreads = createEnvironmentThreadStateAtoms(
+  connectionAtomRuntime,
+  (environmentId, threadId) => clearDeletedThreadDraft(scopedThreadKey(environmentId, threadId)),
+);
 
 const EMPTY_THREAD_STATE_RESULT = AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE);
 // A thread whose creation is still queued or failed loads as not found, and that miss parks

@@ -26,12 +26,14 @@ export function TextGeneratorSettings(props: {
   const [clearKey, setClearKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const previous = editing === null ? undefined : props.generators[editing];
+  const destinationChanged =
+    previous !== undefined && (baseUrl.trim() !== previous.baseUrl || kind !== previous.kind);
   const config = {
     kind,
     ...(label.trim() ? { label: label.trim() } : {}),
     baseUrl: baseUrl.trim(),
     model: model.trim(),
-    apiKey: clearKey ? "" : apiKey || previous?.apiKey || "",
+    apiKey: clearKey ? "" : apiKey || (destinationChanged ? "" : previous?.apiKey) || "",
     enabled: previous?.enabled ?? true,
   };
   const valid = model.trim().length > 0 && validConfig(config);
@@ -66,7 +68,7 @@ export function TextGeneratorSettings(props: {
           <SettingsRow
             key={id}
             title={generator.label ?? generator.baseUrl}
-            description={`${generator.model ?? "No model set"}${generator.enabled ? "" : " · Disabled"}`}
+            description={`${generator.model ?? "No model set"}${generator.enabled ? "" : " · Disabled"}${generator.apiKey === "" ? " · API key not set" : ""}`}
             control={
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -179,13 +181,23 @@ export function TextGeneratorSettings(props: {
               <SecretInput
                 aria-label="API key"
                 placeholder="API key (optional)"
-                configured={previous !== undefined && !clearKey && previous.apiKey !== ""}
+                configured={
+                  previous !== undefined &&
+                  !destinationChanged &&
+                  !clearKey &&
+                  previous.apiKey !== ""
+                }
                 value={apiKey}
                 onChange={(event) => {
                   setApiKey(event.target.value);
                   setClearKey(false);
                 }}
               />
+              {destinationChanged && previous.apiKey !== "" && !apiKey ? (
+                <p className="text-xs text-muted-foreground">
+                  Re-enter the API key for the new address.
+                </p>
+              ) : null}
               {previous && previous.apiKey !== "" && !clearKey ? (
                 <Button
                   type="button"

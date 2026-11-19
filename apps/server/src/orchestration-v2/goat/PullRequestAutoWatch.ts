@@ -36,6 +36,7 @@ export function newPullRequestWatch(
       passed: ended.passed,
       passedChecks: ended.passedChecks,
       conflicting: ended.conflicting,
+      ...(ended.rebaseRequired === undefined ? {} : { rebaseRequired: ended.rebaseRequired }),
     }),
     ...(ended?.owedChecks !== undefined && { owedChecks: ended.owedChecks }),
     ...(ended?.awaitingApproval !== undefined && { awaitingApproval: ended.awaitingApproval }),
@@ -85,12 +86,18 @@ export function syncedPullRequestWatch(
     checksPendingBefore !== undefined && current.checksPending === undefined
       ? withoutChecksAnswer(read)
       : read;
-  const heldContext = keptAfterPass(current.heldContext, kept, {
+  const knownProgress = {
     ...progress,
+    ...(progress.rebaseRequired === undefined && current.rebaseRequired !== undefined
+      ? { rebaseRequired: current.rebaseRequired }
+      : {}),
+  };
+  const heldContext = keptAfterPass(current.heldContext, kept, {
+    ...knownProgress,
     headMoved: progress.headSha !== current.headSha,
   });
   return {
-    ...progress,
+    ...knownProgress,
     ...(heldContext.length === 0 ? {} : { heldContext }),
     ...(current.automatic === true ? { automatic: true } : {}),
   };

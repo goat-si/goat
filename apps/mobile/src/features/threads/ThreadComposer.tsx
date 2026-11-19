@@ -1,3 +1,6 @@
+import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
+export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
+import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import * as Dialog from "../../components/ui/Dialog";
@@ -31,7 +34,6 @@ import {
   composerAttachmentUploadsAtom,
 } from "../../state/composer-attachment-uploads";
 import Animated, {
-  FadeIn,
   FadeOut,
   ReduceMotion,
   useAnimatedStyle,
@@ -58,6 +60,7 @@ import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import { ComposerNotices } from "./ComposerNotices";
+import { ThreadOperateNotice } from "./ThreadOperateNotice";
 import {
   ComposerAttachmentStrip,
   ComposerAttachmentThumbnail,
@@ -83,7 +86,7 @@ import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import { resolveComposerSendPresentation } from "./composerSendPresentation";
 import { FOLLOW_UP_ACTION_LABEL, SendActionButton } from "./SendActionButton";
-import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { ComposerCommandPopover, shouldShowComposerMenu } from "./ComposerCommandPopover";
 import { ComposerPopoverAnchor } from "./ComposerPopoverAnchor";
 import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
 import { resolveComposerSendIntercept, useComposerCommandMenu } from "./use-composer-command-menu";
@@ -111,15 +114,6 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 import type { ThreadComposerProps } from "./thread-composer-props";
-
-export const COMPOSER_COLLAPSED_CHROME = 60;
-// Share of the one-row composer the draft keeps; a long model name truncates first.
-const INLINE_EDITOR_MIN_WIDTH = "40%";
-
-const COMPOSER_ATTACHMENT_ENTERING =
-  Platform.OS === "android"
-    ? FadeIn.duration(160)
-    : FadeIn.delay(COMPOSER_TRANSITION_DURATION_MS).duration(160).reduceMotion(ReduceMotion.System);
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
@@ -222,7 +216,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     draftMessage.trim().length > 0 ||
     draftAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
-  const stripAttachments = composerStripAttachments(draftAttachments);
   const stop = useComposerStopGuard({
     canStop: props.canStopThread,
     runId: props.selectedThread.runtime?.activeRunId ?? null,
@@ -243,6 +236,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   };
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
+  const stripAttachments = composerStripAttachments(
+    draftAttachments,
+    (attachment) =>
+      uploadStates[composerAttachmentUploadKey(props.environmentId, attachment.id)]?.status ===
+      "failed",
+  );
   const attachmentsUploading =
     props.connectionState === "connected" &&
     composerAttachmentsStillUploading({
@@ -693,9 +692,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         style={{ maxWidth: props.contentMaxWidth }}
       >
         {props.draftControls}
-        {!isSubmissionLocked &&
-        composerMenu.trigger &&
-        (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
+        {!isSubmissionLocked && composerMenu.trigger && shouldShowComposerMenu(composerMenu) ? (
           <ComposerPopoverAnchor>
             <ComposerCommandPopover
               items={composerMenu.items}
@@ -1051,11 +1048,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </Animated.View>
         </ComposerSurface>
 
-        {props.connectionState === "connected" && !props.canOperateThread ? (
-          <Text className="pt-2 text-xs text-foreground-muted">
-            This connection cannot control this task. You can still edit your draft.
-          </Text>
-        ) : null}
+        <ThreadOperateNotice
+          environmentId={props.environmentId}
+          connected={props.connectionState === "connected"}
+        />
       </Animated.View>
 
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />

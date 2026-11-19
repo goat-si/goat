@@ -6,8 +6,8 @@ import {
   EventId,
   GuestShareId,
   MessageId,
-  type OrchestrationV2TurnItem,
   ProviderDriverKind,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -45,6 +45,7 @@ import {
   shareThread,
   shareThreadFor,
   threadId,
+  writeItem,
 } from "./GuestShareService.testkit.ts";
 
 it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
@@ -287,71 +288,6 @@ it.effect("serves no render for an item outside the shared thread", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-const ownerRun = Effect.gen(function* () {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  yield* orchestrator.dispatch({
-    type: "message.dispatch",
-    commandId: CommandId.make("owner-message-for-command"),
-    threadId,
-    messageId: MessageId.make("message:command"),
-    text: "Build it",
-    attachments: [],
-    dispatchMode: { type: "defer_start" },
-    createdBy: "user",
-    creationSource: "web",
-  });
-  const { runs } = (yield* orchestrator.getThreadSnapshotWindow(threadId, { rowLimit: 10 }))
-    .projection;
-  return runs[0]!.id;
-});
-
-const writeItem = (
-  id: string,
-  fields:
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
-        "type" | "status" | "input" | "output"
-      >
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
-        "type" | "status" | "fileName" | "diffStr" | "oldStr" | "newStr"
-      >,
-) =>
-  Effect.gen(function* () {
-    const runId = yield* ownerRun;
-    const eventSink = yield* EventSink.EventSinkV2;
-    const now = yield* DateTime.now;
-    yield* eventSink.write({
-      events: [
-        {
-          id: EventId.make(`event:${id}`),
-          type: "turn-item.updated",
-          threadId,
-          driver: ProviderDriverKind.make("codex"),
-          providerInstanceId: instanceId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make(id),
-            threadId,
-            runId,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            title: null,
-            startedAt: now,
-            completedAt: fields.status === "running" ? null : now,
-            updatedAt: now,
-            ...fields,
-          },
-        },
-      ],
-    });
-    return TurnItemId.make(id);
-  });
-
 it.effect("gives the guest a command's detail and output, but no file diffs", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
@@ -402,6 +338,96 @@ it.effect("gives the guest a command's detail and output, but no file diffs", ()
     for (const request of refused) {
       assert.isTrue(Exit.isFailure(yield* Effect.exit(request)));
     }
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("guests can expand only source commands visible at the fork point", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares } = yield* shareThread;
+    const visible = yield* writeItem("item:visible-before-fork", {
+      type: "command_execution",
+      status: "completed",
+      input: "ls",
+      output: "visible",
+    });
+    const run = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs[0]!;
+    const now = yield* DateTime.now;
+    yield* (yield* EventSink.EventSinkV2).write({
+      events: [
+        {
+          id: EventId.make("event:fork-run-done"),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const forkId = ThreadId.make("thread:guest-command-fork");
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("fork-command"),
+      sourceThreadId: threadId,
+      targetThreadId: forkId,
+      sourcePoint: { type: "run", runId: run.id },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const hidden = TurnItemId.make("item:hidden-after-fork");
+    const laterRun = RunId.make("run:guest-after-fork");
+    const visibleItem = yield* orchestrator.getTurnItem({ threadId, itemId: visible });
+    assert.isNotNull(visibleItem);
+    if (!visibleItem || visibleItem.type !== "command_execution")
+      return yield* Effect.die("Missing command");
+    yield* (yield* EventSink.EventSinkV2).write({
+      events: [
+        {
+          id: EventId.make("event:later-run"),
+          type: "run.updated",
+          threadId,
+          runId: laterRun,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: {
+            ...run,
+            id: laterRun,
+            ordinal: run.ordinal + 1,
+            status: "completed",
+            completedAt: now,
+          },
+        },
+        {
+          id: EventId.make("event:hidden-command"),
+          type: "turn-item.updated",
+          threadId,
+          runId: laterRun,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...visibleItem, id: hidden, runId: laterRun, input: "pwd", output: "private" },
+        },
+      ],
+    });
+    const { url } = yield* guestShares.create({ threadId: forkId });
+    const { token: session } = yield* guestShares.redeem({
+      credential: url.slice(url.indexOf("#") + 1),
+      name: "Sam",
+    });
+    assert.deepInclude((yield* guestShares.item(session, visible)).item, {
+      input: "ls",
+      output: "visible",
+    });
+    assert.deepEqual(
+      Array.from(yield* Stream.runCollect(yield* guestShares.commandOutput(session, visible))),
+      [{ kind: "replace", text: "visible", truncated: false, running: false }],
+    );
+    assert.equal((yield* Effect.flip(guestShares.item(session, hidden))).reason, "unavailable");
+    assert.equal(
+      (yield* Effect.flip(guestShares.commandOutput(session, hidden))).reason,
+      "unavailable",
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

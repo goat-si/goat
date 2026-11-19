@@ -78,7 +78,7 @@ it.effect("filters image searches before applying the result limit", () =>
       expect(resultWithoutKind.entries).toEqual([{ kind: "file", path: "public/icon.svg" }]);
       expect(resultWithDirectoryKind.entries).toEqual([{ kind: "file", path: "public/icon.svg" }]);
       expect(fileSearch).toHaveBeenCalledTimes(2);
-      expect(fileSearch).toHaveBeenCalledWith("", { pageSize: 25_002 });
+      expect(fileSearch).toHaveBeenCalledWith(expect.stringContaining("**/*.{"), { pageSize: 201 });
     }),
   ).pipe(Effect.provide(testLayer)),
 );

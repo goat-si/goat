@@ -3,7 +3,7 @@
 // chat and settings routes, the sidebar and the right panel, through the same stores and
 // atoms the app reads. See renderScenarios.renders.tsx for the counting rules.
 import { createMemoryHistory } from "@tanstack/react-router";
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ThreadId } from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 import { isMacPlatform } from "@goat/shared/keybindings";
@@ -15,6 +15,7 @@ import { commands, page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 
 import { AppRoot } from "~/AppRoot";
+import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter, type AppRouter } from "~/router";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -22,6 +23,7 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { vcsEnvironment } from "~/state/vcs";
 import {
   ENVIRONMENT_ID,
+  PROJECT_ID,
   assistantItem,
   emitTerminalMetadata,
   emitThreadEvent,
@@ -286,6 +288,28 @@ it("app-switch-thread", async () => {
   // Only the rows losing and gaining the active highlight change.
   for (const window of windows) expect(window.components.SidebarThreadRow).toBe(2);
   await report("app-switch-thread", windows);
+});
+
+it("app-open-thread-from-draft", async () => {
+  using _clock = frozenClock();
+  const drafts = useComposerDraftStore.getState();
+  const draftId = DraftId.make("draft-render");
+  drafts.setProjectDraftThreadId(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), draftId);
+  using _draft = { [Symbol.dispose]: () => drafts.clearDraftThread(draftId) };
+  const { screen, router } = await mountApp(`/draft/${draftId}`);
+  await using _app = screen;
+  await expect.element(page.getByText("render", { exact: true }).first()).toBeVisible();
+  const counted = await measure(async () => {
+    await act(() =>
+      router.navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: ENVIRONMENT_ID, threadId: A },
+      }),
+    );
+    await expect.element(lastAnswer(A)).toBeVisible();
+  });
+  expect(counted.components.SidebarThreadRow).toBe(1);
+  await report("app-open-thread-from-draft", [counted], { commits: false });
 });
 
 // Through the diff.toggle shortcut (mod+d), the same handler as the header's diff button.

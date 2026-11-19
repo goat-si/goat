@@ -11,8 +11,8 @@ export const LIST_STATES: Record<
   merged: ["MERGED"],
 };
 
-export interface GitHubPullRequestListPage {
-  readonly items: ReadonlyArray<GitHubPullRequestListItem>;
+export interface GitHubPullRequestListPage<Item = GitHubPullRequestListItem> {
+  readonly items: ReadonlyArray<Item>;
   readonly rawCount: number;
   readonly endCursor: string | null;
 }

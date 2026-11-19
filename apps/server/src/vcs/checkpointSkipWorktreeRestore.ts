@@ -22,6 +22,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
     readonly commitOid: string;
     readonly longPaths: ReadonlyArray<string>;
     readonly maxPathBytes?: number;
+    readonly onSpawn?: () => void;
   }) {
     const { execute, vcsProcess, operation, cwd, commitOid, longPaths } = input;
     const sparseConfig = yield* execute({
@@ -120,6 +121,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
       operation,
       cwd,
       args: [...restore, ...(sparseCheckout ? [] : ["--ignore-skip-worktree-bits"]), "--", "."],
+      ...(input.onSpawn === undefined ? {} : { onSpawn: input.onSpawn }),
     });
     if (manual.length === 0) return;
     yield* execute({
@@ -132,6 +134,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
         "--pathspec-file-nul",
       ],
       stdin: manual.map((entry) => `:(top,literal)${entry}\0`).join(""),
+      ...(input.onSpawn === undefined ? {} : { onSpawn: input.onSpawn }),
     });
   },
 );

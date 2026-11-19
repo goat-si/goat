@@ -165,7 +165,7 @@ export function useComposerMenuItems({
   );
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
   // Older settled threads may be missing from the shells on any reachable host.
-  useThreadSearch(
+  const threadSearch = useThreadSearch(
     composerThreadSearchEnvironments(isPathTrigger ? environmentId : null, sshHostsByEnvironment),
     pathTriggerQuery,
     { titlesOnly: true },
@@ -476,9 +476,13 @@ export function useComposerMenuItems({
         : "No pull requests found in this repository.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
+      ? threadSearch.failed
+        ? "Couldn't search threads."
+        : "No matching files or folders."
       : "No matching command.";
   })();
 
-  return { items, isLoading, emptyState };
+  const errorText =
+    composerTriggerKind === "path" && threadSearch.failed ? "Couldn't search threads." : undefined;
+  return { items, isLoading, emptyState, errorText };
 }

@@ -311,7 +311,7 @@ export function ComputerUsePanel({
           Advanced
         </CollapsibleTrigger>
         <CollapsiblePanel>
-          <div className="border-t border-border/50 pt-3 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
+          <div className="border-t border-border/50 pt-3 *:not-first:border-t *:not-first:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
             <ComputerUseReadiness
               {...readinessInput}
               renderGrantAction={(grant) =>

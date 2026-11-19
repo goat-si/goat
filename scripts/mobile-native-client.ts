@@ -1,7 +1,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -42,10 +42,8 @@ const decodeSimulators = Schema.decodeUnknownEffect(
 );
 export type NativeClientRecord = typeof NativeClientRecord.Type;
 export type NativeClientStatus = "compatible" | "missing" | "unknown" | "stale";
-export class NativeClientError extends Schema.TaggedError<NativeClientError>()(
-  "NativeClientError",
-  { message: Schema.String },
-) {}
+import { NativeClientError, resolveAdb, androidSdk } from "./lib/mobile-native-adb.ts";
+export { NativeClientError, resolveAdb } from "./lib/mobile-native-adb.ts";
 
 export function clientStatus(
   fingerprint: string,
@@ -153,21 +151,6 @@ const collect = <E>(stream: Stream.Stream<Uint8Array, E>) =>
       (a, b) => a + b,
     ),
   );
-export const resolveAdb = Effect.gen(function* () {
-  if (yield* isCommandAvailable("adb")) return "adb";
-  const environment = yield* HostProcess.Environment;
-  const path = yield* Path.Path;
-  const executable = (yield* HostProcess.Platform) === "win32" ? "adb.exe" : "adb";
-  for (const sdk of [environment.ANDROID_SDK_ROOT, environment.ANDROID_HOME]) {
-    if (!sdk) continue;
-    const candidate = path.join(sdk, "platform-tools", executable);
-    if (yield* isCommandAvailable(candidate)) return candidate;
-  }
-  return yield* new NativeClientError({
-    message:
-      "adb was not found on PATH or in ANDROID_SDK_ROOT/ANDROID_HOME. Install Android SDK platform-tools.",
-  });
-});
 
 /** Build tool output goes to this file instead of the caller's terminal; null streams it. */
 const BuildLog = Context.Reference<string | null>("nativeClient/BuildLog", {
@@ -189,12 +172,14 @@ const command = Effect.fn("nativeClient.command")(function* (
   );
   const log = inherit ? yield* BuildLog : null;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
+  const sdk = yield* androidSdk;
   const child = yield* spawner.spawn(
     ChildProcess.make(spawn.command, spawn.args, {
       shell: spawn.shell,
       cwd: cwd ?? (yield* roots).mobile,
       env: {
         ...environment,
+        ...(sdk ? { ANDROID_HOME: sdk } : {}),
         APP_VARIANT: "development",
         MOBILE_VERSION_POLICY: "appVersion",
         GOAT_IOS_PERSONAL_TEAM: "0",

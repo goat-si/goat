@@ -40,20 +40,27 @@ export function GitActionElapsedTime({
     return null;
   }
 
-  return <p className={className}>{elapsed}</p>;
+  return (
+    <p aria-live="off" className={className}>
+      {elapsed}
+    </p>
+  );
 }
 
 export function GitActionProgressButtonContent({
   progress,
   isPanel,
+  id,
 }: {
   progress: GitActionProgressPresentation;
   isPanel: boolean;
+  id: string;
 }) {
   const hasOutput = progress.output !== null;
 
   return (
     <div
+      id={id}
       aria-atomic="false"
       aria-live="polite"
       className={cn(

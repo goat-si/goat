@@ -10,6 +10,7 @@ import {
   mergeControlStatus,
   canExecuteImmediateMerge,
   pullRequestStateAction,
+  resolveMergeMethod,
 } from "./pullRequestActions";
 
 const GITHUB = sourceControlClients.get("github").changeRequest;
@@ -89,6 +90,22 @@ describe("mobile pull request actions", () => {
     expect(canPerformPullRequestAction(pr, "merge")).toBe(false);
     expect(mergeUnavailableReason(pr, true, GITHUB)).toContain("conflicts");
     expect(mergeSummary(pr, true, GITHUB)).toBe("Has conflicts");
+  });
+
+  it("picks the chosen, project default, then last used merge method the repository allows", () => {
+    const pr = detail();
+    expect(resolveMergeMethod(pr, null, "merge", "squash")).toBe("merge");
+    expect(resolveMergeMethod(pr, "squash", "merge", "merge")).toBe("squash");
+    expect(resolveMergeMethod(pr, null, "rebase", "merge")).toBe("merge");
+    expect(resolveMergeMethod(pr, null, null, undefined)).toBe("squash");
+    expect(
+      resolveMergeMethod(
+        detail({ mergeCapabilities: { merge: true, squash: false, rebase: false } }),
+        null,
+        null,
+        "rebase",
+      ),
+    ).toBe("merge");
   });
 
   it("names the change request with its host's term", () => {

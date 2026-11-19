@@ -13,6 +13,7 @@ import {
   isDetailBehindShell,
 } from "@goat/client-runtime/state/thread-activity-announcement";
 import {
+  EMPTY_PENDING_FILE_SURFACE_IDS,
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
@@ -79,7 +80,6 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
-  type RunId,
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
@@ -361,6 +361,10 @@ import {
   startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   shouldRefocusComposerOnWindowFocus,
+  noopHeldTurnDiff,
+  noopHeldRevert,
+  noopHeldAttachment,
+  ignoreComposerFocus,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -415,13 +419,6 @@ import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates"
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
-
-const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
-
-const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
-const noopHeldRevert = (_targetTurnCount: number) => {};
-const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
-const ignoreComposerFocus = () => {};
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -1446,6 +1443,7 @@ export default function ChatView(props: ChatViewProps) {
     isSendBusy,
     backgroundSubmissionPending,
   } = useLocalDispatchState({
+    environmentId,
     activeThread,
     activeLatestRun,
     latestUserMessageId:
@@ -2770,6 +2768,7 @@ export default function ChatView(props: ChatViewProps) {
     terminalOpen: Boolean(terminalUiState.terminalOpen),
     previewFocus: isPreviewFocused(),
     previewOpen: previewPanelOpen,
+    rightPanelOpen,
     editableFocus: isEditableFocused(eventTarget),
     modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
     composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
@@ -2791,6 +2790,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   });
   useChatShortcuts({
+    embedded,
     enabled: activeThreadId !== null && !backgroundThread,
     keybindings,
     scriptKeybindings,

@@ -1,3 +1,4 @@
+import { settlementCadenceTests } from "./ThreadSettlementService.cadence-test-cases.ts";
 import { assert, it } from "@effect/vitest";
 import {
   backgroundReads,
@@ -122,6 +123,7 @@ export function settlementAdmissionTests({
   makeSnapshot,
   startHarness,
 }: Pick<typeof Harness, "makeHarness" | "makeThread" | "makeSnapshot" | "startHarness">) {
+  settlementCadenceTests({ makeHarness, makeThread, makeSnapshot, startHarness });
   admissionWorkerTests();
   it.effect(
     "overflow reconciliation reads interactively while periodic full sweeps read in the background",

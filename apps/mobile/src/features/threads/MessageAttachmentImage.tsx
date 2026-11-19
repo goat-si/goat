@@ -1,3 +1,4 @@
+import type { SentImageHandoff } from "../../lib/sentImageHandoff";
 import type { EnvironmentId } from "@goat/contracts";
 import { Image as ExpoImage } from "expo-image";
 import { useMemo, useRef } from "react";
@@ -18,6 +19,8 @@ export function MessageAttachmentImage(props: {
   readonly name: string;
   readonly mimeType: string;
   readonly className: string;
+  readonly handoff?: SentImageHandoff;
+  readonly onImageLoad?: (image: SentImageHandoff) => void;
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const withGallery = useFilePreviewGallery();
@@ -40,7 +43,7 @@ export function MessageAttachmentImage(props: {
   const retriedImage = useRef(false);
   const imageStyle = useResolveClassNames(props.className);
 
-  if (uri === null) {
+  if (uri === null && props.handoff === undefined) {
     return (
       <View className={`${props.className} items-center justify-center`}>
         <AppActivityIndicator />
@@ -72,12 +75,23 @@ export function MessageAttachmentImage(props: {
         }
       >
         <ExpoImage
-          source={assetImageSource(props.environmentId, resource, uri)}
+          source={
+            uri === null
+              ? { uri: props.handoff?.uri }
+              : assetImageSource(props.environmentId, resource, uri)
+          }
+          placeholder={props.handoff ? { uri: props.handoff.uri } : undefined}
+          placeholderContentFit="cover"
           cachePolicy="memory-disk"
           style={imageStyle}
           contentFit="cover"
-          onLoad={() => {
+          onLoad={(event) => {
             retriedImage.current = false;
+            if (props.handoff)
+              props.onImageLoad?.({
+                uri: props.handoff.uri,
+                aspectRatio: event.source.width / event.source.height,
+              });
           }}
           onError={() => {
             if (retriedImage.current) return;

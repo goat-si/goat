@@ -1,3 +1,4 @@
+import { useRetryEnvironment } from "../connection/useRetryEnvironment";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
@@ -39,12 +40,10 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { cn } from "../../lib/cn";
-import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { useThreadShell } from "../../state/entities";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-registry";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadDraftForThread } from "../../state/thread-draft-review";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
@@ -468,7 +467,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
   const headerIcon = String(useUniwindTheme()["--color-icon"]);
   const { environmentId, threadId } = props.route.params;
   const environment = useEnvironmentPresentation(environmentId);
-  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, "environment retry");
+  const retryEnvironment = useRetryEnvironment();
   const isEnvironmentReady = environment.presentation?.connection.phase === "connected";
   const { draftMessage, draftContext } = useThreadDraftForThread({ environmentId, threadId });
   const reviewCache = useReviewCacheForThread({ environmentId, threadId });

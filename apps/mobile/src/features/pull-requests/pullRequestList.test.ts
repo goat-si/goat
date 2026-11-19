@@ -133,6 +133,17 @@ function page(
   };
 }
 
+it("orders merged PRs by actual instants across timezone offsets", () => {
+  const rows = mergePullRequestListEntries(
+    [],
+    [
+      entry(1, { updatedAt: "2026-07-05T01:00:00+02:00" }),
+      entry(2, { updatedAt: "2026-07-05T00:30:00Z" }),
+    ],
+  );
+  expect(rows.map((row) => row.number)).toEqual([2, 1]);
+});
+
 describe("recycled PR list rows", () => {
   const scopedEntry = (patch: Partial<PullRequestListEntry> = {}) => ({
     ...entry(1, patch),

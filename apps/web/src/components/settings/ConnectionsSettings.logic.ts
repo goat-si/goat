@@ -619,9 +619,23 @@ export function resolveAdvertisedEndpointPairingUrl(
   return resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential);
 }
 
-export function resolveCurrentOriginPairingUrl(credential: string): string {
-  const url = new URL("/pair", window.location.href);
-  return setPairingTokenOnUrl(url, credential).toString();
+export function resolveCurrentOriginPairingUrl(
+  credential: string,
+  currentHref = window.location.href,
+): string | null {
+  try {
+    const url = new URL("/pair", currentHref);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      isLoopbackHostname(url.hostname) ||
+      url.hostname.startsWith("127.") ||
+      /^\[::ffff:7f[0-9a-f]{2}:/i.test(url.hostname)
+    )
+      return null;
+    return setPairingTokenOnUrl(url, credential).toString();
+  } catch {
+    return null;
+  }
 }
 
 export function isHostedAppPairingUrl(value: string): boolean {

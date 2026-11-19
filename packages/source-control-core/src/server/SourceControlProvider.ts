@@ -124,7 +124,7 @@ export class SourceControlProvider extends Context.Service<
     readonly headBranchProbe?: (input: {
       readonly headSelectors: ReadonlyArray<string>;
       readonly state: "open" | "all";
-      /** `owner:branch` when the head is the default branch, a name most forks share. */
+      /** An owner-qualified head for hosts that can narrow a crowded branch lookup. */
       readonly defaultBranchHeadSelector?: string | undefined;
     }) => { readonly headSelectors: ReadonlyArray<string>; readonly limit: number };
     readonly readChangeRequestTemplate?: (input: {

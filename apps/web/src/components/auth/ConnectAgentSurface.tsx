@@ -1,3 +1,4 @@
+import { normalizePairingCode } from "@goat/shared/pairingCode";
 import {
   type AuthMcpApprovalDecision,
   type AuthMcpApprovalDetails,
@@ -158,7 +159,7 @@ export function ConnectAgentSurface({
           : {
               _tag: "pairing-code",
               access,
-              code: pairingCode.trim(),
+              code: normalizePairingCode(pairingCode.trim()),
               memoryScopes,
               workspaceTerminalScopes,
             };

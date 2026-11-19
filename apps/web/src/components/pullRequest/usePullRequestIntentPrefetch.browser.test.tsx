@@ -9,6 +9,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
       detail: ((target: unknown) => target) as never,
+      activity: ((target: unknown) => ({ activity: target })) as never,
     },
   };
 });
@@ -83,4 +84,36 @@ it("reads the panel's detail once intent rests on a row for 150 ms", async () =>
 
   await act(() => leave.click());
   expect(state.reads.at(-1)).toBeNull();
+});
+
+it("prefetches activity after sustained intent and cancels on leave", async () => {
+  state.reads = [];
+  await using screen = await render(<Rows />, { router: false }); // A bare hook probe; nothing here navigates.
+  using _timers = fakeTimers({ now: 0 });
+  const rest = screen.getByRole("button", { name: "rest" }).element() as HTMLElement;
+  const leave = screen.getByRole("button", { name: "leave" }).element() as HTMLElement;
+  await act(() => {
+    rest.click();
+    leave.click();
+  });
+  await act(() => vi.advanceTimersByTime(1_000));
+  expect(state.reads).toEqual([]);
+  await act(() => rest.click());
+  await act(() => vi.advanceTimersByTime(149));
+  expect(state.reads).toEqual([]);
+  await act(() => vi.advanceTimersByTime(1));
+  const activity = {
+    activity: {
+      environmentId,
+      input: { projectId: row.projectId, repository: "owner/repo", number: 7, host: "github.com" },
+    },
+  };
+  const activityReads = () =>
+    state.reads.filter((read) => JSON.stringify(read) === JSON.stringify(activity));
+  expect(activityReads().length).toBeGreaterThan(0);
+  const renders = activityReads().length;
+  await act(() => vi.advanceTimersByTime(1_000));
+  expect(activityReads()).toHaveLength(renders);
+  await act(() => leave.click());
+  expect(state.reads.slice(-2)).toEqual([null, null]);
 });

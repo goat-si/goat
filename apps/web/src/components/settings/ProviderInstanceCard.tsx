@@ -261,7 +261,7 @@ function ProviderEnvironmentFieldRow(props: {
               className="min-w-0 flex-1"
               value={value}
               onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
+              placeholder="Enter or re-enter secret"
               configured={props.variable?.valueRedacted === true}
               spellCheck={false}
             />
@@ -424,7 +424,7 @@ export function ProviderEnvironmentSection(props: {
                   className="min-w-0 flex-1"
                   value={variable.valueRedacted ? "" : variable.value}
                   onCommit={(value) => updateVariable(variable.id, { value })}
-                  placeholder="value"
+                  placeholder={variable.name ? "Enter or re-enter secret" : "value"}
                   configured={variable.valueRedacted === true}
                   spellCheck={false}
                   aria-label={`Environment variable value ${index + 1}`}

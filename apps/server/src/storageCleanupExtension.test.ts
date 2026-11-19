@@ -110,7 +110,7 @@ describe("storage cleanup for extension status", () => {
             occurredAt: at(0),
             payload: { ...shell({ deletedAt: at(0) }), lastVisitedAt: null },
           });
-          expect(fixture.snapshotReads()).toBe(startupReads + 3 * Number(worktreeOnDelete));
+          expect(fixture.snapshotReads()).toBe(startupReads + 2 * Number(worktreeOnDelete) + 1);
         }),
       ),
   );

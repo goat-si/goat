@@ -1,4 +1,5 @@
 import { normalizeChangedAcpCustomModels } from "./provider/goat/AcpCustomModelSettings.ts";
+import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as NodeUtil from "node:util";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
@@ -1897,7 +1898,7 @@ const make = Effect.gen(function* () {
       }
       const updated = yield* normalizeChangedAcpCustomModels(
         current,
-        yield* withDisposableStamp(update)(current),
+        clearRetargetedSettingsSecrets(current, yield* withDisposableStamp(update)(current)),
         settingsPath,
       );
       for (const [id, provider] of Object.entries(updated.secretProviders)) {

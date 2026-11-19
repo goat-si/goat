@@ -35,6 +35,7 @@ import {
   codexMcpListLaunchArgs,
   resolveCodexLaunchArgs,
 } from "../provider/codexLaunchArgs.ts";
+import { codexAppServerEnvironment } from "../provider/CodexProvider.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 import {
   normalizeCliError,
@@ -512,7 +513,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(effectiveSelection);
       const binary = effectiveConfig.binaryPath || "codex";
       const env = {
-        ...effectiveEnvironment,
+        ...codexAppServerEnvironment(effectiveEnvironment),
         ...(codexHome ? { CODEX_HOME: codexHome } : {}),
       };
       const routeInput = yield* HomeRoute.resolveCodexRouteContext({
@@ -597,6 +598,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           `model_reasoning_effort="${reasoningEffort}"`,
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
           ...routeArgs,
+          "--config",
+          "features.codex_hooks=false",
+          "--config",
+          "features.hooks=false",
           "--output-schema",
           schemaPath,
           "--output-last-message",

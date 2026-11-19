@@ -110,6 +110,8 @@ export function notificationCompletions(
     if (
       (event.type !== "run.created" && event.type !== "run.updated") ||
       event.payload.completedAt === null ||
+      event.payload.status === "interrupted" ||
+      event.payload.status === "cancelled" ||
       event.payload.completionNotification === "silent" ||
       (event.payload.status !== "failed" && context.idleRunIds.has(event.payload.id))
     )

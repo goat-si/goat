@@ -17,6 +17,7 @@ import { isDevProxiedPath } from "@goat/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@goat/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@goat/shared/observability";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as ByteSize from "effect/ByteSize";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { cast } from "effect/Function";
 import {
   HttpClient,
@@ -64,6 +66,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   DESKTOP_RENDERER_ORIGINS,
+  MCP_HTTP_PATH,
 } from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
 
@@ -354,7 +357,7 @@ export const layerBrowserApiCors = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
     // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    return HttpRouter.cors({
+    const cors = HttpMiddleware.cors({
       ...(devOrigin
         ? {
             allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
@@ -365,6 +368,15 @@ export const layerBrowserApiCors = Layer.unwrap(
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
+    return HttpRouter.middleware(
+      (httpEffect) => {
+        const withCors = cors(httpEffect);
+        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          request.url.split("?", 1)[0] === MCP_HTTP_PATH ? httpEffect : withCors,
+        );
+      },
+      { global: true },
+    );
   }),
 );
 
@@ -545,6 +557,16 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(u
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 
+export const withRootRequestSpans = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
+  Layer.fromBuild((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.updateContext(
+        (context: Context.Context<R>) =>
+          Context.omit(Tracer.ParentSpan)(context) as Context.Context<R>,
+      ),
+    ),
+  );
+
 export const layerAssetRoute = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -719,6 +741,12 @@ const streamStaticFile = (file: FileSystem.File, size: bigint) =>
     }),
   );
 
+// The app can approve agents and start threads in one click, so no other site may frame it.
+const SPA_FRAME_HEADERS = {
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+};
+
 const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
   function* (immutableBuildAssets: ReadonlySet<string>) {
     const request = yield* HttpServerRequest.HttpServerRequest;
@@ -819,6 +847,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     };
     const headers: Record<string, string> = {
       "Cache-Control": cacheControl,
+      ...(isHtml ? SPA_FRAME_HEADERS : {}),
       ...validators(fileInfo),
     };
     const etag = headers.ETag;
@@ -855,6 +884,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       return HttpServerResponse.uint8Array(bytes, {
         headers: {
           "Cache-Control": cacheControl,
+          ...(isHtml ? SPA_FRAME_HEADERS : {}),
           ...validators({ ...info, size: ByteSize.bytes(bytes.byteLength) }),
         },
         contentType,

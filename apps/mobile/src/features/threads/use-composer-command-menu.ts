@@ -413,7 +413,7 @@ export function useComposerCommandMenu({
     query: trigger?.kind === "path" ? trigger.query : null,
   });
   // Older settled threads may be missing from the shells on any reachable host.
-  useThreadSearch(
+  const threadSearch = useThreadSearch(
     composerThreadSearchEnvironments(
       trigger?.kind === "path" ? environmentId : null,
       verifiedThreadHosts,
@@ -768,7 +768,9 @@ export function useComposerCommandMenu({
         ? pullRequestProjectId === null || pullRequestRepository === null
           ? "Pull requests are unavailable for this project."
           : pullRequestSearch.error
-        : null,
+        : trigger?.kind === "path" && threadSearch.failed
+          ? "Couldn't search threads."
+          : null,
     onSelect,
   };
 }

@@ -274,7 +274,11 @@ export function createWorkspaceFocusController(doc: Document) {
     if (areas.length === 0) return false;
     const activeArea = doc.activeElement?.closest<HTMLElement>(AREA_SELECTOR);
     const currentId = fromArea ?? activeArea?.dataset.workspaceArea ?? lastArea;
-    const current = areas.findIndex((area) => area.dataset.workspaceArea === currentId);
+    const activeIndex = fromArea || !activeArea ? -1 : areas.indexOf(activeArea);
+    const current =
+      activeIndex === -1
+        ? areas.findIndex((area) => area.dataset.workspaceArea === currentId)
+        : activeIndex;
     const index =
       current === -1
         ? direction === 1

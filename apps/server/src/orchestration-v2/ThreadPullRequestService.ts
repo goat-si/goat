@@ -29,6 +29,7 @@ import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
 class ThreadPullRequestServiceV2 extends Context.Service<
@@ -110,6 +111,7 @@ interface RefreshRequest {
   readonly threadId: ThreadId | null;
   readonly refresh: boolean;
   readonly backfill?: boolean;
+  readonly kind?: "scheduled" | "immediate";
 }
 
 export const make = Effect.gen(function* () {
@@ -123,6 +125,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const pendingBackfill = new Map<ThreadId, number>();
+  const noPullRequestRechecks = makeNoPullRequestRechecks();
 
   const finishBackfill = (threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id">>) => {
     for (const thread of threads) pendingBackfill.delete(thread.id);
@@ -156,6 +159,7 @@ export const make = Effect.gen(function* () {
           )
         : threadSnapshot.threads;
     const projects = new Map(projectShells.map((project) => [project.id, project]));
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     if (request.backfill) {
       for (const thread of snapshotThreads) {
         if (
@@ -185,13 +189,36 @@ export const make = Effect.gen(function* () {
       JSON.stringify([thread.projectId, thread.worktreePath, thread.branch]),
     );
 
+    const scheduled = new Map(
+      request.kind === "immediate" ||
+        request.threadId !== null ||
+        request.refresh ||
+        request.backfill
+        ? []
+        : [...groups].filter(
+            ([, group]) =>
+              group[0]?.branch != null &&
+              group.every(
+                (thread) => thread.branchPullRequest == null && !pendingBackfill.has(thread.id),
+              ),
+          ),
+    );
+    const selected = noPullRequestRechecks.select(
+      nowMs,
+      Array.from(scheduled, ([key, group]) => ({
+        key,
+        activityAtMs: Math.max(...group.map((thread) => DateTime.toEpochMillis(thread.updatedAt))),
+      })),
+    );
+
     yield* Effect.forEach(
-      groups.values(),
-      (group) =>
+      groups,
+      ([key, group]) =>
         Effect.gen(function* () {
           const first = group[0]!;
           const project = projects.get(first.projectId);
           if (project === undefined) return finishBackfill(group);
+          if (scheduled.has(key) && !selected.has(key)) return;
           const { project: resolvedProject } = yield* resolveProjectForPullRequestDiscovery(
             project,
             repositoryIdentities,
@@ -218,6 +245,12 @@ export const make = Effect.gen(function* () {
                   { cwd, branch: first.branch },
                   { refresh: request.refresh, confirmTerminal: false },
                 );
+          if (first.branch !== null)
+            noPullRequestRechecks.record(
+              key,
+              DateTime.toEpochMillis(yield* DateTime.now),
+              detected !== null,
+            );
           const repository =
             detected === null ? null : pullRequestRepository(detected, resolvedProject);
           const detectedReference =
@@ -371,12 +404,20 @@ export const make = Effect.gen(function* () {
               Effect.logWarning("thread branch pull request lookup failed", {
                 threadIds: group.map((thread) => thread.id),
                 cause: Cause.pretty(cause),
-              }).pipe(Effect.tap(() => Effect.sync(() => failBackfill(group)))),
+              }).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    noPullRequestRechecks.forget(key);
+                    failBackfill(group);
+                  }),
+                ),
+              ),
           ),
         ),
       // Batch concurrent branch lookups into one GitHub GraphQL document.
       { concurrency: 32, discard: true },
     );
+    if (request.threadId === null) noPullRequestRechecks.retain(groups);
   });
 
   // At most one queued request per thread, so a turn end's events share one lookup.
@@ -454,10 +495,24 @@ export const make = Effect.gen(function* () {
     return Effect.void;
   };
 
+  const refreshSignals = yield* Queue.dropping<void>(1);
+
   const start: ThreadPullRequestServiceV2["Service"]["start"] = Effect.fn(
     "ThreadPullRequestServiceV2.start",
   )(function* () {
     yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, processEvent));
+    yield* forkParked(
+      Stream.runForEach(pullRequests.subscribeRefreshes, () =>
+        Queue.offer(refreshSignals, undefined),
+      ),
+    );
+    yield* forkParked(
+      Queue.take(refreshSignals).pipe(
+        Effect.andThen(worker.enqueue({ threadId: null, refresh: true, kind: "immediate" })),
+        Effect.andThen(worker.drain),
+        Effect.forever,
+      ),
+    );
     yield* forkParked(
       Queue.take(linkedThreadReorders).pipe(
         Effect.andThen(pullRequests.notifyLinkedThreadsChanged),

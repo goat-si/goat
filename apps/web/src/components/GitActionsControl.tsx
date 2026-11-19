@@ -11,7 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { GitRunStackedActionResult, GitStackedAction, VcsStatusResult } from "@goat/contracts";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   CloudDownloadIcon,
@@ -154,6 +154,7 @@ export default function GitActionsControl({
   onOpenChanges,
   workspaceMutationId = null,
 }: GitActionsControlProps) {
+  const progressLabelId = useId();
   const sshFetchBack = useSshWorkspaceFetchBack(draftId === undefined ? activeThreadRef : null);
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
@@ -962,11 +963,7 @@ export default function GitActionsControl({
         >
           {gitActionProgress ? (
             <ThreadDetailsControl
-              aria-label={
-                gitActionProgress.output
-                  ? `${gitActionProgress.status} ${gitActionProgress.output}`
-                  : gitActionProgress.status
-              }
+              aria-labelledby={progressLabelId}
               part="primary"
               panel={isPanel}
               multiline
@@ -975,7 +972,11 @@ export default function GitActionsControl({
               size="xs"
               variant={isPanel ? "ghost" : "outline"}
             >
-              <GitActionProgressButtonContent isPanel={isPanel} progress={gitActionProgress} />
+              <GitActionProgressButtonContent
+                id={progressLabelId}
+                isPanel={isPanel}
+                progress={gitActionProgress}
+              />
             </ThreadDetailsControl>
           ) : isPanel && visibleInlineSuccess ? (
             <ThreadDetailsControl part="primary" multiline disabled size="xs" variant="ghost">

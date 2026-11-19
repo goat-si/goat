@@ -30,11 +30,15 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ManagedRelayDpopSigner from "../relay/managedRelay.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import type { EnvironmentShellState } from "./shell.ts";
 import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
   options: {
+    readonly shellState?: (
+      environmentId: EnvironmentId,
+    ) => Atom.Atom<Pick<EnvironmentShellState, "removedAt">>;
     /** Runs on each turn-range and full-thread diff the server answers. */
     readonly onCheckpointDiffAnswer?: QueryAnswerHandler<
       { readonly ignoreWhitespace?: boolean },
@@ -173,12 +177,17 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     threadSearch: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:thread-search",
       tag: ORCHESTRATION_V2_WS_METHODS.searchThreads,
-      staleTimeMs: 30_000,
-      idleTtlMs: 60_000,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
     }),
     archivedShellSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:archived-shell-snapshot",
       tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+      refreshTrigger: ({ environmentId }) => {
+        if (options.shellState === undefined) return undefined;
+        const shell = options.shellState(environmentId);
+        return Atom.make((get) => get(shell).removedAt);
+      },
     }),
     // Read right before deleting a worktree, so never served from cache.
     worktreeThreadIds: createEnvironmentRpcQueryAtomFamily(runtime, {

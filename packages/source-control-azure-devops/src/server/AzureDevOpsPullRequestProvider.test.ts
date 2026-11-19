@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import type { PullRequestCheck, PullRequestCheckStatus } from "@goat/contracts";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
@@ -134,6 +137,7 @@ describe("getChangeRequest", () => {
         Effect.provide(
           Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
             getPullRequest: () => Effect.succeed(PULL_REQUEST),
+            listPolicyChecks: () => Effect.succeed([]),
             listIterations: () =>
               Effect.succeed([ITERATION, { ...ITERATION, id: 4, headCommit: "new-head" }]),
             listIterationChanges: () =>
@@ -168,6 +172,7 @@ describe("getChangeRequest", () => {
           Effect.provide(
             Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
               getPullRequest: () => Effect.succeed(PULL_REQUEST),
+              listPolicyChecks: () => Effect.succeed([]),
               listIterations: () =>
                 state === "missing"
                   ? Effect.succeed([])
@@ -191,6 +196,177 @@ describe("getChangeRequest", () => {
         expect(detail.headSha).toBeUndefined();
         expect(detail.changedFiles).toBe(0);
       }),
+  );
+
+  it.effect(
+    "reads the pull request once for overlapping detail and conversation, then its diff",
+    () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const release = yield* Deferred.make<void>();
+        const provider = yield* make.pipe(
+          Effect.provide(
+            Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+              getPullRequest: () =>
+                Effect.sync(() => {
+                  reads += 1;
+                }).pipe(Effect.andThen(Deferred.await(release)), Effect.as(PULL_REQUEST)),
+              listIterations: () => Effect.succeed([ITERATION]),
+              listIterationChanges: () =>
+                Effect.succeed({ changes: [change("a.ts")], truncated: false }),
+              readItemContent: () =>
+                Effect.succeed({ contents: side("new", 2, 4), isBinary: false }),
+              ...NO_BLOBS,
+              listPolicyChecks: () => Effect.succeed([]),
+              listThreads: () => Effect.succeed([]),
+            }),
+          ),
+        );
+        const input = { cwd: "/w", repository: "acme/web", host: "dev.azure.com", number: 7 };
+
+        // Clients request detail and conversation together; both start before the read returns.
+        const detail = yield* Effect.forkChild(provider.getChangeRequest(input), {
+          startImmediately: true,
+        });
+        const activity = yield* Effect.forkChild(provider.getChangeRequestActivity(input), {
+          startImmediately: true,
+        });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(detail);
+        yield* Fiber.join(activity);
+        yield* provider.getDiff(input);
+
+        expect(reads).toBe(1);
+      }),
+  );
+  it.effect("does not share a pending location across repositories using the same checkout", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const provider = yield* make.pipe(
+        Effect.provide(
+          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+            getPullRequest: () =>
+              Effect.sync(() => {
+                reads += 1;
+                return PULL_REQUEST;
+              }),
+            listIterations: () => Effect.succeed([]),
+            listPolicyChecks: () => Effect.succeed([]),
+            listThreads: () => Effect.succeed([]),
+          }),
+        ),
+      );
+      const ref = { cwd: "/w", host: "dev.azure.com", repository: "org/project/repo-a", number: 7 };
+      yield* provider.getChangeRequest(ref);
+      yield* provider.getChangeRequestActivity({ ...ref, repository: "org/project/repo-b" });
+      expect(reads).toBe(2);
+    }),
+  );
+  it.effect("retries a location read after a shared detail read fails", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const release = yield* Deferred.make<void>();
+      const provider = yield* make.pipe(
+        Effect.provide(
+          Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+            getPullRequest: () =>
+              Effect.suspend(() => {
+                reads += 1;
+                return reads === 1
+                  ? Deferred.await(release).pipe(
+                      Effect.andThen(
+                        Effect.fail(
+                          new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
+                            command: "az",
+                            cwd: "/w",
+                            operation: "getPullRequest",
+                            cause: "failed",
+                          }),
+                        ),
+                      ),
+                    )
+                  : Effect.succeed(PULL_REQUEST);
+              }),
+            listThreads: () => Effect.succeed([]),
+          }),
+        ),
+      );
+      const ref = { cwd: "/w", host: "dev.azure.com", repository: "org/project/repo", number: 7 };
+      const detail = yield* Effect.forkChild(Effect.flip(provider.getChangeRequest(ref)), {
+        startImmediately: true,
+      });
+      const activity = yield* Effect.forkChild(provider.getChangeRequestActivity(ref), {
+        startImmediately: true,
+      });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(detail);
+      yield* Fiber.join(activity);
+      expect(reads).toBe(2);
+    }),
+  );
+});
+
+describe("policy checks", () => {
+  const REPOSITORY = {
+    cwd: "/w",
+    repository: "acme/web",
+    host: "dev.azure.com",
+    number: 7,
+  };
+  const check = (status: PullRequestCheckStatus): PullRequestCheck => ({
+    name: "PR validation",
+    status,
+    description: null,
+    url: null,
+    required: true,
+  });
+  const readFailure = new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
+    command: "az",
+    cwd: "/w",
+    operation: "listPolicyChecks",
+    cause: "unavailable",
+  });
+
+  const provide = (
+    listPolicyChecks: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli["Service"]["listPolicyChecks"],
+    pullRequest = PULL_REQUEST,
+  ) =>
+    make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          getPullRequest: () => Effect.succeed(pullRequest),
+          listIterations: () => Effect.succeed([ITERATION]),
+          listIterationChanges: () => Effect.succeed({ changes: [], truncated: false }),
+          listPolicyChecks,
+        }),
+      ),
+    );
+
+  it.effect("keeps the detail readable when the policies are not", () =>
+    Effect.gen(function* () {
+      const provider = yield* provide(() => Effect.fail(readFailure));
+      const detail = yield* provider.getChangeRequest(REPOSITORY);
+      expect(detail.checks).toEqual([]);
+    }),
+  );
+
+  it.effect.each([
+    { statuses: ["pending", "failure"], expected: "failing" },
+    { statuses: [], expected: null },
+  ] as const)("summarizes $statuses as $expected", ({ statuses, expected }) =>
+    Effect.gen(function* () {
+      const provider = yield* provide(() => Effect.succeed(statuses.map(check)));
+      const summary = yield* provider.getChangeRequestSummary!(REPOSITORY);
+      expect(summary.checksState).toBe(expected);
+    }),
+  );
+
+  it.effect("leaves the last known state alone when the policies cannot be read", () =>
+    Effect.gen(function* () {
+      const provider = yield* provide(() => Effect.fail(readFailure));
+      const summary = yield* provider.getChangeRequestSummary!(REPOSITORY);
+      expect(summary.checksState).toBeUndefined();
+    }),
   );
 });
 

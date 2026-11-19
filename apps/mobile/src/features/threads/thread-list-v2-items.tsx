@@ -1,3 +1,4 @@
+import { resolveThreadListRowStatus } from "@goat/client-runtime/state/thread-list-priority";
 import { ThreadRowMenu } from "./thread-row-menu";
 import { usePendingDraftBranch } from "./use-pending-draft-branch";
 import { copyThreadShell } from "../../lib/copyThreadReference";
@@ -76,6 +77,9 @@ import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { ThreadListV2Duration } from "./thread-list-pane-clock";
 import {
+  TITLE_FAVICON_SIZE,
+  TITLE_FAVICON_OFFSET,
+  TITLE_TEXT_INSET,
   DONE_STATUS_LABEL,
   STATUS_LABEL_BY_STATUS,
   ThreadListV2RowOrigin,
@@ -84,64 +88,16 @@ import {
 } from "./thread-list-v2-row-meta";
 import { threadListV2RowAccessibilityLabel } from "./thread-list-v2-label";
 import { providerInstanceNameLabel } from "../../lib/modelOptions";
-import { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v2-section";
+import { ThreadListV2SectionDivider } from "./thread-list-v2-section";
 export { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v2-section";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
-const TITLE_FAVICON_SIZE = 15;
-// Centers the favicon on the first line of the text-base title.
-const TITLE_FAVICON_OFFSET = 4;
-// Lines below the title start where the title text does.
-const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;
-
-type ThreadListV2ShelfHeaderProps = {
-  readonly count: number;
-  readonly disabled?: boolean;
-  readonly expanded: boolean;
-  readonly onToggle: () => void;
-  readonly pane?: "screen" | "sidebar";
-};
-
-const SHELF_LABEL = { working: "Working", snoozed: "Snoozed", settled: "Settled" } as const;
-
-function ThreadListV2ShelfHeader(
-  props: ThreadListV2ShelfHeaderProps & { readonly kind: keyof typeof SHELF_LABEL },
-) {
-  const label = SHELF_LABEL[props.kind];
-  return (
-    <ThreadListV2Section
-      label={props.expanded ? label : `${label} (${props.count})`}
-      pane={props.pane}
-      tone={props.kind === "snoozed" ? "snoozed" : "default"}
-      disclosure={{
-        expanded: props.expanded,
-        disabled: props.disabled,
-        onToggle: props.onToggle,
-        accessibilityLabel: `${props.count} ${props.kind} ${props.count === 1 ? "thread" : "threads"}`,
-        accessibilityHint: `${props.expanded ? "Collapses" : "Expands"} the ${props.kind} threads.`,
-      }}
-    />
-  );
-}
-
-export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(
-  props: ThreadListV2ShelfHeaderProps,
-) {
-  return <ThreadListV2ShelfHeader {...props} kind="working" />;
-});
-
-export const ThreadListV2SnoozedShelfHeader = memo(function ThreadListV2SnoozedShelfHeader(
-  props: ThreadListV2ShelfHeaderProps,
-) {
-  return <ThreadListV2ShelfHeader {...props} kind="snoozed" />;
-});
-
-export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledShelfHeader(
-  props: ThreadListV2ShelfHeaderProps,
-) {
-  return <ThreadListV2ShelfHeader {...props} kind="settled" />;
-});
+export {
+  ThreadListV2WorkingShelfHeader,
+  ThreadListV2SnoozedShelfHeader,
+  ThreadListV2SettledShelfHeader,
+} from "./thread-list-v2-shelf-header";
 
 const PENDING_TASK_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
@@ -481,7 +437,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
-  const status = liftedThreadListV2Status(resolveThreadListV2Status(thread), props.lift);
+  const rawStatus = resolveThreadListV2Status(thread);
+  const status = liftedThreadListV2Status(resolveThreadListRowStatus(thread), props.lift);
   const isUnread =
     status === "ready" && (threadHasUnseenCompletion(thread) || props.lift === "unseen");
   const markableUnread = canMarkThreadUnread(thread);
@@ -498,6 +455,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     hasQueuedMessages: props.hasQueuedMessages,
     isRegeneratingTitle,
     providerName: providerNameLabel,
+    statusLabel: showsWoke
+      ? "Woke"
+      : (statusLabel?.label ??
+        (status === "waiting" ? "Waiting" : status === "working" ? "Working" : undefined)),
+    timeLabel: snoozedRow ? (props.snoozeWakeLabelText ?? props.timeLabel) : props.timeLabel,
   });
   const timeLabel = props.timeLabel;
 
@@ -925,6 +887,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 {statusLabel.label}
                 {status === "working" || status === "waiting" ? (
                   <ThreadListV2Duration
+                    environmentId={thread.environmentId}
                     startedAt={
                       status === "working"
                         ? resolveThreadWorkingStartedAt(thread)
@@ -988,7 +951,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               : rowAppearance.tertiaryIconTintClassName
           }
         />
-        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
+        {(rawStatus === "failed" || rawStatus === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
@@ -1313,6 +1276,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ThreadRowMenu
+            accessibilityLabel={rowAccessibilityLabel}
             actions={[
               ...(thread.branch
                 ? [

@@ -1,3 +1,4 @@
+import { byTimestamp } from "../../lib/time";
 import { useNavigation } from "@react-navigation/native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentQuery } from "../../state/query";
@@ -22,7 +23,7 @@ export function usePullRequestActivityRows(params: PullRequestParams, filter: Ac
     });
     if (filter.newestFirst) {
       const notice = rows.at(-1)?.key === "truncated" ? rows.pop() : undefined;
-      rows.reverse();
+      rows.sort(byTimestamp(true));
       if (notice) rows.push(notice);
     }
     if (!rows.length)

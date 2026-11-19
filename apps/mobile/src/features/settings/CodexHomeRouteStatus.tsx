@@ -12,6 +12,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  isSecretReference,
   type CodexHomeAuth,
   type EnvironmentId,
   type ProviderInstanceConfig,
@@ -87,6 +88,24 @@ const configValue = (instance: ProviderInstanceConfig | undefined, key: string) 
   typeof instance?.config === "object" && instance.config !== null && key in instance.config
     ? (instance.config as Record<string, unknown>)[key]
     : undefined;
+export function providerReferenceCleared(
+  before: ProviderInstanceConfig,
+  after: ProviderInstanceConfig | undefined,
+) {
+  if (!after) return false;
+  if (
+    (before.environment ?? []).some(
+      (entry) =>
+        entry.secret && !(after.environment ?? []).find((next) => next.name === entry.name)?.secret,
+    )
+  )
+    return true;
+  if (!before.config || typeof before.config !== "object" || Array.isArray(before.config))
+    return false;
+  return Object.entries(before.config).some(
+    ([key, value]) => isSecretReference(value) && !isSecretReference(configValue(after, key)),
+  );
+}
 const routeFields = (instance: ProviderInstanceConfig | undefined) =>
   ["setupMode", "modelRoute", "opencodexBaseUrl", "opencodexAuth"].map((key) =>
     configValue(instance, key),
@@ -161,6 +180,7 @@ export function CodexHomeRouteStatus({
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const codex = provider.driver === "codex";
   const route = codex ? provider.codexRoute : provider.homeRoute;
   const settings = config.data?.config.settings;
@@ -195,6 +215,7 @@ export function CodexHomeRouteStatus({
     pendingRef.current = true;
     setPending(true);
     setError(null);
+    setNotice(null);
     try {
       if (change)
         await confirmCodexRouteChange({
@@ -206,6 +227,17 @@ export function CodexHomeRouteStatus({
           mutate: async (mutation) => {
             const result = await mutate(mutation);
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+            if (
+              result._tag === "Success" &&
+              providerReferenceCleared(
+                mutation.input.providerInstanceMutation.instance,
+                result.value.providerInstances[provider.instanceId],
+              )
+            ) {
+              setNotice(
+                `The saved key for ${resolveProviderInstanceDisplayName(provider)} was cleared because its address changed. Re-enter it in Settings on desktop or web.`,
+              );
+            }
           },
         });
       const result = await refresh({
@@ -333,6 +365,7 @@ export function CodexHomeRouteStatus({
           {error ?? config.error}
         </Text>
       ) : null}
+      {notice ? <Text className="text-sm text-foreground-muted">{notice}</Text> : null}
     </View>
   );
 }

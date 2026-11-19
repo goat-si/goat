@@ -1,3 +1,5 @@
+import { missingProjectError } from "./pullRequestMissingProject.ts";
+import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
 import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
 import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
@@ -95,7 +97,6 @@ import {
   readProjectShells,
   resolveProjectRepositories,
 } from "./projectRepositoryMembership.ts";
-
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
@@ -116,6 +117,8 @@ import {
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
   type ListCursor,
+  MAX_CURSOR_BOUNDARY_IDENTITIES as MAX_TIES,
+  acrossListCursor,
   listCursorAt,
   listCursorKey,
   nextListCursor,
@@ -137,18 +140,6 @@ import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
-}
-
-type PullRequestReading = Pick<
-  PullRequestSummary,
-  "state" | "isDraft" | "updatedAt" | "observedAt"
->;
-
-function supersedesReading(current: PullRequestReading | undefined, next: PullRequestReading) {
-  if (current === undefined) return true;
-  if (current.state === "merged" && next.state !== "merged") return false;
-  if (next.updatedAt !== current.updatedAt) return next.updatedAt > current.updatedAt;
-  return (next.observedAt ?? -Infinity) >= (current.observedAt ?? -Infinity);
 }
 
 // Providers request one extra row; 99 stays within GitHub/GitLab's 100-row API limit.
@@ -382,7 +373,7 @@ const LIST_CURSOR_PATTERN =
 
 function parseListCursor(raw: string): ListCursor | null {
   const match = LIST_CURSOR_PATTERN.exec(raw);
-  if (match === null) return null;
+  if (match === null || (match[3]?.split(",").length ?? 0) > MAX_TIES) return null;
   const seenAt = match[3];
   return {
     updatedBefore: match[1]!,
@@ -747,7 +738,7 @@ export const make = Effect.gen(function* () {
                     };
                   }
                 }
-                return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+                return yield* missingProjectError(host, referenceKey, registry);
               });
             }
             return Effect.succeed(
@@ -955,6 +946,7 @@ export const make = Effect.gen(function* () {
       state: input.item.state,
       isDraft: input.item.isDraft,
       mergeability: input.item.mergeability,
+      ...(input.item.rebaseRequired == null ? {} : { rebaseRequired: input.item.rebaseRequired }),
       additions: input.item.additions,
       deletions: input.item.deletions,
       createdAt: input.item.createdAt,
@@ -1172,9 +1164,7 @@ export const make = Effect.gen(function* () {
         limit,
         query: input.query,
         filters: input.filters,
-        ...(cursor === undefined
-          ? {}
-          : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+        ...(cursor === undefined ? {} : { cursor: acrossListCursor(cursor, chunk, cursorOf) }),
       }).pipe(
         observeRead,
         Effect.flatMap(({ value: page, observedAt }) => {
@@ -1444,6 +1434,9 @@ export const make = Effect.gen(function* () {
             state: changeRequest.state,
             isDraft: changeRequest.isDraft,
             mergeability: changeRequest.mergeability,
+            ...(changeRequest.rebaseRequired == null
+              ? {}
+              : { rebaseRequired: changeRequest.rebaseRequired }),
             additions: changeRequest.additions,
             deletions: changeRequest.deletions,
             changedFiles: changeRequest.changedFiles,
@@ -2892,9 +2885,9 @@ export const make = Effect.gen(function* () {
       return detailUncached(ref).pipe(
         Effect.tap(
           Effect.fn("PullRequestService.recordDetailStats")(function* (value: PullRequestDetail) {
-            // GitHub detail includes the same checks; the checks TTL counts from their observation.
             if (
-              value.provider === "github" &&
+              (value.provider === "github" ||
+                (value.provider === "azure-devops" && value.checks.length > 0)) && // Empty may mean a failed read.
               value.observedAt !== undefined &&
               !(yield* Cache.has(checksCache, key))
             ) {
@@ -2945,6 +2938,7 @@ export const make = Effect.gen(function* () {
     deletions: detail.deletions,
     changedFiles: detail.changedFiles,
     mergeability: detail.mergeability,
+    ...(detail.rebaseRequired == null ? {} : { rebaseRequired: detail.rebaseRequired }),
     headBranch: detail.headBranch,
     baseBranch: detail.baseBranch,
     closedAt: detail.closedAt,
