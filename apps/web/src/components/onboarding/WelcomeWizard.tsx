@@ -15,6 +15,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import {
   AuthTerminalOperateScope,
+  AuthTerminalReadScope,
   CommandId,
   defaultInstanceIdForDriver,
   AuthOrchestrationOperateScope,
@@ -30,7 +31,7 @@ import {
   LinkIcon,
   MonitorIcon,
 } from "~/components/solar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -70,6 +71,7 @@ import {
   useEnvironmentsWithScope,
 } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
+import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { connectPairing } from "../../connection/onboarding";
 import { ChatGptWelcomeCoordinator } from "../settings/ChatGptWelcomeCoordinator";
@@ -885,6 +887,12 @@ function ConnectedAgentsStep({
         <AgentInstallTerminal
           key={`${terminalSession.environmentId}:${terminalSession.providerInstanceId}:${terminalSession.driver}`}
           session={terminalSession}
+          onCommandFinished={() =>
+            void refreshProviders({
+              environmentId: terminalSession.environmentId,
+              input: { instanceId: terminalSession.providerInstanceId },
+            })
+          }
           onClose={() => {
             setTerminalSession(null);
             void refreshProviders({ environmentId, input: {} });
@@ -990,13 +998,16 @@ export function OnboardingCodexSetup({
 
 function AgentInstallTerminal({
   session,
+  onCommandFinished,
   onClose,
 }: {
   readonly session: AgentTerminalSession;
+  readonly onCommandFinished: () => void;
   readonly onClose: () => void;
 }) {
   const { command, cwd, driver, environmentId, keybindings, providerInstanceId } = session;
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
+  const canReadTerminal = useEnvironmentScope(environmentId, AuthTerminalReadScope);
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1015,6 +1026,28 @@ function AgentInstallTerminal({
     "preparing" | "ready" | "openFailed" | "writeFailed"
   >("preparing");
   const terminalReady = setupState === "ready" || setupState === "writeFailed";
+  const commandRunning = useThreadRunningTerminalIds({
+    environmentId,
+    threadId: AGENT_ONBOARDING_THREAD_ID,
+  }).includes(terminalId);
+  const commandStartedRef = useRef(false);
+  const handleCommandFinished = useEffectEvent(onCommandFinished);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- The setup shell stays open after its command finishes.
+  useEffect(() => {
+    if (!canOperateTerminal || !canReadTerminal) {
+      commandStartedRef.current = false;
+    } else if (commandRunning) {
+      commandStartedRef.current = true;
+    } else if (commandStartedRef.current) {
+      commandStartedRef.current = false;
+      if (
+        readEnvironmentScope(environmentId, AuthTerminalOperateScope) &&
+        readEnvironmentScope(environmentId, AuthTerminalReadScope)
+      )
+        handleCommandFinished();
+    }
+  }, [canOperateTerminal, canReadTerminal, commandRunning, environmentId]);
 
   // StrictMode can finish a cancelled open after replacement setup; it must not close or pre-type into that
   // session.
