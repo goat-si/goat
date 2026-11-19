@@ -148,6 +148,36 @@ describe("browser microphone lifecycle", () => {
     await mic.recorder.stopRecording();
     expect(onPcmFrame).toHaveBeenCalledOnce();
   });
+
+  it("keeps the full recording when live PCM encoding cannot start", async () => {
+    await using mic = fakeMicrophone();
+    mic.context.sampleRate = 500_000;
+    const onPcmFrame = vi.fn();
+    const onPcmError = vi.fn();
+    const start = mic.recorder.startRecording({ onPcmFrame, onPcmError });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(5_000).fill(0.25));
+    expect(await mic.recorder.stopRecording()).not.toBeNull();
+    expect(onPcmError).toHaveBeenCalledOnce();
+    expect(onPcmFrame).not.toHaveBeenCalled();
+  });
+
+  it("keeps recording when a live PCM consumer fails", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmError = vi.fn();
+    const start = mic.recorder.startRecording({
+      onPcmFrame: () => {
+        throw new Error("stream closed");
+      },
+      onPcmError,
+    });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmError).toHaveBeenCalledOnce();
+    expect(await mic.recorder.stopRecording()).not.toBeNull();
+  });
   it("drops only initial digital silence, downmixes, streams WAV and releases all resources on stop", async () => {
     await using mic = fakeMicrophone();
     const onStreamingChunk = vi.fn();

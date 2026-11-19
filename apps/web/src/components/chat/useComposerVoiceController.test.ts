@@ -87,6 +87,7 @@ function setup(
     chunk: (audioBase64: string) =>
       recordingOptions.onStreamingChunk?.({ ...payload, audioBase64 }),
     pcm: (bytes: Uint8Array) => recordingOptions.onPcmFrame?.(bytes),
+    pcmError: () => recordingOptions.onPcmError?.(),
     failRecording: (error: VoiceMicrophoneError) => recordingOptions.onError?.(error),
     [Symbol.dispose]: () => controller.cancel(),
   };
@@ -138,6 +139,31 @@ describe("composer voice controller", () => {
     expect(await session.controller.confirm()).toBe(true);
     expect(session.transcribe).toHaveBeenCalledOnce();
     expect(session.readDraft().text).toBe("hello world");
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("uses the full recording when the live PCM encoder fails", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const frameReceived = deferred<void>();
+    const cancel = vi.fn();
+    const startLive = vi.fn(async () => ({
+      feed: async () => {
+        frameReceived.resolve();
+      },
+      finish: async () => "partial",
+      cancel,
+    }));
+    using session = setup({ localModelGrant: grant }, { startLive });
+    await session.controller.start();
+    session.pcm(new Uint8Array([0, 0]));
+    await frameReceived.promise;
+    session.pcmError();
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.transcribe).toHaveBeenCalledOnce();
+    expect(session.readDraft().text).toBe("hello world");
+    expect(cancel).toHaveBeenCalledOnce();
     chooseEnvironmentSpeech(null);
   });
 

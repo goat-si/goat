@@ -239,6 +239,7 @@ export class ComposerVoiceController {
         ...(this.livePump
           ? {
               shouldEncodePcm: () => this.livePump?.active === true,
+              onPcmError: () => this.livePump?.stopStreaming(),
               onPcmFrame: (frame: Uint8Array) => {
                 if (generation === this.generation) this.livePump?.push(frame);
               },

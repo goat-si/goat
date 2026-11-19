@@ -21,6 +21,10 @@ export class LiveSpeechFramePump {
     return this.state === "starting" || this.state === "ready";
   }
 
+  stopStreaming() {
+    this.fail();
+  }
+
   constructor(
     start: (signal: AbortSignal, onFailure: () => void) => Promise<LiveSpeechFrameSession | null>,
     private readonly onFailure: () => void,

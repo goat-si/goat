@@ -96,6 +96,7 @@ export interface VoiceRecordingPayload {
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
   readonly onPcmFrame?: (frame: Uint8Array) => void;
+  readonly onPcmError?: () => void;
   readonly shouldEncodePcm?: () => boolean;
   readonly onLimitReached?: () => void;
   /** A recording that started but then failed, such as one that never received sound. */
@@ -118,6 +119,7 @@ interface RecorderRuntime {
   readonly gain: GainNode;
   readonly chunks: Float32Array[];
   pcmEncoder: StreamingPcmEncoder | null;
+  readonly pcmFailure: (() => void) | undefined;
   streamingChunks: Float32Array[];
   streamingSamples: number;
   sampleCount: number;
@@ -239,6 +241,14 @@ export class BrowserVoiceRecorder {
       processor = context.createScriptProcessor(2_048, 1, 1);
       gain = context.createGain();
       gain.gain.value = 0;
+      let pcmEncoder: StreamingPcmEncoder | null = null;
+      if (options.onPcmFrame) {
+        try {
+          pcmEncoder = new StreamingPcmEncoder(context.sampleRate, options.onPcmFrame);
+        } catch {
+          options.onPcmError?.();
+        }
+      }
       const runtime: RecorderRuntime = {
         stream,
         context,
@@ -246,9 +256,8 @@ export class BrowserVoiceRecorder {
         processor,
         gain,
         chunks: [],
-        pcmEncoder: options.onPcmFrame
-          ? new StreamingPcmEncoder(context.sampleRate, options.onPcmFrame)
-          : null,
+        pcmEncoder,
+        pcmFailure: options.onPcmError,
         streamingChunks: [],
         streamingSamples: 0,
         sampleCount: 0,
@@ -282,7 +291,12 @@ export class BrowserVoiceRecorder {
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
         if (options.shouldEncodePcm?.() === false) runtime.pcmEncoder = null;
-        runtime.pcmEncoder?.push(mono);
+        try {
+          runtime.pcmEncoder?.push(mono);
+        } catch {
+          runtime.pcmEncoder = null;
+          runtime.pcmFailure?.();
+        }
         if (options.onStreamingChunk) {
           runtime.streamingChunks.push(mono);
           runtime.streamingSamples += mono.length;
@@ -379,7 +393,11 @@ export class BrowserVoiceRecorder {
 
   readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
     const runtime = await this.teardown();
-    runtime?.pcmEncoder?.finish();
+    try {
+      runtime?.pcmEncoder?.finish();
+    } catch {
+      runtime?.pcmFailure?.();
+    }
     return runtime ? encodePayload(runtime.chunks, runtime.context.sampleRate) : null;
   };
 
