@@ -169,6 +169,7 @@ import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import { JAVASCRIPT_TRIM_WHITESPACE } from "./deferredCommandMessage.ts";
 import { turnStartMessages } from "./turnStartMessages.ts";
 import { historyPageSubagents } from "./historySubagents.ts";
+import { compactedPromptReads, runIdsSinceLastCompaction } from "./CompactedPromptReads.ts";
 import { readableSearchText } from "./messageSearchIndex.ts";
 import {
   isFoldableWorkItem,
@@ -517,9 +518,8 @@ export interface ProjectionRecordFilter {
    */
   readonly omitSettledSubagentRecords?: boolean;
   /**
-   * For a compacted thread: reads attempts, nodes, messages and provider turns only for runs from
-   * the latest completed compaction's run on, runs that had not ended when that run was
-   * requested, and the runs named here. Runs and turn items are not narrowed.
+   * For a compacted thread, keeps recent and named run records, failed errors, and prompts
+   * needed for fresh context and model switches. Explicit item or run filters keep their scope.
    */
   readonly sinceLastCompaction?: {
     readonly keepRunIds: ReadonlyArray<RunId>;
@@ -2518,49 +2518,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const threadColumn = (ids: ReadonlyArray<unknown> | undefined, column = "thread_id") =>
       sql.literal(ids === undefined ? column : `+${column}`);
 
-    /** The runs whose records a new message reads. Null when nothing was compacted. */
-    const runIdsSinceLastCompaction = Effect.fn("ProjectionStore.runIdsSinceLastCompaction")(
-      function* (
-        threadId: ThreadId,
-        keep: NonNullable<ProjectionRecordFilter["sinceLastCompaction"]>,
-      ) {
-        // A held queue can run out of ordinal order, so a run that ended after the compaction's
-        // run was requested is recent too. Every run row is read anyway, so this scan reads no
-        // extra pages.
-        const recent = yield* sql<{ readonly run_id: RunId }>`
-          WITH compaction AS (
-            SELECT run.ordinal, run.requested_at
-            FROM orchestration_v2_projection_turn_items AS item
-              INDEXED BY orchestration_v2_projection_turn_items_conversation_idx
-            INNER JOIN orchestration_v2_projection_runs AS run ON run.run_id = item.run_id
-            WHERE item.thread_id = ${threadId}
-              AND item.type = 'compaction' AND item.status = 'completed'
-              AND item.type NOT IN ${CONVERSATION_INDEX_EXCLUDED_TYPES}
-              AND run.status <> 'rolled_back'
-            ORDER BY item.ordinal DESC
-            LIMIT 1
-          )
-          SELECT run.run_id
-          FROM compaction
-          INNER JOIN orchestration_v2_projection_runs AS run ON run.thread_id = ${threadId}
-          WHERE run.ordinal >= compaction.ordinal
-            OR run.completed_at IS NULL
-            OR run.completed_at >= compaction.requested_at
-            OR run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-          UNION
-          SELECT message.run_id
-          FROM compaction
-          INNER JOIN orchestration_v2_projection_messages AS message
-            ON message.message_id = ${keep.keepMessageId}
-          WHERE message.thread_id = ${threadId} AND message.run_id IS NOT NULL
-        `;
-        // The compaction's own run is always recent, so no rows means no compaction.
-        return recent.length === 0
-          ? null
-          : encodeIdList([...recent.map((row) => row.run_id), ...keep.keepRunIds]);
-      },
-    );
-
     const readCanonicalProjection = Effect.fn("ProjectionStore.readCanonicalProjection")(
       function* (
         threadId: ThreadId,
@@ -2578,9 +2535,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         if (!threadRow) {
           return yield* new ProjectionStoreThreadNotFoundError({ threadId });
         }
-        const recentRunIds =
+        const recentRuns =
           window === undefined && filter?.sinceLastCompaction !== undefined
-            ? yield* runIdsSinceLastCompaction(threadId, filter.sinceLastCompaction)
+            ? yield* runIdsSinceLastCompaction(sql, threadId, filter.sinceLastCompaction)
+            : null;
+        const recentRunIds = recentRuns === null ? null : encodeIdList(recentRuns);
+        const blockedFilters = [
+          "runIds",
+          "runStatuses",
+          "ancestryRunIds",
+          "turnItemRunId",
+          "turnItemRunIds",
+          "turnItemNodeIds",
+          "turnItemRequestIds",
+          "turnItemStatuses",
+        ] as const;
+        const promptRuns =
+          (fields === undefined || fields.includes("runs")) &&
+          blockedFilters.every((key) => filter?.[key] === undefined)
+            ? recentRuns
             : null;
         const inRecentRuns = (column: string) =>
           recentRunIds === null
@@ -2600,6 +2573,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         };
         const boundedTurnItemRows: ReadonlyArray<WindowPayloadRow> =
           (fields !== undefined && !fields.includes("turnItems")) ||
+          promptRuns !== null ||
           (window === undefined &&
             matchesNothing(
               filter?.turnItemRequestIds,
@@ -2655,7 +2629,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeTurnItemPayload,
           threadId,
         )(boundedTurnItemRows);
-        const turnItems = decodedTurnItems.map((item, index) => {
+        const storedTurnItems = decodedTurnItems.map((item, index) => {
           const row = boundedTurnItemRows[index];
           return row?.work_last_id == null ||
             row.work_item_count == null ||
@@ -2680,14 +2654,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           window === undefined
             ? undefined
             : new Set(
-                turnItems.flatMap((item, index) => {
+                storedTurnItems.flatMap((item, index) => {
                   const row = boundedTurnItemRows[index];
                   return row?.is_selected === 1 ? [String(item.id)] : [];
                 }),
               );
         const cohortJson = (field: string) =>
           JSON.stringify(
-            turnItems.flatMap((payload) => {
+            storedTurnItems.flatMap((payload) => {
               const value = nullableStringField(payload, field);
               return value === null ? [] : [value];
             }),
@@ -3304,12 +3278,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeRows(decodeContextHandoffPayload, threadId)(contextHandoffRows),
           decodeRows(decodeContextTransferPayload, threadId)(contextTransferRows),
         ]);
+        const turnItems =
+          promptRuns === null || (fields !== undefined && !fields.includes("turnItems"))
+            ? storedTurnItems
+            : yield* compactedPromptReads(sql, threadId, runs, promptRuns);
         const messageOrdinals = new Map<string, number>();
         // The literal `type = 'user_message'` lets SQLite pick the partial user-message index.
         const userOnly = messages.every((message) => message.role === "user");
         // The loaded items already order the messages when they hold every item the lookup reads.
         const loadsEveryItemOf = (type: OrchestrationV2TurnItem["type"]) =>
           window === undefined &&
+          promptRuns === null &&
           (fields === undefined || fields.includes("turnItems")) &&
           filter?.turnItemRequestIds === undefined &&
           filter?.turnItemStatuses === undefined &&
