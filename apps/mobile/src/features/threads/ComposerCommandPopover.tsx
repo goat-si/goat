@@ -142,6 +142,14 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
   }
 }
 
+export function shouldShowComposerMenu(menu: {
+  readonly trigger: { readonly kind: ComposerTriggerKind } | null;
+  readonly items: ReadonlyArray<unknown>;
+  readonly error: string | null;
+}): boolean {
+  return menu.items.length > 0 || menu.trigger?.kind === "pull-request" || menu.error !== null;
+}
+
 export function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean): string {
   if (isLoading) {
     return triggerKind === "path" ? "Searching files…" : "Loading…";
@@ -260,6 +268,14 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
           keyboardShouldPersistTaps="always"
           showsVerticalScrollIndicator={false}
         >
+          {props.error ? (
+            <Text
+              accessibilityRole="alert"
+              className="px-3.5 py-2.5 text-xs text-foreground-tertiary"
+            >
+              {props.error}
+            </Text>
+          ) : null}
           {props.items.map((item, index) => (
             <CommandRow
               key={item.id}

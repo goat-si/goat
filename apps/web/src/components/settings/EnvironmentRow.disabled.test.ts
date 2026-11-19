@@ -46,6 +46,7 @@ function present(entry: ConnectionCatalogEntry): EnvironmentPresentation {
     displayUrl: null,
     relayManaged: true,
     serverConfig: null,
+    refusedRouteIds: [],
     connection: { phase: "available", error: null, traceId: null },
   };
 }

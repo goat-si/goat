@@ -49,6 +49,7 @@ const reactTests = [
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
   "src/features/threads/McpAppFullscreenScreen.test.tsx",
+  "src/features/threads/ComposerCommandPopover.search-error.test.tsx",
   "src/features/files/FileSourceSurface.test.tsx",
   "src/features/files/ZipArchiveView.test.tsx",
   "src/lib/clock.test.ts",

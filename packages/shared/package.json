@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./parseUrl": {
+      "types": "./src/parseUrl.ts",
+      "import": "./src/parseUrl.ts"
+    },
     "./speechRecommendation": {
       "types": "./src/speechRecommendation.ts",
       "import": "./src/speechRecommendation.ts"

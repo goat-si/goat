@@ -186,3 +186,20 @@ describe("MCP app tool output", () => {
     expect(turnItemOutputText(bounded)).toBe("chart\n[image]");
   });
 });
+
+describe("tool text output formatting", () => {
+  it.each([
+    '{"id":1234567890123456789,"name":"x"}',
+    '{"id":1}\n{"id":-9007199254740993}',
+    '{"id":9.007199254740993e15}',
+    '{"id":1e309}',
+  ])("keeps %j as returned when parsing would change a number", (text) => {
+    expect(turnItemOutputText(toolItem({ content: [{ type: "text", text }] }))).toBe(text);
+  });
+  it("formats JSON when a large number appears only in a string", () => {
+    const text = '{"id":42,"note":"12345678901234567890"}';
+    expect(turnItemOutputText(toolItem({ content: [{ type: "text", text }] }))).toBe(
+      JSON.stringify(JSON.parse(text), null, 2),
+    );
+  });
+});

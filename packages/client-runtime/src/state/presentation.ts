@@ -93,6 +93,10 @@ function sameConnection(
   );
 }
 
+function sameRouteIds(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  return left.length === right.length && left.every((routeId, index) => right[index] === routeId);
+}
+
 function withoutProviders(
   config: ServerConfig | null,
   previous: EnvironmentServerConfig | null,
@@ -161,11 +165,16 @@ export function createEnvironmentPresentationAtoms<E>(input: {
           get(input.serverConfigValueAtom(environmentId)),
           previous?.serverConfig ?? null,
         ),
+        refusedRouteIds:
+          previous !== null && sameRouteIds(previous.refusedRouteIds, state.refusedRouteIds)
+            ? previous.refusedRouteIds
+            : state.refusedRouteIds,
       } satisfies EnvironmentPresentation;
       return previous !== null &&
         previous.entry === next.entry &&
         previous.connection === next.connection &&
-        previous.serverConfig === next.serverConfig
+        previous.serverConfig === next.serverConfig &&
+        previous.refusedRouteIds === next.refusedRouteIds
         ? previous
         : next;
     }).pipe(Atom.withLabel(`environment-presentation:${environmentId}`)),
@@ -235,6 +244,7 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         prior !== undefined &&
           prior.entry === presentation.entry &&
           prior.connection === presentation.connection &&
+          prior.refusedRouteIds === presentation.refusedRouteIds &&
           prior.serverConfig === serverConfig
           ? prior
           : { ...presentation, serverConfig },

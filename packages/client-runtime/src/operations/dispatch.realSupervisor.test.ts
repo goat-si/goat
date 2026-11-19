@@ -91,6 +91,7 @@ describe("message dispatch on the real supervisor", () => {
               prepared: PREPARED_CONNECTION,
               session: rpcSession,
               openProbeSocket: Effect.fail(transient()),
+              refusedRouteIds: [],
             } satisfies ConnectionDriver.EnvironmentConnectionLease;
           }),
         checkHost: () => Effect.succeed("unchecked" as const),

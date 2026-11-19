@@ -1,3 +1,5 @@
+import { toServerClock } from "@goat/client-runtime/clock";
+import type { EnvironmentId } from "@goat/contracts";
 import type { SubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
 import { formatDuration } from "@goat/shared/orchestrationTiming";
 import { GlassContainer, GlassView } from "expo-glass-effect";
@@ -68,6 +70,7 @@ const CONTROL_OVERLAY_OFFSET = CONTROL_HEIGHT + CONTROL_GAP - COMPOSER_CAPSULE_I
 export const FLOATING_WORKING_CONTROL_COVERAGE = CONTROL_OVERLAY_OFFSET + CONTROL_GAP;
 
 export function FloatingWorkingControl(props: {
+  readonly environmentId?: EnvironmentId;
   readonly colorScheme: "light" | "dark";
   readonly status: FloatingWorkingStatus | null;
   readonly extensionStatus?: { readonly label: string; readonly onPress: () => void } | null;
@@ -200,6 +203,7 @@ export function FloatingWorkingControl(props: {
                 : `${props.status.kind}:${props.status.label}`
             }
             status={props.status}
+            environmentId={props.environmentId}
             onLayout={handleLabelLayout}
           />
         </View>
@@ -417,6 +421,7 @@ function CompactingLabel(props: { readonly onLayout: (event: LayoutChangeEvent) 
 }
 
 function FloatingStatusLabel(props: {
+  readonly environmentId?: EnvironmentId | undefined;
   readonly status: FloatingWorkingStatus;
   readonly onLayout: (event: LayoutChangeEvent) => void;
 }) {
@@ -606,7 +611,12 @@ function FloatingStatusLabel(props: {
     );
   }
   return (
-    <WorkingDuration key="working" startedAt={props.status.startedAt} onLayout={props.onLayout} />
+    <WorkingDuration
+      key="working"
+      environmentId={props.environmentId}
+      startedAt={props.status.startedAt}
+      onLayout={props.onLayout}
+    />
   );
 }
 
@@ -647,17 +657,21 @@ function StatusLabelRow(props: {
 }
 
 function WorkingDuration(props: {
+  readonly environmentId?: EnvironmentId | undefined;
   readonly startedAt: string;
   readonly onLayout: (event: LayoutChangeEvent) => void;
 }) {
   return (
     <StatusLabelRow onLayout={props.onLayout}>
-      <WorkingTimer startedAt={props.startedAt} />
+      <WorkingTimer environmentId={props.environmentId} startedAt={props.startedAt} />
     </StatusLabelRow>
   );
 }
 
-export function WorkingTimer(props: { readonly startedAt: string }) {
+export function WorkingTimer(props: {
+  readonly startedAt: string;
+  readonly environmentId?: EnvironmentId | undefined;
+}) {
   const nowMs = useVisibleSecondClock(true);
   return (
     <SystemText
@@ -665,7 +679,11 @@ export function WorkingTimer(props: { readonly startedAt: string }) {
       numberOfLines={1}
       style={{ fontVariant: ["tabular-nums"], fontWeight: "500" }}
     >
-      Working {formatWorkingDuration(props.startedAt, nowMs)}
+      Working{" "}
+      {formatWorkingDuration(
+        props.startedAt,
+        props.environmentId === undefined ? nowMs : toServerClock(props.environmentId, nowMs),
+      )}
     </SystemText>
   );
 }

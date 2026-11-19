@@ -1,3 +1,4 @@
+import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { composerPathOrModelReplacement } from "./composerModelMentions";
@@ -297,12 +298,6 @@ import { composerCommandKeyHandler } from "./composerCommandKey";
 import { useReplyBannerItems } from "./composerReply";
 import { useComposerReplyTarget } from "./composerReplyTarget";
 import type { ChatComposerHandle } from "./chatComposerHandle";
-
-function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
-  const armed = Date.now() <= deadline.current;
-  deadline.current = 0;
-  return armed;
-}
 
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
@@ -1147,6 +1142,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     items: composerMenuItems,
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
+    errorText: composerMenuError,
   } = useComposerMenuItems({
     composerTrigger,
     environmentId,
@@ -3569,6 +3565,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isLoading={isComposerMenuLoading}
                     triggerKind={composerTriggerKind}
                     emptyStateText={composerMenuEmptyState}
+                    errorText={composerMenuError}
                     activeItemId={activeComposerMenuItem?.id ?? null}
                     onHighlightedItemChange={onComposerMenuItemHighlightedStable}
                     onSelect={onSelectComposerItemStable}

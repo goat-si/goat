@@ -3,11 +3,13 @@ import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { createThreadVisitTracker } from "@goat/client-runtime/state/thread-visits";
 import { type ScopedThreadRef } from "@goat/contracts";
 
+import { environmentCatalog } from "../../connection/catalog";
 import { useUiStateStore } from "../../uiStateStore";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 
 const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: environmentThreadShells.threadShellAtom,
+  sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
   visit: threadEnvironment.visit,
   markLocalVisit: (ref, visitedAt) =>
     useUiStateStore.getState().markThreadVisited(scopedThreadKey(ref), visitedAt),

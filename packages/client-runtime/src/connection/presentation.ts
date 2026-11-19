@@ -62,6 +62,8 @@ export interface EnvironmentPresentation {
   readonly entry: ConnectionCatalogEntry;
   readonly connection: EnvironmentConnectionPresentation;
   readonly serverConfig: EnvironmentServerConfig | null;
+  /** See `SupervisorConnectionState.refusedRouteIds`. */
+  readonly refusedRouteIds: ReadonlyArray<string>;
 }
 
 function projectConnectionState(
