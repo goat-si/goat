@@ -1,4 +1,5 @@
 import { SourceControlProviderKind } from "@goat/contracts";
+import { canonicalRepositoryPath } from "@goat/shared/git";
 import {
   changeRequestUrlBelow,
   type ChangeRequestHostIdentity,
@@ -126,7 +127,8 @@ export const definition = defineSourceControl({
       return isChangeRequestInProjectRepository(changeRequestHost(identity), identity, link);
     return (
       web.host.toLowerCase() === (link.authority ?? link.host).toLowerCase() &&
-      web.pathname.replace(/^\/+|\/+$/g, "").toLowerCase() === link.repository.toLowerCase()
+      canonicalRepositoryPath(web.pathname.replace(/^\/+|\/+$/g, "")) ===
+        canonicalRepositoryPath(link.repository)
     );
   },
   // A server mounted below a path serves only repositories under that mount.
@@ -140,7 +142,8 @@ export const definition = defineSourceControl({
       .join("/");
     return (
       web.host.toLowerCase() === (link.authority ?? link.host).toLowerCase() &&
-      (!mount || link.repository.toLowerCase().startsWith(`${mount.toLowerCase()}/`))
+      (!mount ||
+        canonicalRepositoryPath(link.repository).startsWith(`${canonicalRepositoryPath(mount)}/`))
     );
   },
 });

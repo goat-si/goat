@@ -20,7 +20,7 @@ import {
   type SourceControlProviderDiscoveryItem,
   type SourceControlRepositoryCloneUrls,
 } from "@goat/contracts";
-import { normalizeGitRemoteUrl } from "@goat/shared/git";
+import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@goat/shared/git";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -673,7 +673,7 @@ export const make = Effect.gen(function* () {
             (gitHubApiHostForRemote(remote.url) ??
               normalizeGitRemoteUrl(remote.url).split("/")[0]) === base.host &&
             normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
-              nameWithOwner.toLowerCase(),
+              canonicalRepositoryPath(nameWithOwner),
         )?.name ?? null;
       const baseRemote = Effect.suspend(() => {
         const known = remoteFor(baseNameWithOwner);

@@ -21,6 +21,11 @@ import {
 } from "./git.ts";
 
 describe("normalizeGitRemoteUrl", () => {
+  it("matches percent-encoded and literal Unicode repository segments", () => {
+    expect(
+      normalizeGitRemoteUrl("https://code.example/Team/R%C3%A9sum%C3%A9%20%28app%29.git"),
+    ).toBe(normalizeGitRemoteUrl("ssh://git@code.example/team/résumé%20(app).git"));
+  });
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
     expect(normalizeGitRemoteUrl("git@github.com:Sample-Tools/Goat.git")).toBe(
       "github.com/sample-tools/goat",

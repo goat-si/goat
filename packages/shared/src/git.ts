@@ -132,6 +132,19 @@ export function isTemporaryWorktreeBranch(refName: string): boolean {
 
 const stripGitSuffix = (path: string) => path.replace(/\.git$/i, "");
 
+export function canonicalRepositoryPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => {
+      try {
+        return encodeURIComponent(decodeURIComponent(segment).toLowerCase()).toLowerCase();
+      } catch {
+        return segment.toLowerCase();
+      }
+    })
+    .join("/");
+}
+
 function lowerCaseRemote(value: string, dropSuffix = stripGitSuffix): string {
   return dropSuffix(value.trim().replace(/\/+$/g, "")).toLowerCase();
 }
@@ -156,7 +169,7 @@ export function parseGitRemoteRepository(
         .split("/")
         .filter((segment) => segment.length > 0);
       if (url.hostname && repositorySegments.length > 1) {
-        return { host: url.hostname, path: repositorySegments.join("/") };
+        return { host: url.hostname, path: canonicalRepositoryPath(repositorySegments.join("/")) };
       }
     } catch {
       return null;
@@ -172,10 +185,11 @@ export function parseGitRemoteRepository(
   const scpHost = scpStyleHostAndPath?.[1];
   const scpPath = scpStyleHostAndPath?.[2];
   if (!scpHost || !scpPath) return null;
-  if (!scpHost.startsWith("[")) return { host: scpHost, path: scpPath };
+  const path = canonicalRepositoryPath(scpPath);
+  if (!scpHost.startsWith("[")) return { host: scpHost, path };
   try {
     // Spell an IPv6 host as the URL branch does, so `[::1]:a/b` and `ssh://[::1]/a/b` share a key.
-    return { host: new URL(`ssh://${scpHost}`).hostname, path: scpPath };
+    return { host: new URL(`ssh://${scpHost}`).hostname, path };
   } catch {
     return null;
   }
