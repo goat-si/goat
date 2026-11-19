@@ -1,28 +1,32 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { DEFAULT_UNIFIED_SETTINGS, type DiffLayout } from "@goat/contracts/settings";
 
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
-  stacked: "Stacked",
-  split: "Split",
+  stacked: msg("Stacked"),
+  split: msg("Split"),
 };
 
 export function DiffSettingsSection() {
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
+  const m = useMessages();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
-    <SettingsSection id="diff-settings" title="Diffs and panels">
+    <SettingsSection id="diff-settings" title={gt("Diffs and panels")}>
       <SettingsRow
-        {...searchableSetting("hide-whitespace-changes")}
-        description="Set whether the diff panel ignores whitespace-only edits by default."
+        {...setting("hide-whitespace-changes")}
+        description={gt("Set whether the diff panel ignores whitespace-only edits by default.")}
         resetAction={
           settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
             <SettingResetButton
-              label="diff whitespace changes"
+              label={gt("diff whitespace changes")}
               onClick={() =>
                 updateSettings({
                   diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
@@ -37,17 +41,19 @@ export function DiffSettingsSection() {
             onCheckedChange={(checked) =>
               updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
             }
-            aria-label="Hide whitespace changes by default"
+            aria-label={gt("Hide whitespace changes by default")}
           />
         }
       />
       <SettingsRow
-        {...searchableSetting("default-diff-file-state")}
-        description="Start with files expanded or collapsed when opening diffs or a pull request's Code tab."
+        {...setting("default-diff-file-state")}
+        description={gt(
+          "Start with files expanded or collapsed when opening diffs or a pull request's Code tab.",
+        )}
         resetAction={
           settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed ? (
             <SettingResetButton
-              label="default diff file state"
+              label={gt("default diff file state")}
               onClick={() =>
                 updateSettings({
                   diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
@@ -68,28 +74,32 @@ export function DiffSettingsSection() {
             <SelectTrigger
               size="sm"
               className="w-full sm:w-40"
-              aria-label="Default diff file state"
+              aria-label={gt("Default diff file state")}
             >
-              <SelectValue>{settings.diffFilesCollapsed ? "Collapsed" : "Expanded"}</SelectValue>
+              <SelectValue>
+                {settings.diffFilesCollapsed ? gt("Collapsed") : gt("Expanded")}
+              </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem hideIndicator value="expanded">
-                Expanded
+                {gt("Expanded")}
               </SelectItem>
               <SelectItem hideIndicator value="collapsed">
-                Collapsed
+                {gt("Collapsed")}
               </SelectItem>
             </SelectPopup>
           </Select>
         }
       />
       <SettingsRow
-        {...searchableSetting("diff-layout")}
-        description="Show diffs stacked or side by side. The toggle in the diff toolbar changes this too."
+        {...setting("diff-layout")}
+        description={gt(
+          "Show diffs stacked or side by side. The toggle in the diff toolbar changes this too.",
+        )}
         resetAction={
           settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? (
             <SettingResetButton
-              label="diff layout"
+              label={gt("diff layout")}
               onClick={() => updateSettings({ diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout })}
             />
           ) : null
@@ -103,15 +113,15 @@ export function DiffSettingsSection() {
               }
             }}
           >
-            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Diff layout">
-              <SelectValue>{DIFF_LAYOUT_LABELS[settings.diffLayout]}</SelectValue>
+            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Diff layout")}>
+              <SelectValue>{m(DIFF_LAYOUT_LABELS[settings.diffLayout])}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem hideIndicator value="stacked">
-                {DIFF_LAYOUT_LABELS.stacked}
+                {m(DIFF_LAYOUT_LABELS.stacked)}
               </SelectItem>
               <SelectItem hideIndicator value="split">
-                {DIFF_LAYOUT_LABELS.split}
+                {m(DIFF_LAYOUT_LABELS.split)}
               </SelectItem>
             </SelectPopup>
           </Select>
@@ -119,12 +129,14 @@ export function DiffSettingsSection() {
       />
 
       <SettingsRow
-        {...searchableSetting("proactive-panels")}
-        description="Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines."
+        {...setting("proactive-panels")}
+        description={gt(
+          "Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines.",
+        )}
         resetAction={
           settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled ? (
             <SettingResetButton
-              label="proactive panels"
+              label={gt("proactive panels")}
               onClick={() =>
                 updateSettings({
                   proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
@@ -139,7 +151,7 @@ export function DiffSettingsSection() {
             onCheckedChange={(checked) =>
               updateSettings({ proactivePanelsEnabled: Boolean(checked) })
             }
-            aria-label="Open pull requests and changes panels proactively"
+            aria-label={gt("Open pull requests and changes panels proactively")}
           />
         }
       />

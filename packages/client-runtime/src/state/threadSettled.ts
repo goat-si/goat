@@ -218,6 +218,8 @@ export interface SnoozePreset {
 export interface SnoozePresetOptions {
   readonly presets?: ReadonlyArray<SnoozePresetSetting>;
   readonly formatTime?: (date: Date) => string;
+  readonly formatLabel?: (setting: SnoozePresetSetting, daysAhead: number, label: string) => string;
+  readonly locale?: string;
 }
 
 function snoozeTimeOfDayLabel(date: Date): string {
@@ -279,6 +281,7 @@ export function resolveSnoozePreset(
   setting: SnoozePresetSetting,
   now: Date,
   formatTime: (date: Date) => string = snoozeTimeOfDayLabel,
+  options?: Pick<SnoozePresetOptions, "formatLabel" | "locale">,
 ): SnoozePreset | null {
   let wake: Date;
   let daysAhead = 0;
@@ -297,11 +300,11 @@ export function resolveSnoozePreset(
   const time = formatTime(wake);
   return {
     id: snoozePresetId(setting),
-    label,
+    label: options?.formatLabel?.(setting, daysAhead, label) ?? label,
     whenLabel:
       labelNamesDay || wake.toDateString() === now.toDateString()
         ? time
-        : `${wake.toLocaleDateString(undefined, { weekday: "short" })} ${time}`,
+        : `${wake.toLocaleDateString(options?.locale, { weekday: "short" })} ${time}`,
     snoozedUntil: wake.toISOString(),
   };
 }
@@ -317,7 +320,7 @@ export function resolveSnoozePresets(
   const seen = new Set<number>();
   return (
     (options.presets ?? DEFAULT_SNOOZE_PRESETS)
-      .flatMap((setting) => resolveSnoozePreset(setting, now, options.formatTime) ?? [])
+      .flatMap((setting) => resolveSnoozePreset(setting, now, options.formatTime, options) ?? [])
       // flatMap returned a new array; Hermes has no `toSorted`.
       .sort((a, b) => wakeMinute(a) - wakeMinute(b))
       .filter((preset) => {
