@@ -2,6 +2,7 @@ import { LEGACY_ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts/legacyT3Na
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts";
 
 export const browserApiCorsAllowedMethods = ["GET", "POST", "OPTIONS"] as const;
+export const MCP_HTTP_PATH = "/mcp";
 export const browserApiCorsAllowedHeaders = [
   "authorization",
   "b3",
