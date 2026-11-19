@@ -4738,33 +4738,36 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     },
                   );
                   if (!alreadyOffered) {
-                    yield* continuationRequests.offer({
-                      threadId: context.projectionThreadId,
-                      providerThreadId: context.providerThread.id,
-                      driver: CODEX_PROVIDER,
-                      // Codex starts a new turn from this text, so nothing is buffered.
-                      delivery: "message_text",
-                      detail: codexBackgroundCommandDetail(payload.item),
-                      notification: {
-                        ...backgroundWorkNotification([
-                          {
-                            kind: "command",
-                            label: payload.item.command,
-                            outcome:
-                              payload.item.exitCode === 0
-                                ? "completed"
-                                : payload.item.exitCode == null
-                                  ? "unknown"
-                                  : "failed",
-                            exitCode: payload.item.exitCode ?? undefined,
-                          },
-                        ]),
-                        detail: payload.item.command,
-                        ...(context.projectionRunId === null
-                          ? {}
-                          : { aboutRunId: context.projectionRunId }),
+                    yield* ProviderContinuationRequests.offerWithBackpressure(
+                      continuationRequests,
+                      {
+                        threadId: context.projectionThreadId,
+                        providerThreadId: context.providerThread.id,
+                        driver: CODEX_PROVIDER,
+                        // Codex starts a new turn from this text, so nothing is buffered.
+                        delivery: "message_text",
+                        detail: codexBackgroundCommandDetail(payload.item),
+                        notification: {
+                          ...backgroundWorkNotification([
+                            {
+                              kind: "command",
+                              label: payload.item.command,
+                              outcome:
+                                payload.item.exitCode === 0
+                                  ? "completed"
+                                  : payload.item.exitCode == null
+                                    ? "unknown"
+                                    : "failed",
+                              exitCode: payload.item.exitCode ?? undefined,
+                            },
+                          ]),
+                          detail: payload.item.command,
+                          ...(context.projectionRunId === null
+                            ? {}
+                            : { aboutRunId: context.projectionRunId }),
+                        },
                       },
-                    });
+                    );
                   }
                 }
                 if (turnDrained) {
@@ -5576,7 +5579,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runOrdinal: input.context.input.runOrdinal,
               status: terminalStatus,
               failure: null,
-              ...(terminalStatus === "interrupted" && input.context.hookStopReason !== undefined
+              ...(input.context.hookStopReason !== undefined
                 ? { reason: input.context.hookStopReason }
                 : {}),
               threadDisposition: "reusable",
@@ -6198,7 +6201,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   )
                 ) {
                   const task = input.context.subagent.task;
-                  yield* continuationRequests.offer({
+                  yield* ProviderContinuationRequests.offerWithBackpressure(continuationRequests, {
                     threadId: parent.projectionThreadId,
                     providerThreadId: parent.providerThread.id,
                     driver: CODEX_PROVIDER,

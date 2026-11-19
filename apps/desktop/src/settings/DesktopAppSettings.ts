@@ -192,6 +192,7 @@ export class DesktopAppSettings extends Context.Service<
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setPendingUpdate: (
       pending: DesktopUpdateState["pendingUpdate"],
+      guard?: (current: DesktopUpdateState["pendingUpdate"]) => boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
@@ -639,8 +640,9 @@ export const make = Effect.gen(function* () {
           ? settings
           : { ...settings, updateInstallPolicy: policy },
       ),
-    setPendingUpdate: (pendingUpdate) =>
+    setPendingUpdate: (pendingUpdate, guard) =>
       persist((settings) =>
+        (guard && !guard(settings.pendingUpdate)) ||
         settings.pendingUpdate === pendingUpdate ||
         (pendingUpdate !== null && pendingUpdate.channel !== settings.updateChannel)
           ? settings
@@ -722,8 +724,9 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
               ? settings
               : { ...settings, updateInstallPolicy: policy },
           ),
-        setPendingUpdate: (pendingUpdate) =>
+        setPendingUpdate: (pendingUpdate, guard) =>
           update((settings) =>
+            (guard && !guard(settings.pendingUpdate)) ||
             settings.pendingUpdate === pendingUpdate ||
             (pendingUpdate !== null && pendingUpdate.channel !== settings.updateChannel)
               ? settings

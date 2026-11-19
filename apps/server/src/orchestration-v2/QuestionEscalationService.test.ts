@@ -13,6 +13,7 @@ import {
   awaitMessage,
   holdLauncher,
   answer,
+  promote,
 } from "./QuestionEscalationService.testkit.ts";
 import { assert, it, vi } from "@effect/vitest";
 import {
@@ -43,33 +44,15 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as QuestionEscalationService from "./QuestionEscalationService.ts";
 
-const promote = (suffix: string) =>
-  Effect.gen(function* () {
-    const sink = yield* EventSink.EventSinkV2;
-    const { runs } = yield* records(suffix);
-    const run = runs.find((r) => r.userMessageId === ids(suffix).messageId)!;
-    const now = yield* DateTime.now;
-    yield* sink.write({
-      events: [
-        {
-          id: EventId.make(`promote:${suffix}`),
-          type: "run.updated",
-          threadId: run.threadId,
-          runId: run.id,
-          occurredAt: now,
-          payload: { ...run, status: "running", startedAt: now },
-        },
-      ],
-    });
-  });
-
 it.layer(layerTest)("QuestionEscalationService", (it) => {
   it.effect("a blocked launcher does not delay another launcher or race its own resolution", () =>
     Effect.gen(function* () {
       const blocked = "busy-launcher";
       const healthy = "independent-launcher";
+      const sibling = "same-launcher";
       yield* setup(blocked);
       yield* setup(healthy);
+      yield* setup(sibling, true, ids(blocked).launcherId);
       yield* holdLauncher(blocked);
       const service = yield* start;
       const engine = yield* Orchestrator.OrchestratorV2;
@@ -101,10 +84,15 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
           id: EventId.make(`${event.id}:duplicate`),
         })),
       });
+      const siblingSaved = yield* awaitMessage(ids(sibling).messageId);
+      yield* sink.write({ events: yield* questionEvents(sibling) });
       const healthySaved = yield* awaitMessage(ids(healthy).messageId);
       yield* sink.write({ events: yield* questionEvents(healthy) });
       yield* Fiber.join(healthySaved);
       assert.lengthOf((yield* records(healthy)).messages, 1);
+      assert.isFalse(
+        (yield* records(blocked)).messages.some(({ id }) => id === ids(sibling).messageId),
+      );
       assert.isFalse(yield* Deferred.isDone(release));
       assert.equal(blockedDispatches, 1);
       yield* answer(blocked);
@@ -117,6 +105,7 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
       );
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(cancelled);
+      yield* Fiber.join(siblingSaved);
       yield* Fiber.join(samePair);
       yield* service.reconcile(ids(blocked).askingId, ids(blocked).requestId);
       assert.equal(blockedDispatches, 1);

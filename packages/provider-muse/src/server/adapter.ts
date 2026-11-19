@@ -1,3 +1,5 @@
+import { makeMuseInbox } from "./museInbox.ts";
+import { makeWakeOffers } from "./wakeOffers.ts";
 import { MuseProviderCapabilitiesV2 } from "./capabilities.ts";
 import { MspError, type ProcessExit, type SendUserTurnOptions } from "@muse-code/sdk";
 import {
@@ -112,11 +114,7 @@ export interface MuseAdapterV2Options {
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
   /** Receives every account-wide usage report, whichever session's host sent it. */
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
 
 interface ActiveTurn {
@@ -226,13 +224,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Event,
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
-      type Inbox =
-        | { type: "notification"; method: string; params: unknown; epoch: number }
-        | { type: "failure"; cause: unknown; epoch: number }
-        | { type: "flush"; turn: ActiveTurn };
-      const inbox = yield* Queue.unbounded<Inbox>();
+      const inbox = yield* makeMuseInbox<ActiveTurn>();
       const commands = yield* Semaphore.make(1);
       const eventPermit = yield* Semaphore.make(1);
+      const wakeOffers = yield* makeWakeOffers(options.continuationRequests, eventPermit);
       let host: MuseSdkHost;
       let hostEpoch = 0;
       let closed = false;
@@ -259,6 +254,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       let wake:
         | { readonly nativeId: string; readonly events: Array<[string, unknown]> }
         | undefined;
+      const clearWake = Effect.suspend(() => {
+        wake = undefined;
+        return wakeOffers.cancel;
+      });
       const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
       const decode = <A, I>(schema: Schema.Codec<A, I>, data: unknown) =>
@@ -1004,7 +1003,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         const turn = active;
         broken = true;
         relaunchable = !turn;
-        wake = undefined;
+        yield* clearWake;
         const rootCause = Cause.isCause(cause) ? Cause.squash(cause) : cause;
         const failure = isOpenSessionError(rootCause) ? rootCause.cause : rootCause;
         const detail = isProtocolError(failure)
@@ -1317,20 +1316,21 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             const held = { nativeId: params.turnId, events: [] };
             wake = held;
             const notification = backgroundWorkNotification(finishedBackground.splice(0));
-            if (thread?.appThreadId && options.continuationRequests)
-              yield* options.continuationRequests.offer({
-                threadId: thread.appThreadId,
-                providerThreadId: thread.id,
-                driver: MUSE_PROVIDER,
-                detail: null,
-                ...(notification ? { notification } : {}),
-                dispatchIfCurrent: (dispatch) =>
-                  wake === held ? Effect.asSome(dispatch) : Effect.succeedNone,
-                clearIfCurrent: () =>
-                  Effect.sync(() => {
-                    if (wake === held) wake = undefined;
-                  }),
-              });
+            if (thread?.appThreadId)
+              yield* wakeOffers.offer(
+                {
+                  threadId: thread.appThreadId,
+                  providerThreadId: thread.id,
+                  driver: MUSE_PROVIDER,
+                  detail: null,
+                  ...(notification ? { notification } : {}),
+                  dispatchIfCurrent: (dispatch) =>
+                    wake === held ? Effect.asSome(dispatch) : Effect.succeedNone,
+                  clearIfCurrent: () =>
+                    Effect.suspend(() => (wake === held ? clearWake : Effect.void)),
+                },
+                () => wake === held,
+              );
           }
         }
         // Muse compacts the latest run, which can be the held wake; its compaction item ends this turn.
@@ -1341,6 +1341,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         ) {
           const turnId = typeof params.turnId === "string" ? params.turnId : itemEvent?.turnId;
           if (turnId === wake.nativeId) {
+            if (wake.events.length >= 2_048)
+              return yield* protocolError("Muse wake event buffer exceeded capacity");
             wake.events.push([method, data]);
             return;
           }
@@ -1403,7 +1405,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             if (!turn.flushScheduled) {
               turn.flushScheduled = true;
               yield* Effect.sleep(50).pipe(
-                Effect.andThen(Queue.offer(inbox, { type: "flush", turn })),
+                Effect.andThen(Queue.offer(inbox.queue, { type: "flush", turn })),
                 Effect.forkIn(scope),
               );
             }
@@ -1593,9 +1595,11 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           }
         }
       });
-      yield* Stream.fromQueue(inbox).pipe(
+      yield* Stream.fromQueue(inbox.queue).pipe(
         Stream.runForEach((entry) =>
           Effect.gen(function* () {
+            if (inbox.didOverflow(hostEpoch))
+              return yield* failHost(protocolError("Muse event inbox exceeded capacity"));
             if (entry.type === "flush") {
               const turn = entry.turn;
               turn.flushScheduled = false;
@@ -1692,46 +1696,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           { interruptible: true },
         ).pipe(Effect.provideService(Scope.Scope, scope));
         host = created;
-        created.connection.onNotification((notification) => {
-          Queue.offerUnsafe(inbox, {
-            type: "notification",
-            method: notification.method,
-            params: notification.params,
-            epoch,
-          });
-        });
-        created.connection.onProtocolError((cause) => {
-          Queue.offerUnsafe(inbox, { type: "failure", cause, epoch });
-        });
-        created.connection.onServerRequest(async (request) => {
-          if (request.method === "approval/request" || request.method === "userInput/request")
-            return {};
-          throw new Error(`Unsupported Muse server request: ${request.method}`);
-        });
-        void created.connection.closed.then(() => {
-          if (!closed && epoch === hostEpoch)
-            Queue.offerUnsafe(inbox, {
-              type: "failure",
-              cause: new Error("Muse connection closed unexpectedly"),
-              epoch,
-            });
-        });
-        const reportExit = (exit: ProcessExit) => {
-          if (!closed && epoch === hostEpoch) {
-            const reason = created
-              .stderrTail?.()
-              .findLast((line) => line.trim())
-              ?.trim();
-            Queue.offerUnsafe(inbox, {
-              type: "failure",
-              cause: new Error(
-                `Muse exited unexpectedly (${exit.code ?? exit.signal})${reason ? `: ${reason}` : ""}`,
-              ),
-              epoch,
-            });
-          }
-        };
-        void created.exited.then(reportExit);
+        const reportExit = inbox.watchHost(created, epoch, () => (closed ? undefined : hostEpoch));
         yield* Deferred.await(processExited).pipe(
           Effect.tap((exit) => Effect.sync(() => reportExit(exit))),
           Effect.forkIn(scope),
@@ -1743,7 +1708,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           hostEpoch++;
           if (active) yield* finish(active, "cancelled", "Muse session closed", "broken");
           yield* settleObservedChildren("cancelled");
-          yield* Queue.shutdown(inbox);
+          yield* clearWake;
+          yield* Queue.shutdown(inbox.queue);
           yield* Queue.shutdown(events);
         }).pipe(eventPermit.withPermits(1)),
       );
@@ -2002,7 +1968,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           });
           yield* updateSession("running");
           const held = compact ? undefined : wake;
-          if (held) wake = undefined;
+          if (held) yield* clearWake;
           if (continuation && !held) return yield* finish(turn, "completed");
           if (held && !continuation) turn.joined.add(held.nativeId);
           for (const [method, data] of held?.events ?? [])
@@ -2230,7 +2196,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     Effect.onError(failHost),
                   );
                   broken = true;
-                  wake = undefined;
+                  yield* clearWake;
                   yield* finish(turn, "interrupted", undefined, "broken");
                   yield* settleObservedChildren("interrupted");
                   yield* updateSession("stopped");

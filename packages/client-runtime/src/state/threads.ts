@@ -59,7 +59,6 @@ import {
   snapshotToPersist,
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
-import { threadStreamFailureMessage } from "./threadTextAppends.ts";
 import { makeThreadRequestsResolvedAnnouncer } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 import { makeThreadSubscriptionRecovery } from "./threadSubscriptionRecovery.ts";
@@ -527,6 +526,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   const recovery = yield* makeThreadSubscriptionRecovery({
+    isCold: () => Option.isNone(SubscriptionRef.getUnsafe(state).data),
     setStreamError,
     logAttributes: { environmentId, threadId },
   });
@@ -854,11 +854,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
-  const foregroundResubscriptions = Option.match(wakeups, {
-    onNone: () => Stream.never,
-    onSome: (service) =>
-      service.changes.pipe(Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup)),
-  });
+  const foregroundResubscriptions =
+    Option.getOrUndefined(wakeups)?.changes.pipe(
+      Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup),
+    ) ?? Stream.never;
 
   // Only the first subscription after a warm live resume keeps the retained
   // status. A replacement session or foreground resubscribe on the same scope
@@ -885,15 +884,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           return yield* Effect.never;
         }
 
-        const supportsCompletionMarker = yield* session.initialConfig.pipe(
-          Effect.map((config) => config.threadResumeCompletionMarker === true),
-          Effect.orElseSucceed(() => false),
-        );
+        const config = Option.getOrUndefined(yield* Effect.option(session.initialConfig));
+        const supportsCompletionMarker = config?.threadResumeCompletionMarker === true;
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* markSynchronizing;
         yield* Ref.set(resumingLive, false);
 
-        if (Option.isNone(current.data)) {
+        if (
+          Option.isNone(current.data) &&
+          !recovery.openColdOverSocket(canLoadHistory && config?.threadSnapshotPagination === true)
+        ) {
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
             Effect.flatMap(
               Option.match({
@@ -991,7 +991,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }),
       {
         onDefect: recovery.onDefect,
-        onExpectedFailure: (cause) => setStreamError(threadStreamFailureMessage(cause)),
+        onExpectedFailure: recovery.onExpectedFailure,
         retryExpectedFailureAfter: recovery.retryExpectedFailureAfter,
         resubscribe: Stream.merge(foregroundResubscriptions, recovery.resubscriptions),
       },

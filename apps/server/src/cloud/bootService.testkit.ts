@@ -14,7 +14,7 @@ import * as NodeHttp from "node:http";
 import * as ProcessRunner from "../processRunner.ts";
 import * as BootService from "./bootService.ts";
 import { pinnedRuntimePaths } from "./pinnedRuntime.ts";
-import { serviceStateActiveVersion } from "./serviceProtocol.ts";
+import { SERVICE_LAUNCHER_PROTOCOL, serviceStateActiveVersion } from "./serviceProtocol.ts";
 
 const macInstallerPath =
   "/opt/homebrew/bin:/Users/sam/.npm-global/bin:/Users/sam/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
@@ -191,15 +191,22 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
                   "/etc/systemd/user",
                 ],
               })
-            : input.args[0] === "--version"
-              ? `t3 v${/versions\/([^/]+)\//.exec(input.command)?.[1] ?? "1.2.3"}\n`
-              : input.command === "loginctl" && input.args[0] === "show-user"
-                ? `${control.linger ?? ""}\n`
-                : input.args[1] === "is-enabled"
-                  ? control.enabled
-                    ? "enabled\n"
-                    : "disabled\n"
-                  : "",
+            : input.args[0] === "__service-preflight"
+              ? JSON.stringify({
+                  status: "ready",
+                  version: /versions\/([^/]+)\//.exec(input.command)?.[1],
+                  launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                  databaseChecked: true,
+                })
+              : input.args[0] === "--version"
+                ? `t3 v${/versions\/([^/]+)\//.exec(input.command)?.[1] ?? "1.2.3"}\n`
+                : input.command === "loginctl" && input.args[0] === "show-user"
+                  ? `${control.linger ?? ""}\n`
+                  : input.args[1] === "is-enabled"
+                    ? control.enabled
+                      ? "enabled\n"
+                      : "disabled\n"
+                    : "",
         stderr: "",
         code: ChildProcessSpawner.ExitCode(
           failed ||

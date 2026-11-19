@@ -144,6 +144,11 @@ export class EnvironmentRpcSubscriptionObserver extends Context.Reference<{
 export const isRpcClientError = Schema.is(RpcClientError.RpcClientError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
+export const isAuthorizationFailure = (cause: Cause.Cause<unknown>) =>
+  cause.reasons.some(
+    (reason) => reason._tag === "Fail" && isEnvironmentAuthorizationError(reason.error),
+  );
+
 const MAX_EXPECTED_FAILURE_RETRY_DELAY_MS = 30_000;
 const STREAM_FAILURE_RETRY_DELAY = Duration.seconds(1);
 // A stream that stayed up this long was healthy: its next failure starts the backoff over.
@@ -646,13 +651,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
                           Stream.drain,
                         );
-                        const isAuthorizationFailure = cause.reasons.some(
-                          (reason) =>
-                            reason._tag === "Fail" && isEnvironmentAuthorizationError(reason.error),
-                        );
                         if (
                           options.retryExpectedFailureAfter === undefined ||
-                          isAuthorizationFailure
+                          isAuthorizationFailure(cause)
                         ) {
                           return handled;
                         }

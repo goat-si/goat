@@ -4,11 +4,11 @@ import {
   providerGoalsEqual,
   textFromClaudeContent,
 } from "./ClaudeGoalProjection.ts";
+import * as FiberMap from "effect/FiberMap";
 import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
 import {
   classifyClaudeNativeTool,
   CLAUDE_GOAL_DEFERRING_TASK_TYPES,
-  CLAUDE_SCHEDULED_WAKEUP_EARLY_FIRE_MARGIN_MS,
   CLAUDE_SCHEDULED_WAKEUP_TASK,
   claudeCommandOutputText,
   claudeFileChangeArtifacts,
@@ -1924,19 +1924,10 @@ function isClaudeResultForOtherTurn(input: {
   );
 }
 
-function isClaudeTaskNotificationOriginResult(message: SDKMessage): message is SDKResultMessage & {
-  readonly origin: Extract<
-    NonNullable<SDKResultMessage["origin"]>,
-    { readonly kind: "task-notification" }
-  >;
-} {
-  return message.type === "result" && message.origin?.kind === "task-notification";
-}
-
 // A session-task lifecycle result: it can precede a wake's real turn and ends no turn.
 function isClaudeEmptyTaskNotificationSuccess(message: SDKMessage): boolean {
   return (
-    isClaudeTaskNotificationOriginResult(message) &&
+    Wake.isClaudeTaskNotificationOriginResult(message) &&
     message.subtype === "success" &&
     !message.is_error &&
     message.num_turns === 0 &&
@@ -2709,11 +2700,7 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
   readonly installationGate?: ProviderInstallationGate.ProviderInstallationGate["Service"];
 }
 
@@ -3184,65 +3171,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return { ...current, calls };
           });
         };
-        // ScheduleWakeup reports no background task: its tool result is the only sign that Claude
-        // will start a turn by itself, and Claude keeps one pending wakeup per session. It stays
-        // out of pendingBackgroundTasksByNativeThread because a wakeup must not refuse a model or
-        // mode change; replacing the process cancels it, and that clears this record too.
-        const scheduleWakeupCalls = new Set<string>();
-        const scheduledWakeupsByNativeThread = new Map<string, number>();
-        // Native threads whose current turn Claude started by itself inside the early-fire margin.
-        const possibleEarlyWakeNativeThreads = new Set<string>();
-        const trackClaudeScheduledWakeup = Effect.fnUntraced(function* (
-          nativeThreadId: string,
-          message: SDKMessage,
-        ) {
-          if (isClaudeTurnStartMessage(message)) {
-            const scheduledFor = scheduledWakeupsByNativeThread.get(nativeThreadId);
-            if (scheduledFor === undefined) return;
-            const now = DateTime.toEpochMillis(yield* DateTime.now);
-            if (now >= scheduledFor) {
-              scheduledWakeupsByNativeThread.delete(nativeThreadId);
-            } else if (
-              (yield* Ref.get(activeTurn)) === null &&
-              now >= scheduledFor - CLAUDE_SCHEDULED_WAKEUP_EARLY_FIRE_MARGIN_MS
-            ) {
-              possibleEarlyWakeNativeThreads.add(nativeThreadId);
-            }
-            return;
-          }
-          // A task notification also starts a turn by itself, so an early turn is the wake only
-          // when its result is not a task notification's.
-          if (message.type === "result") {
-            if (
-              possibleEarlyWakeNativeThreads.delete(nativeThreadId) &&
-              !isClaudeTaskNotificationOriginResult(message)
-            ) {
-              scheduledWakeupsByNativeThread.delete(nativeThreadId);
-            }
-            return;
-          }
-          for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
-            if (toolUse.name === "ScheduleWakeup") scheduleWakeupCalls.add(toolUse.id);
-          }
-          if (message.type !== "user") return;
-          const returned = claudeToolResultBlocksFromUserMessage(message).filter((toolResult) =>
-            scheduleWakeupCalls.delete(toolResult.tool_use_id),
-          );
-          if (returned.length === 0) return;
-          const result = message.tool_use_result;
-          const scheduledFor =
-            returned.length === 1 && typeof result === "object" && result !== null
-              ? Reflect.get(result, "scheduledFor")
-              : undefined;
-          // stop:true reports scheduledFor 0. A failed call also clears: losing the hold early
-          // is recoverable, a hold that outlives its wakeup is not.
-          possibleEarlyWakeNativeThreads.delete(nativeThreadId);
-          if (typeof scheduledFor === "number" && scheduledFor > 0) {
-            scheduledWakeupsByNativeThread.set(nativeThreadId, scheduledFor);
-          } else {
-            scheduledWakeupsByNativeThread.delete(nativeThreadId);
-          }
-        });
+        const {
+          scheduledWakeupsByNativeThread,
+          trackClaudeScheduledWakeup,
+          forgetScheduledWake,
+          possibleScheduledWakeStarts,
+        } = Wake.claudeScheduledWakes(
+          Ref.get(activeTurn).pipe(Effect.map((turn) => turn === null)),
+        );
+        const monitorEventWakeStarts = new WeakSet<SDKMessage>();
         const publishedPendingBackgroundTasks = (
           nativeThreadId: string | null,
           roster: ReadonlyMap<string, OrchestrationV2PendingBackgroundTask>,
@@ -3315,6 +3252,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // `end` is the offered wake's last frame once known: its result, or the last frame a user turn absorbed.
         // A retired latch belongs to a cancelled wake that has not ended; its root frames are dropped until it does.
         // Claude may never open an "unopened" one, so a later task's notification releases it instead.
+        const deferredWakeOffers = yield* FiberMap.make<string>();
         const requestedContinuations = yield* Ref.make(
           new Map<
             string,
@@ -3322,6 +3260,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly token: symbol;
               readonly end: SDKMessage | undefined;
               readonly retired: "unopened" | "opened" | null;
+              readonly monitorEvent: boolean;
             }
           >(),
         );
@@ -3912,9 +3851,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const preservedOpaqueTombstones = [...priorOpaqueTombstones].filter((taskId) =>
             bufferedTaskNotificationIds.has(taskId),
           );
-          scheduledWakeupsByNativeThread.delete(nativeThreadId);
-          scheduleWakeupCalls.clear();
-          possibleEarlyWakeNativeThreads.delete(nativeThreadId);
+          forgetScheduledWake(nativeThreadId, true);
           yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
           yield* clearNativeThreadTaskIdSet(
             wakeEligibleBackgroundTasksByNativeThread,
@@ -6127,8 +6064,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     // Stop cancels Claude's wakeup and an exited process loses it; a failed
                     // turn on a live process leaves it pending. Process exits null the query first.
                     if (input.status !== "failed" || (yield* Ref.get(queryContext)) === null) {
-                      scheduledWakeupsByNativeThread.delete(nativeThreadId);
-                      scheduleWakeupCalls.clear();
+                      forgetScheduledWake(nativeThreadId);
                     }
                     yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
                     yield* clearNativeThreadTaskIdSet(
@@ -6613,6 +6549,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           if (message.type === "result") bufferedResultArrivals.set(message, yield* DateTime.now);
           if (isClaudeRootTurnFrame(message)) yield* forgetAbsorbedWake(wakeInput.nativeThreadId);
+          if (isWakeTurnStart && !possibleScheduledWakeStarts.has(message)) {
+            const { tasks } = yield* Ref.get(claudeMonitors);
+            if (
+              [...tasks.values()].some((task) => task.nativeThreadId === wakeInput.nativeThreadId)
+            )
+              monitorEventWakeStarts.add(message);
+          }
           yield* Ref.update(wakeBuffers, (current) => {
             const existing = current.get(wakeInput.nativeThreadId);
             const updated = new Map(current);
@@ -6669,6 +6612,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           const buffered = (yield* Ref.get(wakeBuffers)).get(nativeThreadId);
           const token = Symbol(nativeThreadId);
+          const monitorEvent =
+            ((yield* peekWakeReports(nativeThreadId))?.size ?? 0) === 0 &&
+            Wake.isClaudeMonitorEventWake(
+              buffered?.messages ?? [],
+              monitorEventWakeStarts,
+              isClaudeEmptyTaskNotificationSuccess,
+            );
           const shouldOffer = yield* Ref.modify(requestedContinuations, (current) => {
             if (current.has(nativeThreadId)) {
               return [false, current] as const;
@@ -6680,13 +6630,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 (entry) => entry.type === "result" && !isClaudeEmptyTaskNotificationSuccess(entry),
               ),
               retired: null,
+              monitorEvent,
             });
             return [true, updated] as const;
           });
           if (!shouldOffer) {
             return;
           }
-          const notification = Wake.claudeWakeNotification(yield* takeWakeReports(nativeThreadId));
+          const notification = monitorEvent
+            ? Wake.claudeMonitorProgressNotification()
+            : Wake.claudeWakeNotification(yield* takeWakeReports(nativeThreadId));
           yield* Effect.logInfo("orchestration-v2.claude-wake-turn-detected", {
             providerSessionId: input.providerSessionId,
             threadId: route.threadId,
@@ -6695,7 +6648,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // A process reset can clear and re-latch this thread; a stale request must not retire the newer wake.
           const retire = (): Effect.Effect<void> =>
             sdkMessageLock.withPermits(1)(retireOfferedWake(nativeThreadId, token));
-          yield* continuationRequests.offer({
+          const request = {
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
             driver: CLAUDE_PROVIDER,
@@ -6703,7 +6656,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(notification === null ? {} : { notification }),
             clearIfCurrent: retire,
             onRunEndedWithoutStarting: retire,
-          });
+          } satisfies ProviderContinuationRequests.ProviderContinuationRequest;
+          if ((yield* continuationRequests.offer(request)) === "overflow") {
+            yield* ProviderContinuationRequests.offerWithBackpressure(continuationRequests, {
+              ...request,
+              dispatchIfCurrent: (dispatch) =>
+                Ref.get(requestedContinuations).pipe(
+                  Effect.flatMap((latches) =>
+                    latches.get(nativeThreadId)?.token === token
+                      ? Effect.asSome(dispatch)
+                      : Effect.succeedNone,
+                  ),
+                ),
+            }).pipe(FiberMap.run(deferredWakeOffers, nativeThreadId));
+          }
         });
 
         // Drops what the unstarted continuation would have shown. Starts of subagents still running stay
@@ -6831,9 +6797,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // After a retired wake releases its latch, a wake buffered behind it has had no offer of its own.
         const offerBufferedWake = Effect.fnUntraced(function* (nativeThreadId: string) {
           const messages = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
+          if (yield* holdsBufferedWake(nativeThreadId, messages))
+            yield* offerWakeContinuation(nativeThreadId);
+        });
+        const holdsBufferedWake = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          messages: ReadonlyArray<SDKMessage>,
+        ) {
           const reports = yield* peekWakeReports(nativeThreadId);
           // A lifecycle result ends no turn, and closes the root frames before it.
-          const hasWake =
+          return (
             messages
               .slice(messages.findLastIndex(isClaudeEmptyTaskNotificationSuccess) + 1)
               .some(isClaudeRootTurnFrame) ||
@@ -6843,8 +6816,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 (entry.type === "system" &&
                   entry.subtype === "task_notification" &&
                   reports?.get(entry.task_id)?.report.kind === "subagent"),
-            );
-          if (hasWake) yield* offerWakeContinuation(nativeThreadId);
+            )
+          );
         });
 
         // Untraced like the roster message handling: it runs for every streamed roster change.
@@ -8160,7 +8133,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (
-            isClaudeTaskNotificationOriginResult(message) &&
+            Wake.isClaudeTaskNotificationOriginResult(message) &&
             !isClaudeProviderContinuationTurn(context.input) &&
             message.num_turns === 0
           ) {
@@ -8178,7 +8151,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (
-            isClaudeTaskNotificationOriginResult(message) &&
+            Wake.isClaudeTaskNotificationOriginResult(message) &&
             !isClaudeProviderContinuationTurn(context.input)
           ) {
             yield* clearWakeReports(liveQuery.nativeThreadId);
@@ -8556,7 +8529,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               return;
             }
             // Foreign output already streamed; exclude its result so only the prompt's own echoing result settles the turn.
-            if (isClaudeTaskNotificationOriginResult(message)) {
+            if (Wake.isClaudeTaskNotificationOriginResult(message)) {
               yield* clearWakeReports(liveQuery.nativeThreadId);
             }
             yield* Effect.logInfo("orchestration-v2.claude-result-for-other-turn", {
@@ -9799,14 +9772,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* sdkMessageLock.withPermits(1)(
               Effect.gen(function* () {
                 yield* attachTurn;
-                const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
+                const buffered = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
+                const latch = (yield* Ref.get(requestedContinuations)).get(nativeThreadId);
+                const end =
+                  latch?.monitorEvent === true && latch.end !== undefined
+                    ? buffered.indexOf(latch.end)
+                    : -1;
+                const leavesLaterWake =
+                  end !== -1 && (yield* holdsBufferedWake(nativeThreadId, buffered.slice(end + 1)));
+                const drained = leavesLaterWake ? buffered.slice(0, end + 1) : buffered;
                 yield* Ref.update(requestedContinuations, (current) => {
                   const updated = new Map(current);
                   updated.delete(nativeThreadId);
                   return updated;
                 });
-                const wakeAbsorbed = (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
-                yield* forgetAbsorbedWake(nativeThreadId);
+                const wakeAbsorbed = leavesLaterWake
+                  ? latch?.end?.type !== "result"
+                  : (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
+                if (!leavesLaterWake) yield* forgetAbsorbedWake(nativeThreadId);
                 if (drained.length === 0) {
                   if (turnInput.resume) return;
                   const completedAt = yield* DateTime.now;
@@ -9868,11 +9851,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }
                 if (lastResult !== undefined && !emptyTurnBeforeNextTurn) {
                   yield* handleSdkMessage({ query: querySession.query, message: lastResult });
+                  if (leavesLaterWake) yield* offerBufferedWake(nativeThreadId);
                   return;
                 }
                 if (wakeAbsorbed || (hasOpaqueTaskNotification && !context.nativeWakeStarted)) {
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });
+                  if (leavesLaterWake) yield* offerBufferedWake(nativeThreadId);
                 } else if (!context.nativeWakeStarted && !turnInput.resume) {
                   yield* Effect.sleep(CLAUDE_WAKE_TURN_START_DEADLINE).pipe(
                     Effect.andThen(

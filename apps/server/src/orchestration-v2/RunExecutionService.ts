@@ -94,6 +94,7 @@ import {
   makeInterruptResultTurnItem,
   providerProcessExitCause,
   terminalTerminationCause,
+  terminalRunNoticeEvents,
 } from "./runTerminationCause.ts";
 export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
@@ -150,6 +151,12 @@ function childTurnsContinue(terminal: ProviderTerminalEvent): boolean {
 /** Launching runs still ingest running subagents; taking them over would duplicate events. */
 export function canRouteRelatedSubagent(status: OrchestrationV2Subagent["status"]): boolean {
   return status === "completed";
+}
+
+export function canRouteNativeSubagent(
+  subagent: Pick<OrchestrationV2Subagent, "origin" | "status">,
+): boolean {
+  return subagent.origin === "provider_native" && canRouteRelatedSubagent(subagent.status);
 }
 
 function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
@@ -643,27 +650,7 @@ export const layer: Layer.Layer<
                     payload: finalizedAttempt,
                   },
                 ]),
-            ...(input.terminal.status === "interrupted"
-              ? [
-                  {
-                    id: yield* allocateEventId(),
-                    type: "turn-item.updated" as const,
-                    threadId: input.run.threadId,
-                    runId: input.run.id,
-                    nodeId: input.rootNode.id,
-                    providerInstanceId: input.run.providerInstanceId,
-                    occurredAt: completedAt,
-                    payload: makeInterruptResultTurnItem({
-                      idAllocator,
-                      run: input.run,
-                      rootNode: input.rootNode,
-                      providerThread: input.providerThread,
-                      reason,
-                      completedAt,
-                    }),
-                  },
-                ]
-              : []),
+            ...(yield* terminalRunNoticeEvents({ ...input, idAllocator, completedAt, reason })),
             ...(input.liveProviderTurn !== undefined &&
             !isTerminalProviderTurnStatus(input.liveProviderTurn.status)
               ? [
@@ -1474,11 +1461,9 @@ export const layer: Layer.Layer<
             event.turnItem.streaming &&
             !reservedHeldTurnItemIds.has(event.turnItem.id)
           ) {
-            yield* turnItemPositions.allocate({
-              threadId: event.turnItem.threadId,
-              turnItemId: event.turnItem.id,
-              runId: event.turnItem.runId,
-            });
+            yield* turnItemPositions.allocate(
+              TurnItemPositionStore.positionRequest(event.turnItem),
+            );
             reservedHeldTurnItemIds.add(event.turnItem.id);
           }
           if (event.type === "provider_thread.updated") {

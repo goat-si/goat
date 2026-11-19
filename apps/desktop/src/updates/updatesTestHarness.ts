@@ -243,13 +243,16 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         testSettings = { ...testSettings, updateInstallPolicy: policy };
         return { settings: testSettings, changed: true };
       }),
-    setPendingUpdate: (pendingUpdate) =>
+    setPendingUpdate: (pendingUpdate, guard) =>
       (options.beforeSetPendingUpdate ?? Effect.void).pipe(
         Effect.andThen(
           options.setPendingUpdateError
             ? Effect.fail(options.setPendingUpdateError)
             : Effect.sync(() => {
-                if (pendingUpdate !== null && pendingUpdate.channel !== testSettings.updateChannel)
+                if (
+                  (guard && !guard(testSettings.pendingUpdate)) ||
+                  (pendingUpdate !== null && pendingUpdate.channel !== testSettings.updateChannel)
+                )
                   return { settings: testSettings, changed: false };
                 testSettings = { ...testSettings, pendingUpdate };
                 return { settings: testSettings, changed: true };

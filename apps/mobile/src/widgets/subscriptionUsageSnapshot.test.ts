@@ -64,6 +64,129 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.url).toBe(deepLink);
     expect(JSON.stringify(snapshot)).not.toContain("private@example.com");
   });
+  it("splits a pooled window by account without exposing emails", () => {
+    const claude = (id: string, overrides: Partial<ServerProvider>) =>
+      provider({
+        instanceId: ProviderInstanceId.make(id),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        auth: { status: "authenticated", email: `${id}@example.com` },
+        ...overrides,
+      });
+    const snapshot = buildSubscriptionUsageSnapshot(
+      presentations([
+        claude("smol", {
+          displayName: "smol",
+          accentColor: "#4c6ef5",
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 29, windowDurationMins: 300 }],
+          },
+        }),
+        claude("relay", {
+          displayName: "relay@example.com",
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, id: "seven_day", kind: "weekly", label: "Weekly" }],
+          },
+        }),
+        claude("rex", {
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, resetsAt: "2026-09-05T11:50:00.000Z" }],
+          },
+        }),
+      ]),
+      deepLink,
+      6,
+      true,
+    );
+    const session = snapshot.providers[0]?.windows.find((w) => w.kind === "session");
+    expect(session?.accounts).toStrictEqual([
+      { name: "RE", remaining: 60 },
+      { name: "smol", color: "#4c6ef5", remaining: 71 },
+      { name: "RE2" },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("example.com");
+  });
+  it("keeps colliding redacted names attached to the same accounts when reset order changes", () => {
+    const breakdown = (firstReset: string, secondReset: string) =>
+      buildSubscriptionUsageSnapshot(
+        presentations(
+          [
+            { id: "rex", usedPercent: 30, resetsAt: firstReset },
+            { id: "relay", usedPercent: 70, resetsAt: secondReset },
+          ].map(({ id, usedPercent, resetsAt }) =>
+            provider({
+              instanceId: ProviderInstanceId.make(id),
+              auth: { status: "authenticated", email: `${id}@example.com` },
+              usageLimits: { checkedAt, windows: [{ ...window, usedPercent, resetsAt }] },
+            }),
+          ),
+        ),
+        deepLink,
+        6,
+        true,
+      ).providers[0]?.windows[0]?.accounts;
+    const earlier = "2026-09-05T12:08:00.000Z";
+    const later = "2026-09-05T12:12:00.000Z";
+    const before = breakdown(earlier, later);
+    expect(before).toHaveLength(2);
+    expect(new Set(before?.map(({ name }) => name))).toEqual(new Set(["RE", "RE2"]));
+    expect(breakdown(later, earlier)).toEqual(before?.toReversed());
+  });
+  it.each(["distinct logins", "no login identity"] as const)(
+    "keeps each Proxy account's reading across environments with reused IDs and %s",
+    (identity) => {
+      const breakdown = (firstReset: string, secondReset: string) =>
+        buildSubscriptionUsageSnapshot(
+          new Map(
+            [
+              { env: "env-a", label: "Alpha", usedPercent: 20, resetsAt: firstReset },
+              { env: "env-b", label: "Bravo", usedPercent: 70, resetsAt: secondReset },
+            ].map(({ env, label, usedPercent, resetsAt }) => [
+              EnvironmentId.make(env),
+              {
+                entry: { target: { label: env } },
+                serverConfig: {
+                  providers: [],
+                  usageLimitSources: [
+                    {
+                      id: UsageLimitSourceId.make("hub"),
+                      kind: "cliproxy" as const,
+                      label: "Hub",
+                      checkedAt,
+                      accounts: [
+                        {
+                          id: "seat.json",
+                          driver: ProviderDriverKind.make("codex"),
+                          label,
+                          ...(identity === "distinct logins"
+                            ? { email: `${env}@example.com` }
+                            : {}),
+                          usageLimits: {
+                            checkedAt,
+                            windows: [{ ...window, usedPercent, resetsAt }],
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ]),
+          ),
+          deepLink,
+          6,
+          true,
+        ).providers[0]?.windows[0]?.accounts;
+      const earlier = "2026-09-05T12:08:00.000Z";
+      const later = "2026-09-05T12:12:00.000Z";
+      const alpha = { name: "Alpha", remaining: 80 };
+      const bravo = { name: "Bravo", remaining: 30 };
+      expect(breakdown(earlier, later)).toEqual([alpha, bravo]);
+      expect(breakdown(later, earlier)).toEqual([bravo, alpha]);
+    },
+  );
   it("uses upstream deduplication for a native account also present in a proxy hub", () => {
     const input = new Map([
       [
