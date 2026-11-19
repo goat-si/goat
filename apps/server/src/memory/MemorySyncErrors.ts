@@ -32,6 +32,23 @@ export const transient = (e: Error) =>
   (e._tag === "MemoryHubError" &&
     ["unavailable", "storage_failed", "cursor_expired"].includes(e.code));
 
+export const nextPullRetry = (
+  error: Error,
+  attempts: number,
+  now: number,
+  waitingForCheckpoint: boolean,
+) => {
+  const retrySoon = waitingForCheckpoint || transient(error);
+  return {
+    attempts: Math.min(2147483647, attempts + 1),
+    nextAttemptAt: retrySoon
+      ? now + Math.min(30000, 1000 * 2 ** Math.min(attempts, 5))
+      : Number.MAX_SAFE_INTEGER,
+    failureCode: failureCode(error),
+    holdClass: retrySoon ? null : holdClass(error),
+  };
+};
+
 export const refusedSync = (operation: M.MemoryOperation, code: M.MemoryFailureCode) =>
   (operation.kind === "move" && code === "source_invalidated") ||
   (M.requiresMemoryFloor2(operation) &&

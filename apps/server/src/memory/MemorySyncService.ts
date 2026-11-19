@@ -35,7 +35,13 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
-import { failureCode, holdClass, refusedSync, transient } from "./MemorySyncErrors.ts";
+import {
+  failureCode,
+  holdClass,
+  nextPullRetry,
+  refusedSync,
+  transient,
+} from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -1395,21 +1401,15 @@ const make = Effect.gen(function* () {
     if (result._tag === "Failure") {
       const error = result.failure;
       const now = yield* Clock.currentTimeMillis;
+      const waitingForCheckpoint =
+        error._tag === "MemoryHubError" &&
+        error.code === "bootstrap_required" &&
+        (yield* runtime.readBootstrap(key.memorySpaceId, key.hubEnvironmentId)).state === "unbound";
+      const nextRetry = nextPullRetry(error, retry.attempts, now, waitingForCheckpoint);
       yield* store.transact(
-        store.writePullRetryTx({
-          ...key,
-          expectedVersion: retry.version,
-          retry: {
-            attempts: Math.min(2147483647, retry.attempts + 1),
-            nextAttemptAt: transient(error)
-              ? now + Math.min(30000, 1000 * 2 ** Math.min(retry.attempts, 5))
-              : Number.MAX_SAFE_INTEGER,
-            failureCode: failureCode(error),
-            holdClass: transient(error) ? null : holdClass(error),
-          },
-        }),
+        store.writePullRetryTx({ ...key, expectedVersion: retry.version, retry: nextRetry }),
       );
-      yield* scheduleRecovery(r, transient(error) ? null : holdClass(error));
+      yield* scheduleRecovery(r, nextRetry.holdClass);
       yield* wakePullRetry;
       return yield* error;
     }
