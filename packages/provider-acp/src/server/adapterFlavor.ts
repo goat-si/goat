@@ -251,6 +251,10 @@ export interface AcpAdapterV2Flavor {
     cwd: string,
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
+  readonly subagentsOutlivingPrompt?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskIds: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<string>>;
   readonly supportsCompaction?: boolean;
   /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
   readonly compactViaAdvertisedCommand?: boolean;

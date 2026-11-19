@@ -1,4 +1,4 @@
-import { hasAcpDeferredBackgroundWork } from "./deferredBackground.ts";
+import { hasAcpDeferredBackgroundWork, idleReportedSubagents } from "./deferredBackground.ts";
 import {
   AcpModelSelectionError,
   ACP_STOP_CONFIRM_TIMEOUT_MS,
@@ -3840,6 +3840,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             } else if (context.nativeThreadId === notification.sessionId) {
               if (update.sessionUpdate === "usage_update") {
                 context.replyOpen = false;
+                if (context.promptSettled)
+                  yield* idleReportedSubagents(context, flavor, emitSubagent);
                 yield* rearmDeferredFinalize(context);
               } else if (acpRootSessionUpdateIngestsOutput(notification)) {
                 context.replyOpen = true;
@@ -7338,6 +7340,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               context.promptSettled = true;
               context.promptSettledStatus = "completed";
+              yield* idleReportedSubagents(context, flavor, emitSubagent);
               if (drainedWakeCount === 0) {
                 if (continuationWasRequested && flavor.deferFinalizeForBackgroundWork === true) {
                   if (hasDeferredBackgroundWork(context)) {
@@ -7517,6 +7520,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       });
                       return;
                     }
+                    yield* idleReportedSubagents(context, flavor, emitSubagent);
+                    if (context.finalized) return;
                     if (
                       flavor.deferFinalizeForBackgroundWork === true &&
                       !context.interrupted &&
