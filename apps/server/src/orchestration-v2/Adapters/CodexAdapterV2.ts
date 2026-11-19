@@ -128,6 +128,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
+import { startCodexThread } from "./CodexDelegatedSource.ts";
 import { makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import {
@@ -6926,7 +6927,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   runtimePolicy: threadInput.runtimePolicy,
                 }).pipe(
                   Effect.flatMap((runtime) =>
-                    client.request("thread/start", runtime.params).pipe(
+                    startCodexThread(client, threadInput.threadId, runtime.params).pipe(
                       Effect.tap((response) =>
                         Effect.sync(() => {
                           threadStatuses.record(response.thread.id, response.thread.status.type);
