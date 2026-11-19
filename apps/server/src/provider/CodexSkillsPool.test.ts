@@ -1,5 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
@@ -82,6 +85,30 @@ it.effect("retires a failed helper and retries with a fresh one", () =>
       );
       assert.equal(value, 2);
       assert.equal(spawns, 2);
+    }),
+  ),
+);
+
+it.effect("bounds concurrent helper leases across changing identities", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Queue.unbounded<number>();
+      const release = yield* Deferred.make<void>();
+      const ninth = yield* Deferred.make<void>();
+      const pool = yield* makeCodexSkillsPool((identity: string) => Effect.succeed(identity));
+      for (let index = 0; index < 8; index++) {
+        yield* pool(`profile-${index % 2}`, () =>
+          Queue.offer(started, index).pipe(Effect.andThen(Deferred.await(release))),
+        ).pipe(Effect.forkScoped({ startImmediately: true }));
+      }
+      for (let index = 0; index < 8; index++) yield* Queue.take(started);
+      const pending = yield* pool("profile-0", () =>
+        Deferred.succeed(ninth, undefined).pipe(Effect.asVoid),
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.isFalse(yield* Deferred.isDone(ninth));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(pending);
+      assert.isTrue(yield* Deferred.isDone(ninth));
     }),
   ),
 );
