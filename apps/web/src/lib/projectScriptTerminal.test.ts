@@ -42,3 +42,14 @@ describe("findReusableProjectScriptTerminal", () => {
     ).toBe(expected);
   });
 });
+
+it("does not reuse a terminal while its close is pending", () => {
+  const input = {
+    drawerTerminalIds: ["term-1"],
+    activeTerminalId: "term-1",
+    panelTerminalIds: new Set<string>(),
+    runningTerminalIds: [],
+    closingTerminalIds: ["term-1"],
+  };
+  expect(findReusableProjectScriptTerminal(input)).toBeNull();
+});

@@ -1,3 +1,5 @@
+import { toServerClock } from "@goat/client-runtime/clock";
+import type { EnvironmentId } from "@goat/contracts";
 import { formatWorkingDurationLabel } from "@goat/client-runtime/state/models";
 import { createContext, use } from "react";
 import { Platform, Text as NativeText } from "react-native";
@@ -11,7 +13,10 @@ import { useVisibleSecondClock } from "./use-visible-second-clock";
 export const ThreadListPaneVisibleContext = createContext<boolean | undefined>(undefined);
 
 /** Elapsed time after a Working or Waiting label. */
-export function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
+export function ThreadListV2Duration(props: {
+  readonly startedAt: string | null;
+  readonly environmentId?: EnvironmentId;
+}) {
   const startedAtMs = Date.parse(props.startedAt ?? "");
   const nowMs = useVisibleSecondClock(Number.isFinite(startedAtMs), {
     paneVisible: use(ThreadListPaneVisibleContext),
@@ -27,7 +32,10 @@ export function ThreadListV2Duration(props: { readonly startedAt: string | null 
           fontVariant: ["tabular-nums"],
         }}
       >
-        {formatWorkingDurationLabel(nowMs - startedAtMs)}
+        {formatWorkingDurationLabel(
+          (props.environmentId === undefined ? nowMs : toServerClock(props.environmentId, nowMs)) -
+            startedAtMs,
+        )}
       </NativeText>
     </>
   );

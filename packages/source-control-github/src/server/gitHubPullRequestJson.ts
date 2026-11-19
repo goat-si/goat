@@ -355,11 +355,7 @@ export interface GitHubPullRequestHead {
   readonly headRepositoryOwner: string | null;
 }
 
-export interface GitHubPullRequestActivity {
-  readonly author: PullRequestActor | null;
-  readonly comments: ReadonlyArray<PullRequestComment>;
-  readonly commits: ReadonlyArray<PullRequestCommit>;
-}
+export type { GitHubPullRequestActivity } from "./gitHubPullRequestActivity.ts";
 
 export function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim() ?? "";

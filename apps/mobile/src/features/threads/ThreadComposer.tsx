@@ -83,7 +83,7 @@ import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import { resolveComposerSendPresentation } from "./composerSendPresentation";
 import { FOLLOW_UP_ACTION_LABEL, SendActionButton } from "./SendActionButton";
-import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { ComposerCommandPopover, shouldShowComposerMenu } from "./ComposerCommandPopover";
 import { ComposerPopoverAnchor } from "./ComposerPopoverAnchor";
 import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
 import { resolveComposerSendIntercept, useComposerCommandMenu } from "./use-composer-command-menu";
@@ -693,9 +693,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         style={{ maxWidth: props.contentMaxWidth }}
       >
         {props.draftControls}
-        {!isSubmissionLocked &&
-        composerMenu.trigger &&
-        (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
+        {!isSubmissionLocked && composerMenu.trigger && shouldShowComposerMenu(composerMenu) ? (
           <ComposerPopoverAnchor>
             <ComposerCommandPopover
               items={composerMenu.items}

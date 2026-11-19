@@ -123,3 +123,9 @@ export function ThreadListV2RowOrigin(props: {
     </Text>
   );
 }
+
+export const TITLE_FAVICON_SIZE = 15;
+// Centers the favicon on the first line of the text-base title.
+export const TITLE_FAVICON_OFFSET = 4;
+// Lines below the title start where the title text does.
+export const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;

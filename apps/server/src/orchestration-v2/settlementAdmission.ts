@@ -13,26 +13,35 @@ type State<K> = {
   readonly targets: ReadonlyMap<K, Target>;
   readonly full: "idle" | "queued" | "running" | "rerun";
   readonly refreshFull: boolean;
+  readonly immediateFull: boolean;
   readonly closed: boolean;
 };
 
-const requestFull = <K>(state: State<K>, refresh: boolean): State<K> =>
-  (state.full === "queued" || state.full === "rerun") && (!refresh || state.refreshFull)
+const requestFull = <K>(
+  state: State<K>,
+  refresh: boolean,
+  kind: "scheduled" | "immediate",
+): State<K> =>
+  (state.full === "queued" || state.full === "rerun") &&
+  (!refresh || state.refreshFull) &&
+  (kind === "scheduled" || state.immediateFull)
     ? state
     : {
         ...state,
         full: state.full === "running" || state.full === "rerun" ? "rerun" : "queued",
         refreshFull: state.refreshFull || refresh,
+        immediateFull: state.immediateFull || kind === "immediate",
       };
 
 export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(options: {
   readonly targeted: (key: K) => Effect.Effect<void, E, R>;
-  readonly full: (refresh: boolean) => Effect.Effect<void, E, R>;
+  readonly full: (refresh: boolean, kind: "scheduled" | "immediate") => Effect.Effect<void, E, R>;
 }) {
   const state = yield* TxRef.make<State<K>>({
     targets: new Map(),
     full: "idle",
     refreshFull: false,
+    immediateFull: false,
     closed: false,
   });
   yield* Effect.addFinalizer(() =>
@@ -40,6 +49,7 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
       targets: new Map(),
       full: "idle",
       refreshFull: false,
+      immediateFull: false,
       closed: true,
     }).pipe(Effect.tx),
   );
@@ -50,7 +60,7 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
     if (current.closed) return yield* Effect.interrupt;
     const previous = current.targets.get(key);
     if (previous === undefined && current.targets.size === TARGET_CAPACITY) {
-      yield* TxRef.set(state, requestFull(current, true));
+      yield* TxRef.set(state, requestFull(current, true, "immediate"));
       return;
     }
     if (previous !== undefined && (!previous.running || previous.rerun)) return;
@@ -64,7 +74,18 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
 
   const enqueueFull = TxRef.get(state).pipe(
     Effect.flatMap((current) =>
-      current.closed ? Effect.interrupt : TxRef.set(state, requestFull(current, false)),
+      current.closed
+        ? Effect.interrupt
+        : TxRef.set(state, requestFull(current, false, "scheduled")),
+    ),
+    Effect.tx,
+  );
+
+  const enqueueImmediate = TxRef.get(state).pipe(
+    Effect.flatMap((current) =>
+      current.closed
+        ? Effect.interrupt
+        : TxRef.set(state, requestFull(current, false, "immediate")),
     ),
     Effect.tx,
   );
@@ -116,16 +137,24 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
     const current = yield* TxRef.get(state);
     if (current.closed) return yield* Effect.interrupt;
     if (current.full !== "queued") return yield* Effect.txRetry;
-    yield* TxRef.set<State<K>>(state, { ...current, full: "running", refreshFull: false });
-    return current.refreshFull;
+    yield* TxRef.set<State<K>>(state, {
+      ...current,
+      full: "running",
+      refreshFull: false,
+      immediateFull: false,
+    });
+    return {
+      refresh: current.refreshFull,
+      kind: current.immediateFull ? ("immediate" as const) : ("scheduled" as const),
+    };
   }).pipe(Effect.tx);
   const finishFull = TxRef.update(state, (current): State<K> => ({
     ...current,
     full: !current.closed && current.full === "rerun" ? "queued" : "idle",
   })).pipe(Effect.tx);
   yield* takeFull.pipe(
-    Effect.flatMap((refresh) =>
-      Effect.suspend(() => options.full(refresh)).pipe(
+    Effect.flatMap(({ refresh, kind }) =>
+      Effect.suspend(() => options.full(refresh, kind)).pipe(
         Effect.catchCause(recover),
         Effect.ensuring(finishFull),
       ),
@@ -155,5 +184,5 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
       closed: current.closed,
     })),
   );
-  return { enqueue, enqueueFull, drain, drainFull, snapshot };
+  return { enqueue, enqueueFull, enqueueImmediate, drain, drainFull, snapshot };
 });

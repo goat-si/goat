@@ -57,8 +57,8 @@ const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
 // Every server polls every open linked pull request, and most of them sit untouched for days.
 // One nobody has updated for QUIET_AFTER_MS is read on the quiet cadence instead of each sweep;
 // requested refreshes, watches and a host CLI's merge command still read it at once.
-const QUIET_AFTER_MS = 30 * 60 * 1_000;
-const QUIET_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
+export const QUIET_AFTER_MS = 30 * 60 * 1_000;
+export const QUIET_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
 
 const PR_REACTION_EVENTS = [
   "thread.pull-request-link-updated",
@@ -254,6 +254,7 @@ function snapshotFieldsOf(summary: PullRequestSummary): SnapshotFields {
     ...(summary.reviewDecision === undefined ? {} : { reviewDecision: summary.reviewDecision }),
     ...(summary.checksState === undefined ? {} : { checksState: summary.checksState }),
     ...(summary.mergeability === undefined ? {} : { mergeability: summary.mergeability }),
+    ...(summary.rebaseRequired == null ? {} : { rebaseRequired: summary.rebaseRequired }),
   };
 }
 
@@ -263,6 +264,9 @@ function withKnownMergeability(
   fields: SnapshotFields,
   provider: PullRequestSummary["provider"],
 ): SnapshotFields {
+  if (fields.rebaseRequired == null && previous?.rebaseRequired !== undefined) {
+    fields = { ...fields, rebaseRequired: previous.rebaseRequired };
+  }
   if (
     provider !== "github" ||
     fields.state !== "open" ||
@@ -302,7 +306,8 @@ function snapshotFieldsEqual(left: SnapshotFields, right: SnapshotFields): boole
     left.changedFiles === right.changedFiles &&
     (left.reviewDecision ?? null) === (right.reviewDecision ?? null) &&
     (left.checksState ?? null) === (right.checksState ?? null) &&
-    left.mergeability === right.mergeability
+    left.mergeability === right.mergeability &&
+    left.rebaseRequired === right.rebaseRequired
   );
 }
 

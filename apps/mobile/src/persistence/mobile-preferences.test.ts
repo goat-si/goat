@@ -151,3 +151,15 @@ describe("mobile tool-call visibility preference", () => {
     }),
   );
 });
+
+it.effect("keeps PR activity visibility across a restart and rejects malformed stored values", () =>
+  Effect.gen(function* () {
+    const selection = { bots: true, resolved: false };
+    yield* seedStoredPreferences({ pullRequestActivityVisibility: selection });
+    expect(Reflect.get(yield* loadFresh, "pullRequestActivityVisibility")).toEqual(selection);
+    yield* seedStoredPreferences({
+      pullRequestActivityVisibility: { bots: "yes", resolved: false },
+    });
+    expect(Reflect.get(yield* loadFresh, "pullRequestActivityVisibility")).toBeUndefined();
+  }),
+);

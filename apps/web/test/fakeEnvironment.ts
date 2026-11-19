@@ -507,6 +507,7 @@ export const fakeDriver = {
       },
       session,
       openProbeSocket: Effect.never,
+      refusedRouteIds: [],
     }),
   checkRoute: () => Effect.succeed<RouteCheck>("answered"),
   checkHost: () => Effect.succeed<RouteCheck>("unchecked"),

@@ -1,4 +1,8 @@
 import {
+  mapCheckpointStorageError,
+  isMappedCheckpointStorageError,
+} from "../vcs/checkpointStorageError.ts";
+import {
   OrchestratorMcpFailure,
   type ResourceTelemetryHistoryInput,
   type ServerProcessResourceHistoryInput,
@@ -28,6 +32,12 @@ const PROCESS_ROWS = 64;
 const DAY_MS = 86_400_000;
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
+const reviewFailure = (error: unknown) => {
+  const mapped = mapCheckpointStorageError(error);
+  return isMappedCheckpointStorageError(mapped)
+    ? new OrchestratorMcpFailure({ code: "orchestration_error", message: mapped.detail })
+    : unavailable();
+};
 
 const authorize = Effect.fn("ScopedReadMcp.authorize")(function* (
   scope: McpInvocationScope,
@@ -266,7 +276,7 @@ export const diffPreview = Effect.fn("ScopedReadMcp.diffPreview")(function* (
   const { projectId: _project, threadId: _thread, ...request } = input;
   const data = yield* (yield* Review.ReviewService)
     .getDiffPreview({ ...request, cwd })
-    .pipe(Effect.mapError(unavailable));
+    .pipe(Effect.mapError(reviewFailure));
   const b = budget();
   // Each source spends its shell once, then its files spend what is left.
   const sources = [];
@@ -300,7 +310,7 @@ export const diffFile = Effect.fn("ScopedReadMcp.diffFile")(function* (
   const { projectId: _project, threadId: _thread, ...request } = input;
   const data = yield* (yield* Review.ReviewService)
     .getDiffFileContents({ ...request, headRef: null, cwd })
-    .pipe(Effect.mapError(unavailable));
+    .pipe(Effect.mapError(reviewFailure));
   const b = budget();
   const oldContents = b.text(data.oldContents, RESPONSE_BYTES);
   const newContents = b.text(data.newContents, RESPONSE_BYTES);

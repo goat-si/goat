@@ -103,6 +103,7 @@ export const cleanupFixture = (
     let fullStatusCalls = 0;
     let gitfileDiagnostic: string | null = null;
     let snapshotReads = 0;
+    let checkpointReads = 0;
     let pullRequest: Effect.Effect<GitManager.GitBranchPullRequest | null, GitManagerServiceError> =
       Effect.succeed(null);
     let pullRequestLookups = 0;
@@ -189,36 +190,38 @@ export const cleanupFixture = (
       } as unknown as Orchestrator.OrchestratorV2["Service"]),
       Effect.provideService(SqlClient.SqlClient, ((strings: TemplateStringsArray) =>
         Effect.sync(() =>
-          openSessionCwd !== null && strings.join("").includes("projection_provider_sessions")
-            ? [
-                {
-                  payload_json: JSON.stringify({
-                    id: "session-1",
-                    driver: "codex",
-                    providerInstanceId: "codex",
-                    status: "ready",
-                    cwd: openSessionCwd,
-                    model: null,
-                    capabilities: CodexProviderCapabilitiesV2,
-                    createdAt: "2026-06-01T12:00:00.000Z",
-                    updatedAt: "2026-06-01T12:00:00.000Z",
-                    lastError: null,
-                  }),
-                },
-              ]
-            : outboxStatus !== null && strings.join("").includes("orchestration_v2_effect_outbox")
-              ? [{ status: outboxStatus }]
-              : strings.join("").includes("deleted_at IS NOT NULL")
-                ? deletedThreads.map((thread) => ({
-                    payload_json: JSON.stringify(thread),
-                    workspaceRoot: repo,
-                  }))
-                : strings.join("").includes('AS "worktreePath"')
-                  ? [
-                      ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                      ...storedWorktreePaths,
-                    ].map((worktreePath) => ({ worktreePath }))
-                  : [],
+          strings.join("").includes("WITH RECURSIVE retained")
+            ? (checkpointReads++, [])
+            : openSessionCwd !== null && strings.join("").includes("projection_provider_sessions")
+              ? [
+                  {
+                    payload_json: JSON.stringify({
+                      id: "session-1",
+                      driver: "codex",
+                      providerInstanceId: "codex",
+                      status: "ready",
+                      cwd: openSessionCwd,
+                      model: null,
+                      capabilities: CodexProviderCapabilitiesV2,
+                      createdAt: "2026-06-01T12:00:00.000Z",
+                      updatedAt: "2026-06-01T12:00:00.000Z",
+                      lastError: null,
+                    }),
+                  },
+                ]
+              : outboxStatus !== null && strings.join("").includes("orchestration_v2_effect_outbox")
+                ? [{ status: outboxStatus }]
+                : strings.join("").includes("deleted_at IS NOT NULL")
+                  ? deletedThreads.map((thread) => ({
+                      payload_json: JSON.stringify(thread),
+                      workspaceRoot: repo,
+                    }))
+                  : strings.join("").includes('AS "worktreePath"')
+                    ? [
+                        ...threads.flatMap((thread) => thread.worktreePath ?? []),
+                        ...storedWorktreePaths,
+                      ].map((worktreePath) => ({ worktreePath }))
+                    : [],
         )) as unknown as SqlClient.SqlClient),
       Effect.provideService(GitManager.GitManager, {
         invalidateStatus: () => Effect.void,
@@ -326,6 +329,7 @@ export const cleanupFixture = (
         gitfileDiagnostic = diagnostic;
       },
       snapshotReads: () => snapshotReads,
+      checkpointReads: () => checkpointReads,
       setPullRequest: (
         next: Effect.Effect<GitManager.GitBranchPullRequest | null, GitManagerServiceError>,
       ) => {

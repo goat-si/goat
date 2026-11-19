@@ -108,7 +108,9 @@ export function registerOmoAdapterChecks({
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       yield* runtime.resumeThread({ providerThread });
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       fake.vetoNextSwitch();
       yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       yield* runtime.ensureThread({

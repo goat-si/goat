@@ -324,6 +324,7 @@ export function registerPiExtensionStatusChecks({
       });
       yield* takeEvent((event) => event.type === "runtime_request.updated");
       fake.vetoNextSwitch();
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       const exit = yield* runtime.resumeThread({ providerThread }).pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(exit));
       assert.deepEqual(runtime.providerSession.extensionStatuses, [
@@ -351,6 +352,7 @@ export function registerPiExtensionStatusChecks({
             statusText: key === "lint" ? "Lint clean" : "Watching",
           });
         fake.deferNextLifecycle("switch_session");
+        fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
         const switching = yield* runtime
           .resumeThread({ providerThread })
           .pipe(Effect.exit, Effect.forkScoped);

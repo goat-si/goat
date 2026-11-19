@@ -1,3 +1,4 @@
+import { inheritsForkConversation } from "./ProjectionForkConversation.ts";
 import {
   FORK_HISTORY_TYPES,
   readForkHistoryPage,
@@ -520,26 +521,6 @@ export interface ProjectionRecordFilter {
     readonly keepMessageId: MessageId;
   };
 }
-
-// A fork inherits its source's history before it has messages of its own,
-// unless a portable handoff's budget left none of that history to deliver.
-const inheritsForkConversation = ({
-  thread,
-  contextTransfers,
-  contextHandoffs,
-}: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers" | "contextHandoffs">) => {
-  if (thread.forkedFrom?.type !== "run") return false;
-  const resolution = contextTransfers.find(
-    (transfer) => transfer.type === "fork" && transfer.targetThreadId === thread.id,
-  )?.resolution;
-  return (
-    resolution?.strategy !== "portable_context" ||
-    contextHandoffs.some(
-      (handoff) =>
-        handoff.id === resolution.contextHandoffId && (handoff.history?.messages.length ?? 0) > 0,
-    )
-  );
-};
 
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
@@ -7127,7 +7108,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       while (pendingSourceIds.length > 0) {
         const sourceId = pendingSourceIds.pop();
         if (sourceId === undefined || rowsByThreadId.has(sourceId)) continue;
-        const source = (yield* selectShellThreadRows(sourceId))[0];
+        const source = (yield* selectShellThreadRows(sourceId, { includeDeleted: true }))[0];
         if (source === undefined) continue;
         rowsByThreadId.set(sourceId, source);
         if (source.forked_from_run_source_thread_id !== null) {
@@ -7368,7 +7349,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               if (nextId === undefined || rowsByThreadId.has(nextId)) {
                 continue;
               }
-              const rows = yield* selectShellThreadRows(nextId);
+              const rows = yield* selectShellThreadRows(nextId, {
+                includeDeleted: nextId !== threadId,
+              });
               const row = rows[0];
               if (row === undefined) {
                 continue;

@@ -1,7 +1,14 @@
+import {
+  availableState,
+  offlineState,
+  connectingState,
+  type SupervisorIntent,
+} from "./supervisorState.ts";
+import { exitUnlessInterrupted } from "./exitUnlessInterrupted.ts";
 import type { EstablishmentProgress, SetupPreparation } from "./establishmentProgress.ts";
 import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
-import { withRelayClientTracing } from "@goat/shared/relayTracing";
+import { withLocalTracing, withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -29,6 +36,7 @@ import {
   type ConnectionTarget,
   ConnectionTransientError,
   type NetworkStatus,
+  NO_REFUSED_ROUTES,
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "./model.ts";
@@ -64,12 +72,8 @@ const BETTER_ROUTE_COOLDOWN_MS = 300_000;
 
 type ConnectedLease = ConnectionDriver.EnvironmentConnectionLease & {
   readonly activeRoute: ConnectionRoute | undefined;
+  readonly generation: number;
 };
-
-interface SupervisorIntent {
-  readonly desired: boolean;
-  readonly network: NetworkStatus;
-}
 
 export type SupervisorSignal =
   | { readonly _tag: "ConnectRequested" }
@@ -86,6 +90,17 @@ interface PendingRetryTrace {
   readonly failureCount: number;
   readonly delayMs: number;
   readonly reason: ConnectionFailure["reason"];
+}
+
+function mergeRefusedRoutes(
+  known: ReadonlyArray<string>,
+  refused: ReadonlyArray<string>,
+  keep: (routeId: string) => boolean,
+): ReadonlyArray<string> {
+  const next = [...new Set([...known, ...refused])].filter(keep);
+  return next.length === known.length && next.every((id, index) => id === known[index])
+    ? known
+    : next;
 }
 
 interface TracedAttemptFailure {
@@ -123,16 +138,6 @@ type EstablishmentEvent =
   | { readonly _tag: "Interrupted"; readonly resetRetry: boolean }
   | { readonly _tag: "TimedOut"; readonly sshPreparationTimedOut: boolean };
 
-function exitUnlessInterrupted<A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<Exit.Exit<A, E>, never, R> {
-  return Effect.matchCauseEffect(effect, {
-    onFailure: (cause) =>
-      Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(Exit.failCause(cause)),
-    onSuccess: (value) => Effect.succeed(Exit.succeed(value)),
-  });
-}
-
 export interface EnvironmentSupervisorOptions {
   readonly initiallyDesired?: boolean;
   readonly learnRoutes?: (input: {
@@ -149,56 +154,6 @@ function annotateTarget(target: ConnectionTarget) {
     "environment.label": target.label,
     "environment.target.kind": target._tag,
   });
-}
-
-function availableState(intent: SupervisorIntent, generation: number): SupervisorConnectionState {
-  return {
-    desired: false,
-    network: intent.network,
-    phase: "available",
-    stage: null,
-    attempt: 0,
-    generation,
-    lastFailure: null,
-    retryAt: null,
-  };
-}
-
-function offlineState(
-  intent: SupervisorIntent,
-  generation: number,
-  attempt: number,
-  lastFailure: ConnectionFailure | null,
-): SupervisorConnectionState {
-  return {
-    desired: true,
-    network: intent.network,
-    phase: "offline",
-    stage: null,
-    attempt,
-    generation,
-    lastFailure,
-    retryAt: null,
-  };
-}
-
-function connectingState(
-  intent: SupervisorIntent,
-  generation: number,
-  attempt: number,
-  lastFailure: ConnectionFailure | null,
-  stage: SupervisorConnectionState["stage"] = "preparing",
-): SupervisorConnectionState {
-  return {
-    desired: true,
-    network: intent.network,
-    phase: "connecting",
-    stage,
-    attempt,
-    generation,
-    lastFailure,
-    retryAt: null,
-  };
 }
 
 function failureFromExit<A>(
@@ -316,6 +271,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const preferredRouteId = yield* Ref.make(Option.none<string>());
   const routeCooldowns = yield* Ref.make<ReadonlyMap<string, bigint>>(new Map());
   const setupSamples = yield* Ref.make<ReadonlyArray<number>>([]);
+  const refusedRoutes = yield* Ref.make(NO_REFUSED_ROUTES);
 
   const attemptEntry = Effect.gen(function* () {
     const latest = yield* Ref.get(currentEntry);
@@ -376,15 +332,30 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const better = connectionRoutes(latest)
       .slice(0, current)
       .filter((route) => (cooldowns.get(connectionRouteId(route.target)) ?? 0n) <= now);
-    const passed = yield* Effect.forEach(
+    const results = yield* Effect.forEach(
       better,
       (route: ConnectionRoute) => driver.preflight(latest, route),
       { concurrency: "unbounded" },
     );
-    const index = passed.indexOf(true);
-    if (index === -1) return;
     const live = yield* SubscriptionRef.get(session);
     if (Option.isNone(live) || live.value !== lease.session) return;
+    const refused = better
+      .filter((_route, position) => results[position] === "refused")
+      .map((route) => connectionRouteId(route.target));
+    if (refused.length > 0) {
+      const known = yield* Ref.updateAndGet(refusedRoutes, (current) =>
+        mergeRefusedRoutes(current, refused, () => true),
+      );
+      yield* SubscriptionRef.updateSome(state, (current) =>
+        current.phase === "connected" &&
+        current.generation === lease.generation &&
+        current.refusedRouteIds !== known
+          ? Option.some({ ...current, refusedRouteIds: known })
+          : Option.none(),
+      );
+    }
+    const index = results.findIndex((result) => result === "ready" || result === true);
+    if (index === -1) return;
     yield* signal({
       _tag: "BetterRouteAvailable",
       routeId: connectionRouteId(better[index]!.target),
@@ -713,8 +684,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     let attemptSpan = Option.none<Tracer.Span>();
     const traced = Effect.gen(function* () {
       attemptSpan = Option.some(yield* Effect.currentSpan.pipe(Effect.orDie));
-      yield* annotateTarget(target);
       yield* Effect.annotateCurrentSpan({
+        "environment.target.kind": target._tag,
         "connection.attempt": attempt,
         "connection.generation": generation,
         "connection.retry.failure_count": Option.match(pendingRetry, {
@@ -722,7 +693,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           onSome: (retry) => retry.failureCount,
         }),
       });
-      return yield* effect.pipe(Effect.onExit(annotateAttemptOutcome));
+      return yield* withLocalTracing(effect).pipe(Effect.onExit(annotateAttemptOutcome));
     }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
 
     return Option.match(pendingRetry, {
@@ -786,8 +757,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         case "DisconnectRequested":
           return false;
         case "RetryRequested":
-          yield* Ref.set(resetRetryState, true);
-          if (next.attemptSequence === sequence) return false;
+          if (next.attemptSequence === sequence) {
+            yield* Ref.set(resetRetryState, true);
+            return false;
+          }
           break;
         case "NetworkChanged":
           if (target._tag === "PrimaryConnectionTarget") {
@@ -1075,13 +1048,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       [...samples, setupElapsedMs].slice(-SETUP_SAMPLE_COUNT),
     );
     yield* Ref.set(wakeRetryUntil, 0n);
+    const savedRoutes = yield* currentRoutes;
+    const activeRouteId = connectionRouteId(active.lease.prepared.target);
     const connectedLease: ConnectedLease = {
       ...active.lease,
-      activeRoute: (yield* currentRoutes).find(
-        (route) =>
-          connectionRouteId(route.target) === connectionRouteId(active.lease.prepared.target),
-      ),
+      activeRoute: savedRoutes.find((route) => connectionRouteId(route.target) === activeRouteId),
+      generation,
     };
+    const refusedRouteIds = yield* Ref.updateAndGet(refusedRoutes, (known) =>
+      mergeRefusedRoutes(
+        known,
+        active.lease.refusedRouteIds,
+        (id) =>
+          id !== activeRouteId &&
+          savedRoutes.some((route) => connectionRouteId(route.target) === id),
+      ),
+    );
     const connectedAt = yield* Clock.currentTimeMillis;
     yield* Queue.clear(betterRouteChecks);
     yield* Queue.take(betterRouteChecks).pipe(
@@ -1108,6 +1090,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       generation,
       lastFailure: null,
       retryAt: null,
+      refusedRouteIds,
     });
 
     yield* Effect.sleep(BACKOFF_RESET_AFTER_MS).pipe(
@@ -1212,7 +1195,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       for (const next of pendingSignals) {
         handleSignal(next);
       }
-      if (yield* Ref.getAndSet(resetRetryState, false)) {
+      const retryRequested = yield* Ref.getAndSet(resetRetryState, false);
+      if (retryRequested) {
         failureCount = 0;
         latestFailure = null;
         pendingRetry = Option.none();
@@ -1236,7 +1220,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         handleSignal(yield* waitForSignal);
         continue;
       }
-      if (currentIntent.network === "offline" && !replacing) {
+      const ignoreOffline = replacing || retryRequested;
+      if (currentIntent.network === "offline" && !ignoreOffline) {
         yield* clearLease;
         yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
         handleSignal(yield* waitForSignal);
@@ -1251,7 +1236,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           nextGeneration,
           latestFailure,
           pendingRetry,
-          replacing,
+          ignoreOffline,
           setupContinuation,
         ),
       );
@@ -1309,6 +1294,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           generation,
           lastFailure: error,
           retryAt: null,
+          refusedRouteIds: NO_REFUSED_ROUTES,
         });
         const blockedWait =
           error.reason === "configuration" && error.localProxyUnavailable === true
@@ -1348,6 +1334,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         generation,
         lastFailure: latestFailure,
         retryAt: (yield* Clock.currentTimeMillis) + delayMs,
+        refusedRouteIds: NO_REFUSED_ROUTES,
       });
       handleSignal(yield* waitForRetrySignal(delayMs));
     }

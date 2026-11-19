@@ -18,6 +18,7 @@ import {
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
   getNewProjectRepository,
+  getAddProjectInitialQuery,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
   addProjectRemoteSourceLabel,
@@ -156,7 +157,6 @@ import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
-  ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,
   hasTrailingPathSeparator,
@@ -702,12 +702,7 @@ function OpenCommandPaletteDialog(props: {
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = (environmentId: EnvironmentId | null): string => {
     const environment = environments.find((candidate) => candidate.environmentId === environmentId);
-    const environmentSettings = environment?.serverConfig?.settings ?? null;
-    const baseDirectory = environmentSettings?.addProjectBaseDirectory?.trim() ?? "";
-    if (baseDirectory.length === 0) {
-      return "~/";
-    }
-    return ensureBrowseDirectoryPath(baseDirectory);
+    return getAddProjectInitialQuery(environment?.serverConfig?.settings.addProjectBaseDirectory);
   };
   const { projectByKey } = useProjectLookups();
   const activeThreadKey = activeThread
@@ -907,6 +902,7 @@ function OpenCommandPaletteDialog(props: {
     threadMessageItems,
     now: searchNow,
     isSearchPending: isThreadSearchPending,
+    isSearchFailed: isThreadSearchFailed,
   } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
   // Recent means used recently: written in or opened, whichever is later. The
   // open thread would always lead that list, so it is left out.
@@ -3012,6 +3008,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
+        searchFailed={isThreadSearchFailed}
         onDragStart={() => props.setOpen(false)}
         rows={resultRows.rows}
         listRef={resultListRef}
@@ -3036,7 +3033,9 @@ function OpenCommandPaletteDialog(props: {
                   }
                 : isThreadSearchPending
                   ? { emptyStateMessage: "Searching thread messages…" }
-                  : {})}
+                  : isThreadSearchFailed
+                    ? { emptyStateMessage: "Couldn't search thread messages." }
+                    : {})}
       />
     </CommandPaletteContent>
   );

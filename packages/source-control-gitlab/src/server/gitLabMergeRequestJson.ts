@@ -1,3 +1,5 @@
+import { toMergeability, rebaseRequiredFromStatus } from "./gitLabMergeRequestMergeability.ts";
+export { toMergeability } from "./gitLabMergeRequestMergeability.ts";
 import {
   forkFields,
   reviewerInfo,
@@ -82,7 +84,7 @@ const RawMergeRequestDiffRefs = Schema.Struct({
   start_sha: Schema.NullOr(Schema.String),
 });
 
-const RawMergeRequestSchema = Schema.Struct({
+export const RawMergeRequestSchema = Schema.Struct({
   ...forkFields.fields,
   iid: Schema.Int,
   title: Schema.String,
@@ -95,6 +97,7 @@ const RawMergeRequestSchema = Schema.Struct({
   state: Schema.optional(Schema.NullOr(Schema.String)),
   draft: Schema.optional(Schema.Boolean),
   work_in_progress: Schema.optional(Schema.Boolean),
+  detailed_merge_status: Schema.optional(Schema.NullOr(Schema.String)),
   merge_status: Schema.optional(Schema.NullOr(Schema.String)),
   has_conflicts: Schema.optional(Schema.NullOr(Schema.Boolean)),
   created_at: Schema.String,
@@ -218,6 +221,7 @@ export interface GitLabMergeRequestListItem {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeability: PullRequestMergeability;
+  readonly rebaseRequired?: boolean | undefined;
   readonly additions: number;
   readonly deletions: number;
   readonly createdAt: string;
@@ -278,20 +282,6 @@ export function toState(
   }
 }
 
-export function toMergeability(
-  raw: Pick<Schema.Schema.Type<typeof RawMergeRequestSchema>, "has_conflicts" | "merge_status">,
-): PullRequestMergeability {
-  if (raw.has_conflicts === true) return "conflicting";
-  switch (raw.merge_status?.trim().toLowerCase()) {
-    case "can_be_merged":
-      return "mergeable";
-    case "cannot_be_merged":
-      return "conflicting";
-    default:
-      return "unknown";
-  }
-}
-
 export function toLabels(
   raw: ReadonlyArray<string> | null | undefined,
 ): ReadonlyArray<PullRequestLabel> {
@@ -347,6 +337,9 @@ function toListItem(
     state: toState(raw),
     isDraft: raw.draft ?? raw.work_in_progress ?? false,
     mergeability: toMergeability(raw),
+    ...(rebaseRequiredFromStatus(raw.detailed_merge_status) === undefined
+      ? {}
+      : { rebaseRequired: rebaseRequiredFromStatus(raw.detailed_merge_status) }),
     additions: 0,
     deletions: 0,
     createdAt: raw.created_at,

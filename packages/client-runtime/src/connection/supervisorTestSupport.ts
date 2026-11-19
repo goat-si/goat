@@ -78,6 +78,9 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
   readonly openProbeSocket?: ConnectionDriver.EnvironmentConnectionLease["openProbeSocket"];
   readonly checkHost?: (prepared: PreparedConnection) => Effect.Effect<ConnectionDriver.RouteCheck>;
   readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
+  readonly preflight?: (
+    route: ConnectionRoute,
+  ) => Effect.Effect<ConnectionDriver.RoutePreflight | boolean>;
 }) {
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
     options?.networkStatus ?? "online",
@@ -156,6 +159,7 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
       prepared,
       session,
       openProbeSocket: options?.openProbeSocket ?? Effect.fail(transient()),
+      refusedRouteIds: [],
     } satisfies ConnectionDriver.EnvironmentConnectionLease;
   });
 
@@ -193,6 +197,7 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
           Effect.succeed<ConnectionDriver.RouteCheck>("unchecked"),
         checkRoute: (_entry, route) => checkRoute(route),
         preflight: (_entry, route) =>
+          options?.preflight?.(route) ??
           checkRoute(route).pipe(Effect.map((check) => check === "answered")),
       }),
     ),

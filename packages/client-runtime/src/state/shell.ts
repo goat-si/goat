@@ -32,7 +32,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
-import { subscribeDynamicWithSession } from "../rpc/client.ts";
+import { subscribeDynamicWithSession, subscriptionRetryDelay } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
 import type { DeferredShellSnapshot } from "./shellPullRequests.ts";
@@ -204,6 +204,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const sessionOrigins = new WeakMap<RpcSession, ShellOriginIdentity | null>();
   const origin = yield* Ref.make(Option.getOrUndefined(cached)?.origin);
   const reloadRequests = yield* Queue.sliding<void>(1);
+  let defectRetries = 0;
   const latestLiveSnapshot = yield* Ref.make<Option.Option<LiveShell>>(Option.none());
   const persistence = yield* Queue.sliding<OrchestrationV2ShellSnapshot>(1);
 
@@ -750,11 +751,26 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         );
       }),
       {
+        onDefect: (cause) =>
+          setStreamError(Cause.squash(cause)).pipe(
+            Effect.andThen(Effect.sleep(subscriptionRetryDelay("250 millis", defectRetries++))),
+            Effect.andThen(Queue.offer(reloadRequests, undefined)),
+          ),
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: Stream.merge(foregroundResubscriptions, Stream.fromQueue(reloadRequests)),
       },
-    ).pipe(Stream.runForEachArray((items) => applyItems(items))),
+    ).pipe(
+      Stream.runForEachArray((items) =>
+        applyItems(items).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              defectRetries = 0;
+            }),
+          ),
+        ),
+      ),
+    ),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {

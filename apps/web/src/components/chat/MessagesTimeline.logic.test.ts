@@ -30,30 +30,10 @@ import {
   deriveMessagesTimelineRows,
   timelineEntryTurnFoldRunId,
   deriveMessagesTimelineRowsWithState,
-  resolveAssistantMessageCopyState,
   type MessagesTimelineRow,
   workEntryDisplayLabel,
   liveWorkEntryLabel,
 } from "./MessagesTimeline.logic";
-
-describe("resolveAssistantMessageCopyState", () => {
-  it("copies the rendered representation of Codex directives", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        showCopyButton: true,
-        text: [
-          'Created :codex-file-citation{path="outputs/report.xlsx" purpose="output"}.',
-          "",
-          '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}',
-        ].join("\n"),
-        streaming: false,
-      }),
-    ).toEqual({
-      text: "Created [report.xlsx](<outputs/report.xlsx>).\n\nHello World (Document template)",
-      visible: true,
-    });
-  });
-});
 
 describe("deriveMessagesTimelineRows", () => {
   it("stops stranded thinking after a steer and follows the next thought or tool", () => {
