@@ -80,7 +80,8 @@ import { resolveAvailableWorktreesDirectory } from "../worktreesDirectory.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
-import { unquoteGitPath } from "./gitQuotedPath.ts";
+import { worktreeListLinesToFields, parseWorktreeBranchPaths } from "./worktreeListParsing.ts";
+export { worktreeListLinesToFields } from "./worktreeListParsing.ts";
 import { tryWithWorkspaceLease, tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
@@ -278,54 +279,6 @@ export function existingBranchConflictDetail(input: {
       ? `To continue it, run git worktree add "${input.suggestedPath}" ${input.branch}, then ${relaunch}.`
       : `To continue in that worktree, ${relaunch}.`;
   return `Branch ${input.branch} already exists and ${input.problem}, so GOAT will not reuse or reset it. ${resume} To start fresh, launch with a different branch name.`;
-}
-
-/**
- * Line-form `git worktree list --porcelain` in the `-z` shape: Git for Windows may end lines
- * with CR, and the line form C-quotes unusual paths, which `-z` output never does.
- */
-export function worktreeListLinesToFields(stdout: string): string {
-  return stdout
-    .split("\n")
-    .map((line) => {
-      const field = line.endsWith("\r") ? line.slice(0, -1) : line;
-      const value = field.slice("worktree ".length);
-      return field.startsWith("worktree ") && value.length > 1 && /^".*"$/su.test(value)
-        ? `worktree ${unquoteGitPath(value)}`
-        : field;
-    })
-    .join("\0");
-}
-
-function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
-  const worktreePaths = new Map<string, string>();
-  let currentPath: string | null = null;
-  let currentBranch: string | null = null;
-  let currentPrunable = false;
-
-  const flush = () => {
-    if (currentPath !== null && currentBranch !== null && !currentPrunable) {
-      worktreePaths.set(currentBranch, currentPath);
-    }
-    currentPath = null;
-    currentBranch = null;
-    currentPrunable = false;
-  };
-
-  for (const field of stdout.split("\0")) {
-    if (field === "") {
-      flush();
-    } else if (field.startsWith("worktree ")) {
-      currentPath = field.slice("worktree ".length);
-    } else if (field.startsWith("branch refs/heads/")) {
-      currentBranch = field.slice("branch refs/heads/".length);
-    } else if (field === "prunable" || field.startsWith("prunable ")) {
-      currentPrunable = true;
-    }
-  }
-  flush();
-
-  return worktreePaths;
 }
 
 // Checkout/worktree add parse leading dashes as options; pre-2.44 Git cannot guard with --end-of-options.
