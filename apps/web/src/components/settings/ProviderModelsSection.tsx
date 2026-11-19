@@ -118,7 +118,7 @@ interface ProviderModelsSectionProps {
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
-  readonly onChange: (next: ReadonlyArray<CustomModelDefinition>) => void;
+  readonly onChange: (next: ReadonlyArray<CustomModelDefinition>) => Promise<boolean> | void;
   readonly onHiddenModelsChange: (
     next: ReadonlyArray<string>,
     affectedModels?: ReadonlyArray<string>,
@@ -146,6 +146,8 @@ export function ProviderModelsSection({
 }: ProviderModelsSectionProps) {
   const [input, setInput] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const addAttemptRef = useRef(0);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
@@ -197,8 +199,8 @@ export function ProviderModelsSection({
   const allBuiltInModelsHidden =
     builtInModels.length > 0 && builtInModels.every((model) => hiddenModels.includes(model.slug));
 
-  const handleAdd = () => {
-    if (!canManageCustomModels || driverKind === "antigravity") return;
+  const handleAdd = async () => {
+    if (!canManageCustomModels || driverKind === "antigravity" || isSaving) return;
     const normalized = normalizeCustomModelSlug(input);
     if (!normalized) {
       setError("Enter a model slug.");
@@ -217,15 +219,32 @@ export function ProviderModelsSection({
       return;
     }
 
+    const attempt = ++addAttemptRef.current;
+    setIsSaving(true);
+    let saved: boolean | void;
+    try {
+      saved = await onChange([
+        ...customModels,
+        { slug: normalized, name: normalized, capabilities: null },
+      ]);
+    } catch {
+      if (attempt === addAttemptRef.current)
+        setError("Could not save the custom model. Try again.");
+      return;
+    } finally {
+      if (attempt === addAttemptRef.current) setIsSaving(false);
+    }
+    if (saved !== true || attempt !== addAttemptRef.current) return;
     scrollToSlugRef.current = normalized;
     setFilter("");
-    onChange([...customModels, { slug: normalized, name: normalized, capabilities: null }]);
     setInput("");
     setError(null);
     setIsAdding(false);
   };
 
   const cancelAdd = () => {
+    addAttemptRef.current += 1;
+    setIsSaving(false);
     setInput("");
     setError(null);
     setIsAdding(false);
@@ -234,7 +253,7 @@ export function ProviderModelsSection({
   const handleRemove = (slug: string) => {
     if (!canManageCustomModels) return;
     if (editingSlug === slug) setEditingSlug(null);
-    onChange(customModels.filter((entry) => entry.slug !== slug));
+    void onChange(customModels.filter((entry) => entry.slug !== slug));
     onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
@@ -242,7 +261,7 @@ export function ProviderModelsSection({
 
   const handleSaveEdit = (next: CustomModelDefinition) => {
     if (!canManageCustomModels) return;
-    onChange(customModels.map((entry) => (entry.slug === next.slug ? next : entry)));
+    void onChange(customModels.map((entry) => (entry.slug === next.slug ? next : entry)));
     setEditingSlug(null);
   };
 
@@ -419,6 +438,7 @@ export function ProviderModelsSection({
             id={`provider-instance-${instanceId}-custom-model`}
             size="sm"
             autoFocus
+            readOnly={isSaving}
             value={input}
             onChange={(event) => {
               setInput(event.target.value);
@@ -432,13 +452,13 @@ export function ProviderModelsSection({
               }
               if (event.key !== "Enter") return;
               event.preventDefault();
-              handleAdd();
+              void handleAdd();
             }}
             placeholder={driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : "model-slug"}
             spellCheck={false}
           />
           <div className="flex shrink-0 gap-2">
-            <Button size="sm" variant="outline" onClick={handleAdd}>
+            <Button size="sm" variant="outline" disabled={isSaving} onClick={handleAdd}>
               Add
             </Button>
             <Button size="sm" variant="ghost" onClick={cancelAdd}>

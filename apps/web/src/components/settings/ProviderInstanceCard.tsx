@@ -592,7 +592,7 @@ interface ProviderInstanceCardProps {
   readonly onSelect?: (() => void) | undefined;
   readonly readOnly?: boolean | undefined;
   readonly canWriteSettings?: boolean;
-  readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
+  readonly onUpdate: (nextInstance: ProviderInstanceConfig) => Promise<boolean> | void;
   readonly onDelete?: (() => void) | undefined;
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
@@ -810,7 +810,7 @@ export function ProviderInstanceCard({
       liveProvider?.supportsStructuredCustomModels === true,
     );
     const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    return onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   });
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {

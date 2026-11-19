@@ -881,6 +881,7 @@ export function EnvironmentProviderSettings({
         description: error instanceof Error ? error.message : "The settings update failed.",
       });
     }
+    return result._tag !== "Failure";
   };
 
   const updateInstance = useStableCallback(
@@ -894,7 +895,7 @@ export function EnvironmentProviderSettings({
         isDisabling &&
         resolveAppModelSelectionState(settings, serverProviders).instanceId === instanceId &&
         readEnvironmentScope(environmentId, AuthSettingsWriteScope);
-      void persistInstance(
+      return persistInstance(
         instanceId,
         next,
         shouldClearTextGen
@@ -906,7 +907,7 @@ export function EnvironmentProviderSettings({
 
   const enableInstance = useStableCallback(
     (instanceId: ProviderInstanceId, next: ProviderInstanceConfig) =>
-      persistInstance(instanceId, next),
+      persistInstance(instanceId, next).then(() => undefined),
   );
 
   const deleteInstance = useStableCallback(
@@ -1319,7 +1320,7 @@ interface ProviderInstanceRowActions {
     instanceId: ProviderInstanceId,
     previous: ProviderInstanceConfig,
     next: ProviderInstanceConfig,
-  ) => void;
+  ) => Promise<boolean> | void;
   readonly enableInstance: (
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,
