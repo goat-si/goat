@@ -1117,7 +1117,7 @@ export function PullRequestsPage() {
         <PullRequestListGhost rows={7} caption="Loading pull requests…" />
       ) : listQuery.error && shownCount === 0 ? (
         <PullRequestsUnavailableState
-          error={listQuery.error}
+          error={`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message}`}
           refreshing={listQuery.isPending}
           onRetry={() => listQuery.refresh()}
         />
@@ -1162,7 +1162,7 @@ export function PullRequestsPage() {
 
       {listQuery.error && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
-          <span>{listQuery.error} Showing the last pull requests loaded.</span>
+          <span>{`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message} Showing the last pull requests loaded.`}</span>
           <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
             Retry
           </Button>

@@ -1,3 +1,4 @@
+import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
 import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
@@ -96,7 +97,6 @@ import {
   readProjectShells,
   resolveProjectRepositories,
 } from "./projectRepositoryMembership.ts";
-
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
@@ -117,6 +117,8 @@ import {
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
   type ListCursor,
+  MAX_CURSOR_BOUNDARY_IDENTITIES as MAX_TIES,
+  acrossListCursor,
   listCursorAt,
   listCursorKey,
   nextListCursor,
@@ -371,7 +373,7 @@ const LIST_CURSOR_PATTERN =
 
 function parseListCursor(raw: string): ListCursor | null {
   const match = LIST_CURSOR_PATTERN.exec(raw);
-  if (match === null) return null;
+  if (match === null || (match[3]?.split(",").length ?? 0) > MAX_TIES) return null;
   const seenAt = match[3];
   return {
     updatedBefore: match[1]!,
@@ -736,7 +738,7 @@ export const make = Effect.gen(function* () {
                     };
                   }
                 }
-                return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+                return yield* missingProjectError(host, referenceKey, registry);
               });
             }
             return Effect.succeed(
@@ -1162,9 +1164,7 @@ export const make = Effect.gen(function* () {
         limit,
         query: input.query,
         filters: input.filters,
-        ...(cursor === undefined
-          ? {}
-          : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+        ...(cursor === undefined ? {} : { cursor: acrossListCursor(cursor, chunk, cursorOf) }),
       }).pipe(
         observeRead,
         Effect.flatMap(({ value: page, observedAt }) => {
@@ -2885,9 +2885,9 @@ export const make = Effect.gen(function* () {
       return detailUncached(ref).pipe(
         Effect.tap(
           Effect.fn("PullRequestService.recordDetailStats")(function* (value: PullRequestDetail) {
-            // GitHub detail includes the same checks; the checks TTL counts from their observation.
             if (
-              value.provider === "github" &&
+              (value.provider === "github" ||
+                (value.provider === "azure-devops" && value.checks.length > 0)) && // Empty may mean a failed read.
               value.observedAt !== undefined &&
               !(yield* Cache.has(checksCache, key))
             ) {

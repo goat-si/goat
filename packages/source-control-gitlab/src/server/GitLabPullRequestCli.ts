@@ -1,3 +1,4 @@
+import { makeGitLabAwards } from "./gitLabAwards.ts";
 import { makeGitLabPullRequestStats } from "./gitLabPullRequestStats.ts";
 import {
   decodeMergeRequestWatchFingerprintJson,
@@ -95,11 +96,9 @@ import {
   decodeMergeRequestChangesJson,
   decodeMergeRequestListJson,
   decodeNotesJson,
-  decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
-  gitLabAwardName,
   REPOSITORY_BLOBS_GRAPHQL_QUERY,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
@@ -145,7 +144,6 @@ const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 const isVcsProcessExitError = Schema.is(VcsProcessExitError);
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-
 export class GitLabPullRequestCli extends Context.Service<
   GitLabPullRequestCli,
   {
@@ -503,6 +501,7 @@ export const make = Effect.gen(function* () {
         ["per_page", String(perPage)],
         ["page", String(input.page)],
       ])}`,
+      maxOutputBytes: 16 * 1024 * 1024,
     }).pipe(
       Effect.flatMap((result) => {
         const raw = result.stdout.trim();
@@ -893,17 +892,6 @@ export const make = Effect.gen(function* () {
 
   const projectUsers = makeGitLabProjectUsers(api);
 
-  const awardSubjectPath = (input: {
-    readonly repository: string;
-    readonly number: number;
-    readonly noteId?: string | undefined;
-  }) => {
-    const mergeRequest = `projects/${projectPath(input.repository)}/merge_requests/${input.number}`;
-    return input.noteId === undefined
-      ? `${mergeRequest}/award_emoji`
-      : `${mergeRequest}/notes/${encodeURIComponent(input.noteId)}/award_emoji`;
-  };
-
   const awardsPage = (input: {
     readonly cwd: string;
     readonly host?: string | undefined;
@@ -1125,6 +1113,7 @@ export const make = Effect.gen(function* () {
 
   const viewerUsername = makeGitLabViewer(api);
   const requestChanges = makeGitLabRequestChanges(graphqlRead, viewerUsername);
+  const { setReaction } = makeGitLabAwards(api, viewerUsername);
 
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
@@ -1234,41 +1223,7 @@ export const make = Effect.gen(function* () {
 
     getFileRevisions: fileRevisions,
 
-    setReaction: Effect.fn("GitLabPullRequestCli.setReaction")(function* (input) {
-      const subject = awardSubjectPath(input);
-      if (input.reacted) {
-        yield* api({
-          cwd: input.cwd,
-          host: input.host,
-          path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
-          method: "POST",
-        });
-        return;
-      }
-      // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
-      // award of that name is looked up first.
-      const viewer = yield* viewerUsername(input);
-      const listed = yield* api({ cwd: input.cwd, host: input.host, path: subject });
-      const own = decodeOwnAwardIdJson(listed.stdout.trim(), {
-        content: input.content,
-        viewer,
-      });
-      if (!Result.isSuccess(own)) {
-        return yield* new GitLabMergeRequestReadError({
-          command: "glab",
-          cwd: input.cwd,
-          operation: "setReaction",
-          cause: own.failure,
-        });
-      }
-      if (own.success === null) return;
-      yield* api({
-        cwd: input.cwd,
-        host: input.host,
-        path: `${subject}/${own.success}`,
-        method: "DELETE",
-      });
-    }),
+    setReaction,
 
     listCommits: Effect.fn("GitLabPullRequestCli.listCommits")(function (input) {
       return api({

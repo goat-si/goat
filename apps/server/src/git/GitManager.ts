@@ -1,3 +1,4 @@
+import { gitHubOwnerHeadSelector } from "./gitHubOwnerProbe.ts";
 import { toPullRequestInfo } from "./gitManagerPrInfo.ts";
 import { makePullRequestWorktreeLifecycle } from "./pullRequestWorktreeLifecycle.ts";
 import {
@@ -1541,9 +1542,10 @@ export const make = Effect.gen(function* () {
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
     >,
+    ownerHeadSelector?: string,
   ) {
     const provider = yield* sourceControlProvider(cwd);
-    const probe = headBranchProbe(provider, headContext.headSelectors, "open");
+    const probe = headBranchProbe(provider, headContext.headSelectors, "open", ownerHeadSelector);
     for (const headSelector of probe.headSelectors) {
       const pullRequests = yield* provider.listChangeRequests({
         cwd,
@@ -1584,6 +1586,7 @@ export const make = Effect.gen(function* () {
         ? `${headContext.headRepositoryOwnerLogin}:${defaultBranch}`
         : undefined,
     );
+    let pageWasFull = false;
     for (const headSelector of probe.headSelectors) {
       const pullRequests = yield* provider.listChangeRequests({
         cwd,
@@ -1591,6 +1594,7 @@ export const make = Effect.gen(function* () {
         state: "all",
         limit: probe.limit,
       });
+      pageWasFull ||= pullRequests.length >= probe.limit;
 
       for (const pr of pullRequests.map(toPullRequestInfo)) {
         if (!matchesBranchHeadContext(pr, headContext)) {
@@ -1606,6 +1610,8 @@ export const make = Effect.gen(function* () {
     if (latestOpenPr) {
       return latestOpenPr;
     }
+    const ownerHead = gitHubOwnerHeadSelector(provider.kind, pageWasFull, headContext);
+    if (ownerHead) return (yield* findOpenPr(cwd, headContext, ownerHead)) ?? parsed[0] ?? null;
     return parsed[0] ?? null;
   });
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
