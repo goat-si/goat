@@ -1,4 +1,4 @@
-import { makeResolveGitCommonDir } from "./checkpointGitCommonDir.ts";
+import { makeResolveGitCommonDir, makeResolveCheckpointCommit } from "./checkpointGitCommonDir.ts";
 import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
@@ -40,7 +40,7 @@ import {
   type WorktreeSubmodules,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { checkpointCommitResult, workTreeProbeResult } from "./gitRepositoryProbe.ts";
+import { workTreeProbeResult } from "./gitRepositoryProbe.ts";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -849,14 +849,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ...(env !== undefined ? { env } : {}),
     }).pipe(Effect.map((result) => result.exitCode === 0));
 
-  const resolveCheckpointCommit = (cwd: string, checkpointRef: string) =>
-    execute({
-      operation: "GitVcsDriver.checkpoints.resolveCheckpointCommit",
-      cwd,
-      args: ["rev-parse", "--verify", "--quiet", `${checkpointRef}^{commit}`],
-      env: { LC_ALL: "C" },
-      allowNonZeroExit: true,
-    }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
+  const resolveCheckpointCommit = makeResolveCheckpointCommit(execute);
 
   const resolveGitCommonDir = makeResolveGitCommonDir(execute, fileSystem, path);
 
