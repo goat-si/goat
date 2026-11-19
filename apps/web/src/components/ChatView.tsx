@@ -13,6 +13,11 @@ import {
   isDetailBehindShell,
 } from "@goat/client-runtime/state/thread-activity-announcement";
 import {
+  EMPTY_PENDING_FILE_SURFACE_IDS,
+  noopHeldTurnDiff,
+  noopHeldRevert,
+  noopHeldAttachment,
+  ignoreComposerFocus,
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
@@ -79,7 +84,6 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
-  type RunId,
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
@@ -415,13 +419,6 @@ import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates"
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
-
-const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
-
-const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
-const noopHeldRevert = (_targetTurnCount: number) => {};
-const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
-const ignoreComposerFocus = () => {};
 
 export default function ChatView(props: ChatViewProps) {
   const {

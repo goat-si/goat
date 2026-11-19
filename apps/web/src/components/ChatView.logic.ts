@@ -1497,3 +1497,10 @@ export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | nu
 }
 
 export { deriveWorkspaceMutationId } from "@goat/client-runtime/state/threads";
+
+export const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+
+export const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
+export const noopHeldRevert = (_targetTurnCount: number) => {};
+export const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
+export const ignoreComposerFocus = () => {};
