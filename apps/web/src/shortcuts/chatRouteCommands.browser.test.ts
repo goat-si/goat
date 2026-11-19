@@ -1,4 +1,4 @@
-import { AuthPreviewOperateScope, EnvironmentId } from "@goat/contracts";
+import { AuthPreviewOperateScope, EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -8,8 +8,14 @@ import { readEnvironmentScope } from "../state/session";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { installChatRouteCommands } from "./chatRouteCommands";
 import { registerCommands } from "./dispatcher";
+import { DraftId, useComposerDraftStore } from "../composerDraftStore";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "../state/server";
+import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
+import { Atom } from "effect/reactivity";
 
 vi.mock("../components/preview/findAvailability", { spy: true });
+vi.mock("../state/session", { spy: true });
 vi.mock(import("../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const { compileResolvedKeybindingsConfig } = await import("@goat/shared/keybindings");
@@ -57,6 +63,67 @@ function selectThread(threadKey: string) {
 }
 
 describe("chat route commands", () => {
+  it("checks the current draft environment for preview refresh permission", () => {
+    const draftId = DraftId.make("draft-refresh");
+    const first = EnvironmentId.make("first");
+    const second = EnvironmentId.make("second");
+    const projectId = ProjectId.make("project-refresh");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId({ environmentId: first, projectId }, draftId);
+    const keybindingsAtom = primaryServerKeybindingsAtom as Atom.Writable<
+      ReturnType<typeof compileResolvedKeybindingsConfig>
+    >;
+    const original = appAtomRegistry.get(keybindingsAtom);
+    appAtomRegistry.set(
+      keybindingsAtom,
+      compileResolvedKeybindingsConfig([{ key: "r", command: "preview.refresh" }]),
+    );
+    const { router } = routerAt([
+      ...CHAT,
+      { routeId: "/_chat/draft/$draftId", pathname: `/draft/${draftId}`, params: { draftId } },
+    ]);
+    const onPreviewAction = vi.fn();
+    const scope = vi.mocked(readEnvironmentScope).mockImplementation((id) => id === first);
+    using stack = new DisposableStack();
+    stack.defer(() => scope.mockRestore());
+    stack.defer(() => appAtomRegistry.set(keybindingsAtom, original));
+    stack.defer(() => useComposerDraftStore.getState().clearDraftThread(draftId));
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+    pressKey("r");
+    expect(onPreviewAction).toHaveBeenCalledExactlyOnceWith("refresh");
+    useComposerDraftStore
+      .getState()
+      .setDraftThreadContext(draftId, { projectRef: { environmentId: second, projectId } });
+    pressKey("r");
+    expect(scope).toHaveBeenLastCalledWith(second, AuthPreviewOperateScope);
+    expect(onPreviewAction).toHaveBeenCalledTimes(1);
+  });
+  it("routes preview find on a draft using its current environment and reserved thread", () => {
+    const draftId = DraftId.make("draft-preview");
+    const environmentId = EnvironmentId.make("draft-environment");
+    const threadId = ThreadId.make("draft-thread");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId({ environmentId, projectId: ProjectId.make("project") }, draftId, {
+        threadId,
+      });
+    const { router } = routerAt([
+      ...CHAT,
+      { routeId: "/_chat/draft/$draftId", pathname: `/draft/${draftId}`, params: { draftId } },
+    ]);
+    const onPreviewAction = vi.fn();
+    const available = vi.mocked(readPreviewFindAvailable).mockReturnValue(true);
+    using stack = new DisposableStack();
+    stack.defer(() => available.mockRestore());
+    stack.defer(() => useComposerDraftStore.getState().clearDraftThread(draftId));
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+    expect(pressKey("f").defaultPrevented).toBe(true);
+    expect(available).toHaveBeenCalledWith({ environmentId, threadId });
+    expect(onPreviewAction).toHaveBeenCalledExactlyOnceWith("find");
+  });
   it("lets a lower shortcut scope handle Find when the preview cannot search", () => {
     const { router } = routerAt(CHAT);
     const lower = vi.fn();

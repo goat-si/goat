@@ -795,6 +795,37 @@ it("directs a subagent approval to its remote child when the launcher is snoozed
   });
 });
 
+it("suppresses a completion that happened during snooze even if observed after expiry", async () => {
+  await using app = setup();
+  using _timers = fakeTimers();
+  vi.setSystemTime(new Date("2026-09-14T07:00:00Z"));
+  app.start();
+  state.shells.set(
+    "one",
+    shell({
+      snoozedUntil: "2026-09-13T08:00:00Z",
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:30:00Z" },
+    }),
+  );
+  expect(TestNotification.sent).toHaveLength(0);
+});
+
+it("closes only removed environments' in-app toasts", async () => {
+  await using app = setup();
+  state.inApp = true;
+  focused = true;
+  state.toast.mockReturnValueOnce("one-completed").mockReturnValueOnce("two-completed");
+  app.start();
+  const completed = {
+    latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:01:00Z" },
+  };
+  state.shells.set("one", shell(completed));
+  state.shells.set("two", shell(completed));
+  expect(state.toast).toHaveBeenCalledTimes(2);
+  app.setEnvironmentIds(["one"]);
+  expect(state.closeToast.mock.calls).toEqual([["two-completed"]]);
+});
+
 it("opening a thread closes only its in-app toasts, and disabling notifications closes the rest", async () => {
   await using app = setup();
   state.inApp = true;

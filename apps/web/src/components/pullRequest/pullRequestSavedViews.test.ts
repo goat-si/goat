@@ -6,7 +6,11 @@ import {
   pullRequestListPreferences,
   type PullRequestListPreferences,
 } from "./pullRequestListPreferences";
-import { pullRequestSavedViewPatch, pullRequestViewMatches } from "./pullRequestSavedViews";
+import {
+  decodeSavedViews,
+  pullRequestSavedViewPatch,
+  pullRequestViewMatches,
+} from "./pullRequestSavedViews";
 
 const preferences = {
   involvement: "reviewing",
@@ -93,4 +97,9 @@ it("restores and clears the upstream repository filter", () => {
   expect(
     { ...preferences, upstream: "include", ...pullRequestSavedViewPatch(preferences) }.upstream,
   ).toBeUndefined();
+});
+
+it("rejects a saved view whose identity field is too long", () => {
+  const value = { id: "x".repeat(201), name: "Example", preferences };
+  expect(decodeSavedViews([value])).toEqual([]);
 });

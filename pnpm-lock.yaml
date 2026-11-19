@@ -2275,6 +2275,9 @@ importers:
       micromark-util-character:
         specifier: 'catalog:'
         version: 2.1.1
+      micromark-util-decode-string:
+        specifier: 2.0.1
+        version: 2.0.1
       property-information:
         specifier: ^7.2.0
         version: 7.2.0

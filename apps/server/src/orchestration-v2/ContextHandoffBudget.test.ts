@@ -94,6 +94,28 @@ const handoff: OrchestrationV2ContextHandoff = {
 };
 
 describe("handoff budget", () => {
+  it("keeps the file name when a file change has no detailed paths", () => {
+    const item = {
+      id: TurnItemId.make("item:empty-change"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed" as const,
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "file_change" as const,
+      fileName: "src/a.ts",
+      changes: [],
+    };
+    assert.equal(historicalMessage(item)?.text, "File change: src/a.ts");
+  });
   it("keeps old preview handoffs readable and delivery history off the wire", () => {
     const projected = projectContextHandoffForWire({
       ...handoff,

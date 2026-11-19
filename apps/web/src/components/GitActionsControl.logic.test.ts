@@ -666,3 +666,17 @@ describe("resolveChangesTotals", () => {
     );
   });
 });
+
+it("does not offer create PR for an unknown provider", () => {
+  const unknown = status({
+    aheadCount: 0,
+    aheadOfDefaultCount: 1,
+    sourceControlProvider: {
+      kind: SourceControlProviderKind.make("unknown"),
+      name: "Unknown",
+      baseUrl: "https://example.com",
+    },
+  });
+  assert.notEqual(resolveQuickAction(unknown, false).action, "create_pr");
+  assert.isTrue(buildMenuItems(unknown, false).find((item) => item.id === "pr")?.disabled);
+});

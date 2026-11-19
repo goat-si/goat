@@ -1,3 +1,4 @@
+import { savedViewsJsonValue } from "./savedViewsJson";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -5,7 +6,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { PullRequestSavedViewIdentity } from "@goat/client-runtime/pull-request-saved-views";
+import {
+  PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+  PULL_REQUEST_VIEW_FIELD_MAX_LENGTH,
+  PullRequestSavedViewIdentity,
+} from "@goat/client-runtime/pull-request-saved-views";
 import {
   ChannelBotRef,
   EnvironmentId,
@@ -43,9 +48,19 @@ export type PullRequestListControls = typeof PullRequestListControls.Type;
 
 export const PullRequestSavedView = Schema.Struct({
   ...PullRequestSavedViewIdentity.fields,
-  environmentId: Schema.NullOr(Schema.String),
-  controls: PullRequestListControls,
-  query: Schema.String,
+  environmentId: Schema.NullOr(
+    Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+  ),
+  controls: Schema.Struct({
+    ...PullRequestListControls.fields,
+    projectId: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
+    projectEnvironmentId: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
+  }),
+  query: Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
 });
 export type PullRequestSavedView = typeof PullRequestSavedView.Type;
 const isPullRequestSavedView = Schema.is(PullRequestSavedView);
@@ -161,6 +176,7 @@ export interface Preferences {
   readonly computerUseAdvancedExpanded?: boolean;
   readonly workspaceSelections?: WorkspaceSelections;
   readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
+  readonly pullRequestSavedViewsStatus?: "overflow" | "unreadable";
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -430,7 +446,13 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.workspaceSelections = parsed.workspaceSelections;
   }
   if (Array.isArray(parsed.pullRequestSavedViews)) {
-    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews.filter(isPullRequestSavedView);
+    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews
+      .slice(0, PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
+      .filter((view) => {
+        if (isPullRequestSavedView(view)) return true;
+        console.debug("Discarding malformed saved pull request view");
+        return false;
+      });
   }
   return preferences;
 }
@@ -439,6 +461,8 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
   const database = yield* MobileDatabase.MobileDatabase;
   const secureStorage = yield* MobileSecureStorage.MobileSecureStorage;
   const lock = yield* Semaphore.make(1);
+  let rawSavedViews: unknown;
+  let rawSavedViewsJson: string | undefined;
   const lastUpdatedAt = yield* Ref.make(0);
 
   const parsePayload = (raw: string | null): Preferences | null => {
@@ -561,12 +585,15 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
         (Option.isSome(storedJson) && fallback.updatedAt > storedJson.value.updatedAt));
 
     let parsed: Preferences | null = null;
+    let sourcePayload: string | null = null;
     if (fallbackIsNewer) {
       parsed = fallback.preferences;
+      sourcePayload = fallback.payload;
       yield* Ref.update(lastUpdatedAt, (last) => Math.max(last, fallback.updatedAt));
       if (databaseAvailable) yield* saveJson(fallback.payload, fallback.updatedAt);
     } else if (storedPreferences !== null && Option.isSome(storedJson)) {
       parsed = storedPreferences;
+      sourcePayload = storedJson.value.payload;
       yield* Ref.update(lastUpdatedAt, (last) => Math.max(last, storedJson.value.updatedAt));
       if (fallbackJson !== null) {
         yield* secureStorage
@@ -585,6 +612,7 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
       const legacyJson = yield* secureStorage.getItem(PREFERENCES_KEY);
       const legacyPreferences = parsePayload(legacyJson);
       parsed = legacyPreferences;
+      sourcePayload = legacyJson;
       if (legacyJson !== null && legacyPreferences !== null && databaseAvailable) {
         yield* saveJson(legacyJson);
         yield* secureStorage
@@ -599,7 +627,18 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
       }
     }
 
-    return parsed === null ? {} : sanitizePreferences(parsed);
+    rawSavedViews = parsed?.pullRequestSavedViews;
+    rawSavedViewsJson = sourcePayload === null ? undefined : savedViewsJsonValue(sourcePayload);
+    const status =
+      rawSavedViews !== undefined && !Array.isArray(rawSavedViews)
+        ? ("unreadable" as const)
+        : Array.isArray(rawSavedViews) && rawSavedViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
+          ? ("overflow" as const)
+          : undefined;
+    return {
+      ...(parsed === null ? {} : sanitizePreferences(parsed)),
+      ...(status === undefined ? {} : { pullRequestSavedViewsStatus: status }),
+    };
   });
 
   const load = lock
@@ -615,10 +654,57 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
             try: () => transform(current),
             catch: (cause) => new MobilePreferencesSaveError({ cause }),
           });
-          const next: Preferences = { ...current, ...patch };
-          const payload = yield* encode(PREFERENCES_KEY, next);
+          const touched = patch.pullRequestSavedViews !== undefined;
+          let updatedViews: ReadonlyArray<unknown> | undefined = patch.pullRequestSavedViews;
+          if (updatedViews !== undefined) {
+            if (!updatedViews.every(isPullRequestSavedView))
+              return yield* new MobilePreferencesSaveError({
+                cause: "Invalid saved pull request views",
+              });
+            if (Array.isArray(rawSavedViews)) {
+              const visibleCount = current.pullRequestSavedViews?.length ?? 0;
+              if (
+                updatedViews.length > visibleCount &&
+                rawSavedViews.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
+              )
+                return yield* new MobilePreferencesSaveError({ cause: "Saved view limit reached" });
+              updatedViews = [
+                ...updatedViews,
+                ...rawSavedViews.slice(PULL_REQUEST_SAVED_VIEWS_MAX_COUNT),
+              ];
+            } else if (
+              rawSavedViews === undefined &&
+              updatedViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
+            ) {
+              return yield* new MobilePreferencesSaveError({ cause: "Saved view limit reached" });
+            } else if (rawSavedViews !== undefined && updatedViews.length !== 0) {
+              return yield* new MobilePreferencesSaveError({
+                cause: "Unreadable saved pull request views",
+              });
+            }
+          }
+          const {
+            pullRequestSavedViewsStatus: _status,
+            pullRequestSavedViews: _views,
+            ...rest
+          } = { ...current, ...patch };
+          const json = yield* encode(PREFERENCES_KEY, rest);
+          const savedViewsJson = touched ? JSON.stringify(updatedViews) : rawSavedViewsJson;
+          const payload =
+            savedViewsJson === undefined
+              ? json
+              : `${json.slice(0, -1)}${json === "{}" ? "" : ","}"pullRequestSavedViews":${savedViewsJson}}`;
           yield* saveJson(payload);
-          return next;
+          const parsed = parsePayload(payload);
+          const saved = parsed === null ? {} : sanitizePreferences(parsed);
+          const finalViews = touched ? updatedViews : rawSavedViews;
+          const status =
+            Array.isArray(finalViews) && finalViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
+              ? ("overflow" as const)
+              : finalViews !== undefined && !Array.isArray(finalViews)
+                ? ("unreadable" as const)
+                : undefined;
+          return { ...saved, pullRequestSavedViewsStatus: status };
         }),
       )
       .pipe(

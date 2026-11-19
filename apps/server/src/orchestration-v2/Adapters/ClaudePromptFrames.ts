@@ -67,19 +67,13 @@ export function answersClaudeRequest(
       (message.spawn_depth ?? 1) <= 1
     );
   }
-  if (
-    message.type !== "assistant" &&
-    message.type !== "stream_event" &&
-    message.type !== "user" &&
-    message.type !== "result"
-  )
-    return false;
-  if (echoed.length > 0) return true;
-  if (message.type === "user" && typeof message.message.content === "string") {
-    return (
-      message.uuid === undefined || message.uuid === promptUuid || steerUuids.has(message.uuid)
-    );
+  if (message.type === "user") {
+    if (Reflect.get(message, "isReplay") === true) return false;
+    const content = message.message.content;
+    return Array.isArray(content) && content.some((part) => part.type === "tool_result");
   }
+  if (message.type !== "assistant" && message.type !== "stream_event" && message.type !== "result")
+    return false;
   return true;
 }
 

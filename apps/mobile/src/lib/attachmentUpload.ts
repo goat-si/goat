@@ -278,6 +278,10 @@ export async function prepareTurnAttachments(input: {
   readonly environmentId: EnvironmentId;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly supportsImageUploads?: boolean;
+  readonly uploadAttachment?: (
+    attachment: DraftComposerAttachment,
+    signal: AbortSignal,
+  ) => Promise<string>;
   readonly signal?: AbortSignal;
   readonly leavePendingUploadsOnAbort?: boolean;
   readonly onLocalTransfer?: (transfer: Promise<void>, attachment: DraftComposerAttachment) => void;
@@ -364,6 +368,12 @@ export async function prepareTurnAttachments(input: {
       }
 
       requireUploadAccess();
+      if (input.uploadAttachment) {
+        const id = await input.uploadAttachment(attachment, controller.signal);
+        pendingAttachmentIds.push(id);
+        uploadedAttachments.push(uploadedReference(attachment, id));
+        continue;
+      }
       const result = await runAttachmentUploadCycle({
         registry: appAtomRegistry,
         createUploadUrl: attachmentEnvironment.createUploadUrl,
@@ -441,4 +451,22 @@ export async function prepareTurnAttachments(input: {
   } finally {
     input.signal?.removeEventListener("abort", abort);
   }
+}
+
+export async function uploadComposerAttachment(
+  environmentId: EnvironmentId,
+  attachment: DraftComposerAttachment,
+  signal: AbortSignal,
+  onProgress: (progress: number) => void,
+): Promise<string> {
+  const result = await prepareTurnAttachments({
+    environmentId,
+    attachments: [attachment],
+    supportsImageUploads: true,
+    signal,
+    onUploadProgress: (_, progress) => onProgress(progress),
+  });
+  const id = result.status === "ready" ? result.pendingAttachmentIds[0] : undefined;
+  if (id === undefined) throw new Error("Upload cancelled.");
+  return id;
 }

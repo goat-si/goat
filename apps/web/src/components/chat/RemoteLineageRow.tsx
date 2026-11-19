@@ -17,9 +17,11 @@ export function RemoteLineageRow({
   agent,
   hosts,
   onOpen,
+  anyInstanceBadge,
 }: {
   readonly agent: RemoteLineageAgent;
   readonly hosts: ComposerThreadHosts;
+  readonly anyInstanceBadge: boolean;
   readonly onOpen: (environmentId: EnvironmentId, threadId: ThreadId) => void;
 }) {
   const environmentId = hosts.resolve(agent.remote.host);
@@ -35,7 +37,11 @@ export function RemoteLineageRow({
           if (environmentId && threadId) onOpen(environmentId, threadId);
         }}
       >
-        <ThreadRelationshipIcon fallbackIcon={BotIcon} status={agent.status} />
+        <ThreadRelationshipIcon
+          anyInstanceBadge={anyInstanceBadge}
+          fallbackIcon={BotIcon}
+          status={agent.status}
+        />
         <span className="min-w-0 flex-1 truncate text-left">
           {agent.title || agent.prompt || "Remote agent"}
         </span>

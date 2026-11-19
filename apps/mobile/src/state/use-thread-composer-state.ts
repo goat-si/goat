@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import { compactBeforeSendTokens } from "@goat/client-runtime/state/context-window";
 import { restoreAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import {
@@ -38,11 +39,9 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type EnvironmentId,
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type ThreadId,
 } from "@goat/contracts";
 import { clampFileAttachmentUploadBytes } from "@goat/client-runtime/state/attachments";
 import { nextPastedTextFileName, pastedTextDisposition } from "@goat/client-runtime/text-paste";
@@ -83,6 +82,7 @@ import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
+  uploadComposerAttachmentShared,
 } from "../state/composer-attachment-uploads";
 import {
   appendComposerDraftAttachments,
@@ -132,6 +132,10 @@ import {
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
+import {
+  dispatchingQueuedMessageIdsAtom,
+  selectedDispatchingMessage,
+} from "./threadOutboxDispatching";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useSideChatCommand } from "../features/threads/useSideChatCommand";
@@ -143,15 +147,7 @@ const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
 const EMPTY_CHECKPOINT_SUMMARIES_ATOM = Atom.make<ReadonlyArray<ThreadCheckpointSummary>>([]);
 const EMPTY_THREAD_SEQUENCE_ATOM = Atom.make(0);
 
-/** Resolve per call so callbacks created before editing still target the current draft. */
-function activeComposerDraftKey(thread: {
-  readonly environmentId: EnvironmentId;
-  readonly id: ThreadId;
-}): string {
-  const threadKey = scopedThreadKey(thread.environmentId, thread.id);
-  const edit = getQueuedRunEdit(threadKey);
-  return edit === null ? threadKey : queuedEditDraftKey(threadKey, edit.runId);
-}
+import { activeComposerDraftKey } from "./activeComposerDraftKey";
 
 export function useThreadComposerState() {
   const sideChatCommand = useSideChatCommand();
@@ -167,7 +163,8 @@ export function useThreadComposerState() {
   const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
   const acknowledgedMessages = useAtomValue(acknowledgedThreadMessagesAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
-  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const legacyDispatchingMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const dispatchingQueuedMessageIds = useAtomValue(dispatchingQueuedMessageIdsAtom);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
@@ -194,11 +191,9 @@ export function useThreadComposerState() {
     names.add(nextName);
     return nextName;
   };
-
   useEffect(() => {
     ensureComposerDraftsLoaded();
   }, []);
-
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
     : null;
@@ -207,6 +202,11 @@ export function useThreadComposerState() {
         (message) => message.creation === undefined,
       )
     : [];
+  const dispatchingQueuedMessageId = selectedDispatchingMessage(
+    [selectedThreadCreation?.message, ...selectedThreadQueuedMessages],
+    dispatchingQueuedMessageIds,
+    legacyDispatchingMessageId,
+  );
   const feedbackSubmissions = selectedThreadKey
     ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
     : [];
@@ -277,7 +277,6 @@ export function useThreadComposerState() {
       messages: selectedThreadMessages,
     });
   }, [acknowledgedMessages, selectedThreadKey, selectedThreadSequence, selectedThreadMessages]);
-
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const followUpBehavior = AsyncResult.isSuccess(preferencesResult)
     ? (preferencesResult.value.followUpBehavior ?? DEFAULT_FOLLOW_UP_BEHAVIOR)
@@ -340,7 +339,6 @@ export function useThreadComposerState() {
     selectedThreadProjection ? deriveLatestThreadRun(selectedThreadProjection.projection) : null,
     selectedThreadShell?.latestRun ?? null,
   );
-
   const activeRunId =
     selectedThreadRuntime?.activeRunId && threadRuntimeIsActive(selectedThreadRuntime)
       ? selectedThreadRuntime.activeRunId
@@ -396,7 +394,6 @@ export function useThreadComposerState() {
   const canResume = selectedThreadProjection
     ? canResumeThread(selectedThreadProjection.projection, resumableRunId, queueHeld)
     : queueHeld;
-
   const runlessWorkStartedAt = selectedThreadProjection
     ? deriveRunlessWorkStartedAt(selectedThreadProjection.projection)
     : null;
@@ -412,11 +409,9 @@ export function useThreadComposerState() {
     );
   })();
   const runlessWorkActive = runlessWorkStartedAt !== null;
-
   const providerSubagentStatus = selectedThreadProjection
     ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
     : null;
-
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const resumeCompactionTokens = (selection: ModelSelection | null, text: string, now: string) =>
     selectedEnvironmentRuntime?.connectionState === "connected" &&
@@ -451,17 +446,14 @@ export function useThreadComposerState() {
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
   const canStopTurn = turnCanStop(interruptibleRunId, selectedThreadActivityRun);
-
   const cancelQueuedRunEdit = () => {
     if (selectedThreadKey === null || savingQueuedEditRef.current) return;
     endQueuedRunEdit(selectedThreadKey);
   };
-
   const onRemoveQueuedEditAttachment = (attachmentId: string) => {
     if (selectedThreadKey === null) return;
     removeQueuedRunEditAttachment(selectedThreadKey, attachmentId);
   };
-
   const saveQueuedRunEdit = async () => {
     const thread = selectedThreadShell;
     if (!thread || savingQueuedEditRef.current) return;
@@ -498,6 +490,10 @@ export function useThreadComposerState() {
         environmentId: thread.environmentId,
         attachments: draft.attachments,
         supportsImageUploads: capabilities?.attachmentUploads === true,
+        uploadAttachment: (attachment, signal) =>
+          Effect.runPromise(uploadComposerAttachmentShared(thread.environmentId, attachment), {
+            signal,
+          }),
       }),
     );
     if (AsyncResult.isFailure(prepared)) {

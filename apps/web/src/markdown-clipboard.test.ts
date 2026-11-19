@@ -11,6 +11,17 @@ import {
   serializeAssistantCitation,
 } from "@goat/shared/assistantCitations";
 import { markdownMathRanges, parseMarkdownWithMath } from "@goat/shared/markdownMath";
+import {
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+  CHAT_USER_MARKDOWN_REMARK_PLUGINS,
+} from "@goat/shared/markdownPipeline";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+
+const userMarkdown = unified()
+  .use(remarkParse)
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS)
+  .use(CHAT_USER_MARKDOWN_REMARK_PLUGINS);
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -142,6 +153,41 @@ function renderedCodeBlock(lines: ReadonlyArray<string>): FakeElement {
 }
 
 describe("serializeRenderedMarkdownFragment", () => {
+  it.each([
+    ["array[index]", "https://example.com"],
+    ["first_last@example.com", "mailto:first_last@example.com"],
+  ])("round trips a literal link label %s", (label, href) => {
+    const anchor = new FakeElement("A", [], { href }).append(new FakeText(label));
+    const paragraph = userMarkdown.parse(
+      serializeRenderedMarkdownFragment(asNode(new FakeElement("DIV").append(anchor))),
+    ).children[0];
+    expect(paragraph).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "link", url: href, children: [{ type: "text", value: label }] }],
+    });
+  });
+  it("does not preserve an unsafe link destination when copying", () => {
+    const anchor = new FakeElement("A", [], { href: "javascript:alert(1)" }).append(
+      new FakeText("unsafe"),
+    );
+    const paragraph = userMarkdown.parse(
+      serializeRenderedMarkdownFragment(asNode(new FakeElement("DIV").append(anchor))),
+    ).children[0];
+    expect(paragraph).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "text", value: "unsafe" }],
+    });
+  });
+  it.each([
+    String.raw`see C:\me\.t3\shot.png`,
+    "C:/work/_build/out.txt",
+    "a*word*b and a_word_b; ~~literal~~",
+  ])("copies literal prose through the composer parser: %s", (value) => {
+    const container = new FakeElement("DIV").append(new FakeText(value));
+    const paragraph = userMarkdown.parse(serializeRenderedMarkdownFragment(asNode(container)))
+      .children[0];
+    expect(paragraph).toMatchObject({ type: "paragraph", children: [{ type: "text", value }] });
+  });
   it("copies a popover context reference once, without its details or nested label", () => {
     const reference = "[Review comment](t3-context://v1/review-comment/review-1)";
     const container = new FakeElement("DIV").append(
@@ -196,6 +242,77 @@ describe("serializeRenderedMarkdownFragment", () => {
     const container = new FakeElement("DIV").append(code);
 
     expect(serializeRenderedMarkdownFragment(asNode(container))).toBe("first line\nsecond line");
+  });
+
+  it.each([
+    ["backtick edges", "`value`"],
+    ["space edges", "  value  "],
+    ["only spaces", "   "],
+  ])("copies inline code that parses back unchanged: %s", (_, value) => {
+    const container = new FakeElement("DIV").append(
+      new FakeElement("P").append(
+        new FakeText("Use "),
+        new FakeElement("CODE").append(new FakeText(value)),
+        new FakeText(" here."),
+      ),
+    );
+    const paragraph = parseMarkdownWithMath(serializeRenderedMarkdownFragment(asNode(container)))
+      .children[0];
+    if (paragraph?.type !== "paragraph") throw new Error("Expected a paragraph");
+    expect(paragraph.children.find((child) => child.type === "inlineCode")?.value).toBe(value);
+  });
+
+  it("copies email links with their address and drops in-app destinations", () => {
+    const container = new FakeElement("DIV").append(
+      new FakeElement("P").append(
+        new FakeText("Write to "),
+        new FakeElement("A", [], { href: "mailto:support@example.com" }).append(
+          new FakeText("support@example.com"),
+        ),
+        new FakeText(", "),
+        new FakeElement("A", [], { href: "mailto:support@example.com?subject=Help" }).append(
+          new FakeText("Support"),
+        ),
+        new FakeText(", "),
+        new FakeElement("A", [], { href: "mailto:support@example.com?subject=Help)" }).append(
+          new FakeText("Support"),
+        ),
+        new FakeText(" or "),
+        new FakeElement("A", [], { href: "/environment-one/thread-one" }).append(
+          new FakeText("the thread"),
+        ),
+        new FakeText("."),
+      ),
+    );
+    const copied = serializeRenderedMarkdownFragment(asNode(container));
+    expect(copied).toBe(
+      "Write to support@example.com, [Support](mailto:support@example.com?subject=Help), [Support](mailto:support@example.com?subject=Help\\)) or the thread.",
+    );
+    const paragraph = parseMarkdownWithMath(copied).children[0];
+    if (paragraph?.type !== "paragraph") throw new Error("Expected a paragraph");
+    expect(
+      paragraph.children.filter((child) => child.type === "link").map((link) => link.url),
+    ).toEqual([
+      "mailto:support@example.com",
+      "mailto:support@example.com?subject=Help",
+      "mailto:support@example.com?subject=Help)",
+    ]);
+  });
+
+  it.each([
+    "support@example.com?subject=Help",
+    "foo",
+    "support@example.internal1",
+    "support@example.com_",
+    "support@example.com-",
+  ])("keeps the destination when the email label is not a bare address: %s", (label) => {
+    const href = `mailto:${label}`;
+    const anchor = new FakeElement("A", [], { href }).append(new FakeText(label));
+    const container = new FakeElement("DIV").append(anchor);
+    const paragraph = parseMarkdownWithMath(serializeRenderedMarkdownFragment(asNode(container)))
+      .children[0];
+    if (paragraph?.type !== "paragraph") throw new Error("Expected a paragraph");
+    expect(paragraph.children.find((child) => child.type === "link")?.url).toBe(href);
   });
 
   it("copies alert and insight callouts as their Markdown instead of the rendered label", () => {

@@ -1,5 +1,10 @@
 import * as Schema from "effect/Schema";
-import { PullRequestSavedViewIdentity } from "@goat/client-runtime/pull-request-saved-views";
+import { EnvironmentId, ProjectId } from "@goat/contracts";
+import {
+  PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+  PULL_REQUEST_VIEW_FIELD_MAX_LENGTH,
+  PullRequestSavedViewIdentity,
+} from "@goat/client-runtime/pull-request-saved-views";
 
 import {
   pullRequestListPreferences,
@@ -10,14 +15,31 @@ import {
 
 export const PULL_REQUEST_SAVED_VIEWS_KEY = "goat.pullRequests.savedViews";
 
-export const PullRequestSavedViews = Schema.Array(
-  Schema.Struct({
-    ...PullRequestSavedViewIdentity.fields,
-    preferences: PullRequestListPreferencesSchema,
+export const PullRequestSavedViewSchema = Schema.Struct({
+  ...PullRequestSavedViewIdentity.fields,
+  preferences: Schema.Struct({
+    ...PullRequestListPreferencesSchema.fields,
+    environmentId: Schema.optional(
+      EnvironmentId.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
+    projectId: Schema.optional(
+      ProjectId.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
   }),
-);
-export type PullRequestSavedView = (typeof PullRequestSavedViews.Type)[number];
-export const EMPTY_PULL_REQUEST_SAVED_VIEWS: typeof PullRequestSavedViews.Type = [];
+});
+export const PullRequestSavedViews = Schema.Array(Schema.Unknown);
+export type PullRequestSavedView = typeof PullRequestSavedViewSchema.Type;
+export const EMPTY_PULL_REQUEST_SAVED_VIEWS: ReadonlyArray<unknown> = [];
+export const isSavedView = Schema.is(PullRequestSavedViewSchema);
+export function decodeSavedViews(
+  values: ReadonlyArray<unknown>,
+): ReadonlyArray<PullRequestSavedView> {
+  return values.slice(0, PULL_REQUEST_SAVED_VIEWS_MAX_COUNT).flatMap((value) => {
+    if (isSavedView(value)) return [value];
+    console.debug("Discarding malformed saved pull request view");
+    return [];
+  });
+}
 
 export function pullRequestViewMatches(
   view: PullRequestSavedView,

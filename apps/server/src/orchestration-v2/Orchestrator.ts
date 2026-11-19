@@ -1,3 +1,5 @@
+import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
+import { makeNotificationTasks } from "./goat/NotificationTasks.ts";
 import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
 import { makeReadHandoffItems, makeReadSwitchItems } from "./ForkHistoryReader.ts";
 import { makeNextTurnItemOrdinal } from "./TurnItemOrdinal.ts";
@@ -760,22 +762,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
       );
 
-  // Command reads omit settled tasks, but a completion notice counts its whole cohort.
-  const notificationTasks = (
-    threadId: ThreadId,
-    message: Pick<OrchestrationV2ConversationMessage, "delegatedCompletion">,
-    loaded: ReadonlyArray<OrchestrationV2Subagent>,
-  ) =>
-    message.delegatedCompletion === undefined
-      ? Effect.succeed(loaded)
-      : projectionStore
-          .getThreadRecords(threadId, ["subagents"], {
-            subagentRunIds: [message.delegatedCompletion.parentRunId],
-          })
-          .pipe(
-            Effect.map((records) => records.subagents),
-            Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
-          );
+  const notificationTasks = makeNotificationTasks(
+    projectionStore,
+    (threadId, cause) => new OrchestratorProjectionError({ threadId, cause }),
+  );
 
   const mapHandoffReadError = (threadId: ThreadId, cause: unknown) =>
     new OrchestratorProjectionError({ threadId, cause });
@@ -6681,6 +6671,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
               sourceRunStatus: sourceRun.status,
+              sourceBusy: sourceProjection !== null && sourceHasActiveRun(sourceProjection.runs),
               fromSpecificTurn: sourceRun !== null,
               crossWorkspace: pendingForkTransfer.crossWorkspace === true,
             }),

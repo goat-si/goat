@@ -14,6 +14,13 @@ export function nextClaudeGoal(
   current: OrchestrationV2ProviderGoal | null,
   message: SDKMessage,
 ): OrchestrationV2ProviderGoal | null | undefined {
+  if (
+    message.type === "system" &&
+    message.subtype === "informational" &&
+    message.content.startsWith("Goal cleared after an unrecoverable error (")
+  ) {
+    return null;
+  }
   if (message.type === "assistant") {
     if (message.parent_tool_use_id !== null || message.message.model !== "<synthetic>") {
       return undefined;

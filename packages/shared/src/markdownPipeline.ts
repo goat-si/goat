@@ -15,13 +15,14 @@ import type {
   Text,
 } from "mdast";
 import { remarkKeepWindowsPaths } from "./markdownWindowsPaths.ts";
-import { type PluggableList, type Processor, type Transformer } from "unified";
+import { unified, type PluggableList, type Processor, type Transformer } from "unified";
 import { find, html } from "property-information";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
 import { remarkGithubAlerts } from "./markdownGithubAlerts.ts";
 import { remarkNormalizeListItemIndentation } from "./markdownListIndentation.ts";
 import { remarkKeepOrderedListNumbers } from "./markdownOrderedListNumbers.ts";
@@ -34,6 +35,7 @@ import {
   remarkCodexDirectives,
 } from "./codexMarkdownDirectives.ts";
 import { absoluteFilePathMatches, isWindowsDrivePathHref } from "./markdownLinks.ts";
+import { isWindowsAbsolutePath } from "./path.ts";
 
 export { remarkEnableOrderedListNumbers } from "./markdownOrderedListNumbers.ts";
 
@@ -762,3 +764,16 @@ export function shouldPreserveAssistantLineBreaks(text: string): boolean {
   return /^★ Insight(?:\s|─)/mu.test(text);
 }
 export { remarkAssistantInsights } from "./markdownAssistantInsights.ts";
+
+const linkDestinationProcessor = unified().use(remarkParse).use(remarkKeepWindowsPaths);
+const ANGLE_DESTINATION_CONTENT = /^(?:[^\\<>]|\\.)*$/;
+
+export function decodeMarkdownLinkEscapes(href: string): string {
+  if (href.includes("&")) {
+    const destination = ANGLE_DESTINATION_CONTENT.test(href) ? `<${href}>` : href;
+    const paragraph = linkDestinationProcessor.parse(`[](${destination})`).children[0];
+    const link = paragraph?.type === "paragraph" ? paragraph.children[0] : undefined;
+    if (link?.type === "link") return link.url;
+  }
+  return isWindowsAbsolutePath(href) ? href : href.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+}

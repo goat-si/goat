@@ -23,6 +23,16 @@ describe("isMarkdownFileLinkLabel", () => {
 });
 
 describe("inlineCodeFilePathCandidate", () => {
+  it.each([
+    ["/Users/me/Path Test/notes with spaces.md", "/Users/me/Path Test/notes with spaces.md"],
+    ["~/Library/Mobile Documents/notes.md", "~/Library/Mobile Documents/notes.md"],
+    ["/usr/bin/python3 -m venv .venv", null],
+    ["/usr/local/bin/node server.js", null],
+    ["/bin/echo hello world.txt", null],
+    ["/Users/me/notes with spaces.md", "/Users/me/notes with spaces.md"],
+  ])("distinguishes spaced absolute paths and command snippets: %s", (source, expected) => {
+    expect(inlineCodeFilePathCandidate(source)).toBe(expected);
+  });
   // regression: #13909 model ids in inline code do not become file chips
   it.each([
     ["src\\main.ts", "src/main.ts"],
@@ -160,6 +170,21 @@ describe("extractMarkdownLinkHrefs", () => {
     ["[[[nested](src/main.ts) [unfinished", ["src/main.ts"]],
     [`See ${serializeComposerFileLink("pages/posts/[id].tsx")} now`, ["pages/posts/%5Bid%5D.tsx"]],
   ])("extracts links from incomplete and nested text", (markdown, hrefs) => {
+    expect(extractMarkdownLinkHrefs(markdown)).toEqual(hrefs);
+  });
+
+  it.each([
+    [
+      "[a](/x/app/(a)/page.tsx) [b](/x/app/(b)/page.tsx)",
+      ["/x/app/(a)/page.tsx", "/x/app/(b)/page.tsx"],
+    ],
+    ['[a](/tmp/a(1).txt "title") after', ["/tmp/a(1).txt"]],
+    ["[a](a(b(c))d) [b](ok)", ["a(b(c))d", "ok"]],
+    ["[a](x\\)y) [b](x\\(y)", ["x\\)y", "x\\(y"]],
+    ["[a](unclosed(paren) [b](ok)", ["ok"]],
+    ["[a](" + "(".repeat(32) + "x" + ")".repeat(32) + ")", ["(".repeat(32) + "x" + ")".repeat(32)]],
+    ["[a](" + "(".repeat(33) + "x" + ")".repeat(33) + ") [b](ok)", ["ok"]],
+  ])("keeps balanced parentheses in a destination like the parser: %s", (markdown, hrefs) => {
     expect(extractMarkdownLinkHrefs(markdown)).toEqual(hrefs);
   });
 });

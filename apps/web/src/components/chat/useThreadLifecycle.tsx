@@ -66,6 +66,7 @@ import {
 import { environmentShell } from "../../state/shell";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
+import { resolveSideChatOpen } from "../sideChat/sideChat.logic";
 import { ThreadStatusLine } from "./ThreadStatusLine";
 import { useApprovalBanners } from "./ApprovalDockBanners";
 
@@ -531,7 +532,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     }
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
+      params: buildThreadRouteParams(resolveSideChatOpen(threadRef, shell)),
       ...(options?.sentFrom ? { state: { sentFrom: options.sentFrom } } : {}),
     });
   };

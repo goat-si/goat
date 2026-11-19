@@ -19,6 +19,34 @@ vi.mock("~/state/orchestration", () => ({ orchestrationEnvironment: { threadFind
 const thread = { environmentId: EnvironmentId.make("local"), threadId: ThreadId.make("find") };
 const text = "Plan\nneedle\n   needle";
 
+it("announces user search and navigation but keeps streamed count refreshes silent", async () => {
+  const props = {
+    open: true,
+    query: "needle",
+    matchCount: 3,
+    counting: false,
+    status: null,
+    activeIndex: 0,
+    focusRequestId: 1,
+    navigationId: 1,
+    settled: true,
+    onRetry: () => {},
+    onQueryChange: () => {},
+    onNext: () => {},
+    onPrevious: () => {},
+    onClose: () => {},
+  } as const;
+  await using screen = await render(<ThreadFindBar {...props} />);
+  const live = () => screen.container.querySelector('[aria-live="polite"]')?.textContent;
+  expect(live()).toBe("1/3");
+  await screen.rerender(<ThreadFindBar {...props} matchCount={4} />);
+  expect(live()).toBe("1/3");
+  await screen.rerender(
+    <ThreadFindBar {...props} matchCount={4} activeIndex={1} navigationId={2} />,
+  );
+  expect(live()).toBe("2/4");
+});
+
 function Fixture({ literal }: { literal: boolean }) {
   const { barProps, timelineProps } = useThreadFind({
     thread,
@@ -69,7 +97,10 @@ it.each([
     openThreadFind(scopedThreadKey(thread));
     await using screen = await render(<Fixture literal={literal} />);
     await userEvent.fill(screen.getByRole("searchbox", { name: "Find in thread" }), "   needle");
-    await expect.element(screen.getByText(`1/${count}`)).toBeVisible();
+    await expect.element(screen.getByText(`1/${count}`).last()).toBeVisible();
+    await expect
+      .element(screen.getByText(`1/${count}`).last())
+      .toHaveAttribute("aria-hidden", "true");
     const row = screen.container.querySelector<HTMLElement>("[data-find-query]");
     expect(row?.dataset.findQuery).toBe(query);
     expect(
