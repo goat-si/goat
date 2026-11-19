@@ -53,7 +53,10 @@ it.effect.skipIf(windowsHost)(
       assert.deepEqual(explorer?.args, ["C:\\work\\a.txt"]);
       const powershell = spawned.find((command) => command.command === "powershell.exe");
       assert.ok(powershell);
-      const source = Buffer.from(powershell.args.at(-1) ?? "", "base64").toString("utf16le");
+      const encoded = powershell.args.at(-1);
+      assert.isString(encoded);
+      if (typeof encoded !== "string") throw new Error("Expected encoded PowerShell command");
+      const source = Buffer.from(encoded, "base64").toString("utf16le");
       assert.include(source, "C:\\work\\a.txt");
       assert.include(source, "C:\\work");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
