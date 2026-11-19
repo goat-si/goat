@@ -212,6 +212,7 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
   var fileForPage: (Int) -> URL? = { _ in nil }
   var onRetry: (Int) -> Void = { _ in }
   var onPageChange: (Int) -> Void = { _ in }
+  var onClosing: () -> Void = {}
   var onDismissed: () -> Void = {}
 
   private let titles: [String]
@@ -457,7 +458,10 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
 
   /// Closes back into the current page's thumbnail, or away in the drag's direction when it is gone.
   func close(velocity: CGPoint = .zero) {
-    closeRequested = true
+    if !closeRequested {
+      closeRequested = true
+      onClosing()
+    }
     guard !transitioning, !closing else { return }
     closing = true
     transitioning = true

@@ -14,6 +14,7 @@ final class GoatNativeImageViewer: NSObject {
   /// The original bytes on disk, kept for sharing.
   private var files: [URL?] = []
   private var placeholders: [UIImage?] = []
+  private var preparations = GoatImagePreparationQueue()
   private var loads: [Int: Task<Void, Never>] = [:]
   private var decodes: [Int: Task<Void, Never>] = [:]
   /// The last queued decode; each one waits for it, so one original decodes at a time.
@@ -22,6 +23,7 @@ final class GoatNativeImageViewer: NSObject {
   private var decoded: Set<Int> = []
   private var currentIndex = 0
   private var controller: GoatImageViewerController?
+  private var closing = false
   private var finished = false
 
   init(identifier: String, sources: GoatPresentationSources, sourceIdentifiers: [String],
@@ -42,7 +44,8 @@ final class GoatNativeImageViewer: NSObject {
     let viewer = GoatImageViewerController(titles: titles, selectedIndex: selectedIndex)
     viewer.sourceView = { [weak self] index in self?.sourceView(index) }
     viewer.fileForPage = { [weak self] index in self?.file(at: index) }
-    viewer.onRetry = { [weak self] index in self?.load(index, retry: true) }
+    viewer.onRetry = { [weak self] index in self?.retry(index) }
+    viewer.onClosing = { [weak self] in self?.stopWork() }
     viewer.onDismissed = { [weak self] in self?.finish() }
     viewer.onPageChange = { [weak self] index in self?.show(page: index) }
     controller = viewer
@@ -52,18 +55,20 @@ final class GoatNativeImageViewer: NSObject {
       if let placeholder { viewer.setImage(placeholder, at: index, full: false) }
     }
     presenter.present(GoatImageViewerNavigation(viewer: viewer), animated: false) { viewer.animateIn() }
-    for index in urls.indices { load(index, retry: false) }
+    for index in urls.indices where urls[index] != nil { preparations.enqueue(index) }
+    startPreparations()
   }
 
   /// Delivers a URL that was still resolving when the gallery opened, or nil when it never will.
   func update(index: Int, url: URL?) {
-    guard !finished, urls.indices.contains(index), urls[index] == nil else { return }
+    guard !closing, urls.indices.contains(index), urls[index] == nil else { return }
     guard let url else {
       controller?.setFailed(at: index, retryable: false)
       return
     }
     urls[index] = url
-    load(index, retry: false)
+    preparations.enqueue(index)
+    startPreparations()
   }
 
   func dismiss() {
@@ -88,43 +93,64 @@ final class GoatNativeImageViewer: NSObject {
     return sources?.view(for: sourceIdentifiers[index])
   }
 
-  private func load(_ index: Int, retry: Bool) {
-    guard !finished, urls.indices.contains(index), let url = urls[index], loads[index] == nil else { return }
-    if retry { controller?.setLoading(at: index) }
+  private func retry(_ index: Int) {
+    guard !closing, urls[index] != nil else { return }
+    controller?.setLoading(at: index)
+    preparations.enqueue(index)
+    startPreparations()
+  }
+
+  private func startPreparations() {
+    guard !closing else { return }
+    while let index = preparations.take(near: currentIndex) {
+      guard let url = urls[index] else {
+        preparations.complete(index)
+        continue
+      }
+      prepare(index, url: url)
+    }
+  }
+
+  private func prepare(_ index: Int, url: URL) {
     let title = titles[index]
     loads[index] = Task { @MainActor [self] in
-      defer { loads[index] = nil }
+      defer {
+        loads[index] = nil
+        preparations.complete(index)
+        startPreparations()
+      }
       do {
         let file = try await GoatNativeFilePresentation.prepareFile(url: url, title: title)
-        guard !finished, !Task.isCancelled else { Self.remove(file); return }
+        guard !closing, !Task.isCancelled else { Self.remove(file); return }
         if let previous = files[index] { Self.remove(previous) }
         files[index] = file
         decoded.remove(index)
         if isNearCurrent(index) { decode(index) }
       } catch {
-        guard !finished, !Task.isCancelled else { return }
+        guard !closing, !Task.isCancelled else { return }
         controller?.setFailed(at: index, retryable: true)
       }
     }
   }
 
-  /// Every original downloads up front, but a decoded one costs far more memory than its file,
-  /// so only pages next to the current one decode, and pages further away fall back to their thumbnail.
+  /// Only the current page and its neighbors keep decoded originals.
   private func show(page index: Int) {
     currentIndex = index
     for other in decoded where !isNearCurrent(other) {
       decoded.remove(other)
       controller?.release(at: other, placeholder: placeholders[other])
     }
-    // Queued decodes for pages paged past are skipped before they start.
+    // Cancel active and queued decodes for pages outside the new window.
     for (other, task) in decodes where !isNearCurrent(other) { task.cancel() }
-    for near in files.indices where isNearCurrent(near) { decode(near) }
+    decode(index)
+    for neighbor in [index - 1, index + 1] where files.indices.contains(neighbor) { decode(neighbor) }
+    startPreparations()
   }
 
   private func isNearCurrent(_ index: Int) -> Bool { abs(index - currentIndex) <= 1 }
 
   private func decode(_ index: Int) {
-    guard !finished, let file = file(at: index), !decoded.contains(index), decodes[index] == nil else { return }
+    guard !closing, let file = file(at: index), !decoded.contains(index), decodes[index] == nil else { return }
     let source = sourceView(index)
     let previous = decodeQueue
     let task = Task { @MainActor [self] in
@@ -133,17 +159,17 @@ final class GoatNativeImageViewer: NSObject {
       defer {
         decodes[index] = nil
         // Paged away and back while this run waited: it was cancelled, so the page asks again.
-        if !settled, !finished, isNearCurrent(index), !decoded.contains(index) { decode(index) }
+        if !settled, !closing, isNearCurrent(index), !decoded.contains(index) { decode(index) }
       }
-      guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
       // ImageIO reads SVG poorly or not at all; the thumbnail is vector, so redraw it at full-screen size.
       let isSVG = file.pathExtension.lowercased() == "svg"
-      let image = isSVG ? nil : await Task.detached(priority: .userInitiated) { Self.decode(file) }.value
-      guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      let image = isSVG ? nil : await Self.decodeOffMain(file)
+      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
       if isSVG {
         // The open transition hides the thumbnail, which draws blank until it is back.
         await controller?.untilRevealed()
-        guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+        guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
       }
       settled = true
       if let image = image ?? (isSVG ? source.flatMap(Self.render(_:)) : nil) {
@@ -163,13 +189,17 @@ final class GoatNativeImageViewer: NSObject {
     decodeQueue = task
   }
 
+  private func stopWork() {
+    guard !closing else { return }
+    closing = true
+    for task in loads.values { task.cancel() }
+    for task in decodes.values { task.cancel() }
+  }
+
   private func finish() {
     guard !finished else { return }
     finished = true
-    for task in loads.values { task.cancel() }
-    loads.removeAll()
-    for task in decodes.values { task.cancel() }
-    decodes.removeAll()
+    stopWork()
     decodeQueue = nil
     for file in files.compactMap({ $0 }) { Self.remove(file) }
     files.removeAll()
@@ -215,9 +245,18 @@ final class GoatNativeImageViewer: NSObject {
     }
   }
 
-  /// Decodes off the main thread at no more than zooming needs, and keeps GIFs animated.
+  nonisolated private static func decodeOffMain(_ file: URL) async -> UIImage? {
+    let worker = Task.detached(priority: .userInitiated) { decode(file) }
+    return await withTaskCancellationHandler {
+      await worker.value
+    } onCancel: {
+      worker.cancel()
+    }
+  }
+
+  /// Decodes at no more than zooming needs, and keeps GIFs animated.
   nonisolated private static func decode(_ file: URL) -> UIImage? {
-    guard let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
+    guard !Task.isCancelled, let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
     let count = CGImageSourceGetCount(source)
     guard count > 0 else { return nil }
     let options: [CFString: Any] = [
@@ -230,10 +269,11 @@ final class GoatNativeImageViewer: NSObject {
     animationOptions[kCGImageSourceThumbnailMaxPixelSize] = 1024
     animationOptions[kCGImageSourceShouldCacheImmediately] = nil
     // Every frame stays decoded while it plays, so an animation over this budget shows its first frame.
-    if count > 1, let first = CGImageSourceCreateThumbnailAtIndex(source, 0, animationOptions as CFDictionary),
-      first.bytesPerRow * first.height * count <= animationByteBudget {
+    if !Task.isCancelled, count > 1, let first = CGImageSourceCreateThumbnailAtIndex(source, 0, animationOptions as CFDictionary),
+      count <= animationByteBudget / max(1, first.bytesPerRow * first.height) {
       var frames: [(image: UIImage, delay: Double)] = [(UIImage(cgImage: first), frameDuration(source, 0))]
       for index in 1..<count {
+        guard !Task.isCancelled else { return nil }
         guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, animationOptions as CFDictionary) else { continue }
         frames.append((UIImage(cgImage: frame), frameDuration(source, index)))
       }
@@ -241,11 +281,14 @@ final class GoatNativeImageViewer: NSObject {
       // one bitmap. The tick grows with the animation's length to keep the timeline near 1,000 entries.
       let total = frames.reduce(0) { $0 + $1.delay }
       let tick = max(0.02, total / 1_000)
+      guard !Task.isCancelled else { return nil }
       let timeline = frames.flatMap { frame in
         Array(repeating: frame.image, count: max(1, Int((frame.delay / tick).rounded())))
       }
+      guard !Task.isCancelled else { return nil }
       if frames.count > 1 { return UIImage.animatedImage(with: timeline, duration: Double(timeline.count) * tick) }
     }
+    guard !Task.isCancelled else { return nil }
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
   }
 
