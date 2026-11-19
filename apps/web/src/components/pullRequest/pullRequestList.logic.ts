@@ -595,10 +595,7 @@ export function mergePullRequestLists(
     for (const entry of answer.entries) {
       const key = pullRequestAcrossEnvironmentsKey(entry);
       const held = entries.get(key);
-      if (
-        held === undefined ||
-        (held.environmentId === environmentId && entry.updatedAt > held.updatedAt)
-      ) {
+      if (held === undefined || entry.updatedAt > held.updatedAt) {
         entries.set(key, { ...entry, environmentId });
       }
     }
