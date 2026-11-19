@@ -124,7 +124,7 @@ function ThreadLineageRowList(props: {
       {/* ScrollArea's max-height viewport measures badly inside this scrolling panel. */}
       <ul
         aria-label="Related threads"
-        className="scrollbar-on-hover m-0 max-h-[13.5rem] list-none overflow-x-hidden overflow-y-auto overscroll-contain p-0 has-data-workflow-expanded:max-h-[min(28rem,55dvh)]"
+        className="scrollbar-on-hover m-0 max-h-[13.5rem] list-none overflow-x-hidden overflow-y-auto p-0 has-data-workflow-expanded:max-h-[min(28rem,55dvh)]"
       >
         {props.children}
       </ul>
