@@ -598,9 +598,6 @@ export function getMenuActionDisabledReason({
     if (!hasBranch) {
       return "Detached HEAD: check out a branch before pushing.";
     }
-    if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
-    }
     if (isBehind) {
       return "Branch is behind upstream. Pull/rebase before pushing.";
     }
