@@ -7385,7 +7385,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const checkPromptOutcome =
               flavor.watchPromptOutcome === undefined
                 ? undefined
-                : yield* flavor.watchPromptOutcome(requestedSessionId);
+                : yield* flavor.watchPromptOutcome(requestedSessionId, {
+                    recordedEnvironment: terminalEnvironmentBySessionId.get(requestedSessionId),
+                    runtimeEnvironment: runtimeProcessMcpContext?.processEnvironment,
+                    sessionLaunch,
+                  });
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
             const prompt = yield* Effect.gen(function* () {
               const snapshot =

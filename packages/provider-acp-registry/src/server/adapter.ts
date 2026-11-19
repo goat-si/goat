@@ -1,3 +1,4 @@
+import { kimiRecordedEnvironment, makeKimiPromptOutcomeWatch } from "./kimiAcp.ts";
 import { prefersHttpMcpTransport } from "./mcpTransport.ts";
 import {
   extractClaudeSubagentUpdate,
@@ -216,6 +217,11 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     registryAgentId === "github-copilot-cli" ||
     (options.settings.source === "local" &&
       /^copilot(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? ""));
+  const isKimi =
+    registryAgentId === "kimi-code" ||
+    (options.settings.source === "local" &&
+      /^kimi(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? ""));
+  const watchKimiPromptOutcome = isKimi ? yield* makeKimiPromptOutcomeWatch() : undefined;
   const isClaude =
     registryAgentId === "claude-acp" ||
     (options.settings.source === "local" &&
@@ -238,6 +244,19 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     compactViaAdvertisedCommand: true,
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
+    ...(watchKimiPromptOutcome === undefined
+      ? {}
+      : {
+          watchPromptOutcome: (sessionId, session) =>
+            watchKimiPromptOutcome(
+              sessionId,
+              kimiRecordedEnvironment(
+                session.recordedEnvironment,
+                session.runtimeEnvironment,
+                session.sessionLaunch,
+              ),
+            ),
+        }),
     ...(registryAgentId === "factory-droid"
       ? { extractElicitationForm: extractDroidElicitationForm }
       : isOmp

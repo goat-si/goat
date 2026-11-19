@@ -128,6 +128,11 @@ export interface AcpAdapterV2Flavor {
    */
   readonly watchPromptOutcome?: (
     sessionId: string,
+    session: {
+      readonly recordedEnvironment: NodeJS.ProcessEnv | undefined;
+      readonly runtimeEnvironment: NodeJS.ProcessEnv | undefined;
+      readonly sessionLaunch: unknown;
+    },
   ) => Effect.Effect<
     (
       result: EffectAcpSchema.PromptResponse,
