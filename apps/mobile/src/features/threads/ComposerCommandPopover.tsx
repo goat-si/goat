@@ -142,6 +142,10 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
   }
 }
 
+export function shouldShowComposerMenu(kind: ComposerTriggerKind, itemCount: number): boolean {
+  return itemCount > 0 || kind === "pull-request";
+}
+
 export function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean): string {
   if (isLoading) {
     return triggerKind === "path" ? "Searching files…" : "Loading…";
