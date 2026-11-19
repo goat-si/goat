@@ -39,6 +39,7 @@ vi.mock("effect/Queue", async (importOriginal) => {
 const setup = (resumed = false) =>
   Effect.gen(function* () {
     const queue = yield* Ref.make<Queue.Queue<SDKMessage> | undefined>(undefined);
+    // @effect-diagnostics-next-line abortControllerInEffect:off -- Simulates the SDK aborting callbacks on Stop.
     const controller = new AbortController();
     const harness = yield* makeWakeHarnessWithOptions({
       interrupt: Effect.sync(() => controller.abort()).pipe(
@@ -152,7 +153,7 @@ it.effect.each(["permission", "question", "elicitation", "exit-plan"] as const)(
                   },
                   { signal: controller.signal, requestId: "request-elicit" },
                 ),
-              ).pipe(Effect.forkScoped)
+              ).pipe(Effect.asVoid, Effect.forkScoped)
             : yield* Effect.promise(() =>
                 options!.canUseTool!(
                   kind === "permission"
@@ -179,7 +180,7 @@ it.effect.each(["permission", "question", "elicitation", "exit-plan"] as const)(
                     requestId: "request-tool",
                   },
                 ),
-              ).pipe(Effect.forkScoped);
+              ).pipe(Effect.asVoid, Effect.forkScoped);
         if (kind !== "exit-plan") yield* Queue.take(harness.runtimeRequestReceipts);
         else yield* Fiber.join(pending);
         yield* TestClock.adjust("11 minutes");
@@ -447,7 +448,7 @@ it.effect("a held ExitPlanMode callback can wait without a watchdog failure", ()
           },
         ),
       );
-      assert.equal(result.behavior, "deny");
+      assert.equal(result?.behavior, "deny");
       assert.isFalse(harness.events.some((event) => event.type === "plan.updated"));
       yield* TestClock.adjust("11 minutes");
       assert.equal(harness.terminalEvents().length, 1);
