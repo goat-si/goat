@@ -194,3 +194,32 @@ it.effect("lists a model's link origin only while the model is ready", () =>
     );
   }),
 );
+
+it.effect("returns catalog language and accuracy metadata for recommendations", () =>
+  Effect.gen(function* () {
+    const service = yield* SpeechManagement.SpeechManagement.pipe(
+      Effect.provide(
+        SpeechManagement.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(SpeechModelStore.SpeechModelStore)({
+                isReady: () => Effect.succeed(false),
+                linkedFrom: () => Effect.undefined,
+              }),
+              Layer.mock(ServerSettingsService)({
+                getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+              }),
+              Layer.mock(SpeechInference.SpeechInference)({}),
+            ),
+          ),
+        ),
+      ),
+    );
+    const model = getSpeechModel("handy-computer/parakeet-unified-en-0.6b-gguf");
+    const listed = (yield* service.list).find((item) => item.id === model?.id);
+    expect(listed).toMatchObject({
+      languages: model?.languages,
+      accuracy: { en: model?.benchmark.accuracy.en?.errorPercent },
+    });
+  }),
+);

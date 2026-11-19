@@ -2,6 +2,7 @@ import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ, type DesktopBridge } from "@goat/co
 import { VOICE_RECORDING_LIMIT_SECONDS } from "@goat/client-runtime/voice-input";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding";
+import { requestVoiceMicrophone } from "./requestVoiceMicrophone";
 
 export const MAX_WAVEFORM_SAMPLES = 160;
 const STREAMING_CHUNK_SECONDS = 4;
@@ -214,9 +215,15 @@ export class BrowserVoiceRecorder {
         assertCurrent();
       }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-        });
+        const desktop = window.desktopBridge;
+        stream = await requestVoiceMicrophone(
+          () =>
+            navigator.mediaDevices.getUserMedia({
+              audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+            }),
+          desktop?.getClientPlatform?.() === "linux" ? desktop.restartAudioService : undefined,
+          () => generation === this.generation,
+        );
       } catch (error) {
         throw toMicrophoneError(error);
       }

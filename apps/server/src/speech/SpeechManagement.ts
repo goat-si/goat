@@ -88,6 +88,13 @@ const make = Effect.gen(function* () {
               ...(installed && linkedFrom !== undefined ? { linkedFrom } : {}),
               recommended: model.recommended,
               benchmark: model.benchmark.secondsPer30s,
+              languages: model.languages,
+              accuracy: Object.fromEntries(
+                Object.entries(model.benchmark.accuracy).map(([language, value]) => [
+                  language,
+                  value.errorPercent,
+                ]),
+              ),
             })),
           ),
         { concurrency: 4 },
