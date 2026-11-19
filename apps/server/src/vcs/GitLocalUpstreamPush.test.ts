@@ -91,7 +91,13 @@ it.layer(layerTest)("publish locally tracked branches", (it) => {
         const preview = yield* driver.getReviewDiffPreview({ cwd });
         const changes = preview.sources.find((source) => source.kind === "branch-range")!;
         assert.deepStrictEqual(changes.files, [
-          { path: "feature.txt", previousPath: null, additions: 1, deletions: 0 },
+          {
+            path: "feature.txt",
+            previousPath: null,
+            additions: 1,
+            deletions: 0,
+            changeType: "new",
+          },
         ]);
         assert.equal(
           changes.baseRef,
