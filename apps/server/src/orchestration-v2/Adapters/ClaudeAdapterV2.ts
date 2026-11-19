@@ -1,3 +1,12 @@
+import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
+import {
+  CLAUDE_ATTACHMENT_MAX_BYTES,
+  CLAUDE_ATTACHMENT_MAX_PAGES,
+  makeClaudeAttachmentBudget,
+  reserveClaudePdfBudget,
+} from "./ClaudeAttachmentBudget.ts";
+export { loggedClaudeQueryOptions } from "./ClaudeLoggedQueryOptions.ts";
+import { claudeAutoCompactThreshold, claudeMessageInputTokens } from "./ClaudeContextUsage.ts";
 import {
   isClaudeEmptyTaskNotificationSuccess,
   claudeToolResultSettlesSubagent,
@@ -107,6 +116,7 @@ import {
 import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
   claudeCompactionOutcome,
+  stoppedClaudeCompaction,
   readToolSearchSetting,
   resolveAutoCompactWindow,
 } from "./ClaudeCompactSettings.ts";
@@ -372,7 +382,6 @@ export {
   type ClaudeAgentSdkSessionForkInput,
   type ClaudeAgentSdkSubagentLookupInput,
   claudeQueryMessages,
-  loggedClaudeQueryOptions,
   layerQueryRunner,
 } from "./ClaudeAgentSdkQueryRunner.ts";
 export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
@@ -386,27 +395,6 @@ export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 function claudeContextWindow(modelSelection: ModelSelection): number | null {
   return (
     resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? null
-  );
-}
-// Claude caps the window at the model's context, so a setting at or above it never applies.
-// Below that, Claude compacts 33,000 tokens short of the window: Claude Code 2.1.305's
-// getContextUsage reports a 150,000 window as a 117,000 threshold, for every catalog model.
-const CLAUDE_AUTO_COMPACT_RESERVE_TOKENS = 33_000;
-function claudeAutoCompactThreshold(autoCompactWindow: string, maxTokens: number | null) {
-  const windowTokens = Number(autoCompactWindow);
-  return windowTokens > 0 && (maxTokens === null || windowTokens < maxTokens)
-    ? { autoCompactThreshold: windowTokens - CLAUDE_AUTO_COMPACT_RESERVE_TOKENS }
-    : {};
-}
-function claudeMessageInputTokens(usage: {
-  readonly input_tokens: number;
-  readonly cache_creation_input_tokens?: number | null;
-  readonly cache_read_input_tokens?: number | null;
-}): number {
-  return (
-    usage.input_tokens +
-    (usage.cache_creation_input_tokens ?? 0) +
-    (usage.cache_read_input_tokens ?? 0)
   );
 }
 export function claudeProviderTurnTokenUsage(
@@ -494,6 +482,7 @@ export const ClaudeProviderCapabilitiesV2 = {
     canRollbackThread: true,
     canForkThread: true,
     canForkFromTurn: true,
+    canForkWhileSourceRunning: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
   },
@@ -1016,10 +1005,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
       return boundaryNativeId;
     }
 
-    const terminalTurnsAfterBoundary = sourceTurns
-      .slice(boundaryIndex + 1)
-      .filter(isTerminalProviderTurn);
-    if (terminalTurnsAfterBoundary.length === 0) {
+    if (sourceTurns.length === boundaryIndex + 1) {
       return yield* getNativeConversationHeadId(input.sourceProviderThread);
     }
 
@@ -1184,48 +1170,6 @@ const estimateClaudePdfPages = (bytes: Buffer): number | null => {
   }
   return catalog && pageTree && pages > 0 && count === pages ? pages : null;
 };
-
-const CLAUDE_ATTACHMENT_MAX_BYTES = 28 * 1024 * 1024;
-const CLAUDE_ATTACHMENT_MAX_PAGES = 100;
-
-const makeClaudeAttachmentBudget = (used?: { pagesUsed: number; bytesUsed: number }) => ({
-  committed: { pages: used?.pagesUsed ?? 0, bytes: used?.bytesUsed ?? 0 },
-  pending: { pages: 0, bytes: 0 },
-  compacting: null as { pages: number; bytes: number } | null,
-  get remainingPages() {
-    return CLAUDE_ATTACHMENT_MAX_PAGES - this.committed.pages - this.pending.pages;
-  },
-  get remainingBytes() {
-    return CLAUDE_ATTACHMENT_MAX_BYTES - this.committed.bytes - this.pending.bytes;
-  },
-});
-
-const reserveClaudePdfBudget = (
-  budget: ReturnType<typeof makeClaudeAttachmentBudget>,
-  persist: Effect.Effect<void>,
-) =>
-  Effect.acquireRelease(
-    Effect.sync(() => ({
-      budget,
-      pages: 0,
-      bytes: 0,
-      delivered: false,
-      commit() {
-        if (this.delivered) return;
-        this.delivered = true;
-        budget.pending.pages -= this.pages;
-        budget.pending.bytes -= this.bytes;
-        budget.committed.pages += this.pages;
-        budget.committed.bytes += this.bytes;
-      },
-    })),
-    (reservation) =>
-      Effect.sync(() => {
-        if (reservation.delivered) return;
-        budget.pending.pages -= reservation.pages;
-        budget.pending.bytes -= reservation.bytes;
-      }).pipe(Effect.andThen(persist)),
-  );
 
 const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input: {
   readonly text: string;
@@ -1833,6 +1777,7 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
   readonly promptUuid: string | null;
+  appContextOffered?: ReadonlyMap<string, string> | undefined;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
   nativeWakeStarted: boolean;
@@ -2627,6 +2572,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const missingNativeThreads = new Set<string>();
         const pdfBudgets = new Map<string, ReturnType<typeof makeClaudeAttachmentBudget>>();
+        const appContextDelivery = makeClaudeAppContextDelivery();
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
         const taskListsByNativeThread = yield* Ref.make(
@@ -5429,6 +5375,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             retryFailure !== undefined && requested.status === "interrupted"
               ? { ...requested, status: "failed" as const, failure: retryFailure }
               : requested;
+          if (input.status === "completed" && input.context.appContextOffered !== undefined)
+            appContextDelivery.commit(
+              input.context.nativeThreadId,
+              input.context.appContextOffered,
+            );
           yield* providerRetryTimers.cancel(input.context.providerTurnId);
           yield* unansweredTimers.cancel(input.context.providerTurnId);
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
@@ -5682,11 +5633,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               Effect.gen(function* () {
                 const nativeThreadId =
                   input.context.input.providerThread.nativeThreadRef?.nativeId ?? null;
+                const liveQuery = yield* Ref.get(queryContext);
+                const processKeepsTasks =
+                  input.status === "failed" &&
+                  liveQuery !== null &&
+                  !liveQuery.stopping &&
+                  liveQuery.lastTurn === input.context;
                 if (nativeThreadId !== null) {
-                  if (input.status !== "completed") {
+                  if (input.status !== "completed" && !processKeepsTasks) {
                     // Stop cancels Claude's wakeup and an exited process loses it; a failed
                     // turn on a live process leaves it pending. Process exits null the query first.
-                    if (input.status !== "failed" || (yield* Ref.get(queryContext)) === null) {
+                    if (input.status !== "failed" || liveQuery === null) {
                       forgetScheduledWake(nativeThreadId);
                     }
                     yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
@@ -5726,7 +5683,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   nativeThreadId === null ? undefined : goalsByNativeThread.get(nativeThreadId);
                 const goalChecked = goalCheckedTurns.delete(input.context.providerTurnId);
                 const terminalReason = input.result?.terminal_reason;
-                const liveQuery = yield* Ref.get(queryContext);
                 if (
                   nativeThreadId !== null &&
                   goal?.status === "active" &&
@@ -7124,6 +7080,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
           }
 
+          if (message.type === "conversation_reset") {
+            appContextDelivery.clear(context.nativeThreadId);
+            context.appContextOffered = undefined;
+            if (context.compaction?.status === "running")
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CLAUDE_PROVIDER,
+                turnItem: stoppedClaudeCompaction(context.compaction, yield* DateTime.now),
+              });
+            context.compaction = null;
+            context.compactionFailure = null;
+            const budget = pdfBudgets.get(context.nativeThreadId);
+            if (budget !== undefined) budget.compacting = null;
+            if (context.streamUsage !== null) context.streamUsage.usage = null;
+            lastContextUsage.delete(context);
+            yield* emitContextUsage(context, 0);
+            return;
+          }
+
           if (
             message.type === "system" &&
             (message.subtype === "compact_boundary" ||
@@ -7187,6 +7162,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               budget.compacting = null;
               yield* persistAttachmentBudget(context.nativeThreadId);
             }
+            appContextDelivery.clear(context.nativeThreadId);
+            context.appContextOffered = undefined;
             if (context.streamUsage !== null) context.streamUsage.usage = null;
             lastContextUsage.delete(context);
             const postTokens = message.compact_metadata.post_tokens;
@@ -9400,6 +9377,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfBudgets.get(nativeThreadId)!,
               persistAttachmentBudget(nativeThreadId),
             );
+            const appContext =
+              promptUuid === null || turnInput.resume || nativeControl
+                ? undefined
+                : yield* appContextDelivery.prepare(
+                    nativeThreadId,
+                    turnInput.message.text,
+                    turnInput.appContext ?? [],
+                    pdfReservation,
+                  );
             const promptText = applyClaudePromptEffortPrefix(
               turnInput.message.text,
               compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
@@ -9428,6 +9414,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       ...(skills === undefined ? {} : { skills }),
                       uuid: promptUuid,
                     }).pipe(
+                      Effect.map((message) => appContext?.apply(message) ?? message),
                       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                       Effect.provideService(Path.Path, path),
                     );
@@ -9599,6 +9586,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               });
             });
+            let offerCommitted = false;
+            const commitOffer = () => {
+              if (offerCommitted) return;
+              offerCommitted = true;
+              pdfReservation.commit();
+              if (appContext !== undefined) context.appContextOffered = appContext.snapshot;
+            };
             const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* startUserTurnForWakeReports(nativeThreadId).pipe(
@@ -9606,12 +9600,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Effect.uninterruptibleMask((restore) =>
                     restore(
                       querySession.query.offer(message, () => {
-                        pdfReservation.commit();
+                        commitOffer();
                       }),
                     ).pipe(
                       Effect.tap(() =>
                         Effect.sync(() => {
-                          pdfReservation.commit();
+                          commitOffer();
                         }),
                       ),
                     ),
@@ -10549,6 +10543,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
               const nativeThreadId = yield* getNativeThreadId(rollbackInput.providerThread);
               yield* closeLiveQueryForNativeThread(nativeThreadId);
+              appContextDelivery.clear(nativeThreadId);
               const now = yield* DateTime.now;
               const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(rollbackInput);
 
@@ -10615,7 +10610,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           forkThread: Effect.fn("ClaudeAdapterV2.forkThread")(
             function* (forkInput) {
               const currentTurn = yield* Ref.get(activeTurn);
-              if (currentTurn !== null) {
+              const boundary = forkInput.sourceProviderTurns?.find(
+                (turn) => turn.id === forkInput.providerTurnId,
+              );
+              if (currentTurn !== null && boundary?.status !== "completed") {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,
                   detail: `Cannot fork Claude provider thread ${forkInput.sourceProviderThread.id} while provider turn ${currentTurn.providerTurnId} is active.`,
@@ -10623,8 +10621,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
 
               const sourceNativeThreadId = yield* getNativeThreadId(forkInput.sourceProviderThread);
-              yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               const upToMessageId = yield* resolveClaudeForkUpToMessageId(forkInput);
+              if (forkInput.sourceProviderTurns !== undefined && upToMessageId === undefined) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: "Cannot fork a Claude session without a completed boundary cursor.",
+                });
+              }
               // A moved project still has its transcript under the original cwd.
               // Let the SDK find the session by ID within this Claude home.
               const forkOptions: ForkSessionOptions =

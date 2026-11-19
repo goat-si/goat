@@ -44,6 +44,9 @@ export function assertClaudeBackgroundMonitorWakeOutput(
       description: "Background monitor test",
       kind: "monitor",
       nativeItemId: "toolu_019b4EUbhEcYP4TS7vZn27N1",
+      command: "sleep 8 && echo MONITOR_DONE",
+      startedAt: "1970-01-01T00:00:00.002Z",
+      awaited: true,
     });
   }
   assert.deepEqual(projection.providerThreads[0]?.pendingBackgroundTasks ?? [], []);

@@ -1,4 +1,6 @@
 import { fromLenientJson } from "@goat/shared/schemaJson";
+import type { OrchestrationV2TurnItem } from "@goat/contracts";
+import type * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -103,3 +105,10 @@ export const claudeCompactionOutcome = (succeeded: boolean, failed: boolean) =>
     : failed
       ? ({ status: "failed", title: "Context compaction failed" } as const)
       : ({ status: "interrupted", title: "Context compaction stopped" } as const);
+
+export const stoppedClaudeCompaction = (item: OrchestrationV2TurnItem, now: DateTime.Utc) => ({
+  ...item,
+  ...claudeCompactionOutcome(false, false),
+  completedAt: now,
+  updatedAt: now,
+});

@@ -318,6 +318,7 @@ export interface CommandPolicyV2Shape {
       readonly fromSpecificTurn: boolean;
       /** The fork works in another checkout than its source. */
       readonly crossWorkspace: boolean;
+      readonly sourceBusy?: boolean;
     },
   ) => Effect.Effect<ForkExecutionPolicyV2, CommandPolicyV2Error>;
   readonly ensureRollback: (
@@ -492,6 +493,9 @@ const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input)
     (input.sourceRunStatus === "completed" || input.sourceRunStatus === "waiting") &&
     input.sameProvider &&
     input.hasStrongNativeSource &&
+    (!input.sourceBusy ||
+      (input.sourceRunStatus === "completed" &&
+        input.capabilities.threads.canForkWhileSourceRunning === true)) &&
     input.capabilities.threads.canForkThread &&
     (!input.fromSpecificTurn || input.capabilities.threads.canForkFromTurn) &&
     input.capabilities.identity.nativeThreadIds === "strong" &&
