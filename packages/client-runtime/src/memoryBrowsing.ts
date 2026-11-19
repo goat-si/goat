@@ -156,7 +156,11 @@ export function memoryMoveCandidateCurrent(
 
 type MemoryMoveOutcome =
   | { readonly status: "moved" }
-  | { readonly status: "uncertain"; readonly operationId: MemoryOperationId }
+  | {
+      readonly status: "uncertain";
+      readonly operationId: MemoryOperationId;
+      readonly receiptCheck?: "missing" | "unsupported";
+    }
   | { readonly status: "stale" }
   | { readonly status: "refused"; readonly code: MemoryFailureCode | undefined };
 
@@ -192,7 +196,7 @@ const isRpcError = Schema.is(MemoryRpcError);
 
 export function canSubmitMemoryMove({ outcome }: MoveRow, current: boolean) {
   return (
-    outcome?.status === "uncertain" ||
+    (outcome?.status === "uncertain" && outcome.receiptCheck === undefined) ||
     (current && outcome?.status !== "moved" && outcome?.status !== "stale")
   );
 }
@@ -200,6 +204,7 @@ export function canSubmitMemoryMove({ outcome }: MoveRow, current: boolean) {
 function moveOutcome(
   result: AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>,
   operationId: MemoryOperationId,
+  receiptOnly: boolean,
 ): MemoryMoveOutcome {
   let code: MemoryFailureCode | undefined;
   if (result._tag === "Success") {
@@ -212,6 +217,12 @@ function moveOutcome(
       return { status: "uncertain", operationId };
     code = error.code;
   } else return { status: "uncertain", operationId };
+  if (receiptOnly && (code === "move_receipt_missing" || code === "unsupported_protocol"))
+    return {
+      status: "uncertain",
+      operationId,
+      receiptCheck: code === "move_receipt_missing" ? "missing" : "unsupported",
+    };
   return code === "revision_changed" || code === "identity_mismatch"
     ? { status: "stale" }
     : { status: "refused", code };
@@ -239,6 +250,7 @@ export async function submitMemoryMoves(
     const outcome = moveOutcome(
       await call(current ? request : { receiptFor: request }),
       operationId,
+      !current,
     );
     attempts.set(input.memoryId, { key, outcome });
     refresh ||= outcome.status === "moved" || outcome.status === "stale";
@@ -255,6 +267,10 @@ export function memoryMoveOutcomeMessage(outcome: MemoryMoveOutcome): string {
     case "moved":
       return "Moved.";
     case "uncertain":
+      if (outcome.receiptCheck === "missing")
+        return "No move receipt was found. Show the memory again to retry.";
+      if (outcome.receiptCheck === "unsupported")
+        return "Move receipt recovery is unavailable on this environment. Show the memory again to retry.";
       return "Could not confirm the move. Retry uses the same request.";
     case "stale":
       return "The memory changed. Refresh or select it again before moving it.";

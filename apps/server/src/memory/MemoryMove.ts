@@ -62,7 +62,8 @@ export const makeMoveMemory = (deps: {
     if (pending?.status === "cancelled")
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
     if (!pending && !old) {
-      if (receiptOnly) return yield* new Store.MemoryStoreConflict({ code: "revision_changed" });
+      if (receiptOnly)
+        return yield* new Store.MemoryStoreConflict({ code: "move_receipt_missing" });
       if (!(yield* store.hubFloorActive(op.memorySpaceId)))
         return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
       const moveBinding =

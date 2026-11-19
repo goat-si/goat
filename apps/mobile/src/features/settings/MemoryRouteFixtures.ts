@@ -3,7 +3,6 @@ import { act } from "react";
 import { suggestionScenario } from "../../../../web/src/test/memorySuggestionsFixture";
 import {
   MemoryHistoryPage,
-  MemoryFailureCode,
   MemoryItem,
   MemoryMutationReceipt,
   MemoryRpcError,
@@ -34,7 +33,6 @@ export {
 const originalId = "00000000-0000-4000-8000-000000000003";
 const resolutionId = "00000000-0000-4000-8000-000000000006";
 const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
-const isMemoryFailureCode = Schema.is(MemoryFailureCode);
 
 export function revertHistory() {
   if (nativeItem.status !== "active") throw new Error("Expected active fixture");
@@ -259,14 +257,8 @@ export async function exerciseMemoryMove(
           const ids = attempts.get(input.memoryId) ?? [];
           ids.push(input.operationId);
           attempts.set(input.memoryId, ids);
-          if ("receiptFor" in request && batch === "missing receipt") {
-            const missing = "move_receipt_missing";
-            return Effect.fail(
-              new MemoryRpcError({
-                code: isMemoryFailureCode(missing) ? missing : "revision_changed",
-              }),
-            );
-          }
+          if ("receiptFor" in request && batch === "missing receipt")
+            return Effect.fail(new MemoryRpcError({ code: "move_receipt_missing" }));
           if (input.memoryId === nativeId && (ids.length === 1 || batch === "missing receipt"))
             return Effect.fail(
               new MemoryRpcError({

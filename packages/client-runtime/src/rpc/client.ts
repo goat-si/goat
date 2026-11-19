@@ -6,6 +6,7 @@ import {
   authScopeRequiredResponse,
   type EnvironmentId,
   type MemoryHistoryInput,
+  type MemoryMoveRequest,
   type ClientGuardedRpcTag,
   type ThreadId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -300,6 +301,14 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
       ) as EnvironmentRpcInput<TTag>;
     }
     const memoryCapabilities = config.environment.capabilities.memory;
+    if (
+      tag === WS_METHODS.memoryMove &&
+      memoryCapabilities?.scopeMoves === true &&
+      "receiptFor" in (input as MemoryMoveRequest) &&
+      memoryCapabilities.scopeMoveReceipts !== true
+    ) {
+      return yield* new MemoryRpcError({ code: "unsupported_protocol" });
+    }
     if (tag === WS_METHODS.memoryUpsert || tag === WS_METHODS.memoryForget) {
       const { includeFailureDetails: _hint, ...legacyInput } = dispatchInput as object & {
         readonly includeFailureDetails?: true;

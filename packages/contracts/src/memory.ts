@@ -225,6 +225,7 @@ export const MemoryFailureCode = Schema.Literals([
   "not_found",
   "forgotten",
   "revision_changed",
+  "move_receipt_missing",
   "operation_id_reused",
   "missing_parent",
   "conflict_changed",
