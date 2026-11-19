@@ -24,7 +24,7 @@ import {
 import { scanReplicaMemory } from "./ScanReplicaMemory.ts";
 
 export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture")(function* (
-  scenario: "pre-activation" | "offline floor-2" | "already ready",
+  scenario: "pre-activation" | "offline floor-2" | "already ready" | "oversized backlog",
 ) {
   yield* seed;
   const hub = yield* Hub.MemoryHubService;
@@ -79,7 +79,10 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     threadId: M.ThreadId.make("synthetic-writer-conversation"),
   };
   const replica = Member.fixture(peerFor(memberEnv), undefined, false, false, memberEnv);
-  const readyPeer = scenario === "already ready" ? yield* Layer.build(Layer.fresh(replica)) : null;
+  const readyPeer =
+    scenario === "already ready" || scenario === "oversized backlog"
+      ? yield* Layer.build(Layer.fresh(replica))
+      : null;
   if (readyPeer)
     yield* Effect.gen(function* () {
       yield* Member.ready;
@@ -88,6 +91,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
     }).pipe(Effect.provide(readyPeer));
   const writer = Member.fixture(peerFor(Member.local), undefined, false, false, Member.local);
+  let forgotten: M.MemoryId | undefined;
   const attempts = yield* Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
     const store = yield* Store.MemoryStore;
@@ -123,6 +127,56 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       return [op];
     }
     yield* activate;
+    if (scenario === "oversized backlog") {
+      const victim = yield* remember("Synthetic memory to forget while backfilling");
+      yield* sync.syncOnce;
+      const writerSql = yield* SqlClient.SqlClient;
+      const oversized = '"'.repeat(M.MEMORY_PAGE_MAX_UTF8_BYTES / 2);
+      const backlog = Array.from({ length: M.MEMORY_ORIGIN_UPDATE_MAX }, (_, n) =>
+        Member.operation(50000 + n, M.MemoryId.make(id(50000 + n))),
+      );
+      for (const operations of [backlog.slice(0, 50), backlog.slice(50)]) {
+        const { receipts } = yield* hub.push(
+          {
+            protocolVersion: 1,
+            memorySpaceId: space,
+            environmentId: Member.local,
+            operations,
+            ...negotiation(),
+          },
+          principal(Member.local),
+        );
+        assert.isTrue(receipts.every(({ outcome }) => outcome === "accepted"));
+      }
+      yield* sync.syncOnce;
+      yield* writerSql`INSERT INTO memory_origins
+        ${writerSql.insert(
+          backlog.map(({ memoryId }) => ({
+            space,
+            memory_id: memoryId,
+            environment_id: Member.local,
+            thread_id: oversized,
+          })),
+        )}`;
+      yield* service.forget(
+        {
+          memorySpaceId: space,
+          memoryId: victim.memoryId,
+          operationId: operation(31000).operationId,
+          expectedHeads: [victim.revision.revisionId],
+        },
+        Effect.void,
+      );
+      forgotten = victim.memoryId;
+      const fitting = yield* remember("Synthetic origin that fits behind the backlog");
+      yield* sync.syncOnce;
+      assert.lengthOf(
+        yield* writerSql`SELECT 1 FROM memory_origins WHERE space=${space}
+          AND environment_id=${Member.local} AND thread_id=${oversized}`,
+        M.MEMORY_ORIGIN_UPDATE_MAX,
+      );
+      return [fitting];
+    }
     if (scenario === "already ready") {
       const saved = yield* remember("Synthetic narrow save after the peer joined");
       yield* sync.syncOnce;
@@ -238,6 +292,10 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     refuseOriginPull = scenario === "already ready";
     yield* sync.syncOnce;
     assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
+    if (forgotten) {
+      const store = yield* Store.MemoryStore;
+      assert.isDefined((yield* store.loadAggregate(space, forgotten)).tombstone);
+    }
     for (const op of attempts) yield* scanReplicaMemory(op.memoryId);
     const list = service.list(
       { memorySpaceId: space, origin, limit: 10, includeQuarantined: false },
