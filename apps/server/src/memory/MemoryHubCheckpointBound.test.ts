@@ -26,6 +26,8 @@ import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import * as HubKit from "./MemoryHubService.testkit.ts";
+import { MemoryCompactor } from "./MemoryCompactor.ts";
+import { MemoryHubService } from "./MemoryHubService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import * as Store from "./MemoryStore.ts";
 
@@ -306,6 +308,100 @@ it.effect("contract: the page bound assumes MemoryHubPullResult's encoded limit"
     assert.isTrue(Exit.isSuccess(decodePull(pull(fits))));
     assert.isTrue(Exit.isFailure(decodePull(pull(fits + 1))));
   }),
+);
+
+it.effect(
+  "an upgraded member installs a previously published checkpoint at the envelope limit",
+  () =>
+    Effect.gen(function* () {
+      yield* HubKit.seed;
+      const hub = yield* MemoryHubService;
+      const compactor = yield* MemoryCompactor;
+      const sql = yield* SqlClient.SqlClient;
+      const features = M.MEMORY_FLOOR_2;
+      const member = HubKit.principal(HubKit.otherEnv);
+      const request = {
+        protocolVersion: 1 as const,
+        memorySpaceId: space,
+        environmentId: HubKit.otherEnv,
+      };
+      const encodePull = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPullResult));
+      const original = HubKit.operation(71);
+      const receipt = (yield* hub.push(HubKit.pushInput(original), HubKit.principal())).receipts[0];
+      if (!receipt?.hubSequence) throw new Error("Expected an accepted operation");
+      yield* compactor.compact(HubKit.principal());
+      const joined = yield* hub.join(request, member);
+      const pull = {
+        ...HubKit.pullInput,
+        environmentId: request.environmentId,
+        afterSequence: joined.checkpointSequence,
+        snapshotToken: joined.snapshotToken,
+      };
+      const old = yield* hub.pull(pull, member);
+      if (!old.checkpoint?.bootstrapComplete) throw new Error("Expected a single published page");
+      const base = old.checkpoint;
+      const rejected = (length: number): M.MemoryCompactReceipt => ({
+        memorySpaceId: space,
+        originEnvironmentId: M.EnvironmentId.make("e".repeat(length)),
+        operationKind: "upsert",
+        receipt: {
+          ...receipt,
+          operationId: M.MemoryOperationId.make(id(72)),
+          outcome: "rejected",
+          failureCode: "revision_changed",
+        },
+        revisionId: null,
+        resolutionId: null,
+        revertsResolutionId: null,
+        attemptId: null,
+        fencingToken: null,
+        reportGuard: null,
+      });
+      const padded = (length: number) => ({
+        ...base,
+        compactReceipts: [...base.compactReceipts, rejected(length)],
+      });
+      const width =
+        CHECKPOINT_PULL_MAX_BYTES - utf8(encodePull({ ...old, checkpoint: padded(1) })) + 1;
+      yield* sql`UPDATE memory_inbox_pending SET metadata_json=${JSON.stringify(padded(width))}
+      WHERE space=${space} AND reason='hub_snapshot'`;
+      const legacy = yield* hub.pull(pull, member);
+      assert.strictEqual(utf8(encodePull(legacy)), CHECKPOINT_PULL_MAX_BYTES);
+
+      yield* hub.pull(
+        { ...HubKit.pullInput, afterSequence: joined.checkpointSequence, features },
+        HubKit.principal(),
+      );
+      const activated = yield* hub.pull({ ...pull, features }, member);
+      const decoded = decodePull(JSON.parse(encodePull(activated)));
+      if (!Exit.isSuccess(decoded)) throw new Error("Expected a valid upgraded envelope");
+      const { checkpoint, derivedCap } = decoded.value;
+      assert.strictEqual(derivedCap, 1000);
+      if (!checkpoint?.bootstrapComplete) throw new Error("Expected a complete upgraded page");
+      yield* Effect.gen(function* () {
+        const store = yield* Store.MemoryStore;
+        const stage = {
+          memorySpaceId: space,
+          hubEnvironmentId: HubKit.hubEnv,
+          checkpointId: `hub:${joined.snapshotToken}`,
+          expectedSnapshotToken: joined.snapshotToken,
+          expectedCheckpointSequence: joined.checkpointSequence,
+        };
+        yield* store.transact(
+          store.advanceBootstrapTx({
+            ...stage,
+            expectedState: "unbound",
+            nextState: "staging",
+            snapshotToken: joined.snapshotToken,
+            checkpointSequence: joined.checkpointSequence,
+            nextCursor: null,
+          }),
+        );
+        yield* store.installCheckpointPage({ ...stage, page: checkpoint });
+        yield* store.completeCheckpoint({ ...stage, pageCount: 1 });
+        assert.strictEqual((yield* store.readBootstrap(stage)).state, "ready");
+      }).pipe(Effect.provide(Layer.fresh(HubKit.coreFor(HubKit.otherEnv))));
+    }).pipe(Effect.provide(HubKit.live)),
 );
 
 it.effect(

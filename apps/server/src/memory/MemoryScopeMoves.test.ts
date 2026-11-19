@@ -3,6 +3,8 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
+import { memoryOperationDigest } from "./MemoryDecider.ts";
 import * as Compactor from "./MemoryCompactor.ts";
 import { makePullMemoryTail } from "./MemoryPullTail.ts";
 import * as Hub from "./MemoryHubService.ts";
@@ -107,6 +109,82 @@ describe("negotiated memory scope moves", () => {
       );
       assert.strictEqual(upgraded.derivedCap, 1000);
     }).pipe(checkUsage, Effect.provide(live)),
+  );
+
+  it.effect("an upgraded member advances over a legacy tail entry at the page limit", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const sql = yield* SqlClient.SqlClient;
+      const member = principal(otherEnv);
+      const request = { ...pullInput, environmentId: otherEnv, limit: 1 };
+      const utf8 = (value: string) => new TextEncoder().encode(value).length;
+      const encodePull = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPullResult));
+      const original = operation(65);
+      const saved = (yield* hub.push(pushInput(original), principal())).receipts[0];
+      if (!saved?.hubSequence) throw new Error("Expected a saved memory");
+      const later = newMemory(66);
+      yield* hub.push(pushInput(later), principal());
+      const oldPage = yield* hub.pull(request, member);
+      const legacyEntry = (width: number): M.MemoryHubEntry => {
+        const operation = {
+          ...original,
+          payload: {
+            ...original.payload,
+            evidence: [
+              {
+                origin: "thread" as const,
+                sourceThread: { environmentId: hubEnv, threadId: M.ThreadId.make("legacy-source") },
+                messageIds: [],
+                watermark: {
+                  fromEventId: M.EventId.make("e".repeat(width)),
+                  toEventId: M.EventId.make("end"),
+                  throughSequence: 1,
+                },
+              },
+            ],
+          },
+        };
+        return {
+          kind: "operation",
+          hubSequence: oldPage.throughSequence,
+          operation,
+          receipt: { ...saved, operationDigest: memoryOperationDigest(operation) },
+        };
+      };
+      const width =
+        M.MEMORY_PAGE_MAX_UTF8_BYTES -
+        utf8(encodePull({ ...oldPage, entries: [legacyEntry(1)] })) +
+        1;
+      const entry = legacyEntry(width);
+      yield* sql`UPDATE memory_hub_operations SET entry_json=${JSON.stringify(entry)}
+        WHERE operation_id=${original.operationId}`;
+      assert.strictEqual(
+        utf8(encodePull(yield* hub.pull(request, member))),
+        M.MEMORY_PAGE_MAX_UTF8_BYTES,
+      );
+
+      yield* hub.pull(
+        { ...pullInput, features, afterSequence: oldPage.highWatermark },
+        principal(),
+      );
+      const page = yield* hub.pull({ ...request, features }, member);
+      assert.strictEqual(page.derivedCap, 1000);
+      assert.strictEqual(page.throughSequence, saved.hubSequence);
+      yield* Effect.gen(function* () {
+        const service = yield* Service.MemoryService;
+        const store = yield* Store.MemoryStore;
+        yield* service.receiveHubPage({
+          memorySpaceId: space,
+          hubEnvironmentId: hubEnv,
+          localEnvironmentId: otherEnv,
+          expectedSequence: 0,
+          page,
+          reauthorize: Effect.void,
+        });
+        assert.strictEqual(yield* store.readCursor(space, hubEnv), saved.hubSequence);
+      }).pipe(Effect.provide(Layer.fresh(coreFor(otherEnv))));
+    }).pipe(Effect.provide(live)),
   );
 
   it.effect("never exposes a superseded body to a member catching up before compaction", () =>
