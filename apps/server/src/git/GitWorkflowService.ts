@@ -46,6 +46,7 @@ import {
   type WorkspaceLeaseUnavailableError,
 } from "../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { WorktreeHolderGuard } from "./WorktreeHolderGuard.ts";
 
 const leaseUnavailable =
   (operation: string, command: string, cwd: string) => (error: WorkspaceLeaseUnavailableError) =>
@@ -148,6 +149,7 @@ export class GitWorkflowService extends Context.Service<
     >;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
+      guard?: (path: string) => Effect.Effect<void, GitCommandError>,
     ) => Effect.Effect<void, GitCommandError>;
     readonly inspectExistingBranch: GitVcsDriver.GitVcsDriver["Service"]["inspectExistingBranch"];
     /** The worktree that has `branch` checked out, or null when none has it. */
@@ -586,13 +588,21 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
-    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
+    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input, guard) {
       // Hold the folder git will delete, which it resolves against cwd, so no turn starts in it.
       const target = path.resolve(input.cwd, input.path);
       const operation = "GitWorkflowService.removeWorktree";
       return ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(
-          tryWithWorkspaceSubtree(target, git.removeWorktree({ ...input, path: target })).pipe(
+          tryWithWorkspaceSubtree(
+            target,
+            withWorkspaceLease(
+              target,
+              (guard?.(target) ?? Effect.void).pipe(
+                Effect.andThen(git.removeWorktree({ ...input, path: target })),
+              ),
+            ),
+          ).pipe(
             Effect.catchTags({
               WorkspaceLeaseUnavailableError: (error) =>
                 Effect.fail(leaseUnavailable(operation, "git worktree remove", input.cwd)(error)),
@@ -667,19 +677,24 @@ export const layer = Layer.effect(GitWorkflowService, make);
  */
 export const makeClientWorktrees = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
+  const guard = yield* WorktreeHolderGuard;
   const path = yield* Path.Path;
   const isManaged = yield* makeIsManagedWorktreePath;
 
   const remove = Effect.fn("ClientWorktrees.remove")(function* (input: VcsRemoveWorktreeInput) {
     const target = path.resolve(input.cwd, input.path);
-    if (!(yield* isManaged(target)))
-      return yield* new GitCommandError({
-        operation: "ClientWorktrees.remove",
-        command: "git worktree remove",
-        cwd: input.cwd,
-        detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
-      });
-    return yield* gitWorkflow.removeWorktree(input);
+    const notManaged = new GitCommandError({
+      operation: "ClientWorktrees.remove",
+      command: "git worktree remove",
+      cwd: input.cwd,
+      detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
+    });
+    if (!(yield* isManaged(target))) return yield* notManaged;
+    return yield* gitWorkflow.removeWorktree(input, (lockedPath) =>
+      isManaged(lockedPath).pipe(
+        Effect.flatMap((managed) => (managed ? guard(lockedPath) : Effect.fail(notManaged))),
+      ),
+    );
   });
 
   /** Threads using a worktree, and whether GOAT made it, which decides whether a client offers its removal. */

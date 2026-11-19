@@ -3,6 +3,16 @@ import { assert, describe, it } from "@effect/vitest";
 import * as GitCafeHosts from "./gitCafeHosts.ts";
 
 describe("gitCafeHosts", () => {
+  it("accepts username-less SSH URLs only for valid GitCafe repositories", () => {
+    for (const url of ["ssh://git.cafe/team/project.git", "ssh://git.cafe:2222/team/project.git"]) {
+      assert.deepStrictEqual(GitCafeHosts.parseGitCafeRemote(url), {
+        host: "git.cafe",
+        repository: "team/project",
+      });
+    }
+    assert.isNull(GitCafeHosts.parseGitCafeRemote("ssh://evil.git.cafe/team/project.git"));
+    assert.isNull(GitCafeHosts.parseGitCafeRemote("ssh://git.cafe/team/nested/project.git"));
+  });
   it("knows exactly the production and staging hosts", () => {
     assert.deepStrictEqual([...GitCafeHosts.GITCAFE_HOSTS], ["git.cafe", "staging.git.cafe"]);
     assert.isTrue(GitCafeHosts.isGitCafeHost("Git.Cafe"));

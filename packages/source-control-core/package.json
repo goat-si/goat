@@ -39,6 +39,10 @@
       "types": "./src/server/SourceControlHost.ts",
       "import": "./src/server/SourceControlHost.ts"
     },
+    "./server/firstFetchUrl": {
+      "types": "./src/server/firstFetchUrl.ts",
+      "import": "./src/server/firstFetchUrl.ts"
+    },
     "./server/SourceControlProvider": {
       "types": "./src/server/SourceControlProvider.ts",
       "import": "./src/server/SourceControlProvider.ts"

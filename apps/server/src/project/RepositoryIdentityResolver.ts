@@ -1,7 +1,7 @@
 import type { RepositoryIdentity, SourceControlProviderError } from "@goat/contracts";
 import { parseGitRemoteHost } from "@goat/source-control-core/shared/definition";
 import { repositoryPathFromRemoteUrl } from "@goat/source-control-core/server/SourceControlProvider";
-import { normalizeGitRemoteUrl } from "@goat/shared/git";
+import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@goat/shared/git";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -93,7 +93,7 @@ function pickMarkedRemote(
   if (mark.value === "base") return { remoteName: mark.remoteName, remoteUrl: mark.remoteUrl };
   // Compare hosts with HTTP ports kept: one hostname can serve separate forges on two ports.
   const host = parseGitRemoteHost(mark.remoteUrl)?.host;
-  const markedPath = mark.value.toLowerCase();
+  const markedPath = canonicalRepositoryPath(mark.value);
   const [remoteName, remoteUrl] =
     [...remotes.entries()].find(
       ([, url]) =>
@@ -128,8 +128,9 @@ function repositoryPathOf(canonicalKey: string, remoteUrl: string): string {
   if (displayPath === null) return canonicalPath;
   // A host that names repositories literally keeps the `.git` the display path drops.
   return (
-    [displayPath, `${displayPath}.git`].find((path) => path.toLowerCase() === canonicalPath) ??
-    canonicalPath
+    [displayPath, `${displayPath}.git`].find(
+      (path) => canonicalRepositoryPath(path) === canonicalRepositoryPath(canonicalPath),
+    ) ?? canonicalPath
   );
 }
 

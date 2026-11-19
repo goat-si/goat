@@ -1,6 +1,7 @@
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { GRAPHQL_STATES, type PullRequestListState } from "./gitHubPullRequestStates.ts";
 import * as FileSystem from "effect/FileSystem";
 import {
   GraphQL,
@@ -20,7 +21,7 @@ import {
   type SourceControlProviderDiscoveryItem,
   type SourceControlRepositoryCloneUrls,
 } from "@goat/contracts";
-import { normalizeGitRemoteUrl } from "@goat/shared/git";
+import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@goat/shared/git";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -61,6 +62,7 @@ import {
   type SourceControlManagedCliDiscoverySpec,
 } from "@goat/source-control-core/server/discovery";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import { readSourceControlHostSettings } from "@goat/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
@@ -325,17 +327,6 @@ function repositoryCloneUrls(
 
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
 
-type PullRequestListState = "open" | "closed" | "merged" | "all";
-
-const GRAPHQL_STATES: Record<
-  PullRequestListState,
-  NonNullable<PullRequestsByHead.Variables["states"]>
-> = {
-  open: ["OPEN"],
-  closed: ["CLOSED"],
-  merged: ["MERGED"],
-  all: ["OPEN", "CLOSED", "MERGED"],
-};
 /** 50 lookups keeps responses near 0.5s at the same one-point cost as 100. */
 const HEAD_LOOKUPS_PER_DOCUMENT = 50;
 /** Git reads stagger background lookups by ~300ms; gather batches before spending quota. */
@@ -673,7 +664,7 @@ export const make = Effect.gen(function* () {
             (gitHubApiHostForRemote(remote.url) ??
               normalizeGitRemoteUrl(remote.url).split("/")[0]) === base.host &&
             normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
-              nameWithOwner.toLowerCase(),
+              canonicalRepositoryPath(nameWithOwner),
         )?.name ?? null;
       const baseRemote = Effect.suspend(() => {
         const known = remoteFor(baseNameWithOwner);
@@ -699,7 +690,7 @@ export const make = Effect.gen(function* () {
         if (known !== null) return known;
         const [owner, name] = headNameWithOwner.split("/");
         const fork = yield* readRepository({ host: base.host, owner: owner!, name: name! });
-        const originUrl = yield* git.readConfigValue(input.cwd, "remote.origin.url");
+        const originUrl = yield* readFirstFetchUrl(git, input.cwd, "origin");
         return yield* git.ensureRemote({
           cwd: input.cwd,
           preferredName: headOwner ?? "fork",

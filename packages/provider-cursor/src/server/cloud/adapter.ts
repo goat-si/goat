@@ -11,6 +11,7 @@ import {
   type ProviderSetupError,
 } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { canonicalRepositoryPath } from "@goat/shared/git";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
@@ -131,7 +132,7 @@ function repository(value: string): string | undefined {
   try {
     const url = new URL(value.includes("://") ? value : `https://${value}`);
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return;
-    return `${url.origin}${url.pathname.replace(/\.git\/?$/, "").replace(/\/$/, "")}`;
+    return `${url.origin}${canonicalRepositoryPath(url.pathname.replace(/\.git\/?$/, "").replace(/\/$/, ""))}`;
   } catch {
     return;
   }
@@ -154,8 +155,8 @@ export function resultTask(task: Task, result: RunResult): Task {
           !url.search &&
           !url.hash &&
           url.origin === source.origin &&
-          url.pathname.startsWith(
-            `${source.pathname.replace(/\.git\/?$/, "").replace(/\/$/, "")}/pull/`,
+          canonicalRepositoryPath(url.pathname).startsWith(
+            `${canonicalRepositoryPath(source.pathname.replace(/\.git\/?$/, "").replace(/\/$/, ""))}/pull/`,
           )
           ? url.toString()
           : undefined;

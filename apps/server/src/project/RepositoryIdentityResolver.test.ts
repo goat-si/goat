@@ -425,6 +425,30 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect(
+    "matches encoded gh-resolved repository paths while retaining the remote spelling",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const cwd = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-repository-encoded-",
+        });
+        yield* git(cwd, ["init"]);
+        yield* git(cwd, ["remote", "add", "upstream", "https://github.com/me/fork.git"]);
+        yield* git(cwd, [
+          "remote",
+          "add",
+          "parent",
+          "https://github.com/owner/Repo%20%28One%29.git",
+        ]);
+        yield* git(cwd, ["config", "remote.upstream.gh-resolved", "owner/Repo%20%28One%29"]);
+        const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+        const identity = yield* resolver.resolve(cwd);
+        expect(identity?.locator.remoteName).toBe("parent");
+        expect(identity?.locator.remoteUrl).toBe("https://github.com/owner/Repo%20%28One%29.git");
+      }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect("reads the project's gh default when the server inherited GIT_DIR", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

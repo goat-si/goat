@@ -196,5 +196,11 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       staleTimeMs: 0,
       idleTtlMs: 0,
     }),
+    threadTitleLookup: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:thread-title-lookup",
+      tag: ORCHESTRATION_V2_WS_METHODS.getThreadFamily,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+    }),
   };
 }

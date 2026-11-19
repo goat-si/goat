@@ -468,7 +468,7 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(layerGitWorkflow),
-      Layer.provide(VcsStatusBroadcaster.layerAutomaticFetchInterval),
+      Layer.provide(VcsStatusBroadcaster.layerRefSnapshot.pipe(Layer.provide(GitVcsDriver.layer))),
       // The orchestration runtime also consumes the broadcaster (run
       // finalization), so the policy cannot read the store from the runtime's
       // output.
@@ -881,6 +881,9 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(RuntimeControl.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
+  Layer.provideMerge(
+    VcsStatusBroadcaster.layerAutomaticFetchInterval.pipe(Layer.provide(layerServerSettings)),
+  ),
   Layer.provide(NetService.layer),
 );
 const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
@@ -1116,7 +1119,6 @@ const layerMakeServer = Layer.unwrap(
     // fixPath rewrites PATH, so pin the launcher the shell chose before it does.
     const invokedAs = (yield* resolveLauncherPath) ?? (yield* HostProcess.InvokedAs);
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
-
     const layerHttpListening = Layer.effectDiscard(
       Effect.gen(function* () {
         yield* HttpServer.HttpServer;

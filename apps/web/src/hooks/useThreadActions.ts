@@ -67,6 +67,7 @@ import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { useThreadWorktreeConfirmation } from "./useThreadWorktreeConfirmation";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -325,6 +326,7 @@ export function useThreadActions() {
     reportFailure: false,
     refresh: true,
   });
+  const readWorktreeConfirmation = useThreadWorktreeConfirmation();
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -435,7 +437,7 @@ export function useThreadActions() {
 
   const deleteThread = async (
     target: ScopedThreadRef,
-    opts: { deletedThreadKeys?: ReadonlySet<string> } = {},
+    opts: { deletedThreadKeys?: ReadonlySet<string>; keepWorktree?: boolean } = {},
   ) => {
     const permissionFailure = threadOperationFailure(target);
     if (permissionFailure) return permissionFailure;
@@ -481,10 +483,9 @@ export function useThreadActions() {
     const environmentConfig = appAtomRegistry
       .get(environmentServerConfigsAtom)
       .get(threadRef.environmentId);
-    let orphanedWorktreePath = getOrphanedWorktreePathForThread(
-      survivingThreads,
-      threadRef.threadId,
-    );
+    let orphanedWorktreePath = opts.keepWorktree
+      ? null
+      : getOrphanedWorktreePathForThread(survivingThreads, threadRef.threadId);
     // The server knows who else uses the worktree, which a shell missing idle subagents cannot, and
     // whether GOAT made it. A failed read, or an older server that cannot say, keeps the worktree.
     if (orphanedWorktreePath !== null) {
@@ -495,6 +496,7 @@ export function useThreadActions() {
       if (
         occupants._tag !== "Success" ||
         occupants.value.managed !== true ||
+        occupants.value.removalGuarded !== true ||
         occupants.value.threadIds.some(
           (threadId) => threadId !== threadRef.threadId && deletedIds?.has(threadId) !== true,
         )
@@ -945,27 +947,30 @@ export function useThreadActions() {
     if (permissionFailure) return permissionFailure;
     const localApi = readLocalApi();
     const resolved = resolveThreadTarget(target);
+    let keepWorktree = false;
 
     if (confirmThreadDelete && localApi) {
       const title = resolved?.thread.title ?? knownTitle ?? "this thread";
+      const holders = resolved?.thread.worktreePath
+        ? await settlePromise(() => readWorktreeConfirmation(target, resolved.thread))
+        : AsyncResult.success({ lines: [], keepWorktree: false });
+      if (holders._tag === "Failure") return holders;
+      keepWorktree = holders.value.keepWorktree;
       const confirmationResult = await settlePromise(() =>
         localApi.dialogs.confirm(
           [
             `Delete thread "${title}"?`,
             "This permanently clears conversation history for this thread.",
+            ...holders.value.lines,
           ].join("\n"),
           { variant: "destructive" },
         ),
       );
-      if (confirmationResult._tag === "Failure") {
-        return confirmationResult;
-      }
-      if (!confirmationResult.value) {
-        return AsyncResult.success(undefined);
-      }
+      if (confirmationResult._tag === "Failure") return confirmationResult;
+      if (!confirmationResult.value) return AsyncResult.success(undefined);
     }
 
-    return deleteThread(target);
+    return deleteThread(target, { keepWorktree });
   };
 
   return {

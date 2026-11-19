@@ -18,7 +18,7 @@ import {
   type ThreadId,
   VcsProcessSpawnError,
 } from "@goat/contracts";
-import { newProjectFolderName } from "@goat/shared/path";
+import { foldLatinDiacritics, newProjectFolderName } from "@goat/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -151,7 +151,7 @@ export class ManagedProjectFolders extends Context.Service<
 >()("goat/project/ManagedProjectFolders") {}
 
 const folderWords = (text: string) =>
-  text
+  foldLatinDiacritics(text)
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)

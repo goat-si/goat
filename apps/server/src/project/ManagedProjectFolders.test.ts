@@ -295,6 +295,24 @@ it.effect("gives each Scratch thread its own folder, named from its message", ()
   ),
 );
 
+it.effect("keeps Vietnamese and German words readable in scratch folders", () =>
+  withScratch(() =>
+    Effect.gen(function* () {
+      const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const path = yield* Path.Path;
+      const { projectId } = yield* scratch.ensureScratchProject;
+      const folder = Option.getOrThrow(
+        yield* scratch.folderForThread({
+          projectId,
+          threadId: ThreadId.make("thread-diacritics"),
+          text: "Đường Straße",
+        }),
+      );
+      assert.match(path.basename(folder), /^\d{4}-\d{2}-\d{2}-duong-strasse-/);
+    }),
+  ),
+);
+
 it.effect("leaves threads in other projects alone", () =>
   withScratch(({ baseDir }) =>
     Effect.gen(function* () {

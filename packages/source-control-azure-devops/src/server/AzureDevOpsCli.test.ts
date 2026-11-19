@@ -26,7 +26,10 @@ const mockRun = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"][
 
 // The CLI layer is exercised on a host that spawns `az` itself, so the launcher upgrade stays out of these assertions.
 const layerSupport = Layer.mergeAll(
-  TestSourceControlHost.layer({ process: { run: mockRun } }),
+  TestSourceControlHost.layer({
+    process: { run: mockRun },
+    git: { execute: () => Effect.succeed(processOutput("")) },
+  }),
   NodeServices.layer,
   Layer.succeed(HostProcess.Platform, "linux"),
 );

@@ -5,6 +5,7 @@ import { SourceControlProviderError, type ChangeRequest } from "@goat/contracts"
 
 import * as AzureDevOpsChangeRequestTemplate from "./azureDevOpsChangeRequestTemplate.ts";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import type { NormalizedAzureDevOpsPullRequestRecord } from "./azureDevOpsPullRequests.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
@@ -105,6 +106,9 @@ function isSafeArgument(value: string): boolean {
   return value.length > 0 && !value.startsWith("@") && !value.startsWith("-");
 }
 
+const remoteOf = (input: { readonly context?: { readonly remoteUrl: string } | undefined }) =>
+  input.context === undefined ? {} : { remoteUrl: input.context.remoteUrl };
+
 function toChangeRequest(summary: NormalizedAzureDevOpsPullRequestRecord): ChangeRequest {
   return {
     provider: SourceControlProviderKind.make("azure-devops"),
@@ -159,6 +163,7 @@ export const make = Effect.gen(function* () {
         return azure
           .listPullRequests({
             cwd: input.cwd,
+            ...remoteOf(input),
             headSelector: input.headSelector,
             ...(source !== undefined ? { source } : {}),
             state: input.state,
@@ -185,7 +190,7 @@ export const make = Effect.gen(function* () {
     ),
     getChangeRequest: Effect.fn("AzureDevOpsSourceControlProvider.getChangeRequest")(
       function (input) {
-        return azure.getPullRequest(input).pipe(
+        return azure.getPullRequest({ ...input, ...remoteOf(input) }).pipe(
           Effect.map(toChangeRequest),
           Effect.mapError(
             (error) =>
@@ -210,6 +215,7 @@ export const make = Effect.gen(function* () {
         return azure
           .createPullRequest({
             cwd: input.cwd,
+            ...remoteOf(input),
             baseBranch: input.baseRefName,
             headSelector: input.headSelector,
             ...(source !== undefined ? { source } : {}),
@@ -237,7 +243,7 @@ export const make = Effect.gen(function* () {
     ),
     getRepositoryCloneUrls: Effect.fn("AzureDevOpsSourceControlProvider.getRepositoryCloneUrls")(
       function (input) {
-        return azure.getRepositoryCloneUrls(input).pipe(
+        return azure.getRepositoryCloneUrls({ ...input, ...remoteOf(input) }).pipe(
           Effect.mapError(
             (error) =>
               new SourceControlProviderError({
@@ -284,6 +290,7 @@ export const make = Effect.gen(function* () {
           .getDefaultBranch({
             cwd: input.cwd,
             repository: remote.name,
+            ...remoteOf(input),
             ...(remote.project === null ? {} : { project: remote.project }),
             ...(remote.organization === null ? {} : { organization: remote.organization }),
           })
@@ -309,8 +316,7 @@ export const make = Effect.gen(function* () {
         const remoteName =
           input.context?.remoteName ?? (yield* git.resolvePrimaryRemoteName(input.cwd));
         const remoteUrl =
-          input.context?.remoteUrl ??
-          (yield* git.readConfigValue(input.cwd, `remote.${remoteName}.url`));
+          input.context?.remoteUrl ?? (yield* readFirstFetchUrl(git, input.cwd, remoteName));
         const remote = remoteUrl === null ? null : remoteRepository(remoteUrl);
         if (remote?.organization == null || remote.project == null) {
           return yield* new SourceControlProviderError({

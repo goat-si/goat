@@ -11,7 +11,7 @@ import { basenameOfPath, resolvePierreIconForEntry, GOAT_PIERRE_ICONS } from "~/
 
 export interface DiffFileTreeEntry {
   readonly path: string;
-  readonly status: GitStatus;
+  readonly status?: GitStatus;
 }
 
 function toGitStatus(file: FileDiffMetadata): GitStatus {

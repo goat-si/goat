@@ -109,10 +109,18 @@ export function isWindowsReservedFileName(name: string): boolean {
   return WINDOWS_RESERVED_NAME.test(name.split(".")[0]!.trimEnd().toLowerCase());
 }
 
-export function newProjectFolderName(name: string): string {
-  const slug = name
+export function foldLatinDiacritics(text: string): string {
+  return text
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/ß/g, "ss")
+    .replace(/ẞ/g, "SS");
+}
+
+export function newProjectFolderName(name: string): string {
+  const slug = foldLatinDiacritics(name)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")

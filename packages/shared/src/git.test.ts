@@ -21,6 +21,11 @@ import {
 } from "./git.ts";
 
 describe("normalizeGitRemoteUrl", () => {
+  it("matches percent-encoded and literal Unicode repository segments", () => {
+    expect(
+      normalizeGitRemoteUrl("https://code.example/Team/R%C3%A9sum%C3%A9%20%28app%29.git"),
+    ).toBe(normalizeGitRemoteUrl("ssh://git@code.example/team/résumé%20(app).git"));
+  });
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
     expect(normalizeGitRemoteUrl("git@github.com:Sample-Tools/Goat.git")).toBe(
       "github.com/sample-tools/goat",
@@ -141,6 +146,22 @@ describe("isBareGitConfig", () => {
 });
 
 describe("parseOriginUrlFromGitConfig", () => {
+  it("ignores backslashes in comments before subsequent remote sections", () => {
+    for (const newline of ["\n", "\r\n"]) {
+      for (const comment of ["#", ";"]) {
+        const config = [
+          '[remote "upstream"]',
+          `url = https://github.com/other/repo.git ${comment} ignored backslash \\`,
+          '[remote "origin"]',
+          `url = https://github.com/acme/repo.git ${comment} ignored backslash \\`,
+          `${comment} ignored backslash \\`,
+          '[remote "fork"]',
+          "url = https://github.com/me/repo.git",
+        ].join(newline);
+        expect(parseOriginUrlFromGitConfig(config)).toBe("https://github.com/acme/repo.git");
+      }
+    }
+  });
   it("reads the origin url and ignores other remotes", () => {
     const config = [
       "[core]",
@@ -186,7 +207,7 @@ describe("parseOriginUrlFromGitConfig", () => {
       parseOriginUrlFromGitConfig(
         '[remote "origin"]\n\turl = https://github.com/acme/\\\n\t\trepo.git\n',
       ),
-    ).toBe("https://github.com/acme/repo.git");
+    ).toBe("https://github.com/acme/\t\trepo.git");
   });
 
   it("reads settings on the remote header line", () => {

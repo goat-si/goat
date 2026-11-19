@@ -1,4 +1,6 @@
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
+import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
+export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
 export {
   VcsAutomaticFetchInterval,
   VcsAutoPullPolicy,
@@ -132,6 +134,7 @@ const normalizeCwd = (cwd: string) =>
 export const make = Effect.gen(function* () {
   const automationHold = yield* AutomationHold.AutomationHold;
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
+  const readRefSnapshot = yield* VcsRefSnapshot;
   const autoPullPolicy = yield* VcsAutoPullPolicy;
   const workflow = yield* GitWorkflowService.GitWorkflowService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -457,7 +460,7 @@ export const make = Effect.gen(function* () {
   });
 
   const refreshRemoteAndLocalTotals = Effect.fn("VcsStatusBroadcaster.refreshRemoteAndLocalTotals")(
-    function* (cwd: string, policyCwd: string) {
+    function* (cwd: string, policyCwd: string, refsBeforeLocalRead: string | null) {
       return yield* withRemoteWriteLock(
         cwd,
         Effect.gen(function* () {
@@ -465,14 +468,14 @@ export const make = Effect.gen(function* () {
           // Bump the PR lookup epoch after earlier remote writers have finished.
           yield* workflow.invalidateStatus(cwd);
           const remoteRead = yield* readRemoteStatus(cwd, { refreshUpstream });
-          // Fetch can move the base used for local Changes totals.
-          yield* refreshLocalStatusCore(cwd);
           // Without a fetch, the cached behind count cannot justify an automatic pull.
           const pulled = refreshUpstream
             ? yield* maybeAutoPull(cwd, remoteRead, [policyCwd])
             : null;
           if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
           yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
+          if (refsBeforeLocalRead === null || (yield* readRefSnapshot(cwd)) !== refsBeforeLocalRead)
+            yield* refreshLocalStatusCore(cwd);
           const parts = yield* getStatusParts(cwd);
           return mergeGitStatusParts(parts.local, parts.remote);
         }),
@@ -484,13 +487,14 @@ export const make = Effect.gen(function* () {
     "VcsStatusBroadcaster.refreshStatus",
   )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+    const refsBeforeLocalRead = options?.localOnly ? null : yield* readRefSnapshot(cwd);
     yield* refreshLocalStatusCore(cwd);
     if (options?.localOnly) {
       // Never cache a remote here: readers take `value: null` as "read and found no PR".
       const parts = yield* getStatusParts(cwd);
       return mergeGitStatusParts(parts.local, parts.remote);
     }
-    return yield* refreshRemoteAndLocalTotals(cwd, rawCwd);
+    return yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
   });
 
   type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;

@@ -58,7 +58,12 @@ import {
   resolveAutoFeatureBranchName,
   sanitizeFeatureBranchName,
 } from "@goat/shared/git";
-import { isSshRemoteUrl } from "@goat/shared/sourceControl";
+import {
+  normalizePullRequestReference,
+  toResolvedPullRequest,
+  shouldPreferSshRemote,
+  type ResolvedPullRequest,
+} from "./gitPullRequestHelpers.ts";
 import { summarizeGitActionResult } from "./gitActionSummary.ts";
 import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@goat/source-control-core/shared/definition";
 import {
@@ -90,6 +95,7 @@ import { makePrLookupGitState, prLookupFailureTtl } from "./prLookupGitState.ts"
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import { makeCheckedOutPullRequest } from "./checkedOutPullRequest.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
@@ -238,15 +244,6 @@ const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInp
   (pullRequest) => pullRequest.updatedAt,
 );
 
-interface ResolvedPullRequest {
-  number: number;
-  title: string;
-  url: string;
-  baseBranch: string;
-  headBranch: string;
-  state: "open" | "closed" | "merged";
-}
-
 export interface PullRequestHeadRemoteInfo {
   isCrossRepository?: boolean | undefined;
   headRepositoryNameWithOwner?: string | null | undefined;
@@ -312,35 +309,6 @@ function toStatusPr(pr: PullRequestInfo): {
   };
 }
 
-function normalizePullRequestReference(reference: string): string {
-  const trimmed = reference.trim();
-  const hashNumber = /^#(\d+)$/.exec(trimmed);
-  return hashNumber?.[1] ?? trimmed;
-}
-
-function toResolvedPullRequest(pr: {
-  number: number;
-  title: string;
-  url: string;
-  baseRefName: string;
-  headRefName: string;
-  state?: "open" | "closed" | "merged";
-}): ResolvedPullRequest {
-  return {
-    number: pr.number,
-    title: pr.title,
-    url: pr.url,
-    baseBranch: pr.baseRefName,
-    headBranch: pr.headRefName,
-    state: pr.state ?? "open",
-  };
-}
-
-function shouldPreferSshRemote(url: string | null): boolean {
-  if (!url) return false;
-  return isSshRemoteUrl(url);
-}
-
 function toPullRequestHeadRemoteInfo(pr: {
   isCrossRepository?: boolean | undefined;
   headRepositoryNameWithOwner?: string | null | undefined;
@@ -359,6 +327,7 @@ function toPullRequestHeadRemoteInfo(pr: {
 
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
+  const readRemoteUrl = (cwd: string, name: string) => readFirstFetchUrl(gitCore, cwd, name);
   const checkedOutPullRequest = makeCheckedOutPullRequest(gitCore);
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -642,7 +611,7 @@ export const make = Effect.gen(function* () {
         repository: repositoryNameWithOwner,
         ...pullRequestHostOptions(pullRequest.url),
       });
-      const originRemoteUrl = yield* gitCore.readConfigValue(cwd, "remote.origin.url");
+      const originRemoteUrl = yield* readRemoteUrl(cwd, "origin");
       const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
       const preferredRemoteName =
         pullRequest.headRepositoryOwnerLogin?.trim() ||
@@ -727,7 +696,7 @@ export const make = Effect.gen(function* () {
               ? Effect.fail(cause)
               : Effect.gen(function* () {
                   const remoteName = yield* gitCore.resolvePrimaryRemoteName(cwd);
-                  const remoteUrl = yield* gitCore.readConfigValue(cwd, `remote.${remoteName}.url`);
+                  const remoteUrl = yield* readRemoteUrl(cwd, remoteName);
                   const pullRequestKey = pullRequestRepositoryKey(pullRequest.url);
                   if (
                     remoteUrl === null ||
@@ -756,7 +725,7 @@ export const make = Effect.gen(function* () {
         repository: repositoryNameWithOwner,
         ...pullRequestHostOptions(pullRequest.url),
       });
-      const originRemoteUrl = yield* gitCore.readConfigValue(cwd, "remote.origin.url");
+      const originRemoteUrl = yield* readRemoteUrl(cwd, "origin");
       const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
       const preferredRemoteName =
         pullRequest.headRepositoryOwnerLogin?.trim() ||
@@ -1120,6 +1089,8 @@ export const make = Effect.gen(function* () {
 
   const readConfigValueNullable = (cwd: string, key: string) =>
     gitCore.readConfigValue(cwd, key).pipe(Effect.orElseSucceed(() => null));
+  const readRemoteUrlNullable = (cwd: string, name: string) =>
+    readRemoteUrl(cwd, name).pipe(Effect.orElseSucceed(() => null));
 
   // Whether the remote's host creates change requests in this remote's repository. A host's tools
   // can let configuration, such as gh's default repository, name another one.
@@ -1153,8 +1124,8 @@ export const make = Effect.gen(function* () {
         ? "origin"
         : ((yield* readConfigValueNullable(cwd, `branch.${branch}.remote`)) ?? "origin");
     const remoteUrl =
-      (yield* readConfigValueNullable(cwd, `remote.${preferredRemoteName}.url`)) ??
-      (yield* readConfigValueNullable(cwd, "remote.origin.url"));
+      (yield* readRemoteUrlNullable(cwd, preferredRemoteName)) ??
+      (yield* readRemoteUrlNullable(cwd, "origin"));
 
     const provider = remoteUrl ? sourceControlDefinitions.recognizeRemote(remoteUrl) : null;
     if (!remoteUrl || provider?.kind !== "unknown") return provider;
@@ -1180,7 +1151,7 @@ export const make = Effect.gen(function* () {
       };
     }
 
-    const remoteUrl = yield* readConfigValueNullable(cwd, `remote.${remoteName}.url`);
+    const remoteUrl = yield* readRemoteUrlNullable(cwd, remoteName);
     let repositoryNameWithOwner = parseRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
     if (
       remoteUrl !== null &&
@@ -1436,7 +1407,7 @@ export const make = Effect.gen(function* () {
       remoteName = matches[0];
     }
     if (remoteName === undefined) return null;
-    const remoteUrl = yield* readConfigValueNullable(cwd, `remote.${remoteName}.url`);
+    const remoteUrl = yield* readRemoteUrlNullable(cwd, remoteName);
     return remoteUrl === null ? null : remoteName;
   });
 
@@ -1832,7 +1803,7 @@ export const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.provideService(TextGeneration.TextGenerationProject, input.settings.projectId),
-          Effect.map((result) => sanitizeCommitMessage(result)),
+          Effect.map((result) => sanitizeCommitMessage(result, policy?.kind)),
         );
 
       return {
@@ -2175,7 +2146,13 @@ export const make = Effect.gen(function* () {
       const readRemoteUrlKey = (remoteName: string | null) =>
         remoteName === null
           ? Effect.succeed(null)
-          : readConfig(`remote.${remoteName}.url`).pipe(
+          : rememberPrLookupGitState(
+              cwd,
+              `remoteUrl\u0000${remoteName}`,
+              fresh,
+              readRemoteUrl(cwd, remoteName),
+            ).pipe(
+              Effect.orElseSucceed(() => null),
               Effect.map((remoteUrl) =>
                 remoteUrl ? sourceControlDefinitions.repositoryKeyFromRemote(remoteUrl) : null,
               ),

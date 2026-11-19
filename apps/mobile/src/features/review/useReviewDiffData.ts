@@ -19,6 +19,7 @@ import type {
   ReviewDiffFileStat,
   ReviewDiffPreviewSource,
 } from "@goat/contracts";
+import { reviewFileChangeType } from "@goat/contracts";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
@@ -52,11 +53,12 @@ function getCachedReviewFile(
           ? parsed.files[0]
           : undefined))
       : undefined;
+  const changeType = stat.changeType === undefined ? "change" : reviewFileChangeType(stat);
   const file: ReviewRenderableFile = {
     ...(loaded ?? {
       path: stat.path,
       previousPath: stat.previousPath,
-      changeType: "change" as const,
+      changeType: changeType === "unknown" ? ("change" as const) : changeType,
       languageHint: null,
       additionLines: [],
       deletionLines: [],
@@ -68,18 +70,20 @@ function getCachedReviewFile(
     previousPath: stat.previousPath,
     additions: stat.additions,
     deletions: stat.deletions,
-    ...(patch?._tag === "Success"
-      ? patch.value.source.truncated
-        ? { notice: "File preview exceeds the size limit. Counts include all changes." }
-        : loaded
-          ? {}
-          : { notice: "Could not display file preview." }
-      : {
-          notice:
-            patch?._tag === "Failure"
-              ? "Could not load diff. Select the file to retry."
-              : "Loading diff…",
-        }),
+    ...(changeType === "unknown"
+      ? { notice: "Unknown change type." }
+      : patch?._tag === "Success"
+        ? patch.value.source.truncated
+          ? { notice: "File preview exceeds the size limit. Counts include all changes." }
+          : loaded
+            ? {}
+            : { notice: "Could not display file preview." }
+        : {
+            notice:
+              patch?._tag === "Failure"
+                ? "Could not load diff. Select the file to retry."
+                : "Loading diff…",
+          }),
   };
   if (patch) normalizedFiles.set(patch, { stat, diffHash, file });
   return file;

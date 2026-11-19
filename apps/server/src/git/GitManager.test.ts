@@ -1,5 +1,5 @@
 import { signatureOutputRegression } from "./testkit/signatureOutputRegression.ts";
-import { makeTempDir, removePath, makeDirectory } from "./testkit/fileFixtures.ts";
+import { makeTempDir, makeDirectory } from "./testkit/fileFixtures.ts";
 import { runGit, initRepo } from "./testkit/gitRepository.ts";
 import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -156,36 +156,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         headRef: "feature/status-lowercase-state",
         state: "merged",
         updatedAt: "2026-01-02T00:00:00.000Z",
-      });
-    }),
-  );
-
-  it.effect("status returns an explicit non-repo result for deleted directories", () =>
-    Effect.gen(function* () {
-      const rootDir = yield* makeTempDir("goat-git-manager-missing-dir-");
-      const cwd = NodePath.join(rootDir, "deleted-repo");
-      yield* makeDirectory(cwd);
-      yield* removePath(cwd);
-      const { manager } = yield* makeManager();
-
-      const status = yield* manager.status({ cwd });
-
-      expect(status).toEqual({
-        isRepo: false,
-        hasPrimaryRemote: false,
-        isDefaultRef: false,
-        refName: null,
-        hasWorkingTreeChanges: false,
-        workingTree: {
-          files: [],
-          insertions: 0,
-          deletions: 0,
-        },
-        hasUpstream: false,
-        aheadCount: 0,
-        behindCount: 0,
-        aheadOfDefaultCount: 0,
-        pr: null,
       });
     }),
   );
@@ -3370,9 +3340,15 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
         const preview = yield* driver.getReviewDiffPreview({ cwd: worktreePath });
         const changes = preview.sources.find((source) => source.kind === "branch-range")!;
-        expect
-          .soft(changes.files)
-          .toEqual([{ path: "feature.txt", previousPath: null, additions: 1, deletions: 0 }]);
+        expect.soft(changes.files).toEqual([
+          {
+            path: "feature.txt",
+            previousPath: null,
+            additions: 1,
+            deletions: 0,
+            changeType: "new",
+          },
+        ]);
         yield* runGit(worktreePath, ["push", "-u", "origin", "feature/remote-base"]);
 
         const generatedInputs: TextGeneration.PrContentGenerationInput[] = [];

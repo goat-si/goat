@@ -13,6 +13,8 @@ import {
 } from "@goat/contracts";
 
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
+import { azureCliNeedsScope, scopeAzureCliArgs } from "./azureCliScope.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import { AzureCliInstallLocation } from "./azureCliLauncher.ts";
@@ -24,6 +26,7 @@ import {
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const AZURE_REMOTE_LIST_MAX_BYTES = 64 * 1024;
 
 const azureDevOpsCommandErrorFields = {
   operation: Schema.Literal("execute"),
@@ -221,6 +224,8 @@ export class AzureDevOpsCli extends Context.Service<
       readonly args: ReadonlyArray<string>;
       readonly timeoutMs?: number;
       readonly maxOutputBytes?: number;
+      readonly remoteUrl?: string;
+      readonly resolveRemoteScope?: boolean;
     }) => Effect.Effect<SourceControlHost.SourceControlProcessOutput, AzureDevOpsCliError>;
 
     readonly listPullRequests: (input: {
@@ -229,11 +234,13 @@ export class AzureDevOpsCli extends Context.Service<
       readonly source?: SourceControlProvider.SourceControlRefSelector;
       readonly state: "open" | "closed" | "merged" | "all";
       readonly limit?: number;
+      readonly remoteUrl?: string;
     }) => Effect.Effect<ReadonlyArray<NormalizedAzureDevOpsPullRequestRecord>, AzureDevOpsCliError>;
 
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
+      readonly remoteUrl?: string;
       readonly organization?: string;
       readonly project?: string;
     }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsCliError>;
@@ -241,6 +248,7 @@ export class AzureDevOpsCli extends Context.Service<
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly remoteUrl?: string;
     }) => Effect.Effect<AzureDevOpsRepositoryCloneUrls, AzureDevOpsCliError>;
 
     readonly createRepository: (input: {
@@ -257,6 +265,7 @@ export class AzureDevOpsCli extends Context.Service<
       readonly target?: SourceControlProvider.SourceControlRefSelector;
       readonly title: string;
       readonly bodyFile: string;
+      readonly remoteUrl?: string;
     }) => Effect.Effect<void, AzureDevOpsCliError>;
 
     readonly getDefaultBranch: (input: {
@@ -264,6 +273,7 @@ export class AzureDevOpsCli extends Context.Service<
       readonly repository: string;
       readonly project?: string;
       readonly organization?: string;
+      readonly remoteUrl?: string;
     }) => Effect.Effect<string | null, AzureDevOpsCliError>;
   }
 >()("@goat/source-control-azure-devops/server/AzureDevOpsCli") {}
@@ -404,39 +414,108 @@ export const azureCliInvocation = Effect.fn("AzureDevOpsCli.invocation")(functio
 
 /** @public */
 export const make = Effect.gen(function* () {
-  const { process } = yield* SourceControlHost.SourceControlHost;
+  const { process, git } = yield* SourceControlHost.SourceControlHost;
   const invocation = yield* azureCliInvocation();
 
-  const execute: AzureDevOpsCli["Service"]["execute"] = (input) =>
-    process
-      .run({
-        operation: "AzureDevOpsCli.execute",
-        command: invocation.command,
-        args: [...invocation.args, ...input.args],
-        cwd: input.cwd,
-        ...(invocation.env === undefined ? {} : { env: invocation.env }),
-        classifyFailure: classifyAzFailure,
-        notFoundDetail: "Pull request not found.",
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
-      })
-      .pipe(
-        Effect.mapError((error) =>
-          AzureDevOpsCommandFailedError.fromVcsError(
-            {
-              operation: "execute",
-              command: "az",
-              cwd: input.cwd,
-              argumentCount: input.args.length,
-            },
-            error,
+  const execute: AzureDevOpsCli["Service"]["execute"] = Effect.fn("AzureDevOpsCli.execute")(
+    function* (input) {
+      let remoteUrl = input.remoteUrl ?? null;
+      if (
+        input.resolveRemoteScope === true &&
+        azureCliNeedsScope(input.args) &&
+        input.remoteUrl === undefined
+      ) {
+        const remotes = yield* git
+          .execute({
+            operation: "AzureDevOpsCli.resolveScope",
+            cwd: input.cwd,
+            args: ["remote"],
+            maxOutputBytes: AZURE_REMOTE_LIST_MAX_BYTES,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new AzureDevOpsCommandFailedError({
+                  operation: "execute",
+                  command: "az",
+                  cwd: input.cwd,
+                  argumentCount: input.args.length,
+                  cause,
+                }),
+            ),
+          );
+        if (remotes.stdoutTruncated)
+          return yield* new AzureDevOpsCommandFailedError({
+            operation: "execute",
+            command: "az",
+            cwd: input.cwd,
+            argumentCount: input.args.length,
+            cause: "Git remote output was truncated.",
+          });
+        if (remotes.stdout.trim()) {
+          const name = yield* git.resolvePrimaryRemoteName(input.cwd).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AzureDevOpsCommandFailedError({
+                  operation: "execute",
+                  command: "az",
+                  cwd: input.cwd,
+                  argumentCount: input.args.length,
+                  cause,
+                }),
+            ),
+          );
+          remoteUrl = yield* readFirstFetchUrl(git, input.cwd, name).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AzureDevOpsCommandFailedError({
+                  operation: "execute",
+                  command: "az",
+                  cwd: input.cwd,
+                  argumentCount: input.args.length,
+                  cause,
+                }),
+            ),
+          );
+        }
+      }
+      return yield* process
+        .run({
+          operation: "AzureDevOpsCli.execute",
+          command: invocation.command,
+          args: [
+            ...invocation.args,
+            ...(input.resolveRemoteScope === true
+              ? scopeAzureCliArgs(input.args, remoteUrl, input.remoteUrl !== undefined)
+              : input.args),
+          ],
+          cwd: input.cwd,
+          ...(invocation.env === undefined ? {} : { env: invocation.env }),
+          classifyFailure: classifyAzFailure,
+          notFoundDetail: "Pull request not found.",
+          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            AzureDevOpsCommandFailedError.fromVcsError(
+              {
+                operation: "execute",
+                command: "az",
+                cwd: input.cwd,
+                argumentCount: input.args.length,
+              },
+              error,
+            ),
           ),
-        ),
-      );
+        );
+    },
+  );
 
   const executeJson = (input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0]) =>
     execute({
       ...input,
+      resolveRemoteScope: true,
       args: [...input.args, "--only-show-errors", "--output", "json"],
     });
 
@@ -450,6 +529,7 @@ export const make = Effect.gen(function* () {
         "";
       return executeJson({
         cwd: input.cwd,
+        ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
         args: [
           "repos",
           "pr",
@@ -492,6 +572,7 @@ export const make = Effect.gen(function* () {
     getPullRequest: Effect.fn("AzureDevOpsCli.getPullRequest")(function (input) {
       return executeJson({
         cwd: input.cwd,
+        ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
         args: [
           "repos",
           "pr",
@@ -530,6 +611,7 @@ export const make = Effect.gen(function* () {
       const repository = parseRepositorySpecifier(input.repository);
       return executeJson({
         cwd: input.cwd,
+        ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
         args: [
           "repos",
           "show",
@@ -577,6 +659,8 @@ export const make = Effect.gen(function* () {
     createPullRequest: Effect.fn("AzureDevOpsCli.createPullRequest")(function (input) {
       return execute({
         cwd: input.cwd,
+        resolveRemoteScope: true,
+        ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
         args: [
           "repos",
           "pr",
@@ -609,6 +693,7 @@ export const make = Effect.gen(function* () {
       }
       return executeJson({
         cwd: input.cwd,
+        ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
         args: [
           "repos",
           "show",
