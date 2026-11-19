@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react";
 import { SettingsGroup } from "./SettingsGroup";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { usePrimaryEnvironmentId, usePrimaryEnvironment } from "../../state/environments";
@@ -6,7 +7,6 @@ import { InfoIcon, UndoIcon as Undo2Icon } from "~/components/solar";
 import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { useGT } from "gt-react";
 import { createContext, type ComponentPropsWithoutRef, type ReactNode, useContext } from "react";
 
 import {
@@ -322,6 +322,7 @@ export function SettingsRow({
   children?: ReactNode;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const targetRef = useSettingsSearchTarget<HTMLDivElement>(rowProps.id);
   const primarySettingsAvailable = usePrimarySettingsAvailable();
   const context = useOptionalSettingsScope();
@@ -354,8 +355,8 @@ export function SettingsRow({
     source === "environment" && context?.scope.environmentIds.length === 1
       ? (context.environments.find(
           (environment) => environment.environmentId === context.scope.environmentIds[0],
-        )?.label ?? "environment")
-      : "environment";
+        )?.label ?? gt("environment"))
+      : gt("environment");
   const environmentSettingsById = new Map(
     (context?.connectedEnvironments ?? []).flatMap((environment) =>
       environment.serverConfig
@@ -368,7 +369,7 @@ export function SettingsRow({
     unavailable || environmentWide ? null : isProjectScope && scopedKeys.length > 0 ? (
       source === "project" || source === "mixed" ? (
         <SettingResetButton
-          label={typeof title === "string" ? title : "override"}
+          label={typeof title === "string" ? title : gt("override")}
           tooltip={gt("Reset to inherited value")}
           onClick={() => (onResetOverride ? onResetOverride() : clearOverrides(scopedKeys))}
         />
@@ -400,20 +401,20 @@ export function SettingsRow({
     unavailable && control
       ? inertControl(
           !canWriteSettings
-            ? `This connection lacks permission to change settings on ${
-                context
+            ? gt("This connection lacks permission to change settings on {environment}.", {
+                environment: context
                   ? context.connectedEnvironments
                       .filter((target) => !writableIds.has(target.environmentId))
                       .map((target) => target.label)
-                      .join(", ") || "the selected environment"
-                  : (primaryEnvironment?.label ?? "the primary environment")
-              }.`
+                      .join(", ") || gt("the selected environment")
+                  : (primaryEnvironment?.label ?? gt("the primary environment")),
+              })
             : context
-              ? "Reconnect the selected environment to change this setting."
-              : PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
+              ? gt("Reconnect the selected environment to change this setting.")
+              : m(PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE),
         )
       : environmentWide && control
-        ? inertControl("Environment-wide setting. Select an environment to change it.")
+        ? inertControl(gt("Environment-wide setting. Select an environment to change it."))
         : control;
   const customized =
     context !== null &&
@@ -427,19 +428,24 @@ export function SettingsRow({
       }),
     );
   const inheritance: { state: SettingInheritanceState; summary: string } = mixed
-    ? { state: "mixed", summary: "Mixed across selected environments" }
+    ? { state: "mixed", summary: gt("Mixed across selected environments") }
     : source === "project"
-      ? { state: "overridden", summary: "Overridden for this project" }
+      ? { state: "overridden", summary: gt("Overridden for this project") }
       : source === "t3.json"
         ? {
             state: "inherited",
-            summary: `Inherited from the repository's ${context?.target?.projectFileName ?? "goat.json"}`,
+            summary: gt("Inherited from the repository’s {file}", {
+              file: context?.target?.projectFileName ?? "goat.json",
+            }),
           }
         : source === "environment" && scopedKeys.length > 0
-          ? { state: "inherited", summary: `Inherited from ${inheritedFrom}` }
+          ? {
+              state: "inherited",
+              summary: gt("Inherited from {environment}", { environment: inheritedFrom }),
+            }
           : customized
-            ? { state: "environment", summary: "Set on the environment" }
-            : { state: "default", summary: "Built-in default" };
+            ? { state: "environment", summary: gt("Set on the environment") }
+            : { state: "default", summary: gt("Built-in default") };
   const renderedInheritance =
     context && serverScoped && settingKeys.length > 0 ? (
       <SettingInheritance

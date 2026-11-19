@@ -10,7 +10,7 @@ export interface SettingsNavGroup {
 /** Diagnostics stays out of the sidebar; General links to it. */
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
-    label: "App",
+    label: msg("App"),
     paths: [
       "/settings/general",
       "/settings/appearance",
@@ -29,15 +29,15 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
-    label: "Projects & threads",
+    label: msg("Projects & threads"),
     paths: ["/settings/projects", "/settings/storage", "/settings/archived"],
   },
   {
-    label: "Automations",
+    label: msg("Automations"),
     paths: ["/settings/goat-bot", "/settings/decision-inbox", "/settings/scheduled-tasks"],
   },
   {
-    label: "Machines",
+    label: msg("Machines"),
     paths: ["/settings/hub", "/settings/connections"],
   },
 ];
@@ -59,7 +59,7 @@ export interface SettingsPageLead {
  */
 export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, SettingsPageLead>>> = {
   "/settings/general": {
-    text: "Defaults for new threads, notifications, updates, and how GOAT behaves day to day.",
+    text: msg("Defaults for new threads, notifications, updates, and how GOAT behaves day to day."),
   },
   "/settings/appearance": { text: "Theme, fonts, and layout of this app on this device." },
   "/settings/keybindings": { text: "Keyboard shortcuts for this app." },

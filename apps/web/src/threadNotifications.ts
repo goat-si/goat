@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
 
@@ -6,10 +7,10 @@ import inputUrl from "./assets/notification-input.mp3";
 
 type NotificationMode = ClientSettings["notificationMode"];
 export const NOTIFICATION_MODE_LABELS = {
-  off: "Off",
-  notifications: "Notifications only",
-  sound: "Sound only",
-  "notifications-and-sound": "Notifications with sound",
+  off: msg("Off"),
+  notifications: msg("Notifications only"),
+  sound: msg("Sound only"),
+  "notifications-and-sound": msg("Notifications with sound"),
 } satisfies Record<NotificationMode, string>;
 
 export function hasNotificationSound(mode: NotificationMode) {

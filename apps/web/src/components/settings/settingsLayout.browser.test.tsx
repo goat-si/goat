@@ -26,6 +26,6 @@ it("names the Reset button in the interface language", async () => {
   await persistClientSettingsPatch({ language: "ko" }, async () => {});
 
   await expect
-    .element(screen.getByRole("button", { name: "언어 기본값으로 재설정" }))
+    .element(screen.getByRole("button", { name: "언어 기본값 복원" }))
     .toBeInTheDocument();
 });

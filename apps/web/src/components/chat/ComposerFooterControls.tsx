@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react";
 import type {
   ModelSelection,
   ProviderInstanceId,
@@ -35,6 +36,8 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
+  const m = useMessages();
+  const gt = useGT();
   const size = props.size ?? "sm";
   const composerFloatingLayerProps = useComposerMenuProps();
   const [open, setOpen] = useComposerMenuState(props.hidden);
@@ -97,7 +100,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
               <ComposerSelectControl
                 data-composer-shortcut="composer.mode"
                 size={size}
-                aria-label="Runtime mode"
+                aria-label={gt("Runtime mode")}
                 showChevron={false}
                 className={cn(
                   isFullAccess && "text-warning-foreground hover:text-warning-foreground",
@@ -110,7 +113,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
               size={size}
               className={isFullAccess ? "text-current" : undefined}
             />
-            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
+            <SelectValue data-composer-control-label>{m(runtimeModeOption.label)}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
             {props.runtimeModeOptions.map((option) => {
@@ -126,10 +129,10 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
                     <div className="grid min-w-0 flex-1 gap-0.5">
                       <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
                         <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
+                        {m(option.label)}
                       </span>
                       <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
+                        {m(option.description)}
                       </span>
                     </div>
                   </div>
@@ -138,7 +141,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
             })}
           </SelectPopup>
         </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+        <TooltipPopup side="top">{m(runtimeModeOption.description)}</TooltipPopup>
       </Tooltip>
 
       {interactionModeToggle}

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useRef } from "react";
 
 import { APP_VERSION } from "../../branding";
@@ -8,6 +9,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function AboutVersionTitle() {
+  const gt = useGT();
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const { copyToClipboard } = useCopyToClipboard<void>({
     target: "version",
@@ -16,7 +18,7 @@ export function AboutVersionTitle() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not copy version",
+          title: gt("Could not copy version"),
           description: error.message,
         }),
       );
@@ -25,7 +27,7 @@ export function AboutVersionTitle() {
 
   return (
     <span className="inline-flex items-baseline gap-2">
-      <span>Version</span>
+      <span>{gt("Version")}</span>
       <code className="text-2xs font-medium">
         <Tooltip>
           <TooltipTrigger
@@ -40,7 +42,7 @@ export function AboutVersionTitle() {
               </InlineButton>
             }
           />
-          <TooltipPopup>Copy version</TooltipPopup>
+          <TooltipPopup>{gt("Copy version")}</TooltipPopup>
         </Tooltip>
       </code>
     </span>
