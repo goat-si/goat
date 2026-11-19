@@ -2,6 +2,7 @@ import { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
 export { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
 import { REMOTE_WAIT_READY_SCRIPT } from "./remoteWaitReadyScript.ts";
 import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
+import { REMOTE_HOME_OWNER_WAIT, REMOTE_HOME_OWNER_WAIT_SECONDS } from "./remoteHomeOwnerWait.ts";
 import {
   EXACT_ARCHIVE_VERSION,
   SshInvalidArchiveVersionError,
@@ -37,6 +38,7 @@ import {
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
   SERVER_EXIT_CODE_DATABASE_AHEAD,
+  SERVER_EXIT_CODE_STATE_DIR_OWNED,
 } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { describeReadinessCause } from "@goat/shared/httpReadiness";
@@ -202,7 +204,7 @@ const APP_SERVER_REFUSAL_MS = 600_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
-const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
+const REMOTE_LAUNCH_TIMEOUT_MS = 90_000 + 3 * REMOTE_HOME_OWNER_WAIT_SECONDS * 1_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;
@@ -666,9 +668,14 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
-@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  recheck_selected_before_use
+@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  wait_for_home_owner
+  recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
-    printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
+    if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" = 1 ]; then
+      reuse_live_server
+      break
+    fi
+    printf 'A server appeared before launch but is not compatible; reconnect without replacing it.\\n' >&2; exit 1
   fi
   if database_ahead_marked; then database_ahead_exit; fi
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
@@ -721,6 +728,40 @@ while [ -z "$REMOTE_PORT" ]; do
     if ! launch_server_alive "$REMOTE_PID"; then
       launch_exit=0
       if [ "$GOAT_HOST_WINDOWS" = 0 ]; then wait "$REMOTE_PID" 2>/dev/null || launch_exit=$?; fi
+      if [ "$launch_exit" = ${SERVER_EXIT_CODE_STATE_DIR_OWNED} ] ||
+         { [ "$GOAT_HOST_WINDOWS" = 1 ] && tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | grep -q 'Another GOAT server is using '; }; then
+        if fact_file_is "$PID_FILE" "$REMOTE_PID" && fact_file_is "$PORT_FILE" "$REMOTE_PORT" &&
+           fact_file_is "$MANAGED_FILE" managed &&
+           fact_file_is "$STATE_DIR/identity" "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"; then
+          rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+        fi
+        successor_waited=0
+        successor_deadline=$(($(date +%s) + HOME_OWNER_WAIT_LIMIT))
+        while [ "$successor_waited" -lt "$HOME_OWNER_WAIT_LIMIT" ] && [ "$(date +%s)" -lt "$successor_deadline" ]; do
+          successor_owner="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper home-owned "$DEFAULT_SERVER_HOME" 2>/dev/null)" || :
+          if [ "$successor_owner" = inspection-error ]; then
+            printf 'Cannot inspect GOAT home ownership; no second server was started.\\n' >&2; exit 1
+          fi
+          if [ "$successor_owner" != updating ] && successor="$(live_fact "$RUNNER_CANDIDATE_FILE.pin" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
+            case "$successor" in
+              'live '*)
+                recheck_selected_before_use
+                if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" = 1 ]; then
+                  reuse_live_server
+                  break 2
+                fi ;;
+            esac
+          fi
+          successor_waited=$((successor_waited + 1))
+          sleep 1
+        done
+        if [ "$successor_owner" = updating ]; then
+          printf 'Remote GOAT is updating; retry after the update finishes.\\n' >&2
+        else
+          printf 'Another GOAT server owns this home but did not become ready; reconnect after it starts.\\n' >&2
+        fi
+        exit 1
+      fi
       # Windows launches and runtimes that predate the exit code only leave these errors in the log.
       if [ "$launch_exit" = ${SERVER_EXIT_CODE_DATABASE_AHEAD} ] ||
          tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null |
@@ -806,6 +847,8 @@ function buildRemoteRunnerSetupScript(
 ): string {
   const preserve = selection.source === "retained";
   return applyScriptPlaceholders(withForcedReplacement(REMOTE_RUNNER_SETUP_SCRIPT, input), {
+    GOAT_HOME_OWNER_WAIT: verifyOwnedBeforePublication ? REMOTE_HOME_OWNER_WAIT : "",
+    GOAT_HOME_OWNER_WAIT_CALL: verifyOwnedBeforePublication ? "wait_for_home_owner\n" : "",
     GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
     GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
     GOAT_DRAIN_AUTOMATIC:

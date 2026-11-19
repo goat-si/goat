@@ -326,6 +326,43 @@ it.effect.each([
 );
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self update", (it) => {
+  it.effect("records the launcher identity before completing an accepted handoff", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* makeHarness();
+      const baseDir = path.dirname(path.dirname(h.journal));
+      const marker = path.join(baseDir, "runtime", "service-update-handoff.json");
+      let value: unknown;
+      const result = yield* h.selfUpdate.update({ targetVersion: "1.1.0" }, undefined, () =>
+        fs.readFileString(marker).pipe(
+          Effect.orDie,
+          Effect.map((contents) => {
+            value = JSON.parse(contents);
+          }),
+        ),
+      );
+      expect(value).toMatchObject({ generation: result.updateId, launcherPid: process.ppid });
+    }),
+  );
+  it.effect("continues the accepted handoff if the marker cannot be written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* makeHarness();
+      const baseDir = path.dirname(path.dirname(h.journal));
+      const next = path.join(baseDir, "runtime", `service-update-handoff.json.${process.pid}.next`);
+      yield* fs.makeDirectory(next, { recursive: true });
+      let handoffCalled = false;
+      const result = yield* h.selfUpdate.update({ targetVersion: "1.1.0" }, undefined, () =>
+        Effect.sync(() => {
+          handoffCalled = true;
+        }),
+      );
+      expect(result.updateId).toBe("launcher-id");
+      expect(handoffCalled).toBe(true);
+    }),
+  );
   it.effect.each([
     { asset: "checksums", status: 504 },
     { asset: "archive", status: 503 },
