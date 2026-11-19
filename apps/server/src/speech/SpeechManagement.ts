@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { getSpeechModel, SPEECH_MODELS } from "./model.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
@@ -22,6 +23,11 @@ export class SpeechManagement extends Context.Service<
   SpeechManagement,
   {
     readonly configuration: Effect.Effect<SpeechConfiguration, SpeechManagementError>;
+    readonly configurationChanges: Effect.Effect<
+      Stream.Stream<SpeechConfiguration>,
+      never,
+      Scope.Scope
+    >;
     readonly list: Effect.Effect<
       ReadonlyArray<{
         id: string;
@@ -44,13 +50,9 @@ export class SpeechManagement extends Context.Service<
       audio: ValidatedVoiceWav,
       language?: string,
     ) => Effect.Effect<string, SpeechManagementError>;
-    readonly startStream: (
-      language?: string,
-    ) => Effect.Effect<
+    readonly startStream: (language?: string) => Effect.Effect<
       {
-        readonly feed: (
-          pcm: Float32Array,
-        ) => Effect.Effect<
+        readonly feed: (pcm: Float32Array) => Effect.Effect<
           {
             readonly revision: number;
             readonly text: { readonly committed: string; readonly tentative: string } | null;
@@ -90,6 +92,9 @@ const make = Effect.gen(function* () {
     configuration: settings.getSettings.pipe(
       Effect.map((current) => current.speech),
       Effect.mapError((error) => failure("configuration", error)),
+    ),
+    configurationChanges: Effect.suspend(() => settings.subscribeChanges).pipe(
+      Effect.map(Stream.map((settings) => settings.speech)),
     ),
     list: Effect.gen(function* () {
       const current = yield* settings.getSettings;
