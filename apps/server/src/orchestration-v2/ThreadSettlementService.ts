@@ -41,6 +41,7 @@ import { sourceControlDefinitions } from "../sourceControl/sourceControlDefiniti
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { QUIET_AFTER_MS, QUIET_SYNC_INTERVAL_MS } from "./PullRequestSyncReactor.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
 import {
@@ -52,6 +53,7 @@ export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
+  readonly updatedAt?: string | null | undefined;
 }
 
 const PULL_REQUEST_RECHECK_MS = 2 * 60 * 1_000;
@@ -337,6 +339,7 @@ export const make = Effect.gen(function* () {
   const lookupCache = new Map<string, { value: SettlementPullRequest | null; expiresAt: number }>();
   const lookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
   let mergeGeneration = 0;
+  let quietPausedAtMs = Number.NEGATIVE_INFINITY;
 
   // Untraced: a parent's settle can release many native children and the sweep's span covers them.
   const settleNativeChild = Effect.fnUntraced(
@@ -370,6 +373,7 @@ export const make = Effect.gen(function* () {
   ) {
     if ((yield* automationHold.current) !== null) return;
     if (mergedPullRequest !== null || (refreshLookups && threadId === undefined)) {
+      quietPausedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
       mergeGeneration++;
       lookupCache.clear();
     }
@@ -647,6 +651,7 @@ export const make = Effect.gen(function* () {
         if (!matchesMerge && !projects.has(reference.projectId)) {
           return yield* Effect.die(new Error("linked pull request project not found"));
         }
+        const shellClosed = group.some((member) => shellClosedThreads.delete(member.id));
         const summary = matchesMerge
           ? ({
               state: "merged",
@@ -659,12 +664,13 @@ export const make = Effect.gen(function* () {
                 repository: reference.repository,
                 number: reference.number,
               },
-              { recoverTransientFailure: false },
+              { recoverTransientFailure: false, bypassCache: shellClosed || refreshLookups },
             );
         const terminal = {
           state: summary.state,
           closedAt: summary.closedAt ?? null,
           mergedAt: summary.mergedAt ?? null,
+          ...("updatedAt" in summary ? { updatedAt: summary.updatedAt } : {}),
         } satisfies SettlementPullRequest;
         const cwd = lookupCwdByThreadId.get(thread.id);
         if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
@@ -729,7 +735,13 @@ export const make = Effect.gen(function* () {
               expiresAt:
                 cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
                   ? cached.expiresAt
-                  : DateTime.toEpochMillis(yield* DateTime.now) + PULL_REQUEST_RECHECK_MS,
+                  : DateTime.toEpochMillis(yield* DateTime.now) +
+                    (pullRequest?.state === "open" &&
+                    typeof pullRequest.updatedAt === "string" &&
+                    nowMs - Date.parse(pullRequest.updatedAt) >= QUIET_AFTER_MS &&
+                    nowMs - quietPausedAtMs >= QUIET_SYNC_INTERVAL_MS
+                      ? QUIET_SYNC_INTERVAL_MS
+                      : PULL_REQUEST_RECHECK_MS),
             });
           }
           if (pullRequest === undefined) return;
@@ -947,6 +959,17 @@ export const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(Stream.runForEach(mergedPullRequests, (event) => runSweep(event)));
+    yield* forkParked(
+      Stream.runForEach(pullRequests.subscribeRefreshes, () =>
+        Effect.gen(function* () {
+          quietPausedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
+          mergeGeneration++;
+          lookupCache.clear();
+          evaluated.clear();
+          yield* admission.enqueueImmediate;
+        }),
+      ),
+    );
     yield* forkParked(
       supervise("ThreadSettlementService.events", () =>
         Effect.gen(function* () {

@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, RunId } from "@goat/contracts";
+import { EventId, RunId, SourceControlProviderKind } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -154,5 +154,94 @@ export function settlementCadenceTests({
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
+  );
+  it.effect("quiet open pull requests are read every five minutes", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(NOW));
+      const thread = makeThread("quiet-pr", {
+        branch: "feature",
+        branchPullRequest: {
+          projectId: makeThread("project").projectId,
+          repository: "owner/repository",
+          number: 42,
+          url: "https://example.test/owner/repository/pull/42",
+        },
+      });
+      const fixture = yield* makeHarness({
+        snapshot: makeSnapshot([thread]),
+        pullRequestSummary: (input) =>
+          Effect.succeed({
+            ...input,
+            provider: SourceControlProviderKind.make("github"),
+            title: "Pull request",
+            url: "https://example.test/owner/repository/pull/42",
+            state: "open" as const,
+            headBranch: "feature",
+            baseBranch: "main",
+            updatedAt: DateTime.formatIso(DateTime.makeUnsafe(Date.parse(NOW) - 2 * DAY_MS)),
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+        yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+        assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+        for (let minute = 1; minute <= 4; minute++) {
+          yield* TestClock.adjust("1 minute");
+          yield* Queue.take(fixture.snapshotReads);
+          yield* service.drain;
+        }
+        assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+        yield* TestClock.adjust("1 minute");
+        yield* Queue.take(fixture.snapshotReads);
+        yield* service.drain;
+        yield* TestClock.adjust("1 minute");
+        yield* Queue.take(fixture.snapshotReads);
+        yield* service.drain;
+        assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+      }).pipe(Effect.provide(fixture.layer));
+    }),
+  );
+
+  it.effect("a PR refresh immediately rereads a quiet open pull request", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(NOW));
+      const readAgain = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const thread = makeThread("quiet-refresh", {
+        branch: "feature",
+        branchPullRequest: {
+          projectId: makeThread("project").projectId,
+          repository: "owner/repository",
+          number: 42,
+          url: "https://example.test/owner/repository/pull/42",
+        },
+      });
+      const fixture = yield* makeHarness({
+        snapshot: makeSnapshot([thread]),
+        pullRequestSummary: Effect.fn("cadenceTest.refreshSummary")(function* (input) {
+          const count = yield* Ref.updateAndGet(calls, (value) => value + 1);
+          if (count === 2) yield* Deferred.succeed(readAgain, undefined);
+          return {
+            ...input,
+            provider: SourceControlProviderKind.make("github"),
+            title: "Pull request",
+            url: "https://example.test/owner/repository/pull/42",
+            state: "open" as const,
+            headBranch: "feature",
+            baseBranch: "main",
+            updatedAt: DateTime.formatIso(DateTime.makeUnsafe(Date.parse(NOW) - 2 * DAY_MS)),
+          };
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+        yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+        assert.strictEqual(yield* Ref.get(calls), 1);
+        yield* fixture.publishRefresh;
+        yield* Deferred.await(readAgain);
+        yield* service.drain;
+        assert.strictEqual(yield* Ref.get(calls), 2);
+      }).pipe(Effect.provide(fixture.layer));
+    }),
   );
 }
