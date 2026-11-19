@@ -284,6 +284,21 @@ it("shows unavailable audio when a workspace embed has no thread", async () => {
   expect(screen.container.querySelector("audio")).toBeNull();
 });
 
+it("sizes raw HTML images with pixel units", async () => {
+  setup();
+  const image = `${location.origin}/favicon-32x32.png`;
+  await using screen = await render(
+    <ChatMarkdown
+      cwd={undefined}
+      text={`Image <img src="${image}" alt="spinner" width="14px" height="7px" />`}
+    />,
+  );
+  const element = screen.getByAltText("spinner").element() as HTMLImageElement;
+  await element.decode();
+  const { width, height } = element.getBoundingClientRect();
+  expect({ width, height }).toEqual({ width: 14, height: 7 });
+});
+
 it("selects the picture source for the current theme", async () => {
   setup();
   const light = `${location.origin}/light.png`;
