@@ -155,6 +155,7 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
           ...prePenMemberMemoryNames
             .slice(count)
             .map((name, index) => [159 + count + index, name] as const),
+          [165, "MemorySuggestionQuota"],
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
