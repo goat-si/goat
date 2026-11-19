@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import { compactBeforeSendTokens } from "@goat/client-runtime/state/context-window";
 import { restoreAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import {
@@ -81,6 +82,7 @@ import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
+  uploadComposerAttachmentShared,
 } from "../state/composer-attachment-uploads";
 import {
   appendComposerDraftAttachments,
@@ -488,6 +490,10 @@ export function useThreadComposerState() {
         environmentId: thread.environmentId,
         attachments: draft.attachments,
         supportsImageUploads: capabilities?.attachmentUploads === true,
+        uploadAttachment: (attachment, signal) =>
+          Effect.runPromise(uploadComposerAttachmentShared(thread.environmentId, attachment), {
+            signal,
+          }),
       }),
     );
     if (AsyncResult.isFailure(prepared)) {

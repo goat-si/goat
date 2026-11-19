@@ -153,7 +153,20 @@ export function NewTaskFlowProvider(
   const setExpandedProvider = (expandedProvider: string | null) => updateFlow({ expandedProvider });
   const setEditingPendingTask = (editingPendingTask: QueuedThreadMessage | null) =>
     updateFlow({ editingPendingTask });
-  const selectedEnvironmentId = selectedEnvironmentIdOverride ?? projects[0]?.environmentId ?? null;
+  const draftStamp = useComposerDraft(activeDraftKey).project;
+  const stampedProject =
+    editingPendingTask || !draftStamp
+      ? undefined
+      : projects.find(
+          (project) =>
+            project.environmentId === draftStamp.environmentId &&
+            project.id === draftStamp.projectId,
+        );
+  const selectedEnvironmentId =
+    stampedProject?.environmentId ??
+    selectedEnvironmentIdOverride ??
+    projects[0]?.environmentId ??
+    null;
   const editor = useMemo(
     () => ({
       flowKey,
@@ -195,7 +208,8 @@ export function NewTaskFlowProvider(
   const selectedProject =
     routeFlow.pending || routeFlow.unopenableRouteDraft !== null
       ? null
-      : (projectsForEnvironment.find(
+      : (stampedProject ??
+        projectsForEnvironment.find(
           (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
         ) ??
         // Pin queued edits to their original project when its shell is missing; fallback would silently retarget them.
@@ -225,6 +239,7 @@ export function NewTaskFlowProvider(
       props.routeDraftId !== undefined ||
       props.routePendingTaskId !== undefined ||
       activeDraftKey !== null ||
+      readFlow().draftKey !== null ||
       editingPendingTask !== null ||
       selectedProject === null
     ) {
@@ -239,6 +254,7 @@ export function NewTaskFlowProvider(
   }, [
     activeDraftKey,
     editingPendingTask,
+    readFlow,
     selectedProject,
     props.active,
     props.routeDraftId,

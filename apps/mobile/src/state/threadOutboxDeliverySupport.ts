@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+import { uploadComposerAttachmentShared } from "./composer-attachment-uploads";
 import { uploadingComposerAttachmentKeys } from "../lib/composerAttachmentUploadQueue";
 import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import {
@@ -211,6 +213,10 @@ export async function prepareQueuedMessageAttachments(
     environmentId: queuedMessage.environmentId,
     attachments: queuedMessage.attachments,
     supportsImageUploads,
+    uploadAttachment: (attachment, signal) =>
+      Effect.runPromise(uploadComposerAttachmentShared(queuedMessage.environmentId, attachment), {
+        signal,
+      }),
     persistUploadedReferences: async (draftAttachments) => {
       if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
         return "abandon";

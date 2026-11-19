@@ -465,3 +465,32 @@ it("retains the project stamp and avoids another upload after outbox storage rel
   expect(afterRestart).toEqual([]);
   expect(native.transfer).toHaveBeenCalledOnce();
 });
+
+it("joins queued delivery to the in-flight draft upload and preserves its command on retry", async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  native.transfer.mockImplementation(async (uri, url) => {
+    started.resolve();
+    await release.promise;
+    native.server.set(url.split("/").at(-1)!, native.files.get(uri)!);
+    return { status: 204 };
+  });
+  const queue = worker();
+  await started.promise;
+  const message = queuedMessage();
+  await enqueueThreadOutboxMessage(message);
+  const preparing = prepareQueuedMessageAttachments(message, true);
+  release.resolve();
+  await preparing;
+  await queue.settled();
+  const [persisted] = flattenQueuedThreadMessages(
+    appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+  );
+  expect(persisted?.commandId).toBe(message.commandId);
+  expect(persisted?.attachments[0]?.uploadedAttachmentId).toBe("pending-1");
+  expect(native.transfer).toHaveBeenCalledTimes(1);
+  if (!persisted) throw new Error("Queued message missing");
+  const retry = await prepareQueuedMessageAttachments(persisted, true);
+  expect(retry.status).toBe("ready");
+  expect(native.transfer).toHaveBeenCalledTimes(1);
+});
