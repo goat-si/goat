@@ -137,8 +137,9 @@ interface WatchLife {
   readonly reads: number;
 }
 
-const lifeKey = ({ thread, link, watch }: WatchTarget) =>
-  `${threadPullRequestKeyOf(link)} ${thread.id} ${watch.startedAt}`;
+const lifeKeyOf = (threadId: string, link: ThreadPullRequestLink, watch: ThreadPullRequestWatch) =>
+  `${threadPullRequestKeyOf(link)} ${threadId} ${watch.startedAt}`;
+const lifeKey = ({ thread, link, watch }: WatchTarget) => lifeKeyOf(thread.id, link, watch);
 
 // Checkout access differs by project.
 const groupKeyOf = ({ thread, link }: WatchTarget) =>
@@ -157,6 +158,7 @@ const snapshotFingerprint = ({ link }: WatchTarget) => {
         snapshot.updatedAt,
         snapshot.checksState,
         snapshot.mergeability,
+        snapshot.rebaseRequired,
         snapshot.reviewDecision,
         snapshot.isDraft,
       ].join(" ");
@@ -189,7 +191,11 @@ function planRead(
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
   return {
-    detail: activity || checksDue || last.status !== fingerprint.status || last.inFlight,
+    detail:
+      activity ||
+      checksDue ||
+      last.status !== fingerprint.status ||
+      (last.inFlight && fingerprint.coversDetail !== true),
     activity,
   };
 }
@@ -211,6 +217,7 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarksThrough === right.remarksThrough &&
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
+    left.rebaseRequired === right.rebaseRequired &&
     left.mergeQueueRemovalId === right.mergeQueueRemovalId &&
     left.wakes === right.wakes &&
     left.awaitingBaseline === right.awaitingBaseline &&
@@ -642,24 +649,18 @@ export const make = Effect.gen(function* () {
       ],
       { concurrency: 2 },
     );
-    const read = Exit.isFailure(detailRead)
-      ? Exit.failCause(detailRead.cause)
-      : activityRead === null || detailRead.value.state !== "open"
-        ? Exit.succeed([detailRead.value, Option.none<PullRequestActivity>()] as const)
-        : Exit.isFailure(activityRead)
-          ? Exit.failCause(activityRead.cause)
-          : Exit.succeed([detailRead.value, Option.some(activityRead.value)] as const);
-    if (Exit.isFailure(read)) {
-      if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
+    if (Exit.isFailure(detailRead)) {
+      if (Cause.hasInterruptsOnly(detailRead.cause))
+        return yield* Effect.failCause(detailRead.cause);
       for (const { key } of reads) lastReads.delete(key);
-      const reason = providerFailureReason(read.cause);
+      const reason = providerFailureReason(detailRead.cause);
       if (reason === "rate-limited") return;
       if (reason === "failed") {
         for (const { key, target } of reads) {
           readFailures.delete(lifeKey(target));
           readRetryAt.set(key, now + SWEEP_MINUTES * 60_000);
         }
-        return yield* Effect.failCause(read.cause);
+        return yield* Effect.failCause(detailRead.cause);
       }
       const counts = group.targets.map((target) => {
         const count = (readFailures.get(lifeKey(target)) ?? 0) + 1;
@@ -676,13 +677,27 @@ export const make = Effect.gen(function* () {
       if (spent.length > 0 && (yield* eachTarget(group.key, spent, giveUp))) {
         for (const target of spent) readFailures.delete(lifeKey(target));
       }
-      return yield* Effect.failCause(read.cause);
+      return yield* Effect.failCause(detailRead.cause);
     }
     for (const { key, target } of reads) {
       readFailures.delete(lifeKey(target));
       readRetryAt.delete(key);
     }
-    const [detail, activity] = read.value;
+    const detail = detailRead.value;
+    if (activityRead !== null && Exit.isFailure(activityRead)) {
+      if (Cause.hasInterruptsOnly(activityRead.cause))
+        return yield* Effect.failCause(activityRead.cause);
+      threadTails.delete(group.key);
+      if (providerFailureReason(activityRead.cause) !== "rate-limited") {
+        yield* logFailure("pull request watch activity read failed", { pullRequest: group.key })(
+          activityRead.cause,
+        );
+      }
+    }
+    const activity =
+      activityRead !== null && Exit.isSuccess(activityRead)
+        ? Option.some(activityRead.value)
+        : Option.none<PullRequestActivity>();
     for (const target of group.targets) {
       const life = lifeOf(target);
       const headSha = detail.headSha ?? life.headSha;
@@ -725,7 +740,7 @@ export const make = Effect.gen(function* () {
     const remarksAt = threadTails.get(group.key)?.fetchedAt ?? now;
     for (const { key, last, snapshot } of reads) {
       lastReads.set(key, {
-        at: readActivity ? remarksAt : (last?.at ?? now),
+        at: readActivity && remarks !== null ? remarksAt : (last?.at ?? now),
         fingerprint: snapshot,
         inFlight,
         remarksComplete: readActivity ? remarks !== null : (last?.remarksComplete ?? false),
@@ -929,6 +944,21 @@ export const make = Effect.gen(function* () {
     "PullRequestWatchReactor.start",
   )(function* () {
     const feeds = yield* FiberMap.make<string>();
+    yield* forkParked(
+      Stream.runForEach(engine.streamDomainEvents, (event) => {
+        if (event.type !== "thread.pull-request-synced") return Effect.void;
+        const unread = visibleThreadPullRequests(event.payload.pullRequests ?? []).flatMap(
+          (link) =>
+            link.watch === undefined || lives.has(lifeKeyOf(event.threadId, link, link.watch))
+              ? []
+              : [threadPullRequestKeyOf(link)],
+        );
+        if (unread.length === 0) return Effect.void;
+        return hold.awaitRelease.pipe(
+          Effect.andThen(Effect.forEach(new Set(unread), readOnChange, { discard: true })),
+        );
+      }).pipe(Effect.catchCause(logFailure("pull request watch event stream failed", {}))),
+    );
     yield* forkParked(
       hold.awaitRelease.pipe(
         Effect.andThen(
