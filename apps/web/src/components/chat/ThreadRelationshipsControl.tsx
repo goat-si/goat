@@ -81,6 +81,7 @@ import { serverEnvironment } from "../../state/server";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  hasInstanceBadge,
 } from "../../providerInstances";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
 import {
@@ -200,6 +201,7 @@ interface LaunchedThreadRow {
 
 function LaunchedThreadGroup(props: {
   readonly rows: ReadonlyArray<LaunchedThreadRow>;
+  readonly anyInstanceBadge: boolean;
   readonly onOpenThread: (ref: ScopedThreadRef) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -235,7 +237,11 @@ function LaunchedThreadGroup(props: {
                     />
                   }
                 >
-                  <ThreadRelationshipIcon fallbackIcon={RocketIcon} status={row.status} />
+                  <ThreadRelationshipIcon
+                    anyInstanceBadge={props.anyInstanceBadge}
+                    fallbackIcon={RocketIcon}
+                    status={row.status}
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
                       {row.title}
@@ -360,6 +366,7 @@ export function ThreadRelationshipsPanel(props: {
         currentThread?.projectId ?? null,
       )
     : derivedProviderEntries;
+  const anyInstanceBadge = hasInstanceBadge(providerEntries);
   const projects = allProjects.filter((project) => project.environmentId === props.environmentId);
   const parentNativeStatus = parentProjection
     ? deriveProviderSubagentStatus(parentProjection)?.status
@@ -686,6 +693,7 @@ export function ThreadRelationshipsPanel(props: {
                   <RemoteLineageRow
                     key={row.remote.id}
                     agent={row.remote}
+                    anyInstanceBadge={anyInstanceBadge}
                     hosts={remoteHosts}
                     onOpen={(environmentId, threadId) =>
                       openScopedThread(scopeThreadRef(environmentId, threadId))
@@ -957,6 +965,7 @@ export function ThreadRelationshipsPanel(props: {
       <LaunchedThreadGroup
         key={`${scopedThreadKey(ref)}:launched`}
         rows={launchedRows}
+        anyInstanceBadge={anyInstanceBadge}
         onOpenThread={openScopedThread}
       />
     </ThreadDetailsSection>
