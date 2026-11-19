@@ -76,6 +76,9 @@ import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { ThreadListV2Duration } from "./thread-list-pane-clock";
 import {
+  TITLE_FAVICON_SIZE,
+  TITLE_FAVICON_OFFSET,
+  TITLE_TEXT_INSET,
   DONE_STATUS_LABEL,
   STATUS_LABEL_BY_STATUS,
   ThreadListV2RowOrigin,
@@ -88,12 +91,6 @@ import { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v
 export { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v2-section";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
-
-const TITLE_FAVICON_SIZE = 15;
-// Centers the favicon on the first line of the text-base title.
-const TITLE_FAVICON_OFFSET = 4;
-// Lines below the title start where the title text does.
-const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;
 
 type ThreadListV2ShelfHeaderProps = {
   readonly count: number;

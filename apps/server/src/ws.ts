@@ -1,3 +1,4 @@
+import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
 import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
@@ -483,13 +484,6 @@ export const enqueuePublicOrchestrationCommand = <A, E>(
   RpcAuthorization.rejectPublicMemoryGrantCeiling(input).pipe(
     Effect.andThen(Effect.suspend(() => startup.enqueueCommand(work))),
   );
-
-function shouldUseBoundedThreadSnapshot(input: {
-  readonly acceptBoundedSnapshot?: boolean;
-  readonly acceptDeferredWork?: boolean;
-}): boolean {
-  return input.acceptBoundedSnapshot === true;
-}
 
 function readClientConnectionOrigin(
   request: HttpServerRequest.HttpServerRequest,

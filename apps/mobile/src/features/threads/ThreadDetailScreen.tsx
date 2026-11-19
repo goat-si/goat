@@ -1,3 +1,4 @@
+import { RECONNECT_ERROR_DELAY_MS } from "./threadDetailTiming";
 import { USER_INPUT_TOGGLE_TIMING } from "./threadDetailMotion";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { CloudTaskStatus } from "./CloudTaskStatus";
@@ -165,8 +166,6 @@ import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
 import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
-// Connection failures survive retries and app suspension.
-const RECONNECT_ERROR_DELAY_MS = 5_000;
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
