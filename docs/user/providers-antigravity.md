@@ -143,6 +143,10 @@ Before removing a managed runtime, disable its instances and cancel any active
 installation. Clear any explicit binary path pointing into that runtime. Removal
 is refused while the runtime is in use.
 
+Use `/compact` to summarize a long conversation when your Antigravity runtime
+advertises the command. If it is unavailable, update Antigravity in provider settings
+or send `/clear` when you need a fresh context.
+
 ## Run a native goal
 
 When your Antigravity runtime offers `/goal`, send `/goal` followed by a verifiable
