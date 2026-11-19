@@ -1,3 +1,4 @@
+import type { ModelInfo as ClaudeModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import {
   type CustomModelSetting,
   type ModelCapabilities,
@@ -31,6 +32,7 @@ export interface ClaudeCatalogModel {
   readonly model: ServerProviderModel;
   readonly runtime: ClaudeCodeProfile;
   readonly compatibility: ClaudeCodeCompatibility;
+  readonly apiModel?: string;
 }
 
 export interface ClaudeModelCatalog {
@@ -160,7 +162,7 @@ export function scopeClaudeModelCatalog(
   return { models: [...builtInModels, ...customCatalogModels] };
 }
 
-function resolveClaudeCatalogModel(
+export function resolveClaudeCatalogModel(
   catalog: ClaudeModelCatalog,
   slugOrAlias: string | null | undefined,
 ): ClaudeCatalogModel | undefined {
@@ -172,6 +174,32 @@ function resolveClaudeCatalogModel(
       entry.model.aliases?.some((alias) => alias.toLowerCase() === value.toLowerCase()),
     )
   );
+}
+
+/** Match Claude Code's Bedrock and Vertex routes back to canonical composer models. */
+export function withClaudeCodeModelRoutes(
+  catalog: ClaudeModelCatalog,
+  reportedModels: ReadonlyArray<Pick<ClaudeModelInfo, "value" | "resolvedModel">>,
+): ClaudeModelCatalog {
+  const apiModels = new Map<string, string>();
+  for (const { value, resolvedModel } of reportedModels) {
+    if (value === "default") continue;
+    const wireModel = (resolvedModel ?? value).replace(/\[1m\]$/i, "");
+    const firstPartyId = wireModel
+      .replace(/^(?:[a-z-]+\.)?anthropic\./, "")
+      .replace(/-v\d+(?::\d+)?$/, "")
+      .replace(/@[^@]*$/, "");
+    if (firstPartyId === wireModel) continue;
+    const slug = resolveClaudeReportedModelSlug(catalog, firstPartyId);
+    if (!apiModels.has(slug)) apiModels.set(slug, value.replace(/\[1m\]$/i, ""));
+  }
+  if (!catalog.models.some(({ model }) => apiModels.has(model.slug))) return catalog;
+  return {
+    models: catalog.models.map((entry) => {
+      const apiModel = apiModels.get(entry.model.slug);
+      return apiModel ? { ...entry, apiModel } : entry;
+    }),
+  };
 }
 
 export function resolveClaudeModelSlug(catalog: ClaudeModelCatalog, slugOrAlias: string): string {
@@ -443,7 +471,7 @@ export function resolveClaudeCatalogApiModelId(
   modelSelection: ModelSelection,
 ): string {
   const entry = resolveClaudeCatalogModel(catalog, modelSelection.model);
-  const slug = entry?.model.slug ?? modelSelection.model;
+  const slug = entry?.apiModel ?? entry?.model.slug ?? modelSelection.model;
   const descriptors = getProviderOptionDescriptors({
     caps: entry?.model.capabilities ?? EMPTY_CAPABILITIES,
     selections: modelSelection.options,

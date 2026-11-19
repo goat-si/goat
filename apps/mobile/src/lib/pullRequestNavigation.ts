@@ -1,3 +1,4 @@
+import { parsePullRequestAnchor } from "@goat/shared/pullRequestAnchor";
 import {
   resolveChangeRequestLinkTarget,
   type ChangeRequestLinkCapabilities,
@@ -27,6 +28,7 @@ export function nativePullRequestDestination(
     projectId: String(target.project.id),
     repository: target.repository,
     number: target.number,
+    ...(parsePullRequestAnchor(url) ? { navigationUrl: url } : {}),
     ...(target.host === undefined ? {} : { host: target.host }),
   };
 }

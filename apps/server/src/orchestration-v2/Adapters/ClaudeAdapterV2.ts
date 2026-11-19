@@ -1,4 +1,9 @@
 import * as FiberMap from "effect/FiberMap";
+import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
+import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
+import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
+import { providerFailureFromResult, terminalStatusFromResult } from "./ClaudeResultFailure.ts";
+import { claudeLocalSettingsDirectory } from "../../provider/Drivers/ClaudeHome.ts";
 import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
 import {
   classifyClaudeNativeTool,
@@ -647,7 +652,7 @@ export function makeClaudeQueryOptions(input: {
         } as ClaudeSdkSettings);
   const flagEnvironment = claudeQueryFlagEnvironment({
     environment: input.flagEnvironment,
-    model: compiledSelection.apiModelId,
+    pinnedAlias: compiledSelection.pinnedAlias,
     autoCompactWindow,
     toolSearchOverride: input.toolSearchOverride,
   });
@@ -1826,90 +1831,6 @@ const awaitClaudeUserInputAnswers = Effect.fn("awaitClaudeUserInputAnswers")(fun
   return yield* Effect.raceFirst(Deferred.await(answers), cancellation);
 });
 
-/** Exclude CLI-internal "[ede_diagnostic] ..." telemetry from error banners. */
-function resultUserFacingError(result: SDKResultMessage): string | undefined {
-  const errors = "errors" in result && Array.isArray(result.errors) ? result.errors : [];
-  if (result.subtype === "success" && !result.is_error) {
-    return undefined;
-  }
-  return errors.find(
-    (error): error is string => typeof error === "string" && !error.startsWith("[ede_diagnostic]"),
-  );
-}
-
-const CONTEXT_WINDOW_FULL_ERROR =
-  "Claude stopped: the prompt exceeds the model's context window. Run /compact or start a new thread.";
-
-function terminalResultError(
-  reason: SDKResultMessage["terminal_reason"],
-  failureHint?: string,
-): string | undefined {
-  switch (reason) {
-    case "api_error":
-      return failureHint ?? "Claude gave up after repeated API errors.";
-    case "malformed_tool_use_exhausted":
-      return "Claude gave up after repeated malformed tool calls.";
-    case "budget_exhausted":
-      return "Claude stopped: the turn's token budget was exhausted.";
-    case "structured_output_retry_exhausted":
-      return "Claude could not produce the requested structured output.";
-    case "tool_deferred_unavailable":
-      return "Claude could not resume a deferred tool call: the tool is no longer available.";
-    case "turn_setup_failed":
-      return "Claude could not start the turn.";
-    case "blocking_limit":
-      // blocking_limit also means context exhaustion; only rate-limit evidence sets the hint.
-      return failureHint ?? CONTEXT_WINDOW_FULL_ERROR;
-    case "rapid_refill_breaker":
-      return "Claude stopped: the context refilled too quickly after compaction.";
-    case "prompt_too_long":
-      return CONTEXT_WINDOW_FULL_ERROR;
-    case "image_error":
-      return "Claude stopped: an image in the conversation could not be processed.";
-    case "model_error":
-      return "Claude stopped: the model returned an error.";
-    default:
-      return undefined;
-  }
-}
-
-function isOverloadedResult(result: SDKResultMessage): boolean {
-  return result.subtype === "success" && result.api_error_status === 529;
-}
-
-function terminalStatusFromResult(
-  message: SDKResultMessage,
-  failureHint?: string,
-): Extract<
-  OrchestrationV2ProviderTurn["status"],
-  "completed" | "interrupted" | "failed" | "cancelled"
-> {
-  // Explicit abort reasons override success envelopes with is_error=false.
-  if (
-    message.terminal_reason === "aborted_tools" ||
-    message.terminal_reason === "aborted_streaming"
-  ) {
-    return "interrupted";
-  }
-  if (message.subtype === "success") {
-    // The SDK can report API failures as subtype "success" with is_error set.
-    return isOverloadedResult(message) ||
-      message.api_error_status === 429 ||
-      terminalResultError(message.terminal_reason, failureHint) !== undefined ||
-      (message.is_error && failureHint !== undefined)
-      ? "failed"
-      : "completed";
-  }
-  const errorText = message.errors.join("\n").toLowerCase();
-  if (errorText.includes("interrupt")) {
-    return "interrupted";
-  }
-  if (errorText.includes("cancel")) {
-    return "cancelled";
-  }
-  return "failed";
-}
-
 function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
   return (
     message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
@@ -2062,94 +1983,6 @@ function claudeUsageLimitResetAt(resetsAt: unknown): string | null {
     : null;
 }
 
-function gatewayCooldownResetAt(
-  cooldown: RegExpExecArray | null,
-  completedAt: DateTime.Utc,
-): string | undefined {
-  if (cooldown === null) return undefined;
-  const seconds =
-    Number(cooldown[1] ?? 0) * 3_600 + Number(cooldown[2] ?? 0) * 60 + Number(cooldown[3] ?? 0);
-  const resetMs = DateTime.toEpochMillis(completedAt) + seconds * 1_000;
-  return seconds > 0 && resetMs < 8.64e15
-    ? DateTime.formatIso(DateTime.makeUnsafe(resetMs))
-    : undefined;
-}
-
-function providerFailureFromResult(
-  message: SDKResultMessage,
-  completedAt: DateTime.Utc,
-  failureHint?: string,
-  usageLimited = false,
-): OrchestrationV2ProviderFailure | null {
-  const gatewayResetAt =
-    failureHint === undefined &&
-    message.subtype === "success" &&
-    message.is_error &&
-    message.terminal_reason === "api_error" &&
-    message.api_error_status === 503
-      ? gatewayCooldownResetAt(
-          /^API Error: 503 \[[^\]\r\n]+\] \[429\]: \{"type":"error","error":\{"type":"rate_limit_error",[^\r\n]*\} \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/.exec(
-            message.result,
-          ),
-          completedAt,
-        )
-      : undefined;
-  if (gatewayResetAt !== undefined) {
-    return makeProviderFailure({
-      class: "usage_limit",
-      message: "Claude API rate limit reached. Try again later.",
-      code: "api_error_429",
-      retryable: true,
-      resetAt: gatewayResetAt,
-    });
-  }
-  const failureClass =
-    (message.subtype === "success" && message.api_error_status === 429) || usageLimited
-      ? "usage_limit"
-      : "provider_error";
-  const listedError = resultUserFacingError(message);
-  const apiErrorMessage =
-    message.subtype === "success" &&
-    message.terminal_reason === "api_error" &&
-    message.result.trim().startsWith("API Error:")
-      ? makeProviderFailure({ message: message.result }).message.slice(0, 500)
-      : undefined;
-  const structuredError = isOverloadedResult(message)
-    ? "Claude API is overloaded (529). Try again shortly."
-    : message.subtype === "success" && message.api_error_status === 429
-      ? "Claude API rate limit reached. Try again later."
-      : terminalResultError(message.terminal_reason, failureHint ?? apiErrorMessage);
-  if (message.subtype !== "success") {
-    return makeProviderFailure({
-      message: listedError ?? structuredError ?? message.errors.join("\n"),
-      code: message.subtype,
-      class: failureClass,
-    });
-  }
-  if (!message.is_error && structuredError === undefined) {
-    return null;
-  }
-  const apiErrorStatus = message.api_error_status ?? null;
-  // API-key sessions get no rate_limit_info, so a gateway's 429 carries its reset only as text.
-  const resetAt =
-    apiErrorStatus === 429 && message.result.startsWith("API Error:")
-      ? gatewayCooldownResetAt(
-          /\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/.exec(message.result),
-          completedAt,
-        )
-      : undefined;
-  return makeProviderFailure({
-    message: listedError ?? structuredError ?? failureHint ?? message.result,
-    code:
-      apiErrorStatus === null
-        ? (message.terminal_reason ?? "sdk_result_error")
-        : `api_error_${apiErrorStatus}`,
-    class: failureClass,
-    retryable: apiErrorStatus === 429 || apiErrorStatus === 529 ? true : null,
-    resetAt: resetAt ?? null,
-  });
-}
-
 function providerFailureFromApiRetry(message: SDKAPIRetryMessage): OrchestrationV2ProviderFailure {
   const errorName = message.error.replaceAll("_", " ");
   return makeProviderFailure({
@@ -2218,6 +2051,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 };
 
 interface ActiveClaudeTurnContext {
+  retryBudgetFailure?: OrchestrationV2ProviderFailure;
   readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   input: ProviderAdapter.ProviderAdapterV2TurnInput;
@@ -2340,6 +2174,7 @@ interface ActiveClaudeSubagent {
 }
 
 interface ClaudeLiveQueryContext {
+  readonly modelCatalog: ClaudeModelCatalog;
   readonly environment: NodeJS.ProcessEnv;
   readonly settingsCwd: string | null;
   readonly launchArgSettings: ClaudeSdkSettings | undefined;
@@ -2751,6 +2586,7 @@ export interface ClaudeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
+  readonly routeModelCatalog?: RouteClaudeModelCatalog;
   readonly environment: NodeJS.ProcessEnv;
   readonly resolveLaunch?: Effect.Effect<ClaudeLaunch>;
   /** The Claude CLI's version; read from the configured binary when absent. */
@@ -2814,6 +2650,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     Effect.map((catalog) => scopeClaudeModelCatalog(catalog, adapterOptions.settings.customModels)),
   );
   let modelCatalog = yield* loadModelCatalog;
+  const routeModelCatalog: RouteClaudeModelCatalog =
+    adapterOptions.routeModelCatalog ?? Effect.succeed;
   const reportedContext = createClaudeReportedContext();
   const resolveContextWindow = (selection: ModelSelection) =>
     resolveClaudeCatalogContextWindowTokens(modelCatalog, selection) ??
@@ -2894,44 +2732,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     },
   );
 
-  // A worktree's .git file points at <main>/.git/worktrees/<name>, whose commondir leads back to
-  // <main>/.git. A bare repository has no main checkout, so its worktree keeps its own file.
-  const mainCheckoutRoot = (checkout: string) =>
-    fileSystem.readFileString(path.join(checkout, ".git")).pipe(
-      Effect.flatMap((pointer) => {
-        const gitDir = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
-        if (gitDir === undefined) return Effect.succeed(checkout);
-        const worktreeGitDir = path.resolve(checkout, gitDir);
-        return fileSystem.readFileString(path.join(worktreeGitDir, "commondir")).pipe(
-          Effect.map((commonDir) => {
-            const common = path.resolve(worktreeGitDir, commonDir.trim());
-            return path.basename(common) === ".git" ? path.dirname(common) : checkout;
-          }),
-        );
-      }),
-      Effect.orElseSucceed(() => checkout),
-    );
-  // Claude Code keeps .claude/settings.local.json at the repository root, or in cwd outside a
-  // repository, on Windows, or when the root is home. Its owner check is skipped: missing it only
-  // leaves tool search on, Claude Code's default.
-  const localSettingsDirectory = Effect.fn("ClaudeAdapterV2.localSettingsDirectory")(function* (
-    cwd: string,
-  ) {
-    if ((yield* HostProcess.Platform) === "win32") return cwd;
-    for (let directory = cwd; ; directory = path.dirname(directory)) {
-      const isCheckout = yield* fileSystem
-        .exists(path.join(directory, ".git"))
-        .pipe(Effect.orElseSucceed(() => false));
-      if (isCheckout) {
-        const root = yield* mainCheckoutRoot(directory);
-        return root === (yield* HostProcess.HomeDirectory) ? cwd : root;
-      }
-      if (path.dirname(directory) === directory) return cwd;
-    }
-  });
   const settingsFilesByPrecedence = Effect.fn("ClaudeAdapterV2.settingsFilesByPrecedence")(
     function* (cwd: string | null) {
-      const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
+      const localDirectory =
+        cwd === null
+          ? null
+          : yield* claudeLocalSettingsDirectory(cwd).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            );
       return [
         ...(cwd === null || localDirectory === null
           ? []
@@ -2987,6 +2796,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const providerRetryTimers = makeProviderRetryTimers(sessionScope);
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -3452,6 +3262,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           context: ActiveClaudeTurnContext,
           updatedAt: DateTime.Utc,
         ) {
+          if (context.retryBudgetFailure !== undefined) return;
           const providerRetry = yield* Ref.modify(providerRetries, (current) => {
             const retry = current.get(context.providerTurnId);
             if (retry === undefined) {
@@ -3461,9 +3272,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             updated.delete(context.providerTurnId);
             return [retry, updated] as const;
           });
-          if (providerRetry === undefined) {
-            return;
-          }
+          if (providerRetry === undefined) return;
+          yield* providerRetryTimers.cancel(context.providerTurnId);
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver: CLAUDE_PROVIDER,
@@ -4838,8 +4648,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             workflow === undefined
               ? undefined
               : withWorkflowMemberThreadIds(workflow, childThreadId);
-          // Unstated effort stays unknown: a custom agent definition may override the owner's.
-          const effort = existingSubagent === undefined ? input.effort : existingSubagent.effort;
+          const effort =
+            existingSubagent?.effort ??
+            input.effort ??
+            (lifecycleChanged &&
+            input.status !== "running" &&
+            existingSubagent?.task.modelSelection !== undefined &&
+            (input.nativeTaskType ?? existingSubagent.nativeTaskType) !== CLAUDE_WORKFLOW_TASK_TYPE
+              ? yield* readClaudeSubagentEffort({
+                  configDir: homePath,
+                  nativeSessionId: input.context.nativeThreadId,
+                  taskId: input.taskId,
+                  completed: input.status === "completed",
+                  fileSystem,
+                  path,
+                })
+              : undefined);
           const model = input.model ?? priorTask?.model ?? null;
           const task = {
             ...(priorTask ?? {
@@ -5860,7 +5684,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
         });
 
-        const finalizeActiveTurn = Effect.fnUntraced(function* (input: {
+        const finalizeActiveTurn = Effect.fnUntraced(function* (requested: {
           readonly context: ActiveClaudeTurnContext;
           readonly status: Extract<
             OrchestrationV2ProviderTurn["status"],
@@ -5871,6 +5695,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
         }) {
+          const retryFailure = requested.context.retryBudgetFailure;
+          const input =
+            retryFailure !== undefined && requested.status === "interrupted"
+              ? { ...requested, status: "failed" as const, failure: retryFailure }
+              : requested;
+          yield* providerRetryTimers.cancel(input.context.providerTurnId);
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
           input.context.steersClosed = true;
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
@@ -6413,6 +6243,44 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
         });
+
+        const failExpiredProviderRetry = Effect.fn("ClaudeAdapterV2.failExpiredProviderRetry")(
+          function* (context: ActiveClaudeTurnContext, startedAt: DateTime.Utc) {
+            const live = yield* Ref.get(queryContext);
+            const retry = (yield* Ref.get(providerRetries)).get(context.providerTurnId);
+            if (
+              live === null ||
+              live.lastTurn !== context ||
+              retry?.startedAt !== startedAt ||
+              (yield* Ref.get(activeTurn)) !== context ||
+              (yield* Ref.get(interruptedTurns)).has(context.providerTurnId)
+            )
+              return;
+            context.retryBudgetFailure = { ...retry.failure, retryable: false };
+            yield* interruptTurn({
+              providerThread: context.input.providerThread,
+              providerTurnId: context.providerTurnId,
+            }).pipe(
+              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+              Effect.catch((cause) =>
+                Effect.logWarning("orchestration-v2.claude-retry-budget-stop-failed", { cause }),
+              ),
+            );
+            if ((yield* Ref.get(activeTurn)) !== context) return;
+            const ownsQuery = yield* Ref.modify(queryContext, (current) =>
+              current === live ? [true, null] : [false, current],
+            );
+            if (!ownsQuery) return;
+            live.stopping = true;
+            yield* live.query.close.pipe(
+              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+              Effect.ignore,
+            );
+            yield* finalizeActiveTurnAfterQueryExit(live);
+            yield* endSubagentCallsOfClosedQuery(live.nativeThreadId, "interrupted");
+            yield* Deferred.succeed(live.closed, undefined);
+          },
+        );
 
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
@@ -7594,6 +7462,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               updated.set(context.providerTurnId, state);
               return updated;
             });
+            if (previous === undefined)
+              yield* providerRetryTimers.start(
+                context.providerTurnId,
+                failExpiredProviderRetry(context, state.startedAt),
+              );
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
@@ -7616,8 +7489,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (message.type === "assistant" && input.replayed !== true) {
-            const now = yield* DateTime.now;
-            yield* completeProviderRetry(context, now);
+            if (
+              message.parent_tool_use_id == null &&
+              message.message.model !== "<synthetic>" &&
+              message.error === undefined
+            )
+              yield* completeProviderRetry(context, yield* DateTime.now);
             // CLI-generated <synthetic> frames report zero usage, not context usage.
             if (
               message.parent_tool_use_id === null &&
@@ -8344,10 +8221,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ) {
               resetTimes.push(assistantLimit.resetAt);
             }
-            const resetAt =
-              resetTimes.length > 0 && resetTimes.every((time) => time !== null)
-                ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
-                : null;
             const resultFailure = interrupted
               ? null
               : limitedCompaction !== null
@@ -8362,9 +8235,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     failureHint,
                     usageLimited,
                   );
+            if (resultFailure?.class === "usage_limit" && resultFailure.resetAt != null)
+              resetTimes.push(resultFailure.resetAt);
+            const resetAt = resetTimes.includes(null)
+              ? null
+              : resetTimes.reduce<string | null>(
+                  (latest, time) =>
+                    time !== null && (latest === null || time > latest) ? time : latest,
+                  null,
+                );
             const terminalFailure =
               resultFailure?.class === "usage_limit"
-                ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
+                ? { ...resultFailure, resetAt }
                 : resultFailure;
             yield* finalizeActiveTurn({
               context,
@@ -8458,7 +8340,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             context !== null &&
             liveQuery?.query === input.query &&
             message.type === "stream_event" &&
-            message.event.type === "message_start"
+            message.parent_tool_use_id == null &&
+            message.event.type === "message_start" &&
+            message.event.message.model !== "<synthetic>"
           ) {
             yield* completeProviderRetry(context, yield* DateTime.now);
           }
@@ -9178,10 +9062,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             : McpProviderSession.cuaDriverKey(
                 cuaServer === undefined ? undefined : mcpSession?.cuaDriver,
               );
-          const compiledSelection = compileClaudeModelSelection(
-            turnInput.modelSelection,
-            modelCatalog,
-          );
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
           // Continuations drain existing output without prompting; retain the live process regardless of selection.
@@ -9193,58 +9073,63 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ) {
             return existing;
           }
-          if (
+          const cwd = turnInput.runtimePolicy.cwd;
+          const reuseLaunchSettings =
             existing !== null &&
             existing.nativeThreadId === nativeThreadId &&
             existing.queryPolicyKey === queryPolicyKey &&
-            !existing.stopping &&
-            existing.selection.queryIdentity !== compiledSelection.queryIdentity &&
-            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
-            (existing.selection.apiModelId === compiledSelection.apiModelId ||
-              existing.openedPermissionMode === queryPolicy.permissionMode)
-          ) {
-            yield* applyClaudeSelectionLive(existing, compiledSelection);
-          }
-          if (
-            existing !== null &&
-            existing.nativeThreadId === nativeThreadId &&
-            existing.queryPolicyKey === queryPolicyKey &&
-            !existing.stopping &&
-            existing.selection.queryIdentity === compiledSelection.queryIdentity
-          ) {
-            // Enabling or disabling computer use reaches a live process here,
-            // without replacing it (background work would block that).
+            !existing.stopping;
+          if (reuseLaunchSettings) {
+            const routed = yield* routeModelCatalog(
+              modelCatalog,
+              cwd,
+              existing.launchArgSettings,
+              launch.environment,
+            );
+            const selection = compileClaudeModelSelection(turnInput.modelSelection, routed);
             if (
-              existing.mcpCredentialId !== mcpSession?.providerSessionId ||
-              existing.cuaDriverKey !== cuaKey
+              existing.selection.queryIdentity !== selection.queryIdentity &&
+              canApplyClaudeSelectionLive(existing.selection, selection) &&
+              (existing.selection.apiModelId === selection.apiModelId ||
+                existing.openedPermissionMode === queryPolicy.permissionMode)
             ) {
-              if (!existing.query.setMcpServers)
-                return yield* queryRunnerError(
-                  "MCP credential refresh unavailable.",
-                  "setMcpServers",
-                );
-              yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
-              existing.mcpCredentialId = mcpSession?.providerSessionId;
-              existing.cuaDriverKey = cuaKey;
+              yield* applyClaudeSelectionLive(existing, selection);
             }
-            // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
-            // Auto/default may reflect a policy restriction that forbids restoring bypass.
-            if (existing.permissionMode === "plan" && existing.openedPermissionMode !== "plan") {
-              existing.permissionMode = yield* existing.query
-                .setPermissionMode(existing.openedPermissionMode)
-                .pipe(
-                  Effect.as(existing.openedPermissionMode),
-                  Effect.catchTags({
-                    ClaudeAgentSdkQueryRunnerError: (error) =>
-                      existing.openedPermissionMode === "bypassPermissions"
-                        ? existing.query
-                            .setPermissionMode("default")
-                            .pipe(Effect.as("default" as const))
-                        : Effect.fail(error),
-                  }),
-                );
+            if (existing.selection.queryIdentity === selection.queryIdentity) {
+              // Enabling or disabling computer use reaches a live process here,
+              // without replacing it (background work would block that).
+              if (
+                existing.mcpCredentialId !== mcpSession?.providerSessionId ||
+                existing.cuaDriverKey !== cuaKey
+              ) {
+                if (!existing.query.setMcpServers)
+                  return yield* queryRunnerError(
+                    "MCP credential refresh unavailable.",
+                    "setMcpServers",
+                  );
+                yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
+                existing.mcpCredentialId = mcpSession?.providerSessionId;
+                existing.cuaDriverKey = cuaKey;
+              }
+              // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
+              // Auto/default may reflect a policy restriction that forbids restoring bypass.
+              if (existing.permissionMode === "plan" && existing.openedPermissionMode !== "plan") {
+                existing.permissionMode = yield* existing.query
+                  .setPermissionMode(existing.openedPermissionMode)
+                  .pipe(
+                    Effect.as(existing.openedPermissionMode),
+                    Effect.catchTags({
+                      ClaudeAgentSdkQueryRunnerError: (error) =>
+                        existing.openedPermissionMode === "bypassPermissions"
+                          ? existing.query
+                              .setPermissionMode("default")
+                              .pipe(Effect.as("default" as const))
+                          : Effect.fail(error),
+                    }),
+                  );
+              }
+              return existing;
             }
-            return existing;
           }
 
           // Replacing this thread's process kills its background work, even with a new native identity.
@@ -9258,19 +9143,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return yield* new ClaudeBackgroundWorkBlocksQueryReplacementError();
           }
 
-          // Read before closing the live process so a bad path leaves it running.
-          const appendSystemPromptFileText = yield* readClaudeAppendSystemPromptFile({
-            settings: adapterOptions.settings,
-            cwd: turnInput.runtimePolicy.cwd,
-            fileSystem,
-            path,
-          });
-          const launchArgSettings = yield* readClaudeLaunchArgSettings({
-            settings: adapterOptions.settings,
-            cwd: turnInput.runtimePolicy.cwd,
-            fileSystem,
-            path,
-          });
+          // Read before closing the live process. Append errors retain priority over settings errors.
+          const launchArgInput = { settings: adapterOptions.settings, cwd, fileSystem, path };
+          const [appendResult, settingsResult] = yield* Effect.all(
+            [
+              Effect.result(readClaudeAppendSystemPromptFile(launchArgInput)),
+              Effect.result(readClaudeLaunchArgSettings(launchArgInput)),
+            ],
+            { concurrency: 2 },
+          );
+          const appendSystemPromptFileText = yield* Effect.fromResult(appendResult);
+          const launchArgSettings = yield* Effect.fromResult(settingsResult);
+          const catalog = yield* routeModelCatalog(
+            modelCatalog,
+            cwd,
+            launchArgSettings,
+            launch.environment,
+          );
+          const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection, catalog);
           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
           clearedNativeSessions.delete(nativeThreadId);
           if (existing !== null) {
@@ -9300,7 +9190,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               : subagentPolicy;
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
-            modelCatalog,
+            modelCatalog: catalog,
             nativeThreadId,
             title: turnInput.appThread.title,
             resume: shouldResume,
@@ -9390,6 +9280,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
           const closed = yield* Deferred.make<void, never>();
           const context: ClaudeLiveQueryContext = {
+            modelCatalog: catalog,
             environment: launch.environment,
             queryPolicy,
             nativeThreadId,
@@ -10112,7 +10003,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               existing,
               turnInput.modelSelection === undefined
                 ? undefined
-                : compileClaudeModelSelection(turnInput.modelSelection, modelCatalog),
+                : compileClaudeModelSelection(turnInput.modelSelection, existing.modelCatalog),
               currentTurn.queryPolicy.permissionMode,
             );
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
@@ -10120,7 +10011,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 turnInput.message.text,
                 (
                   liveSteerSelection ??
-                  compileClaudeModelSelection(currentTurn.input.modelSelection, modelCatalog)
+                  compileClaudeModelSelection(
+                    currentTurn.input.modelSelection,
+                    existing.modelCatalog,
+                  )
                 ).promptEffort,
               ),
               attachments: turnInput.message.attachments,
@@ -10473,7 +10367,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             Effect.flatMap(Ref.get(queryContext), (live) =>
               applyClaudeSelectionToRunningQuery(
                 live,
-                compileClaudeModelSelection(modelSelection, modelCatalog),
+                compileClaudeModelSelection(modelSelection, live?.modelCatalog ?? modelCatalog),
                 providerThread.nativeThreadRef?.nativeId,
               ),
             ),
@@ -10845,7 +10739,11 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     input: ProviderAdapterDriverCreateInput<ClaudeSettings>,
     hooks: Pick<
       ClaudeAdapterV2Options,
-      "scopedLimitNames" | "onUsageLimits" | "modelCatalog" | "mcpCredentialRotations"
+      | "scopedLimitNames"
+      | "onUsageLimits"
+      | "modelCatalog"
+      | "mcpCredentialRotations"
+      | "routeModelCatalog"
     > = {},
   ) {
     const { instanceId, environment, enabled, config } = input;

@@ -24,7 +24,6 @@ import { describe, it, assert, expect } from "@effect/vitest";
 
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -2912,6 +2911,7 @@ it.layer(
         );
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.label, "Claude API Key");
       }).pipe(
         Effect.provide(
           layerMockSpawner((args) => {

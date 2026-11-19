@@ -37,3 +37,45 @@ it.effect("uses Claude's environment compact window from settings and process", 
     }).pipe(Effect.provide(NodeServices.layer)),
   ),
 );
+
+it.effect("honors Claude's compaction switches before reporting a configured window", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const file = yield* fileSystem.makeTempFileScoped();
+      const base = {
+        configured: "400000",
+        model: "claude-opus-5-5",
+        launchSettings: undefined,
+        files: [file],
+        environment: {},
+        fileSystem,
+      };
+      yield* fileSystem.writeFileString(file, '{"autoCompactEnabled":false}');
+      assert.equal(yield* resolveAutoCompactWindow(base), "");
+      assert.equal(
+        yield* resolveAutoCompactWindow({ ...base, launchSettings: { autoCompactEnabled: true } }),
+        "400000",
+      );
+      for (const flag of ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"]) {
+        assert.equal(
+          yield* resolveAutoCompactWindow({
+            ...base,
+            files: [],
+            environment: { [flag]: " Yes " },
+          }),
+          "",
+        );
+        assert.equal(
+          yield* resolveAutoCompactWindow({
+            ...base,
+            files: [],
+            environment: { [flag]: "1" },
+            launchSettings: { env: { [flag]: "0" } },
+          }),
+          "400000",
+        );
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  ),
+);
