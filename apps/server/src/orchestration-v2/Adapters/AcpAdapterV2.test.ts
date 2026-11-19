@@ -7664,6 +7664,251 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  const openGrokWakeReplay = Effect.fnUntraced(function* (kind: "monitor" | "command") {
+    const selfInvocation = yield* resolveSelfInvocation();
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const mockAgentPath = yield* bundledMockAgentPath;
+    const instanceId = ProviderInstanceId.make("acp-grok-wake-replay");
+    const grokFlavor = makeGrokAcpAdapterFlavor(
+      {
+        instanceId,
+        settings: DEFAULT_GROK_SETTINGS,
+        environment: {},
+        hostPlatform: yield* HostProcess.Platform,
+        selfInvocation,
+      },
+      yield* HostProcess.HomeDirectory,
+    );
+    const promptStarted = yield* Deferred.make<void>();
+    const promptGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+    const promptHeld = yield* Deferred.make<void>();
+    const finalizeScheduled = yield* Deferred.make<Duration.Input>();
+    const finalized = yield* Deferred.make<void>();
+    const offers: Array<ProviderContinuationRequests.ProviderContinuationRequest> = [];
+    type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+    let updateSession: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+    let taskCompleted:
+      | ((payload: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>)
+      | undefined;
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      selfInvocation,
+      testHooks: {
+        afterPromptSettledWithBackgroundWork: () =>
+          Deferred.succeed(promptHeld, undefined).pipe(Effect.asVoid),
+        onDeferredFinalizeScheduled: (debounce) =>
+          Deferred.succeed(finalizeScheduled, debounce).pipe(Effect.asVoid),
+        afterTurnFinalized: () => Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
+      },
+      flavor: {
+        driver: ACP_TEST_DRIVER,
+        capabilities: AcpProviderCapabilitiesV2,
+        enablePostSettleContinuation: true,
+        deferFinalizeForBackgroundWork: kind === "command",
+        ...(kind === "command"
+          ? {
+              normalizeToolCall: grokFlavor.normalizeToolCall!,
+              extractBackgroundTaskId: grokFlavor.extractBackgroundTaskId!,
+              isBackgroundCommandTool: grokFlavor.isBackgroundCommandTool!,
+            }
+          : {
+              extractBackgroundTaskId: (toolCall) =>
+                toolCall.toolCallId.startsWith("tool-call-monitor-")
+                  ? toolCall.toolCallId.replace("tool-call-", "task-")
+                  : undefined,
+            }),
+        registerExtensions: ({ runtime, applyBackgroundTaskMutation }) =>
+          registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation),
+        makeRuntime: makeMockRuntime({
+          childProcessSpawner,
+          mockAgentPath,
+          wrapRuntime: (runtime) => ({
+            ...runtime,
+            handleSessionUpdate: (handler) =>
+              Effect.sync(() => {
+                updateSession = handler;
+              }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            handleExtNotification: (method, schema, handler) => {
+              if (method === "x.ai/task_completed") {
+                const decode = Schema.decodeUnknownSync(schema);
+                taskCompleted = (payload) => handler(decode(payload));
+              }
+              return runtime.handleExtNotification(method, schema, handler);
+            },
+            prompt: () =>
+              Deferred.succeed(promptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(promptGate)),
+              ),
+          }),
+        }),
+      },
+      continuationRequests: {
+        offer: (request) =>
+          Effect.sync(() => {
+            offers.push(request);
+          }),
+      },
+    });
+    const threadId = ThreadId.make("thread-acp-grok-wake-replay");
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const modelSelection = { instanceId, model: "default" };
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("provider-session-acp-grok-wake-replay"),
+      modelSelection,
+      runtimePolicy,
+    });
+    const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    const rootEvents = yield* runtime.events.pipe(
+      Stream.takeUntil((event) => event.type === "turn.terminal"),
+      Stream.runCollect,
+      Effect.forkScoped,
+    );
+    yield* runtime
+      .startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      )
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(promptStarted);
+    const handleUpdate = updateSession;
+    const handleCompletion = taskCompleted;
+    assert.isDefined(handleUpdate);
+    assert.isDefined(handleCompletion);
+    const sessionId = "mock-session-1";
+    return {
+      update: (update: EffectAcpSchema.SessionUpdate) => handleUpdate({ sessionId, update }),
+      complete: (taskId: string, snapshot?: { output: string; exit_code: number }) =>
+        handleCompletion({
+          sessionId,
+          update: { sessionUpdate: "task_completed", task_id: taskId, task_snapshot: snapshot },
+        }),
+      endPrompt: Deferred.succeed(promptGate, { stopReason: "end_turn" }),
+      promptHeld: Deferred.await(promptHeld),
+      finalizeScheduled: Deferred.await(finalizeScheduled),
+      rootEvents: Deferred.await(finalized).pipe(Effect.andThen(Fiber.join(rootEvents))),
+      hasPendingBackgroundWork: runtime.hasPendingBackgroundWork!,
+      offers,
+    };
+  });
+
+  it.effect("Grok wakes once on the native report when task B was polled before finalization", () =>
+    Effect.gen(function* () {
+      const replay = yield* openGrokWakeReplay("monitor");
+      for (const task of ["a", "b"]) {
+        yield* replay.update({
+          sessionUpdate: "tool_call",
+          toolCallId: `tool-call-monitor-${task}`,
+          title: `Monitor task ${task}`,
+          kind: "execute",
+          status: "pending",
+          rawInput: {},
+        });
+        yield* replay.update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: `tool-call-monitor-${task}`,
+          status: "in_progress",
+        });
+      }
+      yield* replay.complete("task-monitor-a");
+      yield* replay.update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-call-monitor-b",
+        status: "completed",
+      });
+      assert.lengthOf(replay.offers, 0);
+      yield* replay.endPrompt;
+      const events = yield* replay.rootEvents;
+      assert.include(events.at(-1), { type: "turn.terminal", status: "completed" });
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tool-call-monitor-b" &&
+            event.turnItem.status === "completed",
+        ),
+      );
+      assert.lengthOf(replay.offers, 0, "the polled completion alone cannot start a wake");
+      assert.isTrue(yield* replay.hasPendingBackgroundWork);
+      yield* replay.update({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Both background tasks finished." },
+      });
+      assert.lengthOf(replay.offers, 1);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect(
+    "Grok waits for the late native answer after early success and a replayed completion",
+    () =>
+      Effect.gen(function* () {
+        const replay = yield* openGrokWakeReplay("command");
+        for (const taskId of ["early", "blocker"]) {
+          yield* replay.update({
+            sessionUpdate: "tool_call",
+            toolCallId: taskId,
+            title: `Run ${taskId}`,
+            kind: "execute",
+            status: "completed",
+            rawInput: { command: `echo ${taskId}` },
+            rawOutput: { type: "BackgroundTaskStarted", task_id: taskId },
+          });
+        }
+        yield* replay.update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "early",
+          status: "in_progress",
+          rawOutput: { type: "Text", text: "Command progress" },
+        });
+        yield* replay.complete("early", { exit_code: 0, output: "EARLY_BG_DONE\n" });
+        yield* replay.complete("early");
+        yield* replay.update({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "EARLY_SUCCESS_DONE" },
+        });
+        assert.lengthOf(replay.offers, 0);
+        yield* replay.endPrompt;
+        yield* replay.promptHeld;
+        yield* replay.complete("blocker", { exit_code: 0, output: "BLOCKER_DONE\n" });
+        yield* TestClock.adjust(yield* replay.finalizeScheduled);
+        const events = yield* replay.rootEvents;
+        assert.include(events.at(-1), { type: "turn.terminal", status: "completed" });
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text.includes("EARLY_SUCCESS_DONE"),
+          ),
+        );
+        yield* replay.complete("early");
+        yield* replay.complete("blocker");
+        assert.lengthOf(replay.offers, 0, "completions alone cannot start a wake");
+        yield* replay.update({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Preparing the background report" },
+        });
+        yield* replay.complete("early");
+        assert.lengthOf(
+          replay.offers,
+          0,
+          "reasoning and a replayed completion cannot start a wake",
+        );
+        yield* replay.update({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "LATE_NATIVE_ANSWER" },
+        });
+        assert.lengthOf(replay.offers, 1);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live("lets a caller abandon Stop while hard teardown stalls, and finishes the teardown", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
