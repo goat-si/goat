@@ -222,12 +222,14 @@ export function makeAcpReplayRuntime(input: {
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          sessionEnvironment: {},
           spawn: {
             command: process.execPath,
             args: acpReplayAgentArgs(input.scriptPath),
             cwd: runtimeInput.cwd,
             env: {
-              ...process.env,
+              PATH: "",
+              SystemRoot: "C:\\Windows",
               GOAT_ACP_REPLAY_TRANSCRIPT_PATH: transcriptPath,
               GOAT_ACP_REPLAY_STATUS_PATH: input.statusPath,
               GOAT_ACP_REPLAY_WORKSPACE: runtimeInput.cwd,

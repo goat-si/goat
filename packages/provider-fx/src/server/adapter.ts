@@ -211,6 +211,8 @@ function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor
       applyFxModelSelection(runtime, modelSelection, options.defaultModel).pipe(
         Effect.tap(() => applyFxEffortDefault(runtime, modelSelection)),
       ),
+    ownedModelOptionIds: ["mode"],
+    lockSessionModeToPolicy: true,
     sessionModeForPolicy: fxSessionModeForPolicy,
     permissionDisposition: fxPermissionDisposition,
     extractSubagentUpdate: extractFxSubagentUpdate,

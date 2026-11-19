@@ -1,3 +1,4 @@
+import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
   acpSupportsImagePrompts,
   acpProviderItemNativeId,
@@ -146,7 +147,6 @@ import {
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
-  toolCallVisibleOutputChanged,
   withTrackedPermissionToolCall,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
@@ -268,7 +268,7 @@ interface AcpNativeBuildConfiguration {
   readonly configOptions: ReadonlyArray<{ readonly id: string; readonly value: string }>;
 }
 
-interface ActiveAcpTurn {
+export interface ActiveAcpTurn {
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeThreadId: string;
@@ -418,29 +418,6 @@ type PendingRuntimeRequest = {
 
 /** How long a Stop waits for the agent to confirm before the user is offered Force stop. */
 const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
-const TOOL_UPDATE_PERSIST_EVERY = 10;
-
-// Agents can resend whole calls while streaming arguments.
-function shouldPersistToolUpdate(
-  context: Pick<ActiveAcpTurn, "toolUpdatesSkipped">,
-  key: string,
-  previous: AcpToolCallState | undefined,
-  next: AcpToolCallState,
-  reportedStatus: AcpToolCallState["status"],
-): boolean {
-  const skipped = context.toolUpdatesSkipped.get(key) ?? 0;
-  const persist =
-    reportedStatus === "completed" ||
-    reportedStatus === "failed" ||
-    previous === undefined ||
-    previous.status !== next.status ||
-    previous.title !== next.title ||
-    toolCallVisibleOutputChanged(previous, next) ||
-    skipped + 1 >= TOOL_UPDATE_PERSIST_EVERY;
-  context.toolUpdatesSkipped.set(key, persist ? 0 : skipped + 1);
-  return persist;
-}
-
 export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   options: AcpAdapterV2Options,
 ) {
@@ -741,6 +718,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         });
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
+        const configuredPolicyMode = yield* Ref.make<string | undefined>(undefined);
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
@@ -6314,6 +6292,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               selection.value === ACP_EMPTY_OPTION_VALUE ? { ...selection, value: "" } : selection,
             );
           const configOptions = yield* runtime.getConfigOptions;
+          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
+          const modeLocked = flavor.lockSessionModeToPolicy && policyMode !== undefined;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
           const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
             ACP_SESSION_MODE_OPTION_ID,
@@ -6343,6 +6323,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // Advertised values union models; skip per-model rejections instead of failing session open.
             const option = configOptions.find((candidate) => candidate.id === selection.id);
             if (
+              modeLocked &&
+              (selection.id === ACP_SESSION_MODE_OPTION_ID || option?.category === "mode")
+            )
+              continue;
+            if (
               option !== undefined &&
               option.type === "select" &&
               typeof selection.value === "string"
@@ -6365,12 +6350,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }),
             );
           }
-          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
           if (policyMode !== undefined) {
             yield* runtime.setMode(policyMode);
           }
           const modeState = yield* runtime.getModeState;
           if (
+            !modeLocked &&
             modeSelection !== undefined &&
             typeof modeSelection.value === "string" &&
             modeState?.availableModes.some((mode) => mode.id === modeSelection.value) === true &&
@@ -6421,6 +6406,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const nativeBuild = nativeBuildConfigurationBySessionId.get(startResult.sessionId);
             if (nativeBuild !== undefined) {
               if (
+                !modeLocked &&
                 nativeBuild.modeId !== undefined &&
                 effectiveModeState?.currentModeId !== nativeBuild.modeId &&
                 effectiveModeState?.availableModes.some(
@@ -6433,7 +6419,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 const option = effectiveConfigOptions.find(
                   (candidate) => candidate.type === "select" && candidate.id === saved.id,
                 );
-                if (option === undefined || option.type !== "select") continue;
+                if (
+                  option === undefined ||
+                  option.type !== "select" ||
+                  (modeLocked && option.category === "mode")
+                )
+                  continue;
                 const choices = option.options.flatMap((entry) =>
                   "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
                 );
@@ -6445,6 +6436,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
           }
           yield* validateModelSelection(modelSelection);
+          yield* Ref.set(configuredPolicyMode, flavor.sessionModeForPolicy?.(runtimePolicy));
           yield* (
             flavor.onSessionConfigurationUpdate?.(
               yield* runtime.getConfigOptions,
@@ -7088,7 +7080,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (
                 configuredSelection === null ||
                 !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
-                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode
+                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||
+                (yield* Ref.get(configuredPolicyMode)) !==
+                  flavor.sessionModeForPolicy?.(turnInput.runtimePolicy)
               ) {
                 const currentSessionSetup = yield* Ref.get(activeSessionSetup);
                 if (currentSessionSetup === null) {

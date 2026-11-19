@@ -27,6 +27,11 @@ const HIDDEN = new Set([
   "delInstrText",
   "tracked-changes",
   "pPr",
+  "positionH",
+  "positionV",
+  "sizeRelH",
+  "sizeRelV",
+  "fldData",
 ]);
 
 class Truncation extends Error {}
