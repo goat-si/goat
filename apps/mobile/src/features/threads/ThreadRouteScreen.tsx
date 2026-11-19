@@ -1,3 +1,4 @@
+import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import { firstRouteParam } from "../terminal/terminalRouteHelpers.ts";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useThreadHistoryControls } from "./useThreadHistoryControls";
@@ -85,7 +86,10 @@ import { resolveMergeBackTargetThreadId } from "@goat/client-runtime/state/threa
 import { resolveLatestMergeBackRun } from "@goat/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@goat/client-runtime/state/threads";
-import { projectThreadContentPresentation } from "./threadContentPresentation";
+import {
+  projectThreadContentPresentation,
+  threadSyncStatusLabel,
+} from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   useAdaptiveWorkspaceLayout,
@@ -208,9 +212,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   }
 
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
-    return withInspectorHeader(
-      <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />,
-    );
+    return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
   }
 
   const stillHydrating = threadRouteIsHydrating({
@@ -942,14 +944,6 @@ function ThreadRouteContent(
       serverOwned: false,
     };
   })();
-  if (!environmentId || !threadId) {
-    return <OpeningThreadLoadingScreen />;
-  }
-
-  if (!selectedThread) {
-    return <OpeningThreadLoadingScreen />;
-  }
-
   // Queued creation displays its prompt before server creation; temporary not-found is expected.
   const contentPresentation =
     creationState !== null
@@ -960,6 +954,26 @@ function ThreadRouteContent(
           detailDeleted: selectedThreadDetailState.status === "deleted",
           connectionState: routeConnectionState,
         });
+  const threadSyncLabel = useDelayedStatus(
+    selectedThread === null ? "" : scopedThreadKey(selectedThread.environmentId, selectedThread.id),
+    threadSyncStatusLabel(selectedThreadDetailState.status, contentPresentation.kind),
+  );
+  const inspectorHeader = props.inspectorPresentation ? (
+    <ThreadInspectorHeader
+      title={selectedThread?.title ?? "Thread"}
+      subtitle={threadSyncLabel ?? undefined}
+      environmentId={environmentId}
+      threadId={threadId}
+      {...props.inspectorPresentation}
+    />
+  ) : null;
+  if (!environmentId || !threadId || !selectedThread)
+    return (
+      <>
+        {inspectorHeader}
+        <OpeningThreadLoadingScreen />
+      </>
+    );
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = () => (
     <>
@@ -975,7 +989,7 @@ function ThreadRouteContent(
             props.inspectorPresentation ? null : (
               <ThreadHeader
                 title={selectedThread.title}
-                subtitle={headerSubtitle}
+                subtitle={threadSyncLabel ?? headerSubtitle}
                 headerColor={headerColor}
                 usesNativeHeaderGlass={usesNativeHeaderGlass}
                 localWorkspaceAvailable={composer.cloudState.showLocalWorkspace}
@@ -1047,7 +1061,6 @@ function ThreadRouteContent(
           activePendingUserInputAnswers={requests.activePendingUserInputAnswers}
           respondingUserInputId={requests.respondingUserInputId}
           connectionStateLabel={routeConnectionState}
-          threadSyncStatus={selectedThreadDetailState.status}
           historyControls={historyControls}
           activeThreadBusy={composer.activeThreadBusy}
           canStopThread={awaitingBootstrapTurn || composer.canStopTurn}
@@ -1098,6 +1111,7 @@ function ThreadRouteContent(
 
   return (
     <>
+      {inspectorHeader}
       {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
 
       {renderThreadRouteBody()}
