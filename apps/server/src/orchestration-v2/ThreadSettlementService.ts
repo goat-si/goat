@@ -38,8 +38,10 @@ import { supervise } from "../backgroundSupervision.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { QUIET_AFTER_MS, QUIET_SYNC_INTERVAL_MS } from "./PullRequestSyncReactor.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
 import {
@@ -51,6 +53,7 @@ export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
+  readonly updatedAt?: string | null | undefined;
 }
 
 const PULL_REQUEST_RECHECK_MS = 2 * 60 * 1_000;
@@ -325,6 +328,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const shellClosedThreads = new Set<ThreadId>();
+  const noPullRequestRechecks = makeNoPullRequestRechecks();
   const delegatedLaneSettledAt = yield* makeDelegatedLaneSettlement;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -335,6 +339,7 @@ export const make = Effect.gen(function* () {
   const lookupCache = new Map<string, { value: SettlementPullRequest | null; expiresAt: number }>();
   const lookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
   let mergeGeneration = 0;
+  let quietPausedAtMs = Number.NEGATIVE_INFINITY;
 
   // Untraced: a parent's settle can release many native children and the sweep's span covers them.
   const settleNativeChild = Effect.fnUntraced(
@@ -364,9 +369,11 @@ export const make = Effect.gen(function* () {
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
     refreshLookups = false,
+    kind: "scheduled" | "immediate" = "immediate",
   ) {
     if ((yield* automationHold.current) !== null) return;
     if (mergedPullRequest !== null || (refreshLookups && threadId === undefined)) {
+      quietPausedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
       mergeGeneration++;
       lookupCache.clear();
     }
@@ -584,6 +591,29 @@ export const make = Effect.gen(function* () {
     };
     const groups = Map.groupBy(lookupCandidates, lookupKey);
 
+    const scheduledLookups =
+      kind === "immediate" || mergedPullRequest !== null || threadId !== undefined || refreshLookups
+        ? null
+        : noPullRequestRechecks.select(
+            nowMs,
+            [...groups]
+              .filter(([key]) => key.startsWith('["branch",'))
+              .map(([key, group]) => ({
+                key,
+                activityAtMs: Math.max(
+                  ...group.map(
+                    (thread) =>
+                      latestMillis([
+                        toMillis(thread.latestUserMessageAt),
+                        toMillis(thread.latestRunRequestedAt),
+                        toMillis(thread.latestRunStartedAt),
+                        toMillis(thread.latestRunCompletedAt),
+                      ]) ?? DateTime.toEpochMillis(thread.createdAt),
+                  ),
+                ),
+              })),
+          );
+
     // wouldSettle and pullRequestFor run per lookup group; the git and pull request reads they make carry the spans.
     const wouldSettle = Effect.fnUntraced(function* (
       group: ReadonlyArray<(typeof lookupCandidates)[number]>,
@@ -621,6 +651,7 @@ export const make = Effect.gen(function* () {
         if (!matchesMerge && !projects.has(reference.projectId)) {
           return yield* Effect.die(new Error("linked pull request project not found"));
         }
+        const shellClosed = group.some((member) => shellClosedThreads.delete(member.id));
         const summary = matchesMerge
           ? ({
               state: "merged",
@@ -633,12 +664,13 @@ export const make = Effect.gen(function* () {
                 repository: reference.repository,
                 number: reference.number,
               },
-              { recoverTransientFailure: false },
+              { recoverTransientFailure: false, bypassCache: shellClosed || refreshLookups },
             );
         const terminal = {
           state: summary.state,
           closedAt: summary.closedAt ?? null,
           mergedAt: summary.mergedAt ?? null,
+          ...("updatedAt" in summary ? { updatedAt: summary.updatedAt } : {}),
         } satisfies SettlementPullRequest;
         const cwd = lookupCwdByThreadId.get(thread.id);
         if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
@@ -665,11 +697,18 @@ export const make = Effect.gen(function* () {
       }
       const shellClosed = group.filter((member) => shellClosedThreads.delete(member.id)).length > 0;
       const refresh = refreshLookups || shellClosed;
+      const key = lookupKey(thread);
+      if (scheduledLookups !== null && !refresh && !scheduledLookups.has(key)) return undefined;
       // Remembered git state is enough to rule a thread out; only an answer
       // that would settle it is confirmed against fresh git state.
       const remembered = yield* git.branchPullRequest(
         { cwd, branch: thread.branch },
         { refresh, confirmTerminal: false },
+      );
+      noPullRequestRechecks.record(
+        key,
+        DateTime.toEpochMillis(yield* DateTime.now),
+        remembered !== null,
       );
       if (refresh || remembered === null || remembered.state === "open") return remembered;
       if (!(yield* wouldSettle(group, remembered))) return undefined;
@@ -696,7 +735,13 @@ export const make = Effect.gen(function* () {
               expiresAt:
                 cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
                   ? cached.expiresAt
-                  : DateTime.toEpochMillis(yield* DateTime.now) + PULL_REQUEST_RECHECK_MS,
+                  : DateTime.toEpochMillis(yield* DateTime.now) +
+                    (pullRequest?.state === "open" &&
+                    typeof pullRequest.updatedAt === "string" &&
+                    nowMs - Date.parse(pullRequest.updatedAt) >= QUIET_AFTER_MS &&
+                    nowMs - quietPausedAtMs >= QUIET_SYNC_INTERVAL_MS
+                      ? QUIET_SYNC_INTERVAL_MS
+                      : PULL_REQUEST_RECHECK_MS),
             });
           }
           if (pullRequest === undefined) return;
@@ -719,10 +764,14 @@ export const make = Effect.gen(function* () {
           Effect.catchCauseIf(
             (cause) => !Cause.hasInterruptsOnly(cause),
             (cause) =>
-              Effect.logWarning("automatic thread settlement skipped", {
-                threadIds: group.map((thread) => thread.id),
-                cause: Cause.pretty(cause),
-              }),
+              Effect.sync(() => noPullRequestRechecks.forget(key)).pipe(
+                Effect.andThen(
+                  Effect.logWarning("automatic thread settlement skipped", {
+                    threadIds: group.map((thread) => thread.id),
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
           ),
         ),
       { concurrency: 8, discard: true },
@@ -733,8 +782,9 @@ export const make = Effect.gen(function* () {
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
     refreshLookups = false,
+    kind: "scheduled" | "immediate" = "immediate",
   ) =>
-    sweep(mergedPullRequest, threadId, refreshLookups).pipe(
+    sweep(mergedPullRequest, threadId, refreshLookups, kind).pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
@@ -747,10 +797,10 @@ export const make = Effect.gen(function* () {
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
   const admission = yield* SettlementAdmission.make({
     targeted: (threadId: ThreadId) => runSweep(null, threadId),
-    full: (refresh) =>
-      refresh
-        ? runSweep(null, undefined, true)
-        : NodeSqliteClient.backgroundReads(runSweep(null, undefined, false)),
+    full: (refresh, kind) =>
+      kind === "immediate"
+        ? runSweep(null, undefined, refresh, kind)
+        : NodeSqliteClient.backgroundReads(runSweep(null, undefined, refresh, kind)),
   });
   // The event consumer reads metadata only; restoring archived history would hold it behind the archive lock.
   const readThreadMetadata = (threadId: ThreadId) =>
@@ -905,10 +955,21 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         lastSettlementSettings = key;
-        return admission.enqueueFull;
+        return admission.enqueueImmediate;
       }),
     );
     yield* forkParked(Stream.runForEach(mergedPullRequests, (event) => runSweep(event)));
+    yield* forkParked(
+      Stream.runForEach(pullRequests.subscribeRefreshes, () =>
+        Effect.gen(function* () {
+          quietPausedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
+          mergeGeneration++;
+          lookupCache.clear();
+          evaluated.clear();
+          yield* admission.enqueueImmediate;
+        }),
+      ),
+    );
     yield* forkParked(
       supervise("ThreadSettlementService.events", () =>
         Effect.gen(function* () {
