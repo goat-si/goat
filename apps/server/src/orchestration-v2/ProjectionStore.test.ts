@@ -1716,12 +1716,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.strictEqual(decodeThreadHistoryCursor(page.nextCursor!).p, 914);
         // A jump to an entry reads the full index and leaves it cached. With work, it scans
-        // payloads for inline output only in its page's runs, not in a run after its cursor.
+        // inline output only in its page's runs, not in a run after its cursor.
         const scannedRuns: Array<string> = [];
         yield* read("turn-item:bounded-sql-history:950").pipe(
           Effect.provideService(Statement.CurrentTransformer, (statement) => {
             const [query, params] = statement.compile();
-            if (query.includes("LIKE '%htmlRender%'")) scannedRuns.push(String(params[0]));
+            if (query.includes("item.inline_work_output = 1")) scannedRuns.push(String(params[0]));
             return Effect.succeed(statement);
           }),
         );
@@ -1947,7 +1947,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       }
       assert.strictEqual(workIds.size, 999);
       for (const toolName of ["goat.delegate_task", "mcp__goat__delegate_task"]) {
-        yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+        yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
           payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', ${toolName})
           WHERE thread_id = ${threadId} AND ordinal = 2`;
         const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
@@ -1982,13 +1982,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           "deferred",
         ).pipe(Effect.withTracer(pageRead.tracer));
         const payloadScans = pageRead.statements.filter((statement) =>
-          statement.includes("LIKE '%htmlRender%'"),
+          statement.includes("item.inline_work_output = 1"),
         );
         assert.lengthOf(payloadScans, 1);
         assert.include(payloadScans[0], "item.run_id IS json_extract(wanted.value, '$.id')");
       }
       // Until its run is scanned, a cursor on inline output is hidden inside a work group.
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
         payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', 't3-code.delegate_task')
         WHERE thread_id = ${threadId} AND ordinal = 4`;
       const sharedRunId = "run:bounded-sql-history:1";
@@ -2050,7 +2050,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             '$.status', CASE WHEN ordinal <= 700 THEN 'running' ELSE 'completed' END,
             '$.runId', CASE WHEN ordinal <= 700 THEN 'run:bounded-sql-history:300' ELSE ${sharedRunId} END)
         WHERE thread_id = ${threadId} AND ordinal >= 100`;
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
         payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', 't3-code.delegate_task')
         WHERE thread_id = ${threadId} AND ordinal = 720`;
       const beforeMissingCursor = yield* historyPage(
@@ -2070,7 +2070,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         run_id = ${sharedRunId},
         payload_json = json_set(payload_json, '$.status', 'completed', '$.runId', ${sharedRunId})
         WHERE thread_id = ${threadId} AND ordinal >= 100`;
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution', inline_work_output = 0,
         payload_json = json_set(payload_json, '$.type', 'command_execution') WHERE thread_id = ${threadId} AND ordinal IN (2, 4, 720)`;
       for (const [ordinal, status] of [
         [0, "completed"],

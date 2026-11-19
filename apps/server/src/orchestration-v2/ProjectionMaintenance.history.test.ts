@@ -460,3 +460,28 @@ it.effect("rebuild does not restore stale unsent evidence after execution on an 
     assert.equal(rebuilt?.inputDelivery, "ambiguous");
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("recomputes inline output after trimming removes its marker", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    yield* seed;
+    const payload = JSON.stringify({
+      type: "dynamic_tool",
+      output: "x".repeat(12000) + "htmlRender" + "x".repeat(12000),
+    });
+    yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+      (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json, inline_work_output)
+      VALUES ('trim-inline', 'thread-0', 500, 'dynamic_tool', 'completed', '2026-01-01', ${payload}, 1)`;
+    yield* sql`INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
+      VALUES ('thread-0', 'trim-inline', 500)`;
+    yield* maintenance.boundHistory({ budgetBytes: 0, now });
+    const [row] = yield* sql<{
+      readonly payload_json: string;
+      readonly inline_work_output: number;
+    }>`
+      SELECT payload_json, inline_work_output FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'trim-inline'`;
+    assert.isFalse(row!.payload_json.includes("htmlRender"));
+    assert.equal(row!.inline_work_output, 0);
+  }).pipe(Effect.provide(layer)),
+);
