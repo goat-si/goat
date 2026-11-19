@@ -142,7 +142,7 @@ it.effect.each(["origin", "github"] as const)(
 );
 
 it.effect.each(["on a branch", "detached", "unborn"] as const)(
-  "reads only the repository root for review requests that ignore the branch when %s",
+  "reuses the cached repository layout for review requests when %s",
   (state) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -183,7 +183,7 @@ it.effect.each(["on a branch", "detached", "unborn"] as const)(
           cwd,
           file: { path: "new.txt", previousPath: null, sourceKind: "working-tree" },
         });
-        assert.equal(discoveries(), 1);
+        assert.equal(discoveries(), 3);
         assert.deepStrictEqual(
           workingTree.sources
             .find((source) => source.kind === "working-tree")!
@@ -192,7 +192,7 @@ it.effect.each(["on a branch", "detached", "unborn"] as const)(
         );
 
         const general = yield* driver.getReviewDiffPreview({ cwd });
-        assert.equal(discoveries(), 3);
+        assert.equal(discoveries(), 1);
         assert.equal(
           general.sources.find((source) => source.kind === "branch-range")!.headRef,
           state === "detached" ? "HEAD" : yield* git(cwd, ["branch", "--show-current"]),

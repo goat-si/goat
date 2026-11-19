@@ -2872,21 +2872,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return { baseRef, insertions, deletions };
   }, Effect.scoped);
 
-  const resolveReviewWorktreeRoot = Effect.fn("resolveReviewWorktreeRoot")(function* (cwd: string) {
-    const result = yield* executeGit(
-      "GitVcsDriver.resolveRepositoryPaths.worktreeRoot",
-      cwd,
-      ["rev-parse", "--show-toplevel"],
-      { timeoutMs: 5_000, allowNonZeroExit: true },
-    );
-    const output = result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout;
-    if (result.exitCode === 0 && output.length > 0) {
-      return {
-        worktreeRoot: path.normalize(path.isAbsolute(output) ? output : path.resolve(cwd, output)),
-        currentBranch: null,
-      };
-    }
-    return yield* resolveRepositoryPathsUncached(cwd);
+  const resolveReviewRepository = Effect.fn("resolveReviewRepository")(function* (
+    cwd: string,
+    needsCurrentBranch: boolean,
+  ) {
+    if (!(yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => true)))) return null;
+    const repository = yield* resolveRepositoryPaths(cwd);
+    if (!repository?.worktreeRoot) return null;
+    const currentBranch = needsCurrentBranch
+      ? yield* readCurrentBranch("GitVcsDriver.review.currentBranch", cwd)
+      : null;
+    return { worktreeRoot: repository.worktreeRoot, currentBranch };
   });
 
   const getReviewDiffPreview = Effect.fn("getReviewDiffPreview")(function* (
@@ -2904,11 +2900,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       : REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES;
     const requestedScope = input.file?.sourceKind ?? input.scope;
     const needsCurrentBranch = requestedScope === undefined || requestedScope === "branch-range";
-    const repository = yield* (
-      needsCurrentBranch
-        ? resolveRepositoryPathsUncached(input.cwd)
-        : resolveReviewWorktreeRoot(input.cwd)
-    ).pipe(
+    const repository = yield* resolveReviewRepository(input.cwd, needsCurrentBranch).pipe(
       Effect.catchTags({
         GitCommandError: (error) =>
           isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
