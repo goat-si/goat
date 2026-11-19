@@ -90,6 +90,7 @@ function setup() {
           },
           connection: { phase: "connected", error: null, traceId: null },
           serverConfig: null,
+          refusedRouteIds: [],
         },
       ]),
     ),

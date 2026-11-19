@@ -431,6 +431,7 @@ describe("saved SSH row semantic status", () => {
       const selected = savedConnectionSshRoute({
         entry: entryWithAlternate,
         serverConfig: null,
+        refusedRouteIds: [],
         connection: {
           ...withoutEvidence,
           ...(evidence === "ready" ? { sshRuntimeReady } : {}),

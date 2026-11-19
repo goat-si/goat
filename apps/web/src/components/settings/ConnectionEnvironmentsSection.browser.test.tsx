@@ -796,6 +796,7 @@ it.each([
       displayUrl: null,
       relayManaged: false,
       serverConfig: null,
+      refusedRouteIds: [],
       entry: {
         enabled: true,
         target: sshTarget,
@@ -957,6 +958,7 @@ it("expands a saved machine's connection diagnosis and retries without hiding SS
     displayUrl: null,
     relayManaged: false,
     serverConfig: null,
+    refusedRouteIds: [],
     entry: {
       enabled: true,
       target: new SshConnectionTarget({
