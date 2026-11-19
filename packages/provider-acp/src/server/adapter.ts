@@ -1,3 +1,4 @@
+import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
   acpSupportsImagePrompts,
   acpProviderItemNativeId,
@@ -146,7 +147,6 @@ import {
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
-  toolCallVisibleOutputChanged,
   withTrackedPermissionToolCall,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
@@ -268,7 +268,7 @@ interface AcpNativeBuildConfiguration {
   readonly configOptions: ReadonlyArray<{ readonly id: string; readonly value: string }>;
 }
 
-interface ActiveAcpTurn {
+export interface ActiveAcpTurn {
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeThreadId: string;
@@ -418,29 +418,6 @@ type PendingRuntimeRequest = {
 
 /** How long a Stop waits for the agent to confirm before the user is offered Force stop. */
 const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
-const TOOL_UPDATE_PERSIST_EVERY = 10;
-
-// Agents can resend whole calls while streaming arguments.
-function shouldPersistToolUpdate(
-  context: Pick<ActiveAcpTurn, "toolUpdatesSkipped">,
-  key: string,
-  previous: AcpToolCallState | undefined,
-  next: AcpToolCallState,
-  reportedStatus: AcpToolCallState["status"],
-): boolean {
-  const skipped = context.toolUpdatesSkipped.get(key) ?? 0;
-  const persist =
-    reportedStatus === "completed" ||
-    reportedStatus === "failed" ||
-    previous === undefined ||
-    previous.status !== next.status ||
-    previous.title !== next.title ||
-    toolCallVisibleOutputChanged(previous, next) ||
-    skipped + 1 >= TOOL_UPDATE_PERSIST_EVERY;
-  context.toolUpdatesSkipped.set(key, persist ? 0 : skipped + 1);
-  return persist;
-}
-
 export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   options: AcpAdapterV2Options,
 ) {
