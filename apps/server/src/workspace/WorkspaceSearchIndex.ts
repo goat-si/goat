@@ -28,6 +28,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import { isWholeWordRange, mapContentMatchRanges } from "./workspaceContentMatchRanges.ts";
+import { buildWholeWordPattern, findWordRanges } from "./workspaceWholeWord.ts";
 import { searchContentsWithGit } from "./workspaceGitContentSearch.ts";
 import { makeIgnoreFileDecider } from "./workspaceIgnoreFiles.ts";
 import { makeSymlinkScan, mergeSymlinkMatches } from "./workspaceSymlinkScan.ts";
@@ -711,7 +712,10 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       }
       contentIndexPending = false;
     }
-    let { searchQuery, regexMode } = buildContentSearchQuery(input);
+    const wholeWordPrefilter = input.wholeWord && !input.useRegex && /^\w+$/.test(input.query);
+    let { searchQuery, regexMode } = wholeWordPrefilter
+      ? { searchQuery: buildWholeWordPattern(input.query, input.caseSensitive), regexMode: true }
+      : buildContentSearchQuery(input);
     const deadline = performance.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
     // Grep cursors advance per file; whole-word filtering needs enough raw candidates before advancing.
     const rawPageSize = input.wholeWord
@@ -744,9 +748,11 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
 
       for (const match of result.items) {
         if (isIgnoredPath(gitIgnore.ignored, match.relativePath, hostIsWindows)) continue;
-        const matchRanges = mapContentMatchRanges(match.lineContent, match.matchRanges).filter(
-          (range) => !input.wholeWord || isWholeWordRange(match.lineContent, range),
-        );
+        const matchRanges = (
+          wholeWordPrefilter
+            ? findWordRanges(match.lineContent, input.query, input.caseSensitive)
+            : mapContentMatchRanges(match.lineContent, match.matchRanges)
+        ).filter((range) => !input.wholeWord || isWholeWordRange(match.lineContent, range));
         // fff reports hits past its 512-char lineContent cap with no ranges, so whole words can't be verified there.
         if (input.wholeWord && matchRanges.length === 0) continue;
         matches.push({
