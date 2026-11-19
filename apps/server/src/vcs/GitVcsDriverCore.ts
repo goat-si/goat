@@ -51,6 +51,7 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -166,6 +167,7 @@ const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_FETCH_TIMEOUT = Duration.minutes(5);
 
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
+const STATUS_FETCH_MAX_PENDING = 256;
 const REPOSITORY_PATHS_CACHE_CAPACITY = 2_048;
 const REPOSITORY_PATHS_CACHE_TTL = Duration.minutes(10);
 const REPOSITORY_PATHS_REFRESH_COALESCE_TTL = Duration.seconds(5);
@@ -344,7 +346,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
-  const statusFetches = new Map<string, Fiber.Fiber<void, GitCommandError>>();
+  type StatusFetchState = {
+    phase: "queued" | "running" | "claimed";
+    claimed: Deferred.Deferred<void>;
+    finished: Deferred.Deferred<boolean>;
+  };
+  const statusFetches = new Map<
+    string,
+    { state: StatusFetchState; fiber: Fiber.Fiber<void, GitCommandError> }
+  >();
   const statusFetchProcesses = yield* Semaphore.make(4);
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
@@ -781,11 +791,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const fiber = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const pending = statusFetches.get(key);
-        if (pending) return pending;
+        if (pending) return pending.fiber;
+        if (statusFetches.size >= STATUS_FETCH_MAX_PENDING) {
+          yield* Effect.logWarning("Background Git fetch admission limit reached");
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.fetchRemoteForStatus",
+            command: "git fetch",
+            cwd: fetchCwd,
+            detail: "Too many background Git fetches are pending.",
+          });
+        }
+        const state: StatusFetchState = {
+          phase: "queued",
+          claimed: yield* Deferred.make<void>(),
+          finished: yield* Deferred.make<boolean>(),
+        };
         // Frequent poll deadlines and disconnected clients must not interrupt a
         // healthy writer. A separate safety limit prevents a hung transport from
         // occupying its worker slot indefinitely.
-        const started = yield* executeGit("GitVcsDriver.fetchRemoteForStatus", fetchCwd, args, {
+        const fetch = executeGit("GitVcsDriver.fetchRemoteForStatus", fetchCwd, args, {
           env: STATUS_UPSTREAM_REFRESH_ENV,
           fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
           timeoutMs: Duration.toMillis(STATUS_UPSTREAM_FETCH_TIMEOUT),
@@ -799,18 +823,39 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ),
           Effect.tapError(() => recordStatusRemoteRefreshFailure(key)),
           Effect.tapCause((cause) => Effect.logWarning("Background Git fetch failed", cause)),
-          statusFetchProcesses.withPermits(1),
+        );
+        const started = yield* Effect.raceFirst(
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              if (state.phase !== "queued") return false;
+              state.phase = "running";
+              yield* restore(fetch);
+              return true;
+            }),
+          ).pipe(statusFetchProcesses.withPermits(1)),
+          Deferred.await(state.claimed).pipe(Effect.as(false)),
+        ).pipe(
+          Effect.flatMap((completed) =>
+            completed
+              ? Effect.void
+              : Deferred.await(state.finished).pipe(
+                  Effect.flatMap((succeeded) =>
+                    succeeded ? Effect.void : fetch.pipe(statusFetchProcesses.withPermits(1)),
+                  ),
+                ),
+          ),
           Effect.onExit(() =>
             Effect.sync(() => {
-              statusFetches.delete(key);
+              if (statusFetches.get(key)?.state === state) statusFetches.delete(key);
             }),
           ),
           Effect.forkIn(serviceScope, { startImmediately: false, uninterruptible: false }),
         );
-        statusFetches.set(key, started);
+        statusFetches.set(key, { state, fiber: started });
         return started;
       }),
     );
+    yield* Effect.annotateCurrentSpan("statusFetch.joining", true);
     const result = yield* Fiber.join(fiber).pipe(
       Effect.timeoutOption(STATUS_UPSTREAM_REFRESH_TIMEOUT),
     );
@@ -2362,12 +2407,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
     const remote = yield* readConfigValue(cwd, `branch.${refName}.remote`);
+    let fetchedUpstreamOnly = false;
     if (remote) {
       const gitCommonDir = yield* resolveGitCommonDir(cwd);
       const pending = statusFetches.get(`${gitCommonDir}\0${remote}`);
       // The status wait can finish while its fetch still owns reference locks.
       // Let our existing writer finish before starting the pull's fetch.
-      if (pending) yield* Fiber.await(pending);
+      if (pending) {
+        const claimed = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            if (pending.state.phase !== "queued") return false;
+            pending.state.phase = "claimed";
+            yield* Effect.addFinalizer((exit) =>
+              Deferred.succeed(
+                pending.state.finished,
+                Exit.isSuccess(exit) && !fetchedUpstreamOnly,
+              ),
+            );
+            yield* Deferred.succeed(pending.state.claimed, undefined);
+            return true;
+          }),
+        );
+        if (!claimed) {
+          yield* Effect.annotateCurrentSpan("statusFetch.waiting", true);
+          yield* Fiber.await(pending.fiber);
+        }
+      }
     }
     const beforeSha = yield* runGitStdout(
       "GitVcsDriver.pullCurrentBranch.beforeSha",
@@ -2422,6 +2487,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         currentSha === beforeSha
       ) {
         args = ["pull", "--ff-only", "--progress", "--", remote, mergeRef];
+        fetchedUpstreamOnly = true;
         result = yield* executeGitWithStableDiagnostics(
           "GitVcsDriver.pullCurrentBranch.pull",
           cwd,
@@ -2450,11 +2516,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const refreshed = yield* readStatusDetailsLocal(cwd);
     return {
-      status: beforeSha.length > 0 && beforeSha === afterSha ? "skipped_up_to_date" : "pulled",
+      status:
+        beforeSha.length > 0 && beforeSha === afterSha
+          ? ("skipped_up_to_date" as const)
+          : ("pulled" as const),
       refName,
       upstreamRef: refreshed.upstreamRef,
     };
-  });
+  }, Effect.scoped);
 
   const readRangeContext: GitVcsDriver.GitVcsDriver["Service"]["readRangeContext"] = Effect.fn(
     "readRangeContext",
