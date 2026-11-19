@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -464,6 +465,46 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         assert.deepEqual(yield* discoverClaudeSkills(settings), []);
       }
     }),
+  );
+
+  it.effect("prefers managed skills and retains legacy Windows settings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skills-" });
+      const configDir = path.join(tempDir, "user");
+      const workspace = path.join(tempDir, "workspace");
+      const programFiles = path.join(tempDir, "Program Files");
+      const programData = path.join(tempDir, "ProgramData");
+      const managed = path.join(programFiles, "ClaudeCode");
+      const legacy = path.join(programData, "ClaudeCode");
+      yield* writeSkill(path.join(managed, ".claude", "skills"), "deploy", "# Managed");
+      yield* writeSkill(path.join(legacy, ".claude", "skills"), "legacy", "# Legacy");
+      yield* writeSkill(path.join(configDir, "skills"), "deploy", "# User");
+      yield* writeSkill(path.join(workspace, ".claude", "skills"), "deploy", "# Project");
+      yield* fs.writeFileString(
+        path.join(legacy, "managed-settings.json"),
+        '{"skillOverrides":{"deploy":"off"}}',
+      );
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace, {
+        ProgramFiles: programFiles,
+        PROGRAMDATA: programData,
+      });
+      assert.deepEqual(
+        skills.map(({ name, path: skillPath, enabled }) => ({
+          name,
+          path: skillPath,
+          enabled,
+        })),
+        [
+          {
+            name: "deploy",
+            path: path.join(managed, ".claude", "skills", "deploy", "SKILL.md"),
+            enabled: false,
+          },
+        ],
+      );
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
   );
 
   it.effect("prefers user skills on name collisions even with a stray .agents copy", () =>

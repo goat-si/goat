@@ -963,7 +963,7 @@ export const layerWithOptions = (
 
       const {
         readReleasedProviderThreads,
-        writeReleasedToolCallEvents,
+        writeReleasedProcessTaskEvents,
         writeReleasedBackgroundWorkEvents,
       } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
 
@@ -1122,10 +1122,10 @@ export const layerWithOptions = (
                   if (input.cancelIdleFiber !== false) {
                     yield* cancelIdleFiber(entry.idleFiber);
                   }
-                  // Queued events can persist tool calls after the release-time scan.
+                  // Queued events can persist tasks after the release-time scan.
                   const afterDrain = Effect.forEach(
                     releasedProviderThreads,
-                    (thread) => writeReleasedToolCallEvents(thread, releasedAt),
+                    (thread) => writeReleasedProcessTaskEvents(thread, releasedAt),
                     { discard: true },
                   ).pipe(logReleaseFailure(input.providerSessionId));
                   if (input.gracefulSubscribers === true) {

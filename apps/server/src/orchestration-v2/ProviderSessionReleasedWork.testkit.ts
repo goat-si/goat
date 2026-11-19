@@ -1,6 +1,8 @@
+import * as TestClock from "effect/testing/TestClock";
 import { assert, it } from "@effect/vitest";
 import {
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   TurnItemId,
 } from "@goat/contracts";
@@ -181,6 +183,267 @@ export function registerReleasedBackgroundWorkChecks({
         toolCallStatus,
       };
     });
+
+  it.effect.each([
+    { duringDrain: false, legacy: false },
+    { duringDrain: true, legacy: false },
+    { duringDrain: true, legacy: true },
+  ])(
+    "settles released workflow members without touching the replacement (during drain: $duringDrain, legacy card: $legacy)",
+    ({ duringDrain, legacy }) =>
+      Effect.gen(function* () {
+        const state = yield* Ref.make(emptyState);
+        const beforeUnchangedWrite = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+        yield* Effect.gen(function* () {
+          const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+          const idAllocator = yield* IdAllocator.IdAllocatorV2;
+          const { threadId, providerSessionId, providerThreads } =
+            yield* openSessionWithBackgroundCommand("provider-session-release-native-child");
+          const now = yield* DateTime.now;
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          const children = yield* Effect.forEach(providerThreads, (owner, index) =>
+            Effect.gen(function* () {
+              const childThreadId = yield* idAllocator.allocate.thread({
+                fixtureName: `release-child-${index}`,
+                projectId: yield* idAllocator.allocate.project({ fixtureName: "release-child" }),
+              });
+              const nativeId = legacy && index === 0 ? "dev-server" : `agent-${index}`;
+              const allocateNode = (nativeItemId: string) =>
+                idAllocator.derive.nodeFromProviderItem({ driver: CODEX_DRIVER, nativeItemId });
+              const id = allocateNode(nativeId);
+              const root = allocateNode(`root-${nativeId}`);
+              const nativeTaskRef = { driver: CODEX_DRIVER, nativeId, strength: "strong" } as const;
+              const memberThreadId = yield* idAllocator.allocate.thread({
+                fixtureName: `release-member-${index}`,
+                projectId: yield* idAllocator.allocate.project({ fixtureName: "release-member" }),
+              });
+              const memberKey = `${childThreadId}:agent:1`;
+              const memberId = allocateNode(memberKey);
+              const memberRoot = allocateNode(`${memberKey}:thread-root`);
+              const memberRef = { ...nativeTaskRef, nativeId: memberKey };
+              const subagent: OrchestrationV2Subagent = {
+                id,
+                threadId,
+                runId,
+                childThreadId,
+                nativeTaskRef,
+                parentNodeId: idAllocator.derive.rootNode({ runId }),
+                origin: "provider_native",
+                createdBy: "agent",
+                driver: CODEX_DRIVER,
+                providerInstanceId: modelSelection.instanceId,
+                providerThreadId: null,
+                prompt: "Work in the background",
+                title: null,
+                model: null,
+                status: "running",
+                result: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                workflow: {
+                  phases: [],
+                  agents: [
+                    { index: 1, childThreadId: memberThreadId, label: "Member", state: "running" },
+                  ],
+                },
+              };
+              yield* eventSink.write({
+                events: [
+                  yield* makeThreadCreatedEvent({ idAllocator, threadId: childThreadId, now }),
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId }),
+                    type: "subagent.updated",
+                    threadId,
+                    occurredAt: now,
+                    payload: subagent,
+                  },
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId }),
+                    type: "turn-item.updated",
+                    threadId,
+                    occurredAt: now,
+                    payload: {
+                      ...subagent,
+                      type: "subagent",
+                      id: TurnItemId.make(`turn-item:${nativeId}`),
+                      subagentId: id,
+                      nodeId: id,
+                      providerThreadId: legacy && index === 0 ? null : owner.id,
+                      providerTurnId: null,
+                      nativeItemRef: nativeTaskRef,
+                      parentItemId: null,
+                      ordinal: index + 1,
+                    },
+                  },
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+                    type: "node.updated",
+                    threadId: childThreadId,
+                    occurredAt: now,
+                    payload: {
+                      id: root,
+                      threadId: childThreadId,
+                      rootNodeId: root,
+                      runId: null,
+                      parentNodeId: null,
+                      kind: "root_turn",
+                      status: "running",
+                      countsForRun: false,
+                      providerThreadId: null,
+                      providerTurnId: null,
+                      nativeItemRef: nativeTaskRef,
+                      runtimeRequestId: null,
+                      checkpointScopeId: null,
+                      startedAt: now,
+                      completedAt: null,
+                    },
+                  },
+                ],
+              });
+              const { workflow: _workflow, ...coordinator } = subagent;
+              const writeMember = Effect.gen(function* () {
+                yield* eventSink.write({
+                  events: [
+                    yield* makeThreadCreatedEvent({ idAllocator, threadId: memberThreadId, now }),
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+                      type: "subagent.updated",
+                      threadId: childThreadId,
+                      occurredAt: now,
+                      payload: {
+                        ...coordinator,
+                        id: memberId,
+                        threadId: childThreadId,
+                        runId: null,
+                        childThreadId: memberThreadId,
+                        parentNodeId: root,
+                        nativeTaskRef: memberRef,
+                      },
+                    },
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId: memberThreadId }),
+                      type: "node.updated",
+                      threadId: memberThreadId,
+                      occurredAt: now,
+                      payload: {
+                        id: memberRoot,
+                        threadId: memberThreadId,
+                        rootNodeId: memberRoot,
+                        runId: null,
+                        parentNodeId: null,
+                        kind: "root_turn",
+                        status: "running",
+                        countsForRun: false,
+                        providerThreadId: null,
+                        providerTurnId: null,
+                        nativeItemRef: memberRef,
+                        runtimeRequestId: null,
+                        checkpointScopeId: null,
+                        startedAt: now,
+                        completedAt: null,
+                      },
+                    },
+                  ],
+                });
+              });
+              if (!duringDrain || index !== 0) yield* writeMember;
+              return { id, root, childThreadId, memberId, memberRoot, memberThreadId, writeMember };
+            }),
+          );
+          const replacementSessionId = providerThreads[1].providerSessionId;
+          if (replacementSessionId === null)
+            return yield* Effect.die("Missing replacement session");
+          yield* manager.open({
+            threadId,
+            providerSessionId: replacementSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          if (duringDrain) {
+            const runtime = Option.getOrThrow(yield* manager.get(providerSessionId));
+            if (runtime.subscribeEvents === undefined) return assert.fail("no event subscription");
+            const subscription = yield* runtime.subscribeEvents;
+            const entered = yield* Deferred.make<void>();
+            const resume = yield* Deferred.make<void>();
+            const lateChild = children[0];
+            if (lateChild === undefined) return assert.fail("no workflow to drain");
+            const consumer = yield* subscription.events.pipe(
+              Stream.tap(() =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(resume)),
+                  Effect.andThen(lateChild.writeMember),
+                ),
+              ),
+              Stream.runDrain,
+              Effect.exit,
+              Effect.forkScoped,
+            );
+            const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+            if (queue === undefined) return assert.fail("no provider event queue");
+            yield* Queue.offer(queue, {
+              type: "provider_session.updated",
+              driver: CODEX_DRIVER,
+              providerSession: runtime.providerSession,
+            });
+            yield* Deferred.await(entered);
+            yield* Ref.set(beforeUnchangedWrite, TestClock.adjust("1 second"));
+            yield* manager.detach({ providerSessionId, threadId });
+            yield* Deferred.succeed(resume, undefined);
+            yield* Fiber.join(consumer);
+          } else {
+            yield* manager.close(providerSessionId);
+          }
+          assert.isTrue(yield* manager.isLive(replacementSessionId));
+          const parent = yield* projectionStore.getThreadProjection(threadId);
+          const status = yield* Effect.forEach(children, ({ id, root, childThreadId }) =>
+            projectionStore
+              .getThreadRecords(childThreadId, ["nodes"])
+              .pipe(
+                Effect.map(({ nodes }) => [
+                  parent.subagents.find((row) => row.id === id)?.status,
+                  nodes.find((row) => row.id === root)?.status,
+                ]),
+              ),
+          );
+          assert.deepStrictEqual(status, [
+            ["interrupted", "interrupted"],
+            ["running", "running"],
+          ]);
+          const memberStatuses = yield* Effect.forEach(
+            children,
+            ({ childThreadId, memberId, memberRoot, memberThreadId }) =>
+              Effect.gen(function* () {
+                const { subagents } = yield* projectionStore.getThreadRecords(childThreadId, [
+                  "subagents",
+                ]);
+                const { nodes } = yield* projectionStore.getThreadRecords(memberThreadId, [
+                  "nodes",
+                ]);
+                return [
+                  subagents.find((row) => row.id === memberId)?.status,
+                  nodes.find((row) => row.id === memberRoot)?.status,
+                ];
+              }),
+          );
+          assert.deepStrictEqual(memberStatuses, [
+            ["interrupted", "interrupted"],
+            ["running", "running"],
+          ]);
+        }).pipe(
+          Effect.provide(
+            layerTest({
+              state,
+              idleTimeoutMs: 60_000,
+              capabilities: ExclusiveCapabilities,
+              beforeUnchangedWrite,
+            }),
+          ),
+        );
+      }),
+  );
 
   // regression: a worktree handoff left its tool call running, so the thread stayed Waiting
   it.effect.each(["detach", "stream failure", "provider stop", "early close"] as const)(

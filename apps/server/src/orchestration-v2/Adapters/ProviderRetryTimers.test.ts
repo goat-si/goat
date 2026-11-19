@@ -4,11 +4,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { makeCodexRetryTimers } from "./CodexRetryTimers.ts";
+import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
 
 it.effect("replaces a retry deadline and cancels it when the retry recovers", () =>
   Effect.gen(function* () {
-    const timers = makeCodexRetryTimers(yield* Effect.scope);
+    const timers = makeProviderRetryTimers(yield* Effect.scope);
     const id = ProviderTurnId.make("retry-turn");
     const fired = yield* Ref.make<Array<string>>([]);
     const finished = yield* Deferred.make<void>();
@@ -41,7 +41,7 @@ it.effect("replaces a retry deadline and cancels it when the retry recovers", ()
 // A recovering delta cancels outside the terminalization permit; it must not cut a finalize short.
 it.effect("a cancel after the deadline fired leaves the stall work running to its end", () =>
   Effect.gen(function* () {
-    const timers = makeCodexRetryTimers(yield* Effect.scope);
+    const timers = makeProviderRetryTimers(yield* Effect.scope);
     const id = ProviderTurnId.make("retry-turn");
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
