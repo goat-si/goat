@@ -1341,7 +1341,9 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
         teardown(true);
       });
   };
-  submit.addEventListener("click", () => submitAnnotation("attach"));
+  submit.addEventListener("click", (event) => {
+    if (event.isTrusted) submitAnnotation("attach");
+  });
   const handleOverlayKey = (event: KeyboardEvent): void => {
     if (event.type !== "keydown") return;
     onKeyDown(event);

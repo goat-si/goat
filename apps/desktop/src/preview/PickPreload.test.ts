@@ -155,6 +155,8 @@ it.each([
       if (previous) Object.defineProperty(document, "elementsFromPoint", previous);
       else Reflect.deleteProperty(document, "elementsFromPoint");
     });
+    using listeners = vi.spyOn(HTMLButtonElement.prototype, "addEventListener");
+
     const shadowRoot = startAnnotation();
 
     card.dispatchEvent(
@@ -168,6 +170,15 @@ it.each([
     );
     if (!attach) throw new Error("Attach button not found");
     attach.click();
+    expect(attach.disabled).toBe(false);
+    expect(ipcSends.send).not.toHaveBeenCalledWith(ELEMENT_PICKED_CHANNEL, expect.anything());
+    const listenerIndex = listeners.mock.contexts.findIndex(
+      (target, index) => target === attach && listeners.mock.calls[index]?.[0] === "click",
+    );
+    const listener = listeners.mock.calls[listenerIndex]?.[1];
+    if (typeof listener !== "function") throw new Error("Attach click listener not found");
+    // The DOM test environment has no native input source.
+    listener.call(attach, { isTrusted: true } as MouseEvent);
 
     expect((await picked.promise).elements[0]?.rect).toEqual(rect);
   },
