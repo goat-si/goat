@@ -1,3 +1,10 @@
+import type { AgentSessionRecentThread, AgentSessionSource } from "./AgentSessionScannerTypes.ts";
+export type {
+  AgentSessionThreadMessage,
+  AgentSessionThread,
+  AgentSessionRecentThread,
+  AgentSessionSource,
+} from "./AgentSessionScannerTypes.ts";
 import {
   MAX_IMPORT_RECORDS,
   emptyClaudeFields,
@@ -106,40 +113,6 @@ const MAX_IMPORT_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORT_TRANSCRIPTS = 100;
 
-export interface AgentSessionThreadMessage {
-  readonly role: "user" | "assistant";
-  readonly text: string;
-  readonly createdAt: string;
-}
-
-export interface AgentSessionThread {
-  readonly source: AgentSessionSource;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly providerSessionId: string;
-  readonly title: string;
-  readonly model: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
-  readonly omittedMessageCount: number;
-}
-
-export type AgentSessionRecentThread =
-  | {
-      readonly _tag: "Importable";
-      readonly thread: AgentSessionThread;
-      readonly source: AgentSessionImportSource;
-      /** The root's linked worktree the session ran in, or null when it ran in the root. */
-      readonly worktree: { readonly path: string; readonly branch: string | null } | null;
-    }
-  | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
-  | {
-      readonly _tag: "Duplicate";
-      readonly source: AgentSessionImportSource;
-      readonly messages: AgentSessionThread["messages"];
-    }
-  | { readonly _tag: "Skipped" };
-
 export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
@@ -147,8 +120,6 @@ export class AgentSessionScanner extends Context.Service<
     readonly recentThreads: ScanCompatibility.RecentAgentSessions<AgentSessionRecentThread>;
   }
 >()("goat/project/AgentSessionScanner") {}
-
-export type AgentSessionSource = AgentSessionProjectCandidate["sources"][number];
 
 interface RawCandidate {
   readonly cwd: string;
