@@ -64,7 +64,10 @@ export function usePullRequestSavedViews() {
         pullRequestSavedViews: transform(current.pullRequestSavedViews ?? EMPTY_SAVED_VIEWS),
       }),
     });
-  return { views, ready, update } as const;
+  const status = AsyncResult.isSuccess(preferences)
+    ? preferences.value.pullRequestSavedViewsStatus
+    : undefined;
+  return { views, ready, update, status } as const;
 }
 
 function withEnvironmentControls(
