@@ -179,7 +179,7 @@ export function parseForgejoRemote(value: string) {
     : null;
 }
 
-export function matchForgejoLogin(
+function matchingForgejoLogins(
   logins: ReturnType<typeof parseForgejoLogins>,
   remote: NonNullable<ReturnType<typeof parseForgejoRemote>>,
   requestedHost?: string,
@@ -212,12 +212,41 @@ export function matchForgejoLogin(
     const deepest = Math.max(...matches.map(depth));
     matches = matches.filter((login) => depth(login) === deepest);
   }
-  return matches.length === 1
-    ? matches[0]
-    : new Set(matches.map((login) => login.url)).size === 1
-      ? matches.find((login) => login.default === "true")
-      : undefined;
+  return matches;
 }
+
+export function matchForgejoLogin(
+  logins: ReturnType<typeof parseForgejoLogins>,
+  remote: NonNullable<ReturnType<typeof parseForgejoRemote>>,
+  requestedHost?: string,
+  hostOnly = false,
+) {
+  return chooseForgejoLogin(matchingForgejoLogins(logins, remote, requestedHost, hostOnly));
+}
+
+function chooseForgejoLogin(matches: ReturnType<typeof parseForgejoLogins>) {
+  if (matches.length === 1) return matches[0];
+  const defaults = matches.filter((login) => login.default === "true");
+  return new Set(matches.map((login) => login.url)).size === 1 && defaults.length === 1
+    ? defaults[0]
+    : undefined;
+}
+
+const MAX_AMBIGUOUS_LOGIN_NAMES = 8;
+const MAX_LOGIN_NAME_LENGTH = 80;
+const ambiguousLoginDetail = (
+  command: "fj" | "tea",
+  logins: ReturnType<typeof parseForgejoLogins>,
+) => {
+  const names = logins
+    .slice(0, MAX_AMBIGUOUS_LOGIN_NAMES)
+    .map((login) => login.name.slice(0, MAX_LOGIN_NAME_LENGTH).replace(/[\p{Cc}]/gu, " "));
+  const suffix =
+    logins.length > MAX_AMBIGUOUS_LOGIN_NAMES
+      ? ` and ${logins.length - MAX_AMBIGUOUS_LOGIN_NAMES} more`
+      : "";
+  return `Multiple ${command} logins match: ${names.join(", ")}${suffix}. Set a tea default for logins on the same server, or specify the full server URL.`;
+};
 
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
@@ -596,8 +625,7 @@ export const make = Effect.gen(function* () {
     const selectLogin = (logins: ReturnType<typeof parseForgejoLogins>) =>
       remote
         ? matchForgejoLogin(logins, remote, remote.ssh ? requestedHost : undefined, matchHostOnly)
-        : (logins.find((item) => item.default === "true") ??
-          (new Set(logins.map((item) => item.name)).size === 1 ? logins[0] : undefined));
+        : chooseForgejoLogin([...new Map(logins.map((item) => [item.name, item])).values()]);
     let login = selectLogin(fjLogins);
     let command: "fj" | "tea" = "fj";
     if (
@@ -616,7 +644,17 @@ export const make = Effect.gen(function* () {
           command: "fj",
           cwd: input.cwd,
           reason: "authentication",
-          detail: "Multiple fj logins match this repository. Specify its full server URL.",
+          detail: ambiguousLoginDetail(
+            "fj",
+            remote
+              ? matchingForgejoLogins(
+                  fjLogins,
+                  remote,
+                  remote.ssh ? requestedHost : undefined,
+                  matchHostOnly,
+                )
+              : fjLogins,
+          ),
         });
       if (available.failure.reason !== "missing-cli") return yield* available.failure;
     }
@@ -629,7 +667,23 @@ export const make = Effect.gen(function* () {
     }
     if (!login) {
       command = "tea";
-      login = selectLogin(yield* listLogins({ cwd: input.cwd, command: "tea" }));
+      const teaLogins = yield* listLogins({ cwd: input.cwd, command: "tea" });
+      login = selectLogin(teaLogins);
+      const matches = remote
+        ? matchingForgejoLogins(
+            teaLogins,
+            remote,
+            remote.ssh ? requestedHost : undefined,
+            matchHostOnly,
+          )
+        : teaLogins;
+      if (!login && matches.length > 1)
+        return yield* new ForgejoCliError({
+          command,
+          cwd: input.cwd,
+          reason: "authentication",
+          detail: ambiguousLoginDetail(command, matches),
+        });
     }
     if (!login)
       return yield* new ForgejoCliError({
