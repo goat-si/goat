@@ -133,6 +133,8 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     readonly beforeRegistrationRegister?: (
       registration: ConnectionRegistration,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
+    /** The catalog refuses this registration, as it refuses a Pen route another one saved. */
+    readonly refuseRegistration?: (registration: ConnectionRegistration) => boolean;
     readonly beforeRoutesSet?: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
@@ -197,12 +199,13 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     register: (registration, routes) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRegister?.(registration) ?? Effect.void;
+        if (options?.refuseRegistration?.(registration) === true) return false;
         yield* Ref.update(storedTargets, (current) =>
           replaceRoutes(current, registration.target.environmentId, routes),
         );
         switch (registration._tag) {
           case "RelayConnectionRegistration":
-            return;
+            return true;
           case "BearerConnectionRegistration":
           case "SshConnectionRegistration":
           case "HubProxyConnectionRegistration":
@@ -216,14 +219,14 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
               registration._tag === "HubProxyConnectionRegistration" ||
               registration._tag === "PenConnectionRegistration"
             )
-              return;
+              return true;
             yield* Ref.update(storedCredentials, (current) => {
               const next = new Map(current);
               next.set(registration.target.connectionId, registration.credential);
               return next;
             });
-            return;
         }
+        return true;
       }),
     setRoutes: (environmentId, routes) =>
       (options?.beforeRoutesSet?.(environmentId) ?? Effect.void).pipe(

@@ -22,7 +22,7 @@ import {
   decodeOrDiscardOrchestrationCache,
   putRemoteDpopTokenInCatalog,
   putConnectionCredentialInCatalog,
-  registerConnectionInCatalog,
+  registerThroughCatalog,
   removeCatalogValue,
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
@@ -634,9 +634,9 @@ export const layer = Layer.effectContext(
     const registrationStore = Persistence.ConnectionRegistrationStore.of({
       register: Effect.fn("Persistence.ConnectionRegistrationStore.register")(
         function (registration, routes) {
-          return catalog
-            .update((document) => registerConnectionInCatalog(document, registration, routes))
-            .pipe(Effect.mapError((cause) => persistenceError("register-connection", cause)));
+          return registerThroughCatalog(catalog.update, registration, routes).pipe(
+            Effect.mapError((cause) => persistenceError("register-connection", cause)),
+          );
         },
       ),
       setRoutes: Effect.fn("Persistence.ConnectionRegistrationStore.setRoutes")(

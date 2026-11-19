@@ -336,12 +336,32 @@ export function removeConnectionFromCatalog(
   };
 }
 
+/** Registers through a catalog update; false when the newest catalog refused it (a Pen takeover). */
+export const registerThroughCatalog = <E>(
+  update: (
+    transform: (document: ConnectionCatalogDocument) => ConnectionCatalogDocument,
+  ) => Effect.Effect<void, E>,
+  registration: ConnectionRegistration,
+  routes: ReadonlyArray<PersistedConnectionTarget>,
+) =>
+  Effect.suspend(() => {
+    let applied = false;
+    return update((document) => {
+      const next = registerConnectionInCatalog(document, registration, routes);
+      applied = next !== document;
+      return next;
+    }).pipe(Effect.map(() => applied));
+  });
+
 export function setConnectionEnabledInCatalog(
   document: ConnectionCatalogDocument,
   environmentId: EnvironmentId,
   enabled: boolean,
 ): ConnectionCatalogDocument {
-  const registered = document.targets.some((target) => target.environmentId === environmentId);
+  // An environment holding only routes the closed Pen gate keeps back is no listed one.
+  const registered = document.targets.some(
+    (target) => target.environmentId === environmentId && routeIsShown({ target }),
+  );
   const without = removeCatalogValue(
     document.disabledEnvironmentIds,
     (value) => value,

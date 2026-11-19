@@ -2,7 +2,7 @@ import {
   readCatalogHub,
   setCatalogHub,
   putRemoteDpopTokenInCatalog,
-  registerConnectionInCatalog,
+  registerThroughCatalog,
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
   setRoutesInCatalog,
@@ -80,9 +80,9 @@ export const layer = Layer.effectContext(
     });
     const registrationStore = Persistence.ConnectionRegistrationStore.of({
       register: (registration, routes) =>
-        catalog
-          .update((document) => registerConnectionInCatalog(document, registration, routes))
-          .pipe(Effect.mapError((error) => targetPersistenceError("register-connection", error))),
+        registerThroughCatalog(catalog.update, registration, routes).pipe(
+          Effect.mapError((error) => targetPersistenceError("register-connection", error)),
+        ),
       setRoutes: (environmentId, routes) =>
         catalog
           .update((document) => setRoutesInCatalog(document, environmentId, routes))

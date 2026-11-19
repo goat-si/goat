@@ -1,13 +1,17 @@
 import { EnvironmentId } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import { PenConnectionProfile, PenConnectionRegistration } from "../connection/catalog.ts";
 import { BearerConnectionTarget, PenConnectionTarget } from "../connection/model.ts";
 import {
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   registerConnectionInCatalog,
+  registerThroughCatalog,
   removeConnectionFromCatalog,
+  setConnectionEnabledInCatalog,
   setRoutesInCatalog,
+  type ConnectionCatalogDocument,
 } from "./storageDocument.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -102,3 +106,43 @@ it("a Pen member's route stays with the environment that saved it when another o
   );
   expect(next).toBe(document);
 });
+
+const penOnly = (): ConnectionCatalogDocument => ({
+  ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+  targets: [
+    new PenConnectionTarget({
+      environmentId: ENVIRONMENT_ID,
+      label: "Pen",
+      connectionId: "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
+    }),
+  ],
+});
+
+it("switching off an environment that holds only Pen routes the closed gate hides saves no off switch, as for a removed one", () => {
+  expect(
+    setConnectionEnabledInCatalog(penOnly(), ENVIRONMENT_ID, false).disabledEnvironmentIds,
+  ).toEqual([]);
+});
+
+it.effect("a registration through the catalog tells whether the newest catalog took it", () =>
+  Effect.gen(function* () {
+    const connectionId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
+    const pin = {
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    };
+    let document = penOnly();
+    const update = (transform: (current: ConnectionCatalogDocument) => ConnectionCatalogDocument) =>
+      Effect.sync(() => void (document = transform(document)));
+    const as = (environmentId: EnvironmentId) =>
+      new PenConnectionRegistration({
+        target: new PenConnectionTarget({ environmentId, label: "Box", connectionId }),
+        profile: new PenConnectionProfile({ ...pin, environmentId, label: "Box", connectionId }),
+      });
+    expect(yield* registerThroughCatalog(update, as(EnvironmentId.make("another")), [])).toBe(
+      false,
+    );
+    expect(yield* registerThroughCatalog(update, as(ENVIRONMENT_ID), [])).toBe(true);
+  }),
+);

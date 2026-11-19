@@ -505,7 +505,8 @@ export const make = Effect.gen(function* () {
           }
           entry = next.entry;
         }
-        yield* registrations.register(registration, persistedRoutes(entry));
+        // The newest catalog may refuse it (a Pen route another environment saved meanwhile).
+        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) return false;
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );

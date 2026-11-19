@@ -41,3 +41,17 @@ it.effect("a Pen member's route another environment saved, in any channel, is no
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
 );
+
+it.effect("a registration the catalog refuses is not shown or counted as saved", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([], [], [], { refuseRegistration: () => true });
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const answered = EnvironmentId.make("answered");
+      expect(yield* registry.register(new PenConnectionRegistration(routeOf(answered)))).toBe(
+        false,
+      );
+      expect((yield* SubscriptionRef.get(registry.entries)).has(answered)).toBe(false);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
