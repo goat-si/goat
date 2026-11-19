@@ -963,7 +963,7 @@ function ThreadRouteContent(
       title={selectedThread?.title ?? "Thread"}
       subtitle={threadSyncLabel ?? undefined}
       environmentId={environmentId}
-      threadId={threadId}
+      threadId={selectedThread?.id ?? null}
       {...props.inspectorPresentation}
     />
   ) : null;
