@@ -43,7 +43,7 @@ it("renders subagent progress without image markup or link URL tails", async () 
       item={item}
       environmentId={EnvironmentId.make("env")}
       createdAt="2026-01-01T00:00:00Z"
-      timestampFormat="12h"
+      timestampFormat="12-hour"
       runs={[]}
       onOpenThread={() => {}}
     />,
