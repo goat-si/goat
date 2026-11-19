@@ -33,7 +33,7 @@ export function makeSubmoduleRemoval<E>(deps: {
       const modules = path.join(admin.stdout.replace(/\n$/, ""), "modules");
       const stored = yield* fs.exists(modules);
       const manifest = yield* fs.exists(path.join(cwd, ".gitmodules"));
-      if (!stored && !manifest) return { force: false, reason: null };
+      if (!stored && !manifest) return { force: false, reason: null, manifestOnly: false };
       const populated = yield* inspect([
         "submodule",
         "foreach",
@@ -144,7 +144,7 @@ export function makeSubmoduleRemoval<E>(deps: {
           for (const name of names) unchecked.push(path.join(target, name));
         }
       }
-      return { force, reason: null };
+      return { force, reason: null, manifestOnly: manifest && !force };
     },
     Effect.orElseSucceed(() => ({ force: false, reason: "submodules could not be inspected" })),
   );

@@ -883,6 +883,8 @@ const make = Effect.gen(function* () {
           reason: sentence(removalReason),
         });
         if (removal._tag === "keep") return keep(removal.reason);
+        if (submodules.manifestOnly && snapshotCovers && removal.hasChanges)
+          return keep("cannot safely force-remove a worktree with an uninitialized submodule");
         // Clean only untracked files. Ordinary worktrees retain Git's final tracked-edit check.
         if (settings.worktreeKeepWhen === "tracked-changes" && !submodules.force)
           yield* cleanupGit(worktreePath, ["clean", "-ffdx"], "git clean");
