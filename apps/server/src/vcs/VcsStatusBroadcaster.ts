@@ -104,7 +104,7 @@ export class VcsStatusBroadcaster extends Context.Service<
      * For a checkout someone is waiting on. Returns once the new branch is published, so the
      * caller's reply does not outrun it, and finishes the slower remote read in the background.
      */
-    readonly refreshAfterCheckout: (cwd: string) => Effect.Effect<void>;
+    readonly refreshAfterCheckout: (cwd: string) => Effect.Effect<void, GitManagerServiceError>;
     readonly refreshStatus: (
       cwd: string,
       options?: { readonly localOnly?: boolean },
@@ -493,21 +493,6 @@ export const make = Effect.gen(function* () {
     return yield* refreshRemoteAndLocalTotals(cwd, rawCwd);
   });
 
-  const refreshAfterCheckout: VcsStatusBroadcaster["Service"]["refreshAfterCheckout"] = Effect.fn(
-    "VcsStatusBroadcaster.refreshAfterCheckout",
-  )(function* (rawCwd) {
-    const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    const localDone = yield* Deferred.make<void>();
-    // Owned by the broadcaster so a client disconnecting mid-switch still leaves status correct.
-    yield* refreshLocalStatusCore(cwd).pipe(
-      Effect.ensuring(Deferred.succeed(localDone, undefined)),
-      Effect.andThen(refreshRemoteAndLocalTotals(cwd, rawCwd)),
-      Effect.ignoreCause({ log: true }),
-      Effect.forkIn(broadcasterScope),
-    );
-    yield* Deferred.await(localDone);
-  });
-
   type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;
   interface QueuedRefresh {
     current: RefreshReply;
@@ -521,6 +506,9 @@ export const make = Effect.gen(function* () {
   ) {
     while (true) {
       const result = yield* runStatusRefresh(rawCwd).pipe(Effect.exit);
+      if (Exit.isFailure(result) && !Exit.hasInterrupts(result)) {
+        yield* Effect.logWarning("VCS status refresh failed", result.cause);
+      }
       if (Exit.isFailure(result) && Exit.hasInterrupts(result)) {
         return yield* Effect.failCause(result.cause);
       }
@@ -535,16 +523,15 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = (rawCwd, options) => {
-    if (options?.localOnly) return runStatusRefresh(rawCwd, options);
-    return Effect.uninterruptibleMask((restore) =>
+  const admitStatusRefresh = (rawCwd: string) =>
+    Effect.uninterruptible(
       Effect.gen(function* () {
-        if (broadcasterScope.state._tag === "Closed") return yield* restore(Effect.interrupt);
+        if (broadcasterScope.state._tag === "Closed") return yield* Effect.interrupt;
         const requested = yield* Deferred.make<VcsStatusResult, GitManagerServiceError>();
         const queued = queuedRefreshes.get(rawCwd);
         if (queued) {
           queued.followUp ??= requested;
-          return yield* restore(Deferred.await(queued.followUp));
+          return queued.followUp;
         }
         if (queuedRefreshes.size >= MAX_STATUS_REFRESH_WORKERS) {
           return yield* new GitManagerError({
@@ -555,7 +542,6 @@ export const make = Effect.gen(function* () {
         }
         const queue: QueuedRefresh = { current: requested, followUp: null };
         queuedRefreshes.set(rawCwd, queue);
-        // The worker belongs to the broadcaster so a caller can cancel its own wait.
         const worker = yield* drainStatusRefreshes(rawCwd, queue).pipe(
           Effect.forkIn(broadcasterScope, { startImmediately: true, uninterruptible: false }),
         );
@@ -569,10 +555,22 @@ export const make = Effect.gen(function* () {
           Deferred.doneUnsafe(queue.current, failure);
           if (queue.followUp) Deferred.doneUnsafe(queue.followUp, failure);
         });
-        return yield* restore(Deferred.await(requested));
+        return requested;
       }),
     );
-  };
+
+  const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = (rawCwd, options) =>
+    options?.localOnly
+      ? runStatusRefresh(rawCwd, options)
+      : admitStatusRefresh(rawCwd).pipe(Effect.flatMap(Deferred.await));
+
+  const refreshAfterCheckout: VcsStatusBroadcaster["Service"]["refreshAfterCheckout"] = Effect.fn(
+    "VcsStatusBroadcaster.refreshAfterCheckout",
+  )(function* (rawCwd) {
+    const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+    yield* refreshLocalStatusCore(cwd);
+    yield* admitStatusRefresh(rawCwd);
+  });
 
   const refreshPullRequestStatus: VcsStatusBroadcaster["Service"]["refreshPullRequestStatus"] =
     Effect.fn("VcsStatusBroadcaster.refreshPullRequestStatus")(function* (rawCwd) {

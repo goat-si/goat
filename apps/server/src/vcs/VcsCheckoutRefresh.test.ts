@@ -2,6 +2,8 @@ import { assert, it, describe } from "@effect/vitest";
 import type { VcsStatusLocalResult, VcsStatusRemoteResult } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import {
@@ -53,5 +55,74 @@ describe("checkout refresh", () => {
       assert.deepStrictEqual(yield* Deferred.await(remotePublished), remoteStatusWithPr);
       assert.equal((yield* broadcaster.getStatus({ cwd: "/repo" })).pr?.number, 2978);
     }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+  });
+
+  it.effect("bounds and coalesces checkout remote work and drains it after release", () => {
+    const localFibers = new Set<number>();
+    const completions = new Map<string, number>();
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      fileSystem: FileSystem.makeNoop({ realPath: (cwd) => Effect.succeed(cwd) }),
+    };
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const release = yield* Deferred.make<void>();
+      const allComplete = yield* Deferred.make<void>();
+      state.beforeLocalStatus = Effect.withFiber((fiber) =>
+        Effect.sync(() => {
+          localFibers.add(fiber.id);
+        }),
+      );
+      state.beforeRemoteStatus = Deferred.await(release);
+      state.onRemoteStatusComplete = (cwd) =>
+        Effect.sync(() => {
+          completions.set(cwd, (completions.get(cwd) ?? 0) + 1);
+        }).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              [...completions.values()].reduce((sum, count) => sum + count, 0) === 32
+                ? Deferred.succeed(allComplete, undefined)
+                : Effect.void,
+            ),
+          ),
+        );
+      const paths = Array.from({ length: 16 }, (_, i) => `/repo-${i}`);
+      for (const cwd of paths) yield* broadcaster.refreshAfterCheckout(cwd);
+      for (const cwd of paths) {
+        for (let i = 0; i < 8; i++) yield* broadcaster.refreshAfterCheckout(cwd);
+      }
+      assert.isAtMost(localFibers.size, 17); // caller plus at most 16 admitted workers
+      const overflow = yield* broadcaster.refreshAfterCheckout("/overflow").pipe(Effect.result);
+      assert.isTrue(Result.isFailure(overflow));
+      assert.equal(state.remoteStatusCalls, 0);
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(allComplete);
+      assert.equal(completions.size, 16);
+      for (const count of completions.values()) assert.equal(count, 2);
+      yield* broadcaster.refreshStatus("/after-drain");
+    }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+  });
+
+  it.effect("fails the checkout refresh when local publication fails", () => {
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      failLocalStatus: true,
+    };
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const result = yield* broadcaster.refreshAfterCheckout("/repo").pipe(Effect.result);
+      assert.isTrue(Result.isFailure(result));
+      assert.equal(state.remoteStatusCalls, 0);
+    }).pipe(Effect.provide(layerTestFor(state)));
   });
 });

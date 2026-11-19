@@ -52,6 +52,7 @@ import {
   CommandId,
   EnvironmentAuthorizationError,
   FilesystemBrowseError,
+  GitCommandError,
   MemoryImportRpcError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
@@ -1528,6 +1529,20 @@ export const layerWsRpc = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const refreshAfterCheckout = (cwd: string) =>
+        vcsStatusBroadcaster.refreshAfterCheckout(cwd).pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({
+                operation: "vcs.refreshAfterCheckout",
+                command: "git status",
+                cwd,
+                detail: "Checkout completed, but Git status refresh failed.",
+                cause,
+              }),
+          ),
+        );
+
       const getOrchestrationV2ArchivedShellSnapshot = Effect.gen(function* () {
         const { threads, projects, snapshotSequence } = yield* loadShellSnapshotParts({
           sql,
@@ -2957,15 +2972,11 @@ export const layerWsRpc = (
             .createRef(input)
             .pipe(
               Effect.tap(() =>
-                input.switchRef
-                  ? vcsStatusBroadcaster.refreshAfterCheckout(input.cwd)
-                  : refreshGitStatus(input.cwd),
+                input.switchRef ? refreshAfterCheckout(input.cwd) : refreshGitStatus(input.cwd),
               ),
             ),
         [WS_METHODS.vcsSwitchRef]: (input) =>
-          gitWorkflow
-            .switchRef(input)
-            .pipe(Effect.tap(() => vcsStatusBroadcaster.refreshAfterCheckout(input.cwd))),
+          gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshAfterCheckout(input.cwd))),
         [WS_METHODS.sshHostStatus]: (input) => sshHostSetup.status(input),
         [WS_METHODS.sshHostHandoffProgress]: (input) =>
           sshHostSetup.handoffProgress(input, { kind: "client", sessionId: currentSessionId }),
