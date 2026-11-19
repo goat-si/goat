@@ -1,5 +1,6 @@
 import { toLabels, type LabelFields } from "./gitHubPullRequestLabels.ts";
 import { toMergeMethod } from "./gitHubMergeMethod.ts";
+import { toFileViewedState } from "./gitHubFileViewedState.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -1280,6 +1281,7 @@ export function toReviewDismissalsPage(result: ReviewDismissals.Result): {
 }
 
 function toThreadComment(comment: ThreadComment, viewer: string | null): PullRequestThreadComment {
+  const reviewUrl = trimmed(comment.pullRequestReview?.url);
   return {
     id: comment.id,
     author: toActor(comment.author),
@@ -1287,6 +1289,7 @@ function toThreadComment(comment: ThreadComment, viewer: string | null): PullReq
     createdAt: comment.createdAt,
     editedAt: comment.lastEditedAt,
     url: trimmed(comment.url),
+    ...(reviewUrl === null ? {} : { reviewUrl }),
     reactions: toReactions(comment.reactionGroups, viewer),
   };
 }
@@ -1663,17 +1666,6 @@ export interface GitHubPullRequestFilesViewedPage {
     readonly state: PullRequestFileViewedState;
   }>;
   readonly nextCursor: string | null;
-}
-
-function toFileViewedState(raw: string): PullRequestFileViewedState {
-  switch (raw.trim().toUpperCase()) {
-    case "VIEWED":
-      return "viewed";
-    case "DISMISSED":
-      return "dismissed";
-    default:
-      return "unviewed";
-  }
 }
 
 export function toPullRequestFilesViewedPage(

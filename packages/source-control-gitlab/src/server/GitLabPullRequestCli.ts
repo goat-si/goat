@@ -71,7 +71,7 @@ import type {
   PullRequestReaction,
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
-  PullRequestReviewThread,
+  PullRequestConversationThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
 } from "@goat/contracts";
@@ -94,7 +94,6 @@ import {
   decodeNotesJson,
   decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
-  decodeProjectLabelsJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
   gitLabAwardName,
@@ -106,6 +105,7 @@ import {
   type GitLabMergeRequestListItem,
   type GitLabMergeRequestListState,
 } from "./gitLabMergeRequestJson.ts";
+import { decodeProjectLabelsJson } from "./gitLabProjectLabels.ts";
 import type {
   ProviderChangeRequestSummary,
   ProviderFileStats,
@@ -697,7 +697,7 @@ export const make = Effect.gen(function* () {
     readonly repository: string;
     readonly number: number;
     readonly page: number;
-    readonly collected: ReadonlyArray<PullRequestReviewThread>;
+    readonly collected: ReadonlyArray<PullRequestConversationThread>;
     readonly collectedDiffRefs: ReadonlyMap<string, GitLabDiffRefs>;
     readonly collectedFindingIds: ReadonlyArray<string>;
   }): Effect.Effect<GitLabDiscussionThreads, GitLabPullRequestCliError> =>

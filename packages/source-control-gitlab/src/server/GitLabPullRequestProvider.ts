@@ -8,6 +8,7 @@ import type {
   PullRequestActor,
   PullRequestCapabilities,
   PullRequestReaction,
+  PullRequestThreadComment,
   PullRequestViewerPermissions,
 } from "@goat/contracts";
 
@@ -420,6 +421,18 @@ export const make = Effect.gen(function* () {
               author !== null && botLogins.has(author.login.toLowerCase())
                 ? { ...author, isBot: true }
                 : author;
+            const withNoteDetails = (comment: PullRequestThreadComment) => ({
+              ...comment,
+              ...edited(comment.id),
+              author: withBotFlag(comment.author),
+              url: noteUrl(comment.id),
+              reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+            });
+            const overviewThreads = discussions.threads.flatMap((thread) =>
+              thread.path === null
+                ? [{ ...thread, comments: thread.comments.map(withNoteDetails) }]
+                : [],
+            );
             return {
               reactions: awards.reactions,
               comments: notes.comments.map((comment) => ({
@@ -432,20 +445,22 @@ export const make = Effect.gen(function* () {
               })),
               commentCount: notes.comments.length,
               commentsTruncated: notes.truncated || discussions.truncated,
-              reviewThreads: discussions.threads.map((thread) => ({
-                ...thread,
-                isOutdated: isOutdated(
-                  discussions.diffRefsByThreadId.get(thread.id),
-                  detail?.diffRefs,
-                ),
-                comments: thread.comments.map((comment) => ({
-                  ...comment,
-                  ...edited(comment.id),
-                  author: withBotFlag(comment.author),
-                  url: noteUrl(comment.id),
-                  reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
-                })),
-              })),
+              reviewThreads: discussions.threads.flatMap((thread) =>
+                thread.path === null
+                  ? []
+                  : [
+                      {
+                        ...thread,
+                        isOutdated: isOutdated(
+                          discussions.diffRefsByThreadId.get(thread.id),
+                          detail?.diffRefs,
+                        ),
+                        comments: thread.comments.map(withNoteDetails),
+                      },
+                    ],
+              ),
+              // Sent only when there are some, so a merge request without them reads as before.
+              ...(overviewThreads.length === 0 ? {} : { overviewThreads }),
               commits,
             };
           },
