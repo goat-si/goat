@@ -15,7 +15,7 @@ import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import profileMigration from "../../../persistence/Migrations/119_PermissionProfiles.ts";
 import migration from "../../../persistence/Migrations/098_Memory.ts";
 import searchMigration from "../../../persistence/Migrations/100_MemorySearchCounters.ts";
-import hubMigration from "../../../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "../../../memory/testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../../../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../../../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../../../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";

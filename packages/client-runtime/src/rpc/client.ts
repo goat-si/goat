@@ -6,6 +6,7 @@ import {
   authScopeRequiredResponse,
   type EnvironmentId,
   type MemoryHistoryInput,
+  type MemoryMoveRequest,
   type ClientGuardedRpcTag,
   type ThreadId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -40,6 +41,7 @@ export class EnvironmentRpcUnavailableError extends Schema.TaggedError<Environme
   {
     environmentId: Schema.String,
     message: Schema.String,
+    reason: Schema.optionalKey(Schema.Literal("move_receipt_unsupported")),
   },
 ) {}
 
@@ -299,6 +301,53 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.refusedReverts === true,
       ) as EnvironmentRpcInput<TTag>;
     }
+    const memoryCapabilities = config.environment.capabilities.memory;
+    if (
+      tag === WS_METHODS.memoryMove &&
+      memoryCapabilities?.scopeMoves === true &&
+      "receiptFor" in (input as MemoryMoveRequest) &&
+      memoryCapabilities.scopeMoveReceipts !== true
+    ) {
+      return yield* new EnvironmentRpcUnavailableError({
+        environmentId: supervisor.target.environmentId,
+        message: "Move receipt recovery is unavailable on this environment.",
+        reason: "move_receipt_unsupported",
+      });
+    }
+    if (tag === WS_METHODS.memoryUpsert || tag === WS_METHODS.memoryForget) {
+      const { includeFailureDetails: _hint, ...legacyInput } = dispatchInput as object & {
+        readonly includeFailureDetails?: true;
+      };
+      dispatchInput = {
+        ...legacyInput,
+        ...(memoryCapabilities?.mutationFailureDetails === true
+          ? { includeFailureDetails: true as const }
+          : {}),
+      } as EnvironmentRpcInput<TTag>;
+    }
+    if (
+      tag === WS_METHODS.memoryList ||
+      tag === WS_METHODS.memorySearch ||
+      tag === WS_METHODS.memoryRead ||
+      tag === WS_METHODS.memoryHistory
+    ) {
+      const {
+        includeMarks: _marks,
+        includeScopeVersion,
+        origin,
+        ...legacyInput
+      } = dispatchInput as object & {
+        readonly includeMarks?: true;
+        readonly includeScopeVersion?: true;
+        readonly origin?: import("@goat/contracts").ScopedThreadRef;
+      };
+      dispatchInput = {
+        ...legacyInput,
+        ...(memoryCapabilities?.provenanceProjection ? { includeMarks: true as const } : {}),
+        ...(memoryCapabilities?.originFilter && origin ? { origin } : {}),
+        ...(memoryCapabilities?.scopeMoves && includeScopeVersion ? { includeScopeVersion } : {}),
+      } as EnvironmentRpcInput<TTag>;
+    }
     if (
       !supportsMemoryProtocol(config.environment.capabilities) ||
       (tag === WS_METHODS.memoryHistory &&
@@ -306,6 +355,8 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.resolutionInputs !== true) ||
       ((tag === WS_METHODS.memoryHubDiagnostics || tag === WS_METHODS.memoryHubReconcile) &&
         config.environment.capabilities.memory?.hubDiagnostics !== true) ||
+      (tag === WS_METHODS.memoryMove && memoryCapabilities?.scopeMoves !== true) ||
+      (tag.startsWith("memory.suggestions.") && memoryCapabilities?.saveSuggestions !== true) ||
       (tag === WS_METHODS.memoryImportProvider &&
         config.environment.capabilities.memory?.importProvider !== true) ||
       ((tag === WS_METHODS.siteNotesList ||
@@ -707,7 +758,8 @@ export type MemoryBodyRpcTag =
   | typeof WS_METHODS.memorySearch
   | typeof WS_METHODS.memoryRead
   | typeof WS_METHODS.memoryHistory
-  | typeof WS_METHODS.memoryReadSource;
+  | typeof WS_METHODS.memoryReadSource
+  | typeof WS_METHODS.memorySuggestionsList;
 
 /** Runs an ephemeral body read in the caller's interruptible atom scope. */
 export function requestMemoryQuery<R, E, T extends MemoryBodyRpcTag>(

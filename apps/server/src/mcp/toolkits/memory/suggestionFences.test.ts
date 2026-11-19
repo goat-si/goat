@@ -1,0 +1,401 @@
+import { expect, it } from "@effect/vitest";
+import * as M from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Service from "../../../memory/MemoryService.ts";
+import * as Store from "../../../memory/MemoryStore.ts";
+import { makeMemoryMutationHandlers } from "../../../memory/MemoryMutationHandlers.ts";
+import { makeMemorySaveSuggestions } from "../../../memory/MemorySaveSuggestions.ts";
+import { memoryOperationDigest } from "../../../memory/MemoryDecider.ts";
+import {
+  decodeLegacyError,
+  decodeLegacyMutationReceipt,
+  decodeLegacyUpsert,
+} from "../../../memory/testkit/FrozenMemoryV1.ts";
+
+import * as Fixture from "./handlers.testkit.ts";
+
+const origin = {
+  environmentId: Fixture.scope().environmentId,
+  threadId: M.ThreadId.make("fixture-suggesting-thread"),
+};
+const space = Fixture.space;
+const localRequest = { memorySpaceId: space, memoryId: Fixture.memoryId };
+const hub = M.EnvironmentId.make("fixture-hub");
+const forgetId = M.MemoryOperationId.make(Fixture.id(340));
+const tombstone = {
+  ...localRequest,
+  deleteOperationId: forgetId,
+  deletingEnvironmentId: hub,
+  deletedAtUtc: M.MemoryUtcTimestamp.make("2026-01-01T00:00:00.000Z"),
+  suppressedSourceKeys: [],
+  suppressedContent: [],
+  sourceExclusions: [],
+};
+const forget = {
+  ...localRequest,
+  protocolVersion: 1,
+  kind: "forget",
+  originEnvironmentId: hub,
+  operationId: forgetId,
+  expectedHeads: [],
+  tombstone,
+} satisfies M.MemoryOperation;
+
+const installForgetCheckpoint = Effect.fn("test.installForgetCheckpoint")(function* () {
+  const store = yield* Store.MemoryStore;
+  const address = {
+    memorySpaceId: space,
+    hubEnvironmentId: hub,
+    checkpointId: "fixture",
+    expectedSnapshotToken: "fixture-token",
+    expectedCheckpointSequence: 1,
+  };
+  yield* store.transact(
+    store.advanceBootstrapTx({
+      ...address,
+      expectedState: "unbound",
+      nextState: "staging",
+      snapshotToken: address.expectedSnapshotToken,
+      checkpointSequence: 1,
+      nextCursor: null,
+    }),
+  );
+  yield* store.installCheckpointPage({
+    ...address,
+    page: M.MemoryHubCheckpointPage.make({
+      memorySpaceId: space,
+      checkpointSequence: 1,
+      retentionFloor: 0,
+      causalBoundary: { checkpointSequence: 1, boundaryId: "fixture" },
+      pageOrdinal: 0,
+      tombstones: [tombstone],
+      items: [],
+      revisions: [],
+      conflicts: [],
+      resolutions: [],
+      compactReceipts: [
+        {
+          memorySpaceId: space,
+          originEnvironmentId: hub,
+          operationKind: "forget",
+          receipt: {
+            outcome: "deleted",
+            operationId: forgetId,
+            memoryId: localRequest.memoryId,
+            operationDigest: memoryOperationDigest(forget),
+            hubSequence: 1,
+          },
+          revisionId: null,
+          resolutionId: null,
+          revertsResolutionId: null,
+          attemptId: null,
+          fencingToken: null,
+          reportGuard: null,
+        },
+      ],
+      identities: [
+        {
+          ...localRequest,
+          scope: { kind: "user" },
+          creatingEnvironmentId: hub,
+          createOperationId: forgetId,
+          createdAtUtc: tombstone.deletedAtUtc,
+        },
+      ],
+      fences: [{ ...localRequest, highestFencingToken: 0, activeLease: null }],
+      suppressions: [],
+      importLineage: [],
+      nextCursor: null,
+      bootstrapComplete: true,
+    }),
+  });
+  yield* store.completeCheckpoint({ ...address, pageCount: 1 });
+});
+
+it.effect.each(["local", "inbound", "checkpoint"] as const)(
+  "a %s forget purges existing suggestions and drops an earlier refusal that reaches storage late",
+  (path) =>
+    Effect.gen(function* () {
+      const service = yield* Service.MemoryService;
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const suggestions = makeMemorySaveSuggestions({
+        sql,
+        store,
+        requireSharing: () => Effect.void,
+        stableUuid: Service.memoryStableUuid,
+      });
+      if (path === "local") yield* service.upsert(Fixture.upsert(), Effect.void);
+      const candidate = (n: number) => ({
+        input: { ...Fixture.upsert(n), memoryId: M.MemoryId.make(Fixture.id(n)) },
+        thread: origin,
+        knownRevisions: [],
+        lineageComplete: false,
+        forgetGeneration: 0,
+        reason: "thread_lineage_incomplete" as const,
+      });
+      const before = candidate(341);
+      const delayed = candidate(342);
+      yield* suggestions.onRefusedSave(before, Effect.void);
+      expect(yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void)).toHaveLength(
+        1,
+      );
+      if (path === "local") yield* service.forget(localRequest, Effect.void);
+      else if (path === "checkpoint") yield* installForgetCheckpoint();
+      else
+        yield* service.receiveHubPage({
+          memorySpaceId: space,
+          hubEnvironmentId: hub,
+          localEnvironmentId: origin.environmentId,
+          expectedSequence: 0,
+          reauthorize: Effect.void,
+          page: {
+            highWatermark: 1,
+            throughSequence: 1,
+            hasMore: false,
+            entries: [
+              {
+                kind: "operation",
+                hubSequence: 1,
+                operation: forget,
+                receipt: {
+                  outcome: "deleted",
+                  operationDigest: memoryOperationDigest(forget),
+                  operationId: forget.operationId,
+                  memoryId: forget.memoryId,
+                  hubSequence: 1,
+                },
+              },
+            ],
+          },
+        });
+      yield* suggestions.onRefusedSave(delayed, Effect.void);
+      expect(yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void)).toEqual([]);
+      expect(
+        yield* sql`SELECT forget_generation FROM memory_space_counters WHERE space=${space}`,
+      ).toEqual([{ forget_generation: 1 }]);
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("keeps an accepting suggestion when the pending queue reaches capacity", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const suggestions = makeMemorySaveSuggestions({
+      sql,
+      store,
+      requireSharing: () => Effect.void,
+      stableUuid: Service.memoryStableUuid,
+    });
+    const candidate = (n: number) => ({
+      input: { ...Fixture.upsert(n), memoryId: M.MemoryId.make(Fixture.id(n)) },
+      thread: origin,
+      knownRevisions: [],
+      lineageComplete: true,
+      forgetGeneration: 0,
+      reason: "capacity_exceeded" as const,
+    });
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+    const first = candidate(500);
+    yield* suggestions.onRefusedSave(first, Effect.void);
+    const target = { memorySpaceId: space, suggestionId: first.input.memoryId };
+    expect(yield* service.acceptSuggestion(target, Effect.void)).toEqual({ status: "pending" });
+    for (let offset = 1; offset <= M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS; offset++) {
+      yield* suggestions.onRefusedSave(candidate(500 + offset), Effect.void);
+    }
+    const rows = yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void);
+    expect(rows).toHaveLength(M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS);
+    expect(rows).toContainEqual(
+      expect.objectContaining({ suggestionId: target.suggestionId, state: "accepting" }),
+    );
+    expect(rows).not.toContainEqual(
+      expect.objectContaining({ suggestionId: candidate(501).input.memoryId }),
+    );
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("keeps the bound when all suggestion slots contain accepting writes", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const suggestions = makeMemorySaveSuggestions({
+      sql,
+      store,
+      requireSharing: () => Effect.void,
+      stableUuid: Service.memoryStableUuid,
+    });
+    const candidate = (n: number) => ({
+      input: { ...Fixture.upsert(n), memoryId: M.MemoryId.make(Fixture.id(n)) },
+      thread: origin,
+      knownRevisions: [],
+      lineageComplete: true,
+      forgetGeneration: 0,
+      reason: "hub_unavailable" as const,
+    });
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+    const pinned = Array.from({ length: M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS }, (_, n) =>
+      candidate(600 + n),
+    );
+    for (const row of pinned) {
+      yield* suggestions.onRefusedSave(row, Effect.void);
+      expect(
+        yield* service.acceptSuggestion(
+          {
+            memorySpaceId: space,
+            suggestionId: row.input.memoryId,
+          },
+          Effect.void,
+        ),
+      ).toEqual({ status: "pending" });
+    }
+    const extra = candidate(700);
+    const staged = yield* service.acceptSuggestionWrite(
+      extra.input,
+      { origin, unverified: true },
+      Effect.void,
+    );
+    expect(staged.receipt).toMatchObject({ pendingSync: true, revisionId: null });
+    yield* suggestions.onRefusedSave(
+      { ...extra, stagedOperationId: extra.input.operationId },
+      Effect.void,
+    );
+    const rows = yield* sql<{
+      id: string;
+      state: string;
+    }>`SELECT id,state FROM memory_save_suggestions WHERE space=${space} ORDER BY id`;
+    expect(rows).toEqual(pinned.map(({ input }) => ({ id: input.memoryId, state: "accepting" })));
+    const workId = `sync:${space}:${extra.input.operationId}`;
+    yield* service.settleHubAcknowledgement({
+      memorySpaceId: space,
+      hubEnvironmentId: hub,
+      localEnvironmentId: origin.environmentId,
+      workId,
+      operation: { operationId: extra.input.operationId, operationDigest: staged.operationDigest },
+      receipt: {
+        operationId: extra.input.operationId,
+        operationDigest: staged.operationDigest,
+        memoryId: extra.input.memoryId,
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "hub_upgrade_required",
+      },
+      reauthorize: Effect.void,
+    });
+    expect((yield* store.readWork(workId))?.status).toBe("failed");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("body-bearing suggestion requests require a person session even with memory grants", () =>
+  Effect.gen(function* () {
+    const memory = yield* Service.MemoryService;
+    const input = { memorySpaceId: space, suggestionId: Fixture.memoryId };
+    for (const principalKind of ["proxied_person", "outside_client"] as const) {
+      const handlers = makeMemoryMutationHandlers(
+        memory,
+        { principalKind },
+        Effect.void,
+        Effect.void,
+      );
+      const errors = yield* Effect.all([
+        handlers[M.WS_METHODS.memorySuggestionsList]({ memorySpaceId: space }).pipe(Effect.flip),
+        handlers[M.WS_METHODS.memorySuggestionsAccept](input).pipe(Effect.flip),
+        handlers[M.WS_METHODS.memorySuggestionsDismiss](input).pipe(Effect.flip),
+      ]);
+      expect(errors.map((error) => error.code)).toEqual([
+        "unavailable",
+        "unavailable",
+        "unavailable",
+      ]);
+    }
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([false, true])("WS mutation errors project for request opt-in %s", (optedIn) =>
+  Effect.gen(function* () {
+    const memory = yield* Service.MemoryService;
+    const handlers = makeMemoryMutationHandlers(
+      memory,
+      { principalKind: "person" },
+      Effect.void,
+      Effect.void,
+    );
+    const base = Fixture.upsert();
+    const option = optedIn ? { includeFailureDetails: true as const } : {};
+    const oversized = {
+      ...base,
+      ...option,
+      payload: {
+        ...base.payload,
+        evidence: [
+          {
+            origin: "thread" as const,
+            sourceThread: origin,
+            watermark: {
+              fromEventId: M.EventId.make("e".repeat(63000)),
+              toEventId: M.EventId.make("end"),
+              throughSequence: 1,
+            },
+            messageIds: [],
+          },
+        ],
+      },
+    };
+    const failure = yield* Effect.flip(
+      handlers[M.WS_METHODS.memoryUpsert](optedIn ? oversized : decodeLegacyUpsert(oversized)),
+    );
+    if (optedIn)
+      expect(failure).toMatchObject({
+        code: "capacity_exceeded",
+        capacity: { dimension: "payload_bytes" },
+      });
+    else expect(decodeLegacyError({ ...failure })).toMatchObject({ code: "payload_too_large" });
+
+    const wide = {
+      ...base,
+      ...option,
+      payload: {
+        ...base.payload,
+        derivedFromMemoryRevisions: Array.from({ length: 101 }, (_, n) =>
+          M.MemoryRevisionId.make(Fixture.id(1000 + n)),
+        ),
+      },
+    };
+    const upgrade = yield* Effect.flip(handlers[M.WS_METHODS.memoryUpsert](wide));
+    if (optedIn) expect(upgrade.code).toBe("hub_upgrade_required");
+    else expect(decodeLegacyError({ ...upgrade }).code).toBe("thread_lineage_incomplete");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect(
+  "WS mutation receipts retain terminal failure for legacy requests and rich details on opt-in",
+  () =>
+    Effect.gen(function* () {
+      const memory = yield* Service.MemoryService;
+      const upsert = Fixture.upsert();
+      const input = { ...localRequest, operationId: upsert.operationId, expectedHeads: [] };
+      const receipt: M.MemoryMutationReceipt = {
+        operationId: input.operationId,
+        memoryId: input.memoryId,
+        outcome: "rejected",
+        failureCode: "hub_unavailable",
+        revisionId: null,
+        pendingSync: false,
+      };
+      const handlers = makeMemoryMutationHandlers(
+        { ...memory, forget: () => Effect.succeed({ operationDigest: "0".repeat(64), receipt }) },
+        { principalKind: "person" },
+        Effect.void,
+        Effect.void,
+      );
+      const legacy = yield* handlers[M.WS_METHODS.memoryForget](input);
+      expect(decodeLegacyMutationReceipt(legacy)).toMatchObject({
+        outcome: "rejected",
+        failureCode: "unavailable",
+      });
+      const optedIn = { ...input, includeFailureDetails: true as const };
+      expect(yield* handlers[M.WS_METHODS.memoryForget](optedIn)).toEqual(receipt);
+    }).pipe(Effect.provide(Fixture.layer)),
+);

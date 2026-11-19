@@ -1,12 +1,25 @@
+import {
+  importFixtureSourceId as sourceId,
+  legacyMemoryCapabilities,
+  mockDismissibleSuggestion,
+  mockMemoryImport,
+  mockStagedSuggestion,
+  replaySuggestionChange,
+  revertHistory,
+  exerciseMemoryMove,
+  memoryMoveCases,
+  receipt,
+  suggestionMemoryCapabilities,
+  suggestionScenario,
+} from "./MemoryRouteFixtures";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   WS_METHODS,
   MemoryItem,
-  MemoryMutationReceipt,
-  type MemoryForgetInput,
   MemorySourcePage,
   MemoryUpsertInput,
+  MemoryRpcError,
   MemoryHistoryPage,
   MemoryRevertResult,
   type MemoryRevertResolutionInput,
@@ -27,7 +40,6 @@ import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import { SettingsMemoryRouteScreen, MemoryEnvironmentEntry } from "./SettingsMemoryRouteScreen";
-
 const encodeUpsert = Schema.encodeSync(MemoryUpsertInput);
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -39,8 +51,9 @@ afterEach(async () => {
 async function mount(
   scopes?: Parameters<NativeMemoryHarness["grant"]>[0],
   setup?: (harness: NativeMemoryHarness) => void,
+  capabilities?: Parameters<typeof createNativeMemoryHarness>[0],
 ) {
-  h = createNativeMemoryHarness();
+  h = createNativeMemoryHarness(capabilities);
   setup?.(h);
   if (scopes) h.grant(scopes);
   await h.waitForAtom(h.memory.syncStatus.permissionAtom(nativeEnv), Boolean);
@@ -58,55 +71,6 @@ const decodeRevertResult = Schema.decodeUnknownSync(MemoryRevertResult);
 const decodeItem = Schema.decodeUnknownSync(MemoryItem);
 const decodeSource = Schema.decodeUnknownSync(MemorySourcePage);
 const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
-function revertHistory() {
-  if (nativeItem.status !== "active") throw new Error("Expected active fixture");
-  return decodeHistory({
-    memoryId: nativeId,
-    revisions: [
-      {
-        revision: { ...nativeItem.revision, revisionId: originalId, payloadRef: originalId },
-        payload: nativeItem.status === "active" ? nativeItem.payload : null,
-      },
-    ],
-    resolutions: [
-      {
-        resolution: {
-          resolutionId,
-          memorySpaceId: nativeSpace,
-          memoryId: nativeId,
-          inputRevisionIds: [originalId, "00000000-0000-4000-8000-000000000007"],
-          inputPayloadRefs: [originalId, "00000000-0000-4000-8000-000000000007"],
-          judgmentRef: resolutionId,
-          requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
-          effectiveProvider: "codex",
-          effectiveModel: "synthetic",
-          resolvingEnvironmentId: nativeEnv,
-          fencingToken: 1,
-          resultRevisionId: "00000000-0000-4000-8000-000000000004",
-          appliedAtUtc: "2000-01-01T00:00:00.000Z",
-          revertDeadlineUtc: "2000-01-31T00:00:00.000Z",
-        },
-        payload: { resolutionId, judgment: "Synthetic resolution" },
-      },
-    ],
-    tombstone: null,
-    reports: [],
-    revertResults: [],
-    localAvailability: nativeItem.localAvailability,
-    nextCursor: null,
-  });
-}
-const decodeReceipt = Schema.decodeUnknownSync(MemoryMutationReceipt);
-function receipt(input: unknown, rejected = false) {
-  return decodeReceipt({
-    operationId: (input as MemoryForgetInput).operationId,
-    memoryId: nativeId,
-    revisionId: null,
-    outcome: rejected ? "rejected" : "deleted",
-    pendingSync: !rejected,
-    ...(rejected ? { failureCode: "revision_changed" } : {}),
-  });
-}
 describe("native Memory with shared factory", () => {
   it("searches the selected destination, retains an empty page's cursor, and clears search", async () => {
     await mount();
@@ -123,6 +87,9 @@ describe("native Memory with shared factory", () => {
       },
     }));
     expect(view.container.textContent).toContain("Synthetic memory body");
+    expect(view.container.textContent).not.toMatch(
+      /Saved from conversation|Select memories|Show suggestions/,
+    );
     await view.type("Search memory", "absent");
     await view.click("Search");
     expect(view.container.textContent).toContain(
@@ -497,21 +464,30 @@ describe("native Memory with shared factory", () => {
     expect(view.container.textContent).toContain("Update this environment");
     expect(h.calls).toEqual([]);
   });
-  it("preserves one save intent after a lost response and explicitly retries the same payload", async () => {
-    await mount();
-    h.responses.set(WS_METHODS.memoryUpsert, () => {
-      throw new Error("Synthetic lost response");
-    });
-    await view.click("Remember something");
-    await view.type("Memory text", "Synthetic retry fact");
-    await view.click("Save memory");
-    expect(view.container.textContent).toContain("Retry uses the same request");
-    h.responses.set(WS_METHODS.memoryUpsert, () => ({ outcome: "accepted", pendingSync: true }));
-    await view.click("Retry save request");
-    const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
-    expect(writes).toHaveLength(2);
-    expect(writes[0]!.input).toEqual(writes[1]!.input);
-  });
+  it.each(["lost reply", "hub_unavailable"] as const)(
+    "preserves one save intent after an uncertain response and retries the same payload: %s",
+    async (failure) => {
+      await mount(undefined, undefined, { protocolVersion: 1, mutationFailureDetails: true });
+      h.responses.set(WS_METHODS.memoryUpsert, () =>
+        failure === "hub_unavailable"
+          ? Effect.fail(new MemoryRpcError({ code: failure }))
+          : Effect.die(new Error("Synthetic lost response")),
+      );
+      await view.click("Open memory: Synthetic memory body");
+      await view.click("Edit");
+      await view.type("Memory text", "Synthetic retry fact");
+      await view.click("Save memory");
+      expect(view.container.textContent).toContain("Retry uses the same request");
+      h.responses.set(WS_METHODS.memoryUpsert, () => ({ outcome: "accepted", pendingSync: true }));
+      await view.click("Retry save request");
+      const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
+      expect(writes.map(({ input }) => input)).toEqual([writes[0]?.input, writes[0]?.input]);
+      expect(writes[0]?.input).toMatchObject({
+        includeFailureDetails: true,
+        expectedHeads: [nativeItem.status === "active" ? nativeItem.revision.revisionId : null],
+      });
+    },
+  );
   it("keeps reading available on a read-only connection without allowing a write", async () => {
     await mount(["memory:read"]);
     expect(view.container.textContent).toContain("Synthetic memory body");
@@ -584,17 +560,10 @@ describe("native Memory with shared factory", () => {
     await view.click("Open memory: Synthetic memory body");
     await view.click("Edit");
     await view.type("Memory text", "Synthetic discarded draft");
-    const read = h.memory.read({
-      environmentId: nativeEnv,
-      input: { memorySpaceId: nativeSpace, memoryId: nativeId },
-    });
-    const resumed = h.deferred<MemoryItem>();
-    h.responses.set(WS_METHODS.memoryRead, () => resumed.response);
-    await act(async () => h.registry.refresh(read));
+    await act(async () => h.revoke());
     expect(view.container.querySelector('input[aria-label="Memory text"]')).toBeNull();
-    await act(async () => {
-      await resumed.succeed(nativeItem);
-    });
+    await act(async () => h.grant(["memory:read", "memory:write", "orchestration:read"]));
+    await view.click("Open memory: Synthetic memory body");
     expect(view.container.querySelector('input[aria-label="Memory text"]')).toBeNull();
     await view.click("Edit");
     expect(
@@ -1204,63 +1173,10 @@ it("keeps dozens of native projects behind one menu row", async () => {
 describe("native WP6 Settings commands", () => {
   const importCalls = () =>
     h.calls.filter((call) => call.method === WS_METHODS.memoryImportProvider);
-  const sourceId = "00000000-0000-4000-8000-000000000025";
   function setupImport(count = 1) {
     h = createNativeMemoryHarness();
     h.grant(["memory:read", "memory:write", "filesystem:read", "settings:write"]);
-    h.responses.set(WS_METHODS.memoryImportProvider, (value) => {
-      const input = value as {
-        action: string;
-        operationId: string;
-        items: Array<{ sourceItemKey: string }>;
-      };
-      if (input.action === "discover")
-        return {
-          action: "discover",
-          sources: [
-            {
-              sourceId,
-              format: "codex",
-              parserVersion: "1",
-              profile: "private-profile",
-              label: "/private/path",
-            },
-          ],
-        };
-      if (input.action === "preview")
-        return {
-          action: "preview",
-          sourceId,
-          sessionId: "synthetic-session",
-          items: Array.from({ length: count }, (_, index) => ({
-            sourceItemKey: `key-${index}`,
-            sourceFingerprint: "a".repeat(64),
-            byteCount: 10,
-            mappingRequired: true,
-            title: `Import memory ${index + 1}`,
-          })),
-        };
-      return {
-        action: input.action,
-        receipt: {
-          operationId: input.operationId,
-          sourceId,
-          sessionId: "synthetic-session",
-          sessionNewItems: 1,
-          sessionBodyBytes: 10,
-          state: "completed",
-          items:
-            input.items?.map((item) => ({
-              sourceItemKey: item.sourceItemKey,
-              outcome: "created",
-              memoryId: null,
-              revisionId: null,
-            })) ?? [],
-          remaining: 0,
-        },
-        syncStatus: nativeSyncStatus,
-      };
-    });
+    mockMemoryImport(h, count);
   }
   async function show(
     params: Parameters<typeof SettingsMemoryRouteScreen>[0]["route"]["params"] = {
@@ -2246,3 +2162,79 @@ it.each([false, true])("keeps native legacy revert with incomplete page=%s", asy
     );
   }
 });
+
+it("shows a refused save as pending through acceptance and marks only the published memory", async () => {
+  const { refused } = suggestionScenario;
+  await mount(undefined, mockStagedSuggestion, suggestionMemoryCapabilities);
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).not.toContain("Provenance unverified");
+  await view.click("Accept");
+  expect(h.calls.find(({ method }) => method === WS_METHODS.memorySuggestionsAccept)).toMatchObject(
+    {
+      environmentId: nativeEnv,
+      input: { memorySpaceId: nativeSpace, suggestionId: refused[0]?.suggestionId },
+    },
+  );
+  expect(view.container.textContent).toContain("Waiting for the memory hub");
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).not.toContain("Provenance unverified");
+  expect(
+    [...view.container.querySelectorAll("button")].find((b) => b.textContent === "Accept")
+      ?.disabled,
+  ).toBe(true);
+
+  await replaySuggestionChange(h, "upsert");
+  expect(h.calls.findLast(({ method }) => method === WS_METHODS.memoryList)?.input).toHaveProperty(
+    "includeMarks",
+    true,
+  );
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).toContain("Provenance unverified");
+  expect(view.container.textContent).toContain("No pending suggestions");
+  expect(view.container.textContent).not.toContain("Waiting for the memory hub");
+});
+
+it("removes dismissed suggestions and removes remaining suggestions when a forget is projected", async () => {
+  const { dismissible, forgettable } = suggestionScenario;
+  await mount(undefined, mockDismissibleSuggestion, suggestionMemoryCapabilities);
+  expect(view.container.textContent).toContain(dismissible[0]?.text);
+  await view.click("Dismiss");
+  expect(
+    h.calls.find(({ method }) => method === WS_METHODS.memorySuggestionsDismiss),
+  ).toMatchObject({
+    environmentId: nativeEnv,
+    input: { memorySpaceId: nativeSpace, suggestionId: dismissible[0]?.suggestionId },
+  });
+  expect(view.container.textContent).toContain("No pending suggestions");
+  expect(view.container.textContent).not.toContain(dismissible[0]?.text);
+
+  h.responses.set(WS_METHODS.memorySuggestionsList, () => forgettable);
+  await view.click("Show suggestions");
+  expect(view.container.textContent).toContain(forgettable[0]?.text);
+  await replaySuggestionChange(h, "forget");
+  expect(view.container.textContent).toContain("Forgotten memory");
+  expect(view.container.textContent).not.toContain(forgettable[0]?.text);
+});
+
+it("does not render or request suggestions from the legacy memory destination", async () => {
+  const { refused, legacyPage } = suggestionScenario;
+  await mount(
+    undefined,
+    (harness) => {
+      harness.responses.set(WS_METHODS.memoryList, (input) => {
+        expect(input).not.toHaveProperty("includeMarks");
+        return legacyPage;
+      });
+      harness.responses.set(WS_METHODS.memorySuggestionsList, () => refused);
+    },
+    legacyMemoryCapabilities,
+  );
+  expect(view.container.textContent).toContain("Remember something");
+  expect(view.container.textContent).not.toMatch(
+    /Show suggestions|Accept|Dismiss|Provenance unverified/,
+  );
+  expect(h.calls.some(({ method }) => method.startsWith("memory.suggestions."))).toBe(false);
+});
+it.each(memoryMoveCases)("retries refused and uncertain moves independently (batch %s)", (batch) =>
+  exerciseMemoryMove(mount, () => ({ h, view }), batch),
+);

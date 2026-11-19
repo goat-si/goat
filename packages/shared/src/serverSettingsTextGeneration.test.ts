@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerSettings,
 } from "@goat/contracts";
 import { createModelSelection } from "./model.ts";
 import {
@@ -45,6 +46,34 @@ const piProvider = (model: Partial<ServerProviderModel>) =>
     slashCommands: [],
     skills: [],
   }) satisfies ServerProvider;
+
+it("memory fallback from a standalone generator picks OmO's default instead of gpt-6-luna", () => {
+  const omo = ProviderInstanceId.make("omo");
+  const standalone = ProviderInstanceId.make("standalone");
+  const driver = ProviderDriverKind.make("omo");
+  const selection = createModelSelection(standalone, "standalone-model");
+  const onlyOmo = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: { [omo]: { driver, enabled: true, config: {} } },
+    textGenerators: {
+      [standalone]: {
+        kind: "openaiCompatible",
+        baseUrl: "https://model.example/v1",
+        apiKey: "",
+        enabled: true,
+      },
+    },
+    textGenerationModelSelection: selection,
+  } satisfies ServerSettings;
+  const providers = [
+    { ...piProvider({ slug: "default", name: "OmO default" }), instanceId: omo, driver },
+  ];
+  expect(resolveMemoryModelSelection(onlyOmo, providers)).toEqual({
+    instanceId: omo,
+    model: "default",
+  });
+  expect(resolveReviewGuideModelSelection(onlyOmo, providers, null)).toEqual(selection);
+});
 
 it.each([
   ["writer", resolveSourceControlWriterModelSelection],

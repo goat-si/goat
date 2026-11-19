@@ -5,7 +5,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Settings from "../serverSettings.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
@@ -47,28 +47,30 @@ const database = Layer.effectDiscard(
   ),
 ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
 const storeLayer = Store.layer.pipe(Layer.provideMerge(database));
-export const core = Service.layer.pipe(
-  Layer.provide(
-    Layer.succeed(Settings.MemoryHubCommittedSettings, {
-      read: Effect.succeed({
-        provenance: null,
-        settings: { mode: "hub" as const, memorySpaceId: space },
-        version: 1,
+export const coreFor = (environmentId: M.EnvironmentId) =>
+  Service.layer.pipe(
+    Layer.provide(
+      Layer.succeed(Settings.MemoryHubCommittedSettings, {
+        read: Effect.succeed({
+          provenance: null,
+          settings: { mode: "hub" as const, memorySpaceId: space },
+          version: 1,
+        }),
       }),
-    }),
-  ),
-  Layer.provide(
-    Layer.mock(RepositoryResolver.RepositoryIdentityResolver)({
-      resolve: () => Effect.succeed(null),
-    }),
-  ),
-  Layer.provideMerge(Quota.layer.pipe(Layer.provideMerge(storeLayer))),
-  Layer.provide(
-    Layer.succeed(Environment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(hubEnv),
-    }),
-  ),
-);
+    ),
+    Layer.provide(
+      Layer.mock(RepositoryResolver.RepositoryIdentityResolver)({
+        resolve: () => Effect.succeed(null),
+      }),
+    ),
+    Layer.provideMerge(Quota.layer.pipe(Layer.provideMerge(storeLayer))),
+    Layer.provide(
+      Layer.succeed(Environment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(environmentId),
+      }),
+    ),
+  );
+export const core = coreFor(hubEnv);
 export const configuration = Layer.succeed(Hub.MemoryHubConfiguration, {
   read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
 });

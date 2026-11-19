@@ -127,6 +127,73 @@ it.effect("missing hub advertisement stops before reading the credential or post
   }).pipe(Effect.provide(live)),
 );
 
+it.effect("keeps caller-supplied floor fields off a legacy hub request", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const client = yield* Client.MemoryHubClient;
+    const bodies: string[] = [];
+    const fetch: typeof globalThis.fetch = async (_url, init) => {
+      if (init?.method === "GET") return json(descriptor);
+      bodies.push(String(init?.body));
+      return json({ requests: [] });
+    };
+    assert.deepStrictEqual(
+      yield* client
+        .collectSourceReads(connection, { ...input, features: M.MEMORY_FLOOR_2 })
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch)),
+      { requests: [] },
+    );
+    assert.lengthOf(bodies, 1);
+    assert.notInclude(bodies[0]!, '"features"');
+  }).pipe(Effect.provide(live)),
+);
+
+it.effect.each([false, true])(
+  "sends the origin cursor only to a hub that advertises catch-up: %s",
+  (supported) =>
+    Effect.gen(function* () {
+      yield* seed;
+      const client = yield* Client.MemoryHubClient;
+      const bodies: string[] = [];
+      const fetch: typeof globalThis.fetch = async (_url, init) => {
+        if (init?.method === "GET")
+          return json({
+            ...descriptor,
+            capabilities: {
+              ...descriptor.capabilities,
+              memory: {
+                protocolVersion: 1,
+                derivedCap: 1000,
+                originUpdates: true,
+                ...(supported ? { originCatchup: true } : {}),
+              },
+            },
+          });
+        bodies.push(String(init?.body));
+        return json({
+          highWatermark: 0,
+          throughSequence: 0,
+          hasMore: false,
+          entries: [],
+          ...(supported ? { originPage: { throughSequence: 9, hasMore: false, updates: [] } } : {}),
+        });
+      };
+      const result = yield* client
+        .pull(connection, {
+          protocolVersion: 1,
+          memorySpaceId: space,
+          environmentId: environment,
+          afterSequence: 0,
+          afterOriginSequence: 9,
+          limit: 10,
+        })
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
+      assert.lengthOf(bodies, 1);
+      assert.strictEqual(bodies[0]?.includes('"afterOriginSequence":9'), supported);
+      assert.strictEqual(result.originPage?.throughSequence, supported ? 9 : undefined);
+    }).pipe(Effect.provide(live)),
+);
+
 it.effect("401 and 403 remain distinct and are never retried", () =>
   Effect.gen(function* () {
     yield* seed;

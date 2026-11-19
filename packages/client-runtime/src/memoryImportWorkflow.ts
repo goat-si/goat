@@ -83,6 +83,8 @@ const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
   space_live_items: "Memory space count limit reached",
   environment_live_items: "Environment memory count limit reached",
   live_payload_bytes: "Memory content storage limit reached",
+  dependencies: "This memory has too many sources",
+  payload_bytes: "This memory is too large to sync",
   history: "Memory history limit reached",
   import_session_items: "Import session item limit reached",
   import_session_bytes: "Import session size limit reached",

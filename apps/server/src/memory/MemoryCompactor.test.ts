@@ -1,3 +1,6 @@
+import { runRememberOriginFixture } from "./testkit/RememberOriginFixture.ts";
+import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
+import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import * as RecallFixture from "./MemoryRecall.ts";
 import { checkUsage } from "./MemoryUsageScan.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -818,4 +821,175 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect("negotiated conversation origins survive edits, compaction, and paged bootstrap", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const hub = yield* Hub.MemoryHubService;
+    const service = yield* Service.MemoryService;
+    const store = yield* Store.MemoryStore;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_events(application_event_version INTEGER,aggregate_kind TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT,event_id TEXT,sequence INTEGER)`;
+    const features = M.MEMORY_FLOOR_2;
+    yield* hub.pull({ ...pull(0), features }, principal());
+    yield* hub.pull({ ...pull(0, memberEnv), features }, principal(memberEnv));
+    const send = (operations: readonly M.MemoryOperation[]) =>
+      hub.push(
+        { protocolVersion: 1, memorySpaceId: space, environmentId: hubEnv, operations, features },
+        principal(),
+      );
+    const settle = Effect.fn("test.settle")((receipt: Store.StoredReceipt) =>
+      Effect.gen(function* () {
+        const op = yield* store.readWorkOperation(`sync:${space}:${receipt.receipt.operationId}`);
+        if (!op || op.kind !== "upsert") throw new Error("Expected an upsert operation");
+        assert.propertyVal((yield* send([op])).receipts[0], "outcome", "accepted");
+        return op;
+      }),
+    );
+    const origin = { environmentId: hubEnv, threadId: M.ThreadId.make("synthetic-conversation") };
+    const remember = (text: string) =>
+      service.remember({ memorySpaceId: space, scope: "user", text }, Effect.void, origin);
+    const narrow = yield* settle(yield* remember("Synthetic narrow origin"));
+    const update = {
+      protocolVersion: 1 as const,
+      memorySpaceId: space,
+      environmentId: hubEnv,
+      features,
+      operations: [],
+      originUpdates: [
+        {
+          memoryId: narrow.memoryId,
+          createOperationId: narrow.operationId,
+          threadId: origin.threadId,
+        },
+      ],
+    };
+    yield* hub.push({ ...update, environmentId: memberEnv }, principal(memberEnv));
+    assert.isUndefined((yield* store.loadAggregate(space, narrow.memoryId)).identity?.origin);
+    yield* hub.push(update, principal());
+    const sources = Array.from({ length: 101 }, (_, n) => {
+      const base = operation(22000 + n);
+      const memoryId = M.MemoryId.make(id(32000 + n));
+      return { ...base, memoryId, revision: { ...base.revision, memoryId } };
+    });
+    for (const batch of [sources.slice(0, 100), sources.slice(100)]) {
+      const receipts = (yield* send(batch)).receipts;
+      assert.isTrue(receipts.every((receipt) => receipt.outcome === "accepted"));
+    }
+    yield* store.appendThreadLineage(
+      origin,
+      space,
+      sources.map((op) => op.revision.revisionId),
+    );
+    const wide = yield* settle(yield* remember("Synthetic wide origin"));
+    for (const [offset, initial] of [narrow, wide].entries()) {
+      yield* settle(
+        yield* service.upsert(
+          {
+            memorySpaceId: space,
+            memoryId: initial.memoryId,
+            operationId: M.MemoryOperationId.make(id(33100 + offset)),
+            expectedHeads: [initial.revision.revisionId],
+            scope: { kind: "user" },
+            assertionKind: "inference",
+            baseBoundary: null,
+            payload: {
+              text: `Synthetic edited body ${offset}`,
+              evidence: [],
+              derivedFromMemoryRevisions: [],
+            },
+          },
+          Effect.void,
+        ),
+      );
+    }
+    yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS + 1);
+    yield* (yield* Compactor.MemoryCompactor).compact(principal());
+    const joined = yield* hub.join(
+      { protocolVersion: 1, memorySpaceId: space, environmentId: memberEnv, features },
+      principal(memberEnv),
+    );
+    const pages: M.MemoryHubCheckpointPage[] = [];
+    let cursor: string | undefined;
+    for (let count = 0; count < 20; count++) {
+      const reply = yield* hub.pull(
+        {
+          ...pull(joined.checkpointSequence, memberEnv),
+          features,
+          snapshotToken: joined.snapshotToken,
+          ...(cursor ? { cursor } : {}),
+        },
+        principal(memberEnv),
+      );
+      const page = reply.checkpoint;
+      if (!page) throw new Error("Expected a checkpoint page");
+      pages.push(page);
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    assert.isAbove(pages.length, 1);
+    assert.isTrue(M.validateMemoryCheckpointRecords(pages));
+    assert.isFalse(
+      pages.some((page) =>
+        page.revisions.some(({ revision }) =>
+          [narrow.revision.revisionId, wide.revision.revisionId].includes(revision.revisionId),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const replica = yield* Store.MemoryStore;
+      const reader = yield* Service.MemoryService;
+      const checkout = {
+        memorySpaceId: space,
+        hubEnvironmentId: hubEnv,
+        checkpointId: "synthetic-conversation-bootstrap",
+        expectedSnapshotToken: joined.snapshotToken,
+        expectedCheckpointSequence: joined.checkpointSequence,
+      };
+      yield* replica.transact(
+        Effect.andThen(
+          replica.learnHubFloor(space, yield* Clock.currentTimeMillis),
+          replica.advanceBootstrapTx({
+            ...checkout,
+            expectedState: "unbound",
+            nextState: "staging",
+            snapshotToken: joined.snapshotToken,
+            checkpointSequence: joined.checkpointSequence,
+            nextCursor: null,
+          }),
+        ),
+      );
+      for (const page of pages) yield* replica.installCheckpointPage({ ...checkout, page });
+      yield* replica.completeCheckpoint({ ...checkout, pageCount: pages.length });
+      for (const op of [narrow, wide]) yield* scanReplicaMemory(op.memoryId);
+      const request = { memorySpaceId: space, origin, limit: 1, includeQuarantined: false };
+      const first = yield* reader.list(request, Effect.void);
+      assert.isNotNull(first.nextCursor);
+      const second = yield* reader.list({ ...request, cursor: first.nextCursor! }, Effect.void);
+      assert.sameMembers(
+        [...first.items, ...second.items].map(({ memoryId }) => memoryId),
+        [narrow.memoryId, wide.memoryId],
+      );
+      assert.isEmpty(
+        (yield* reader.list(
+          { ...request, origin: { ...origin, environmentId: memberEnv } },
+          Effect.void,
+        )).items,
+      );
+    }).pipe(Effect.provide(Layer.fresh(core)));
+  }).pipe(checkUsage, Effect.provide(live), Effect.provideService(MemoryFloor2Enabled, true)),
+);
+
+it.effect.each([
+  "pre-activation",
+  "offline floor-2",
+  "already ready",
+  "oversized backlog",
+] as const)("replicates origins from %s narrow remembers through real sync", (scenario) =>
+  runRememberOriginFixture(scenario).pipe(
+    checkUsage,
+    Effect.provide(live),
+    Effect.provideService(MemoryFloor2Enabled, true),
+  ),
 );

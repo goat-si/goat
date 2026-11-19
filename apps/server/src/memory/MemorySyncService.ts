@@ -1,3 +1,10 @@
+import { makeMemoryOriginReplication } from "./MemoryOriginReplication.ts";
+import { checkSyncDispatch } from "./store/SaveSuggestions.ts";
+import { makePullMemoryTail } from "./MemoryPullTail.ts";
+import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
+import { validateCheckpointClosureCapacity } from "./MemoryDependencies.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
+import { checkConflictDependencies } from "./MemoryConflictDependencies.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned submission IDs.
 import * as NodeCrypto from "node:crypto";
 import * as M from "@goat/contracts";
@@ -26,9 +33,15 @@ import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
-import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
-import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
+import {
+  failureCode,
+  holdClass,
+  nextPullRetry,
+  refusedSync,
+  transient,
+} from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -150,7 +163,6 @@ const decodePull = Schema.decodeUnknownEffect(M.MemoryHubPullResult);
 const decodeSource = Schema.decodeUnknownEffect(M.MemorySourceReadOutcome);
 const decodeGenerated = Schema.decodeUnknownEffect(M.ResolveMemoryConflictExecutionResult);
 const decodeResolveInput = Schema.decodeUnknownEffect(M.ResolveMemoryConflictInput);
-const decodeLineagePayload = Schema.decodeUnknownEffect(M.MemoryPayload);
 const decodeSubmission = Schema.decodeUnknownEffect(M.MemoryHubApplyResolutionInput);
 const encodePush = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPushInput));
 const HELD_CLAIM_DEFER_MS = 60_000;
@@ -425,8 +437,9 @@ const make = Effect.gen(function* () {
         return noteFailure(r.settings.memoryHubVersion, error);
       }),
     );
+  const selfFeatures = memoryFloorAdvertisement(yield* MemoryFloor2Enabled);
   const callPull = (r: Route, i: M.MemoryHubPullInput) =>
-    r.connection ? client.pull(r.connection, i) : hub.pull(i, r.principal!);
+    r.connection ? client.pull(r.connection, i) : hub.pull({ ...i, ...selfFeatures }, r.principal!);
   const release = (r: Route, ticket: M.MemoryResolutionLease) => {
     const input: M.MemoryHubReleaseInput = {
       protocolVersion: 1,
@@ -438,7 +451,9 @@ const make = Effect.gen(function* () {
       fencingToken: ticket.fencingToken,
     };
     return (
-      r.connection ? client.release(r.connection, input) : hub.release(input, r.principal!)
+      r.connection
+        ? client.release(r.connection, input)
+        : hub.release({ ...input, ...selfFeatures }, r.principal!)
     ).pipe(
       Effect.interruptible,
       Effect.timeout("15 seconds"),
@@ -547,7 +562,9 @@ const make = Effect.gen(function* () {
         fencingToken: current.fencingToken,
       };
       const renewed = yield* (
-        r.connection ? client.renew(r.connection, input) : hub.renew(input, r.principal!)
+        r.connection
+          ? client.renew(r.connection, input)
+          : hub.renew({ ...input, ...selfFeatures }, r.principal!)
       ).pipe(
         Effect.tapError(() =>
           Effect.sync(() => {
@@ -555,7 +572,6 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
-
       yield* ensureEpoch(r.settings.memoryHubVersion);
       if (
         renewed.memorySpaceId !== current.memorySpaceId ||
@@ -657,21 +673,11 @@ const make = Effect.gen(function* () {
         const dependencies = [
           ...new Set([...row.ticket.conflictHeadSet, ...inheritedDependencies]),
         ];
-        // Check the existing payload codec's dependency/byte bounds before generation.
-        const lineage = yield* decodeLineagePayload({
-          text: "lineage admission",
-          evidence: [],
-          derivedFromMemoryRevisions: dependencies,
-        }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
-        const recheckDependencies = Service.validateSummaryDependencies(
-          row.ticket.memorySpaceId,
-          {
-            ...lineage,
-            derivedFromMemoryRevisions: inheritedDependencies.filter(
-              (id) => !row.ticket.conflictHeadSet.includes(id),
-            ),
-          },
-          { memoryId: row.ticket.memoryId, revisions: dependencies },
+        const recheckDependencies = checkConflictDependencies(
+          store,
+          row.ticket,
+          inheritedDependencies,
+          dependencies,
         ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         yield* recheckDependencies;
         const input = yield* decodeResolveInput({
@@ -696,6 +702,7 @@ const make = Effect.gen(function* () {
         yield* ensureEpoch(r.settings.memoryHubVersion);
         yield* eligibility(row.ticket);
         generationAttempted = true;
+        yield* recheckDependencies;
         const holdKey = yield* hold.keyFor(input.modelSelection);
         const generated = yield* Effect.scoped(
           Effect.gen(function* () {
@@ -763,6 +770,7 @@ const make = Effect.gen(function* () {
             memoryId: row.ticket.memoryId,
             expectedHeads: row.ticket.conflictHeadSet,
             kind: "resolve",
+            ...(snapshot.scopeVersion ? { expectedScopeVersion: snapshot.scopeVersion } : {}),
             conflictId: row.ticket.conflictId,
             fencingToken: row.ticket.fencingToken,
             revision: {
@@ -809,6 +817,9 @@ const make = Effect.gen(function* () {
             resolutionPayload: { resolutionId, judgment: trusted.result.judgment },
           },
         }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
+        if (submission.operation.kind !== "resolve")
+          return yield* new M.MemoryHubError({ code: "invalid_output" });
+        yield* requireMemoryTailFit(submission.operation);
         row = yield* store.transact(
           Effect.gen(function* () {
             yield* recheckDependencies;
@@ -823,7 +834,7 @@ const make = Effect.gen(function* () {
       yield* ensureEpoch(r.settings.memoryHubVersion);
       const receipt = yield* r.connection
         ? client.applyResolution(r.connection, row.submission!)
-        : hub.applyResolution(row.submission!, r.principal!);
+        : hub.applyResolution({ ...row.submission!, ...selfFeatures }, r.principal!);
       if (receipt.outcome === "rejected" || receipt.hubSequence === null) {
         if (receipt.outcome !== "rejected")
           return yield* new M.MemoryHubError({ code: "invalid_output" });
@@ -1141,7 +1152,7 @@ const make = Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
             const ticket = yield* r.connection
               ? client.claim(r.connection, frozen.claim)
-              : hub.claim(frozen.claim, r.principal!);
+              : hub.claim({ ...frozen.claim, ...selfFeatures }, r.principal!);
             yield* ensureEpoch(r.settings.memoryHubVersion);
             if (
               ticket.memorySpaceId !== r.space ||
@@ -1241,48 +1252,7 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const pullTail = Effect.fnUntraced(function* (
-    r: Route,
-    budget: { pages: number; entries: number },
-  ) {
-    let highWatermark: number | undefined;
-    while (budget.pages < 10 && budget.entries < 1000) {
-      const after = yield* store.readCursor(r.space!, r.hubId);
-      const page = yield* callPull(r, {
-        protocolVersion: 1,
-        memorySpaceId: r.space!,
-        environmentId: local,
-        afterSequence: after,
-        limit: Math.min(100, 1000 - budget.entries),
-        ...(highWatermark === undefined ? {} : { highWatermark }),
-      }).pipe(
-        Effect.flatMap(decodePull),
-        Effect.mapError((e) =>
-          e._tag === "SchemaError" ? new M.MemoryHubError({ code: "invalid_output" }) : e,
-        ),
-      );
-      yield* ensureEpoch(r.settings.memoryHubVersion);
-      if (
-        page.checkpoint ||
-        (highWatermark !== undefined && page.highWatermark !== highWatermark) ||
-        page.throughSequence < after ||
-        (page.hasMore && page.throughSequence === after)
-      )
-        return yield* new M.MemoryHubError({ code: "invalid_output" });
-      highWatermark = page.highWatermark;
-      yield* service.receiveHubPage({
-        memorySpaceId: r.space!,
-        hubEnvironmentId: r.hubId,
-        localEnvironmentId: local,
-        expectedSequence: after,
-        page,
-        reauthorize: ensureEpoch(r.settings.memoryHubVersion),
-      });
-      budget.pages++;
-      budget.entries += page.entries.length;
-      if (!page.hasMore) break;
-    }
-  });
+  const pullTail = makePullMemoryTail({ store, service, callPull, ensureEpoch, local });
   const bootstrap = Effect.fnUntraced(function* (
     r: Route,
     budget: { pages: number; entries: number },
@@ -1302,7 +1272,7 @@ const make = Effect.gen(function* () {
       // The hub device is a replica too; use its active self authority without self HTTP.
       const join = yield* r.connection
         ? client.join(r.connection, input)
-        : hub.join(input, r.principal!);
+        : hub.join({ ...input, ...selfFeatures }, r.principal!);
       yield* ensureEpoch(r.settings.memoryHubVersion);
       state = {
         state: "staging",
@@ -1345,9 +1315,10 @@ const make = Effect.gen(function* () {
           yield* runtime.discardBootstrap(r.space, r.hubId, state.snapshotToken!);
         return yield* response.failure;
       }
-      const page = (yield* decodePull(response.success).pipe(
+      const decoded = yield* decodePull(response.success).pipe(
         Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
-      )).checkpoint;
+      );
+      const page = decoded.checkpoint;
       if (
         !page ||
         page.pageOrdinal !== state.pageCount ||
@@ -1359,6 +1330,8 @@ const make = Effect.gen(function* () {
         .transact(
           Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
+            if (decoded.derivedCap)
+              yield* store.learnHubFloor(r.space!, yield* Clock.currentTimeMillis);
             const stage = {
               memorySpaceId: r.space!,
               hubEnvironmentId: r.hubId,
@@ -1366,6 +1339,9 @@ const make = Effect.gen(function* () {
               expectedSnapshotToken: state.snapshotToken!,
               expectedCheckpointSequence: state.checkpointSequence,
             };
+            yield* validateCheckpointClosureCapacity(page).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             yield* store.installCheckpointPage({ ...stage, page });
             if (page.bootstrapComplete) {
               yield* store.completeCheckpoint({
@@ -1425,21 +1401,15 @@ const make = Effect.gen(function* () {
     if (result._tag === "Failure") {
       const error = result.failure;
       const now = yield* Clock.currentTimeMillis;
+      const waitingForCheckpoint =
+        error._tag === "MemoryHubError" &&
+        error.code === "bootstrap_required" &&
+        (yield* runtime.readBootstrap(key.memorySpaceId, key.hubEnvironmentId)).state === "unbound";
+      const nextRetry = nextPullRetry(error, retry.attempts, now, waitingForCheckpoint);
       yield* store.transact(
-        store.writePullRetryTx({
-          ...key,
-          expectedVersion: retry.version,
-          retry: {
-            attempts: Math.min(2147483647, retry.attempts + 1),
-            nextAttemptAt: transient(error)
-              ? now + Math.min(30000, 1000 * 2 ** Math.min(retry.attempts, 5))
-              : Number.MAX_SAFE_INTEGER,
-            failureCode: failureCode(error),
-            holdClass: transient(error) ? null : holdClass(error),
-          },
-        }),
+        store.writePullRetryTx({ ...key, expectedVersion: retry.version, retry: nextRetry }),
       );
-      yield* scheduleRecovery(r, transient(error) ? null : holdClass(error));
+      yield* scheduleRecovery(r, nextRetry.holdClass);
       yield* wakePullRetry;
       return yield* error;
     }
@@ -1479,7 +1449,7 @@ const make = Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
             const result = yield* r.connection
               ? client.respondSourceRead(r.connection, revoke)
-              : hub.respondSourceRead(revoke, r.principal!);
+              : hub.respondSourceRead({ ...revoke, ...selfFeatures }, r.principal!);
             yield* ensureEpoch(r.settings.memoryHubVersion);
             if (
               result.kind !== "revoke" ||
@@ -1510,7 +1480,7 @@ const make = Effect.gen(function* () {
           };
           const collected = yield* r.connection
             ? client.collectSourceReads(r.connection, input)
-            : hub.collectSourceReads(input, r.principal!);
+            : hub.collectSourceReads({ ...input, ...selfFeatures }, r.principal!);
           const previous = collected.requests.findIndex((q) => q.requestId === lastRelayRequest);
           const requests = [
             ...collected.requests.slice(previous + 1),
@@ -1638,7 +1608,9 @@ const make = Effect.gen(function* () {
                 r.connection
                   ? client.respondSourceRead(r.connection, response, prepareResponse)
                   : prepareResponse.pipe(
-                      Effect.flatMap((input) => hub.respondSourceRead(input, r.principal!)),
+                      Effect.flatMap((input) =>
+                        hub.respondSourceRead({ ...input, ...selfFeatures }, r.principal!),
+                      ),
                     )
               ).pipe(Effect.timeout("1 second"));
             }).pipe(
@@ -1657,6 +1629,13 @@ const make = Effect.gen(function* () {
           TimeoutError: () => Effect.void,
         }),
       );
+  const replicateOrigins = makeMemoryOriginReplication(sql, {
+    store,
+    local,
+    hub,
+    client,
+    ensureEpoch,
+  });
   const push = Effect.fnUntraced(function* (r: Route) {
     const now = yield* Clock.currentTimeMillis;
     const candidates = yield* store.readEligibleOutbox(r.space!, now, 100);
@@ -1691,16 +1670,37 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
-          const ack = yield* r.connection
-            ? client.push(r.connection, input)
-            : hub.push(input, r.principal!);
+          const prepare = checkSyncDispatch(sql, acquired, input, candidate.work.metadata);
+          const ack = yield* (
+            r.connection
+              ? client.push(r.connection, input, prepare)
+              : hub.push({ ...input, ...selfFeatures }, r.principal!, prepare)
+          ).pipe(
+            Effect.catchTags({
+              MemoryHubError: (error) =>
+                refusedSync(operation, error.code)
+                  ? Effect.succeed({
+                      receipts: [
+                        {
+                          operationId: operation.operationId,
+                          memoryId: operation.memoryId,
+                          operationDigest: acquired.operationDigest,
+                          outcome: "rejected" as const,
+                          hubSequence: null,
+                          failureCode: error.code,
+                        },
+                      ],
+                    })
+                  : Effect.fail(error),
+            }),
+          );
           yield* ensureEpoch(r.settings.memoryHubVersion);
           const receipt = ack.receipts[0];
           if (
             ack.receipts.length !== 1 ||
             !receipt ||
             receipt.operationId !== acquired.operationId ||
-            receipt.operationDigest !== acquired.operationDigest
+            !matchesMemoryOperationDigest(operation, receipt.operationDigest)
           )
             return yield* new M.MemoryHubError({ code: "invalid_output" });
           yield* service.settleHubAcknowledgement({
@@ -1878,7 +1878,7 @@ const make = Effect.gen(function* () {
             : Effect.fail(new Service.MemoryAccessError({ code: "fenced" })),
         });
       }
-      yield* push(r);
+      yield* Effect.andThen(push(r), replicateOrigins(r));
       yield* synchronizePull(r, budget);
       yield* sweep;
       yield* ensureEpoch(r.settings.memoryHubVersion);
@@ -2361,7 +2361,7 @@ const make = Effect.gen(function* () {
           };
           const requested = yield* r.connection
             ? client.requestSourceRead(r.connection, submission)
-            : hub.requestSourceRead(submission, r.principal!);
+            : hub.requestSourceRead({ ...submission, ...selfFeatures }, r.principal!);
           yield* permit;
           if (
             !requested.request.stamp ||
@@ -2390,7 +2390,7 @@ const make = Effect.gen(function* () {
               };
               const result = yield* r.connection
                 ? client.resultSourceRead(r.connection, i)
-                : hub.resultSourceRead(i, r.principal!);
+                : hub.resultSourceRead({ ...i, ...selfFeatures }, r.principal!);
               yield* permit;
               yield* ensureEpoch(r.settings.memoryHubVersion);
               if ((yield* Clock.currentTimeMillis) >= deadline) break;

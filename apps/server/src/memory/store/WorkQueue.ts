@@ -8,24 +8,12 @@ import {
   storedTicketRowCodec,
   threadCodec,
   threadHookCodec,
-  threadLineageCodec,
   workMetadataCodec,
   workRows,
 } from "./StoreCodecs.ts";
 import type { WorkRow } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
-import {
-  MemoryStorageError,
-  MemoryStoreConflict,
-  MemoryWork,
-  strict,
-  threadHookId,
-  threadLineageId,
-} from "./StoreModel.ts";
-import type { ThreadLineage } from "./StoreModel.ts";
-
-// Bounds the per-read walk over app-owned task results; past it the lineage is too large to trust.
-const MAX_TASK_RESULT_SOURCES = 100;
+import { MemoryStoreConflict, MemoryWork, strict, threadHookId } from "./StoreModel.ts";
 
 export const makeWorkQueue = (
   kernel: Pick<StoreKernel, "sql" | "transact">,
@@ -39,158 +27,6 @@ export const makeWorkQueue = (
       sql<WorkRow>`SELECT * FROM memory_outbox WHERE id=${id} AND admin_json IS NULL`,
     );
     return (yield* workRows(rows))[0];
-  });
-  // Runs inside readThreadLineage's span, once per task result source.
-  const readOwnLineage = Effect.fnUntraced(function* (
-    thread: M.ScopedThreadRef,
-    space: M.MemorySpaceId,
-  ) {
-    const rows = yield* stored(
-      "thread-lineage-read",
-      sql<{ metadata_json: string }>`
-      SELECT metadata_json FROM memory_outbox WHERE id=${threadLineageId(thread)}`,
-    );
-    const lineage: ThreadLineage = rows[0]
-      ? yield* threadLineageCodec
-          .decode(rows[0].metadata_json, strict)
-          .pipe(
-            Effect.mapError(
-              (cause) => new MemoryStorageError({ stage: "thread-lineage-codec", cause }),
-            ),
-          )
-      : {
-          kind: "threadLineage",
-          sourceThread: thread,
-          memorySpaceId: space,
-          state: "tracked",
-          revisions: [],
-        };
-    // App-owned tasks get a task, not parent history, and their results are merged in
-    // readThreadLineage from the child's own lineage. Native children cannot prove non-inheritance.
-    // An active provider pointer alone also says nothing about inherited context.
-    // Same-thread handoffs/compaction keep the cumulative set; rollback cannot clear it.
-    const unknown = yield* stored(
-      "thread-lineage-origin",
-      sql`SELECT 1 FROM orchestration_events
-      WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${thread.threadId}
-      AND ((event_type='thread.created' AND (
-        json_extract(payload_json,'$.forkedFrom.type') IN ('run','provider_thread')
-        OR json_extract(payload_json,'$.lineage.relationshipToParent')='fork'
-        OR json_extract(payload_json,'$.historyOrigin')='v1_import'
-        OR (json_extract(payload_json,'$.creationSource')='provider' AND (
-          json_extract(payload_json,'$.lineage.relationshipToParent')='subagent'
-          OR json_extract(payload_json,'$.forkedFrom.type')='node'
-          OR json_extract(payload_json,'$.lineage.parentThreadId') IS NOT NULL))))
-        OR (event_type='provider-thread.updated' AND json_extract(payload_json,'$.forkedFrom.providerThreadId') IS NOT NULL)
-        OR (event_type='provider-thread.updated' AND json_extract(payload_json,'$.status')='not_loaded' AND json_extract(payload_json,'$.nativeThreadRef') IS NOT NULL AND json_extract(payload_json,'$.providerSessionId') IS NULL)
-        OR (event_type IN ('context-transfer.created','context-transfer.updated')
-          AND json_extract(payload_json,'$.type') IS NOT 'subagent_spawn'
-          AND json_extract(payload_json,'$.type') IS NOT 'subagent_result'
-          AND json_extract(payload_json,'$.targetThreadId')=${thread.threadId}
-          AND json_extract(payload_json,'$.sourceThreadId')!=${thread.threadId})) LIMIT 1`,
-    );
-    return lineage.memorySpaceId !== space || unknown.length
-      ? { ...lineage, state: "unknown" as const }
-      : lineage;
-  });
-  const taskResultSources = (threadId: M.ThreadId) =>
-    stored(
-      "thread-lineage-results",
-      sql<{ source: string | null; linked: number }>`
-      SELECT DISTINCT json_extract(t.payload_json,'$.sourceThreadId') AS source,
-        (EXISTS(SELECT 1 FROM orchestration_events s
-          WHERE s.application_event_version=2 AND s.aggregate_kind='thread' AND s.stream_id=${threadId}
-          AND s.event_type='subagent.updated' AND json_extract(s.payload_json,'$.origin')='app_owned'
-          AND json_extract(s.payload_json,'$.childThreadId')=json_extract(t.payload_json,'$.sourceThreadId'))
-        AND EXISTS(SELECT 1 FROM orchestration_events c
-          WHERE c.application_event_version=2 AND c.aggregate_kind='thread'
-          AND c.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND c.event_type='thread.created'
-          AND json_extract(c.payload_json,'$.lineage.parentThreadId')=${threadId}
-          AND json_extract(c.payload_json,'$.lineage.relationshipToParent')='subagent'
-          AND json_extract(c.payload_json,'$.creationSource') IS NOT 'provider')
-        AND NOT EXISTS(SELECT 1 FROM orchestration_events d
-          WHERE d.application_event_version=2 AND d.aggregate_kind='thread'
-          AND d.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND d.event_type='thread.deleted')) AS linked
-      FROM orchestration_events t
-      WHERE t.application_event_version=2 AND t.aggregate_kind='thread' AND t.stream_id=${threadId}
-      AND t.event_type IN ('context-transfer.created','context-transfer.updated')
-      AND json_extract(t.payload_json,'$.type')='subagent_result'
-      AND json_extract(t.payload_json,'$.targetThreadId')=${threadId}
-      AND json_extract(t.payload_json,'$.sourceThreadId') IS NOT ${threadId}`,
-    );
-  // A missing row reads as empty, so only a linked, undeleted app-owned child is merged;
-  // its lineage was recorded before any body reached it and never shrinks.
-  const readThreadLineage = Effect.fn("MemoryStore.readThreadLineage")(function* (
-    thread: M.ScopedThreadRef,
-    space: M.MemorySpaceId,
-  ) {
-    const own = yield* readOwnLineage(thread, space);
-    if (own.state !== "tracked") return own;
-    const revisions = new Set(own.revisions);
-    const visited = new Set<string>([thread.threadId]);
-    const pending = [thread.threadId];
-    for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
-      for (const { source, linked } of yield* taskResultSources(next)) {
-        if (!source || !linked || visited.has(source)) return { ...own, state: "unknown" as const };
-        visited.add(source);
-        if (visited.size > MAX_TASK_RESULT_SOURCES + 1)
-          return { ...own, state: "overflow" as const };
-        const child = M.ThreadId.make(source);
-        const lineage = yield* readOwnLineage({ ...thread, threadId: child }, space);
-        if (lineage.state !== "tracked") return { ...own, state: lineage.state };
-        for (const revision of lineage.revisions) revisions.add(revision);
-        pending.push(child);
-      }
-    }
-    return revisions.size > 100
-      ? { ...own, state: "overflow" as const }
-      : { ...own, revisions: [...revisions] };
-  });
-  const appendThreadLineage = Effect.fn("MemoryStore.appendThreadLineage")(function* (
-    thread: M.ScopedThreadRef,
-    space: M.MemorySpaceId,
-    revisions: ReadonlyArray<M.MemoryRevisionId>,
-  ) {
-    return yield* transact(
-      Effect.gen(function* () {
-        const previous = yield* readThreadLineage(thread, space);
-        const union = [...new Set([...previous.revisions, ...revisions])];
-        const state =
-          previous.state !== "tracked"
-            ? previous.state
-            : union.length > 100
-              ? "overflow"
-              : "tracked";
-        // Injection remains available for unknown/overflow contexts. Persist the fence
-        // before delivery so every thread-derived producer stays disabled thereafter.
-        // Overflow preserves the previous set, including an initially empty set.
-        const metadata = yield* stored(
-          "thread-lineage-codec",
-          threadLineageCodec.encode({
-            ...previous,
-            state,
-            revisions: union.length > 100 ? previous.revisions : union,
-          }),
-        );
-        yield* stored(
-          "thread-lineage-write",
-          sql`INSERT INTO memory_outbox
-        (id,space,kind,status,metadata_json,next_attempt_at)
-        VALUES (${threadLineageId(thread)},'_worker','rebuild','completed',${metadata},0)
-        ON CONFLICT(id) DO UPDATE SET metadata_json=excluded.metadata_json
-        WHERE memory_outbox.metadata_json!=excluded.metadata_json`,
-        );
-        return true;
-      }),
-    );
-  });
-  const deleteThreadLineage = Effect.fn("MemoryStore.deleteThreadLineage")(function* (
-    thread: M.ScopedThreadRef,
-  ) {
-    yield* stored(
-      "thread-lineage-delete",
-      sql`DELETE FROM memory_outbox WHERE id=${threadLineageId(thread)}`,
-    );
   });
   const retryWork = Effect.fn("MemoryStore.retryWork")(function* (
     work: MemoryWork,
@@ -356,9 +192,6 @@ export const makeWorkQueue = (
   });
   return {
     readWork,
-    readThreadLineage,
-    appendThreadLineage,
-    deleteThreadLineage,
     retryWork,
     rearmGenerationWork,
     renewWork,

@@ -173,6 +173,13 @@ describe("V2 preview upgrade", () => {
         [156, "DisposableMachineRequests"],
         [157, "DisposableMachineEnrollment"],
         [158, "AuthSessionPenMember"],
+        [159, "MemoryThreadLineage"],
+        [160, "MemorySaveSuggestions"],
+        [161, "MemoryHubFloor"],
+        [162, "MemoryScopeVersion"],
+        [163, "MemoryCompactMoveReceipts"],
+        [164, "MemoryOriginCatchup"],
+        [165, "MemorySuggestionQuota"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -356,6 +363,13 @@ describe("V2 preview upgrade", () => {
         [156, "DisposableMachineRequests"],
         [157, "DisposableMachineEnrollment"],
         [158, "AuthSessionPenMember"],
+        [159, "MemoryThreadLineage"],
+        [160, "MemorySaveSuggestions"],
+        [161, "MemoryHubFloor"],
+        [162, "MemoryScopeVersion"],
+        [163, "MemoryCompactMoveReceipts"],
+        [164, "MemoryOriginCatchup"],
+        [165, "MemorySuggestionQuota"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

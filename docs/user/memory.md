@@ -18,9 +18,11 @@ To share memory, use **Add device** in the hub’s Memory settings. Every device
 
 Choose **Remember something**, enter what you want to keep, and choose its scope: **All projects** for memories shared across conversations, **Project** for one project, or **Thread** for one conversation. Imports use the same scopes.
 
+To change an existing memory's scope, open its details or select several memories and choose **Move to…**. Moving keeps the memory's history and evidence. All active devices in the memory hub must be updated before you can move memories between scopes.
+
 For project memories, use a shared project binding to share an identity across projects, or return to the repository binding. Changing the binding affects future memories; existing memories keep their scope. Preview an import again after changing its scope or binding.
 
-Search for a memory, open it to read its history, or use **Edit** to change it. Editing keeps it where it was saved.
+Search for a memory, open it to read its history, or use **Edit** to change it. Editing keeps it where it was saved. Memory text hides after a minute on screen; choose **Show again** to read it. An edit you have changed keeps your text.
 
 If search coverage is incomplete or unavailable, an empty result does not prove a memory is missing. Clear the search to browse saved memories instead.
 
@@ -46,6 +48,8 @@ Every member can save and edit memories when it has memory write permission. If 
 
 To stop sharing on a device, turn sharing off in its Memory settings (**Leave sharing** for a member on web or desktop). Saved memories stay on the device. To share them again, make the same device the hub or add the member from the hub’s Memory settings.
 
+A hub that has enabled support for longer memory histories can add an older device in Settings, but the device must update before it can sync. Older GOAT builds cannot reopen an upgraded memory database, and restoring a backup loses memory writes made after that backup.
+
 If device setup does not finish, use **Retry** to continue the same request. After a reload, use **Replace key** to recover the device or **Remove** to clean up incomplete setup. If settings changed on another device, review the latest settings before trying again.
 
 ## Read original conversations
@@ -56,7 +60,7 @@ Removing that permission applies to later requests and to results still on the h
 
 ## Review conflicts
 
-When devices make conflicting changes, only the conflicting memory is put on hold. GOAT automatically resolves it using the resolving device’s default provider and model, and applies the result without waiting for approval. If resolution fails, that memory stays on hold.
+When devices make conflicting changes, only the conflicting memory is put on hold. GOAT automatically resolves it using the resolving device’s default provider and model, and applies the result without waiting for approval. If one of the conflicting versions is unverified, GOAT skips the model call and leaves the memory on hold for you to review. A failed resolution also leaves the memory on hold.
 
 Open the memory’s history to review the resolution and judgment. The conflicting originals and judgment are kept for 30 days unless the memory is forgotten. Within 30 days of each resolution, choose a retained original and use **Revert resolution** to restore it once. Reverting requires the resolved memory to be unchanged and its original still available; a revert cannot itself be reverted. Deletion takes priority over edits, so an older edit cannot bring back a forgotten memory.
 
@@ -76,6 +80,14 @@ Open the memory, choose **Forget**, and confirm. This cannot be undone. Forgetti
 
 The provider’s original conversation stays, but forgotten content is never imported again. Forgetting content does not automatically shrink the database file.
 
+### Forget several memories
+
+In **Settings → Memory**, choose **Select memories**, mark the records, and choose **Forget** with the number selected. Confirm once. The results show which memories were forgotten, which are waiting to sync, and which you can retry.
+
+### Find memories saved from a conversation
+
+Use **Saved from conversation** to choose a conversation, then browse or search within the selected memory scope. GOAT matches the conversation that originally saved the memory. Older memories with no recorded conversation do not appear in the filtered results.
+
 ## Agent access
 
 Agent memory access depends on the environment’s current policy and the run’s permissions. For scheduled tasks, subagents, and work GOAT Bot or Slack starts for you, **Saved limit** is the stored maximum: none, read only, or read and write. **Allowed now** is what the server currently permits, which may be narrower. If **Allowed now** is absent, the server does not know the current value. Turning agent memory access on cannot widen the saved limit.
@@ -84,7 +96,11 @@ When connecting an outside agent through OAuth, select **Read memory** or **Writ
 
 ## When a conversation cannot save memories
 
-Forked or imported conversations, and conversations that have received more memories than GOAT can safely track, can still use memories but cannot save new ones or produce new memory summaries. Start a new conversation to save the memory.
+If GOAT can only trace part of a conversation’s memory history, it can save the exact words you type. Those memories carry the **Provenance unverified** badge and stay out of automatic memory context and summaries. If GOAT asks you to update the other machines in your memory hub, update them before trying again.
+
+### Review save suggestions
+
+When an agent’s wording needs your review, open **Settings → Memory → Suggestions**. Choose **Accept** to save the text or **Dismiss** to remove the suggestion. GOAT checks the source and permissions again when you accept. Suggestions expire after seven days. Forgetting a memory clears pending suggestions in the same memory space.
 
 ## Connection problems
 

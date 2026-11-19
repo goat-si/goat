@@ -11,4 +11,5 @@ export const MEMORY_MCP_TOOLS = [
   "memory_forget",
   "memory_revert_resolution",
   "memory_read_source",
+  "goat_memory_suggestions",
 ] as const;

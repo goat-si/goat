@@ -1,3 +1,4 @@
+import { decodeV1MemoryOperation as decodeOperation } from "./testkit/DecodeV1MemoryOperation.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { MemoryStoreReclaimResult } from "./MemoryStoreReclaim.ts";
 import { memoryFailure } from "../mcp/toolkits/memory/handlers.ts";
@@ -16,7 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
@@ -33,7 +34,6 @@ const memory = M.MemoryId.make(id(2));
 const env = M.EnvironmentId.make("fixture");
 const now = "2026-10-14T00:00:00.000Z";
 const hash = "a".repeat(64);
-const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const operation = (n = 3) =>
   decodeOperation({
     protocolVersion: 1,

@@ -21,7 +21,7 @@ import * as Auth from "./MemoryHubAuth.ts";
 import * as Hub from "./MemoryHubHttp.ts";
 import * as Settings from "../serverSettings.ts";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 
 const space = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
 const member = M.EnvironmentId.make("synthetic-member");

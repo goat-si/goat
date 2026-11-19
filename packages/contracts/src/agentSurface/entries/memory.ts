@@ -35,10 +35,14 @@ export const memoryEntries = {
     guide:
       "Needs memory:read. For one query across thread, project and user memory use goat_memory_recall. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
+      includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       limit: "Items per page, 1 to 100. Default 20.",
       cursor: "nextCursor from the previous page, unchanged, with the same query and scope.",
       query: "The words to find.",
+      origin:
+        "Use this when looking for memories saved from a particular conversation. Filters by that conversation’s environmentId and threadId.",
       scope:
         "Where to search: {kind:'user'} (default), {kind:'project', projectKey} or {kind:'thread', thread, projectKey?}.",
       mode: "fts (default) for phrase search, or substring for partial text.",
@@ -68,6 +72,10 @@ export const memoryEntries = {
     description: "List one bounded page of memory items.",
     guide:
       "Needs memory:read. Pass includeQuarantined (false hides quarantined items); memorySpaceId defaults to this server's space. The default scope is user.",
+    parameters: {
+      includeMarks: "true includes provenance and the origin thread when recorded.",
+      includeScopeVersion: "true includes each memory's scope version.",
+    },
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -87,6 +95,8 @@ export const memoryEntries = {
     description: "Read one memory item.",
     guide: "Needs memory:read.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
+      includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       memoryId: "The item's id from goat_memory_recall, goat_memory_search or goat_memory_list.",
     },
@@ -114,6 +124,7 @@ export const memoryEntries = {
     summary: "Read one bounded memory history page.",
     description: "Read one bounded page of a memory item’s revision history.",
     guide: "Needs memory:read.",
+    parameters: { includeMarks: "true includes provenance and the origin thread when recorded." },
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -150,11 +161,11 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Save a memory from text and a scope.",
     description:
-      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId to replace an existing memory instead of adding another. Do not save progress reports, tool output or execution summaries.",
+      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId with text to edit a memory in place, or pass memoryId and a different scope without text to move it and keep its history. Do not save progress reports, tool output or execution summaries.",
     guide:
       "Needs memory:write and a session allowed to write. GOAT fills the memory space, ids, current revision, project key and this conversation as evidence.",
     parameters: {
-      text: "The memory, written to stand on its own.",
+      text: "The memory, written to stand on its own. Omit it when moving a memory.",
       scope:
         "user (every project), project (this conversation's project) or thread. Required unless memoryId is set.",
       memoryId: "Optional id from goat_memory_recall to replace that memory; it keeps its scope.",
@@ -197,14 +208,37 @@ export const memoryEntries = {
       openWorldHint: false,
     },
   }),
+  "memory.suggestions": entry({
+    resource: "memory",
+    verb: "suggestions",
+    name: "goat_memory_suggestions",
+    toolkit: "memory",
+    summary: "List pending memory save suggestions.",
+    description:
+      "List metadata for pending memory save suggestions. A person can review the text in Settings → Memory.",
+    guide: "Needs memory:read. Omit memorySpaceId to use this server's current memory space.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "memory.forget": entry({
     resource: "memory",
     verb: "forget",
     name: "memory_forget",
     toolkit: "memory",
     summary: "Forget memory.",
-    description: "Forget a memory item.",
-    guide: "Needs memory:write and a session allowed to write.",
+    description: "Forget a memory item by its memoryId.",
+    guide:
+      "Needs memory:write and a session allowed to write. Omit memorySpaceId to use this server's current memory space.",
+    parameters: {
+      memoryId: "The memory to forget.",
+      memorySpaceId: "Optional memory space. Defaults to the current space.",
+      operationId: "Optional explicit operation ID. Supply expectedHeads with it.",
+      expectedHeads: "Expected heads for an explicit operation ID.",
+    },
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

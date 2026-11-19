@@ -1,3 +1,4 @@
+import { decodeV1MemoryOperation as decodeOperation } from "./testkit/DecodeV1MemoryOperation.ts";
 import {
   checkUsage,
   scanRevertResultBytes,
@@ -21,7 +22,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import migration from "../persistence/Migrations/098_Memory.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import searchMigration from "../persistence/Migrations/100_MemorySearchCounters.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
@@ -69,7 +70,6 @@ const encodeOperationJson = Schema.encodeEffect(Schema.fromJsonString(M.MemoryOp
 const encodePayload = Schema.encodeEffect(Schema.fromJsonString(M.MemoryPayload));
 const encodeCheckpointPage = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubCheckpointPage));
 const decodeCheckpointPage = Schema.decodeEffect(Schema.fromJsonString(M.MemoryHubCheckpointPage));
-const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const operation = (n = 3) =>
   decodeOperation({
     protocolVersion: 1,
@@ -1057,7 +1057,7 @@ describe("MemoryStore", () => {
       const generation = (yield* store.loadAggregate(space, memory)).generation;
       const base = reconnected();
       const op = base.operation;
-      if (op.kind === "forget") throw new Error("Fixture kind");
+      if (!M.isMemoryRevisionOperation(op)) throw new Error("Fixture kind");
       for (const changed of [
         { ...base, operationDigest: "b".repeat(64) },
         { ...base, operation: { ...op, payload: { ...op.payload, text: "changed" } } },

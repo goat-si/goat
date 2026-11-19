@@ -37,7 +37,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), [158, "AuthSessionPenMember"]);
+      assert.deepStrictEqual(migrationManifest.at(-1), [165, "MemorySuggestionQuota"]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -132,16 +132,16 @@ describe("GOAT migrations after upstream 080-089", () => {
   );
 
   it.effect(
-    "the previous build refuses a database this build migrated and leaves it unchanged",
+    "the pre-shift build refuses a database migrated through the shift and leaves it unchanged",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations();
+        yield* runMigrations({ toMigrationInclusive: 157 });
         const before = yield* history;
         const tables = yield* schema;
         // The previous build's manifest: no upstream 080-089, GOAT ten ids lower.
         const upstream80s = new Set(UPSTREAM_80S.map(([, name]) => name));
         const previousEntries = migrationEntries.flatMap(([id, name, migration]) =>
-          upstream80s.has(name)
+          upstream80s.has(name) || id > 157
             ? []
             : [[GOAT_MIGRATION_NAMES.has(name) ? id - 10 : id, name, migration] as const],
         );

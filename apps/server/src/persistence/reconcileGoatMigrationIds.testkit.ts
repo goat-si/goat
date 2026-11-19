@@ -9,7 +9,7 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 import { GOAT_MIGRATION_NAMES } from "./reconcileGoatMigrationIds.ts";
 
 // Builds before cycle 261114 recorded GOAT's migrations at 80-147. Upstream took 080-089, so GOAT's
-// block moved to 90-158 and older ledgers move with it.
+// block moved to 90-157 and older ledgers move with it.
 export const UPSTREAM_80S: ReadonlyArray<readonly [number, string]> = [
   [80, "ScheduledTaskThreadMode"],
   [81, "ProjectionMessageSearchText"],

@@ -1,3 +1,4 @@
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -16,7 +17,7 @@ import * as SourceControl from "../sourceControl/SourceControlProviderRegistry.t
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import migration from "../persistence/Migrations/098_Memory.ts";
 import lastReadyMigration from "../persistence/Migrations/108_MemoryLastReadySpace.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
@@ -307,6 +308,7 @@ export const fixture = (
   changing = false,
   environmentId = local,
   quotaLayer = quota,
+  wrapStore?: (store: Store.MemoryStore["Service"]) => Store.MemoryStore["Service"],
 ) => {
   const environmentIdentity =
     environmentId === local
@@ -340,7 +342,12 @@ export const fixture = (
     environmentIdentity,
     generation,
   ).pipe(Layer.provideMerge(Layer.merge(sharedSettings, committed)));
-  return Sync.layer.pipe(Layer.provideMerge(client.pipe(Layer.provideMerge(shared))));
+  const sync = wrapStore
+    ? Sync.layer.pipe(
+        Layer.provide(Layer.effect(Store.MemoryStore, Effect.map(Store.MemoryStore, wrapStore))),
+      )
+    : Sync.layer;
+  return sync.pipe(Layer.provideMerge(client.pipe(Layer.provideMerge(shared))));
 };
 export const ready = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -446,3 +453,26 @@ export const sourceFixture = Effect.gen(function* () {
     Effect.void,
   );
 });
+
+export const refusals = [
+  {
+    shape: "a typed runner refusal",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Grok did not disclose or support the selected memory model.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    }),
+  },
+  {
+    shape: "a provider setup error under a generic detail",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Antigravity text generation failed.",
+      cause: new M.ProviderSetupError({
+        instanceId: M.ProviderInstanceId.make("antigravity"),
+        operation: "start",
+        detail: "Antigravity needs a Gemini API key or Google Cloud project.",
+      }),
+    }),
+  },
+];

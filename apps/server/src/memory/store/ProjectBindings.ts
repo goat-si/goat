@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import { discardRevokedProjectPromotions } from "./FloorWrites.ts";
 import { decodeBinding, keyCodec, stored } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
 import { MemoryStoreConflict, strict } from "./StoreModel.ts";
@@ -59,6 +60,15 @@ export const makeProjectBindings = (
           sql`INSERT INTO memory_project_bindings (memory_space_id,environment_id,project_id,project_key_json,repository_key_json,version,updated_at) VALUES (${binding.memorySpaceId},${binding.project.environmentId},${binding.project.projectId},${binding.projectKey ? yield* keyCodec.encode(binding.projectKey) : null},${binding.repositoryKey ? yield* keyCodec.encode(binding.repositoryKey) : null},${binding.version},${now}) ON CONFLICT(memory_space_id,environment_id,project_id) DO UPDATE SET project_key_json=excluded.project_key_json,repository_key_json=coalesce(memory_project_bindings.repository_key_json,excluded.repository_key_json),version=excluded.version,updated_at=excluded.updated_at`,
         );
 
+        if (old)
+          yield* discardRevokedProjectPromotions(
+            sql,
+            binding.memorySpaceId,
+            sql`
+            json_extract(metadata_json,'$.promotionBinding.project.environmentId')=${binding.project.environmentId} AND
+            json_extract(metadata_json,'$.promotionBinding.project.projectId')=${binding.project.projectId}
+          `,
+          );
         yield* emit({
           memorySpaceId: binding.memorySpaceId,
           projectionWatermark: yield* nextWatermark(binding.memorySpaceId),

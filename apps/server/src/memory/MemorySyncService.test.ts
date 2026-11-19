@@ -1,3 +1,5 @@
+import { runSelfWideSave } from "./testkit/SelfMemoryFloorScenario.ts";
+import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { fencedReleaseAfterSync } from "./MemorySyncFencedRelease.testkit.ts";
 import {
@@ -24,10 +26,10 @@ import {
   commit,
   conflict,
   sourceFixture,
+  refusals,
 } from "./MemorySyncService.testkit.ts";
 import { legacySyncStatusRpc } from "./MemorySyncStatusLegacy.testkit.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
-import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Exit from "effect/Exit";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
@@ -3498,35 +3500,14 @@ it.effect(
     }),
 );
 
-const refusals = [
-  {
-    shape: "a typed runner refusal",
-    error: new M.TextGenerationError({
-      operation: "resolveMemoryConflict",
-      detail: "Grok did not disclose or support the selected memory model.",
-      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-    }),
-  },
-  {
-    shape: "a provider setup error under a generic detail",
-    error: new M.TextGenerationError({
-      operation: "resolveMemoryConflict",
-      detail: "Antigravity text generation failed.",
-      cause: new M.ProviderSetupError({
-        instanceId: M.ProviderInstanceId.make("antigravity"),
-        operation: "start",
-        detail: "Antigravity needs a Gemini API key or Google Cloud project.",
-      }),
-    }),
-  },
-];
 it.effect.each([
+  { ...refusals[0]!, shape: "an unverified input", lostReleaseResponses: 0, unverified: true },
   ...refusals.map((refusal) => ({ ...refusal, lostReleaseResponses: 0 })),
   // The Hub ended the lease but its release answer was lost: the attempt still retires.
   { ...refusals[0]!, shape: "a refusal whose release answer is lost", lostReleaseResponses: 1 },
 ])(
   "$shape retires the attempt unreported and claims the conflict again once the model is due",
-  ({ error, lostReleaseResponses }) =>
+  ({ error, lostReleaseResponses, ...input }) =>
     Effect.gen(function* () {
       let calls = 0;
       let claims = 0;
@@ -3559,11 +3540,21 @@ it.effect.each([
           yield* conflict();
           const sync = yield* Sync.MemorySyncService;
           const store = yield* Store.MemoryStore;
+          const unverified = "unverified" in input;
+          if (unverified) {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO memory_revision_marks SELECT c.space,h.value,'unverified' FROM memory_conflicts c, json_each(c.heads_json) h WHERE c.space=${space} LIMIT 1`;
+          }
           const attempt = Effect.gen(function* () {
             yield* sync.syncOnce;
             yield* sync.scheduleConflictResolution;
           });
           yield* attempt;
+          if (unverified) {
+            assert.deepStrictEqual([calls, claims], [0, 1]);
+            yield* sync.shutdown;
+            return;
+          }
           assert.deepStrictEqual([calls, claims], [1, 1]);
           // Held: sweeps before the probe neither call the provider nor claim at the Hub.
           for (let n = 0; n < 5; n++) {
@@ -5044,7 +5035,7 @@ it.effect.each(["stale-candidate", "ticket-write-failure"] as const)(
     }),
 );
 
-it.effect.each(["bootstrap", "exchange"] as const)(
+it.effect.each(["bootstrap", "exchange", "floor restart"] as const)(
   "automatic hub initialization bootstraps its own replica without HTTP: %s",
   (phase) =>
     Effect.scoped(
@@ -5086,9 +5077,11 @@ it.effect.each(["bootstrap", "exchange"] as const)(
               }),
             ),
           ),
+          Layer.provide(Layer.succeed(MemoryFloor2Enabled, phase === "floor restart")),
           Layer.provideMerge(selfCore),
         );
         const app = Sync.layer.pipe(
+          Layer.provide(Layer.succeed(MemoryFloor2Enabled, false)),
           Layer.provideMerge(
             Layer.mergeAll(
               selfHub,
@@ -5130,6 +5123,7 @@ it.effect.each(["bootstrap", "exchange"] as const)(
             memorySpaceId: allocated,
             bootstrap: "ready",
           });
+          if (phase === "floor restart") return yield* runSelfWideSave(allocated, local);
           if (phase === "bootstrap") {
             yield* sync.shutdown;
             return;

@@ -126,8 +126,16 @@ export const makeHubWrite = (
       });
     yield* stored(
       "hub-append-finalize",
-      sql`UPDATE memory_hub_operations SET entry_json=${json},payload_ref=${op.kind === "forget" ? null : op.revision.payloadRef} WHERE hub_sequence=${hubSequence}`,
+      sql`UPDATE memory_hub_operations SET entry_json=${json},payload_ref=${M.isMemoryRevisionOperation(op) ? op.revision.payloadRef : null} WHERE hub_sequence=${hubSequence}`,
     );
+    if (op.kind === "forget" && input.outcome === "deleted")
+      yield* stored(
+        "hub-forget-watermark-advance",
+        sql`
+        INSERT INTO memory_space_counters(space,forget_generation,last_forget_sequence)
+        VALUES (${op.memorySpaceId},0,${hubSequence})
+        ON CONFLICT(space) DO UPDATE SET last_forget_sequence=max(last_forget_sequence,excluded.last_forget_sequence)`,
+      );
     const record: M.MemoryCompactReceipt = {
       memorySpaceId: op.memorySpaceId,
       originEnvironmentId: op.originEnvironmentId,
@@ -137,7 +145,9 @@ export const makeHubWrite = (
         : {}),
       receipt,
       revisionId:
-        op.kind === "forget" || input.outcome === "rejected" ? null : op.revision.revisionId,
+        M.isMemoryRevisionOperation(op) && input.outcome !== "rejected"
+          ? op.revision.revisionId
+          : null,
       resolutionId:
         op.kind === "resolve"
           ? op.resolution.resolutionId
@@ -201,7 +211,11 @@ export const makeHubWrite = (
         "hub-tail",
         sql<{
           entry_json: string;
-        }>`SELECT entry_json FROM memory_hub_operations WHERE space=${input.memorySpaceId} AND hub_sequence>${input.afterSequence} AND hub_sequence<=${highWatermark} ORDER BY hub_sequence LIMIT ${Math.max(1, Math.min(input.limit, M.MEMORY_PAGE_MAX_ITEMS)) + 1}`,
+          scope_version: number | null;
+        }>`SELECT o.entry_json,i.scope_version FROM memory_hub_operations o
+          LEFT JOIN memory_identity_ledger i ON i.space=o.space AND i.memory_id=o.memory_id
+          WHERE o.space=${input.memorySpaceId} AND o.hub_sequence>${input.afterSequence} AND o.hub_sequence<=${highWatermark}
+          ORDER BY o.hub_sequence LIMIT ${Math.max(1, Math.min(input.limit, M.MEMORY_PAGE_MAX_ITEMS)) + 1}`,
       );
       const entries: M.MemoryHubEntry[] = [];
       const maxBytes = Math.min(input.maxBytes, 262144);
@@ -220,6 +234,12 @@ export const makeHubWrite = (
           }),
         ).length;
         if (size > maxBytes) break;
+        if (
+          entry.kind === "operation" &&
+          M.isMemoryRevisionOperation(entry.operation) &&
+          (entry.operation.expectedScopeVersion ?? 0) < (row.scope_version ?? 0)
+        )
+          return yield* new M.MemoryHubError({ code: "cursor_expired" });
         entries.push(entry);
       }
       if (rows.length && entries.length === 0)

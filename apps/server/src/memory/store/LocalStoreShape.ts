@@ -1,3 +1,4 @@
+import type { ThreadLineage } from "./ThreadLineage.ts";
 import type * as M from "@goat/contracts";
 import type { MemoryRevertSlot } from "../MemoryRevertSlot.ts";
 import type { ImportStorePorts } from "../imports/MemoryImportTypes.ts";
@@ -29,7 +30,6 @@ import type {
   MemoryUsage,
   ResolutionSnapshot,
   SyncWorkCandidate,
-  ThreadLineage,
 } from "./StoreModel.ts";
 
 export interface LocalStoreShape {
@@ -37,6 +37,10 @@ export interface LocalStoreShape {
     effect: Effect.Effect<A, E, R>,
     options?: { requireOuter?: boolean; finalGuard?: Effect.Effect<void, E> },
   ) => Effect.Effect<A, E | MemoryStorageError, Exclude<R, Transaction>>;
+  readonly areAutomaticallyUsable: (
+    space: M.MemorySpaceId,
+    revisions: readonly M.MemoryRevisionId[],
+  ) => Effect.Effect<boolean, MemoryStorageError>;
   readonly readThreadLineage: (
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
@@ -45,6 +49,7 @@ export interface LocalStoreShape {
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
     revisions: ReadonlyArray<M.MemoryRevisionId>,
+    markUnknown?: boolean,
   ) => Effect.Effect<boolean, MemoryStorageError>;
   readonly deleteThreadLineage: (
     thread: M.ScopedThreadRef,
@@ -56,7 +61,11 @@ export interface LocalStoreShape {
   readonly readResolutionInputsPage: (
     input: M.MemoryHistoryInput & { resolutionInputsFor: M.MemoryResolutionId },
   ) => Effect.Effect<
-    { scope: M.MemoryScope | null; page: M.MemoryHistoryPage },
+    {
+      scope: M.MemoryScope | null;
+      page: M.MemoryHistoryPage;
+      consumed: MemoryAggregate["revisions"];
+    },
     MemoryStorageError | MemoryStoreConflict
   >;
   readonly readResolutionSnapshot: (

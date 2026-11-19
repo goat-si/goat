@@ -10,15 +10,10 @@ import * as Socket from "effect/socket/Socket";
 import * as TestClock from "effect/testing/TestClock";
 import { makeWsRpcSocketProtocol, WsRpcGroup } from "./protocol.ts";
 
-it("activates the 15 core, four administration and one import route", () => {
+it("installs exactly the declared memory routes for every client", () => {
   const methods = [...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("memory."));
-  expect(methods).toHaveLength(20);
-  expect(methods).toContain(WS_METHODS.memoryOwnerSourceReadPolicyGet);
-  expect(methods).toContain(WS_METHODS.memoryOwnerSourceReadPolicyUpdate);
-  expect(methods).toContain(WS_METHODS.memoryResetReportAttempts);
-  expect(methods).toContain(WS_METHODS.memoryHubReconcile);
-  expect(methods).toContain(WS_METHODS.memoryChanges);
-  expect(methods).toContain(WS_METHODS.memoryImportProvider);
+  const declared = Object.values(WS_METHODS).filter((tag) => tag.startsWith("memory."));
+  expect(methods.sort()).toEqual(declared.sort());
 });
 
 it("installs every hub node RPC for web, desktop and mobile clients", () => {

@@ -157,9 +157,6 @@ const fixture = (
               cause: undefined,
             });
           return {
-            kind: "threadLineage" as const,
-            sourceThread: thread,
-            memorySpaceId: space,
             state: options.state ?? "tracked",
             revisions: options.revisions ?? [revision],
           };

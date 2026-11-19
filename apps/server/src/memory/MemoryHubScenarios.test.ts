@@ -1,3 +1,4 @@
+import { moveFloorCapabilities } from "./testkit/MemoryHubProtocolFixtures.ts";
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -32,7 +33,6 @@ import * as Hub from "./MemoryHubService.ts";
 import * as Compactor from "./MemoryCompactor.ts";
 import { layerMemoryHubServices, layerMemoryHubRoutes, layerMemoryHubStarted } from "../server.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
-
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(id(1));
 const memoryId = M.MemoryId.make(id(2));
@@ -63,7 +63,6 @@ const operation = (
   },
   payload: { text: "synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
 });
-
 // r2 can reuse the actual HTTP/core fixture when L4's H/A/B drivers are integrated.
 // No SyncService double, transcript reader or alternate admission path is installed.
 const makeScenario = (fileSystem?: FileSystem.FileSystem) =>
@@ -640,7 +639,6 @@ describe("Memory hub assembled HTTP scenarios", () => {
         );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect(
     "relays only the owner's synthetic source through four actual routes and purges it",
     () =>
@@ -772,7 +770,6 @@ describe("Memory hub assembled HTTP scenarios", () => {
         );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect("uses bearer identity for 401/403 and withdraws live advertisement when disabled", () =>
     Effect.gen(function* () {
       const s = yield* scenario;
@@ -843,15 +840,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
       );
       const enabled = yield* descriptor;
       assert.strictEqual(enabled.capabilities.memoryHubProtocolVersion, 1);
-      assert.deepStrictEqual(enabled.capabilities.memory, {
-        protocolVersion: 1,
-        refusedReverts: true,
-        resolutionInputs: true,
-        retainedLocalSpace: true,
-        generationHold: true,
-        hubDiagnostics: true,
-        siteNotes: true,
-      });
+      assert.deepStrictEqual(enabled.capabilities.memory, moveFloorCapabilities);
       yield* s.configure("disabled");
       const disabled = yield* descriptor;
       assert.strictEqual(disabled.environmentId, enabled.environmentId);
