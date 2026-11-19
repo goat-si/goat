@@ -34,6 +34,7 @@ export class SpeechStreamError extends Schema.TaggedError<SpeechStreamError>()(
 ) {}
 
 type Event =
+  | { readonly type: "ready" }
   | {
       readonly type: "partial";
       readonly revision: number;
@@ -262,15 +263,18 @@ export const make = Effect.gen(function* () {
         });
     }),
     finish,
-    events: (id: string) => {
+    events: (id: string, announceReady = false) => {
       const lookup = find(id);
       return Stream.unwrap(
         Effect.gen(function* () {
           const current = yield* lookup;
           if (current.subscribed) return yield* new SpeechStreamError({ code: "busy" });
           current.subscribed = true;
-          return Stream.fromQueue(current.events).pipe(
-            Stream.takeUntil((event) => event.type !== "partial"),
+          const events = Stream.fromQueue(current.events);
+          return (
+            announceReady ? Stream.concat(Stream.make({ type: "ready" } as const), events) : events
+          ).pipe(
+            Stream.takeUntil((event) => event.type === "final" || event.type === "error"),
             Stream.ensuring(Effect.suspend(() => (session === current ? close() : Effect.void))),
           );
         }),

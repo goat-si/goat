@@ -55,6 +55,7 @@ export class SpeechStreamRpcError extends Schema.TaggedError<SpeechStreamRpcErro
   { code: SpeechStreamErrorCode },
 ) {}
 export const SpeechStreamEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("ready") }),
   Schema.Struct({
     type: Schema.Literal("partial"),
     revision: NonNegativeInt,

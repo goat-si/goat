@@ -56,6 +56,7 @@ it.effect("authorizes and routes live audio and terminal text through the RPC gr
       );
       yield* client[SPEECH_STREAM_WS_METHODS.feed]({ streamId, sequence: 0, audioBase64: "AAA=" });
       yield* Deferred.await(subscribed);
+      expect(yield* Queue.take(received)).toEqual({ type: "ready" });
       expect(yield* Queue.take(received)).toEqual({
         type: "partial",
         revision: 1,

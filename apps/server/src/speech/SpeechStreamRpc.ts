@@ -24,6 +24,6 @@ export const makeSpeechStreamRpcHandlers = Effect.fn("SpeechStreamRpc.handlers")
     [SPEECH_STREAM_WS_METHODS.cancel]: ({ streamId }) =>
       connection.cancel(streamId).pipe(Effect.as({}), Effect.mapError(mapError)),
     [SPEECH_STREAM_WS_METHODS.events]: ({ streamId }) =>
-      connection.events(streamId).pipe(Stream.mapError(mapError)),
+      connection.events(streamId, true).pipe(Stream.mapError(mapError)),
   });
 });

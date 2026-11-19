@@ -67,6 +67,7 @@ export async function startLiveSpeechSession(options: {
   }
   const onEvent = (event: SpeechStreamEvent) => {
     if (!active) return;
+    if (event.type === "ready") return;
     if (event.type === "error") return fail();
     if (event.type === "final") {
       active = false;
@@ -95,15 +96,17 @@ export async function startLiveSpeechSession(options: {
   }
   return {
     feed(bytes: Uint8Array) {
-      if (!active) return;
+      if (!active) return Promise.resolve();
       if (
         !options.canSend() ||
         inFlight ||
         bytes.byteLength === 0 ||
         bytes.byteLength > VOICE_STREAM_MAX_CHUNK_BYTES ||
         bytes.byteLength % 2 !== 0
-      )
-        return fail();
+      ) {
+        fail();
+        return Promise.resolve();
+      }
       const input = { streamId, sequence: sequence++, audioBase64: uint8ArrayToBase64(bytes) };
       const pending = options.transport
         .feed(input, options.signal)
@@ -112,6 +115,7 @@ export async function startLiveSpeechSession(options: {
           if (inFlight === pending) inFlight = null;
         });
       inFlight = pending;
+      return pending;
     },
     async finish() {
       if (!active) return null;
