@@ -100,7 +100,7 @@ export function createThreadOutboxDelivery(): {
   const retries = new Map<MessageId, ThreadOutboxRetry>();
   const uploadFailures = new Map<MessageId, number>();
   const exhaustedUploads = new Set<MessageId>();
-  let readyEnvironmentIds = new Set<string>();
+  const connectionStates = new Map<string, string>();
   // Existing-thread turns the server accepted but whose outbox removal has
   // not landed; the next pass retries only the removal, never the send.
   const acknowledgedExistingThreadMessageIds = new Set<MessageId>();
@@ -154,7 +154,14 @@ export function createThreadOutboxDelivery(): {
   const settle = (messageId: MessageId, delivery: Promise<boolean>): void => {
     void delivery
       .then(
-        (sent) => (sent ? clearRetry(messageId) : scheduleRetry(messageId)),
+        (sent) => {
+          if (!sent) return scheduleRetry(messageId);
+          const queued = Object.values(
+            appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+          ).some((messages) => messages.some((message) => message.messageId === messageId));
+          const outcome = queued ? "deferred" : "delivered";
+          if (outcome === "delivered") clearRetry(messageId);
+        },
         (error: unknown) => {
           console.warn("[thread-outbox] queued message delivery threw", { messageId, error });
           scheduleRetry(messageId);
@@ -622,20 +629,21 @@ export function createThreadOutboxDelivery(): {
     for (const messageId of new Set([...retries.keys(), ...uploadFailures.keys()])) {
       if (!queuedMessageIds.has(messageId)) clearRetry(messageId);
     }
-    const ready = new Set(
-      connectedEnvironments
-        .filter(
-          (environment) =>
-            environment.connectionState === "connected" &&
-            serverConfigs.has(environment.environmentId),
-        )
-        .map((environment) => environment.environmentId),
-    );
-    for (const message of Object.values(queuedMessagesByThreadKey).flat()) {
-      if (ready.has(message.environmentId) && !readyEnvironmentIds.has(message.environmentId))
-        clearRetry(message.messageId);
+    const reconnected = new Set<string>();
+    for (const environment of connectedEnvironments) {
+      const previous = connectionStates.get(environment.environmentId);
+      if (
+        previous !== undefined &&
+        previous !== "connected" &&
+        environment.connectionState === "connected"
+      ) {
+        reconnected.add(environment.environmentId);
+      }
+      connectionStates.set(environment.environmentId, environment.connectionState);
     }
-    readyEnvironmentIds = ready;
+    for (const message of Object.values(queuedMessagesByThreadKey).flat()) {
+      if (reconnected.has(message.environmentId)) clearRetry(message.messageId);
+    }
     if (dispatchingQueuedMessageId !== null) {
       return;
     }
