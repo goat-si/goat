@@ -34,6 +34,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
+import { resolveWslFileManagerPath } from "./wslFileManagerPath.ts";
 import { makeStaleWhileRevalidate } from "../environment/staleWhileRevalidate.ts";
 export {
   ExternalLauncherError,
@@ -373,11 +374,6 @@ const fileManagerRevealKindForPlatform = Effect.fn(
   return hasGraphicalLinuxSession(env) ? "files" : undefined;
 });
 
-function resolveWslFileManagerPath(target: string, distroName: string): string {
-  const relativePath = target.replace(/^\/+/, "").replaceAll("/", "\\");
-  return `\\\\wsl.localhost\\${distroName}${relativePath.length > 0 ? `\\${relativePath}` : ""}`;
-}
-
 export function buildBrowserLaunch(
   target: string,
   platform: NodeJS.Platform,
@@ -568,7 +564,7 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     command,
     args:
       command === "explorer.exe" && env.WSL_DISTRO_NAME !== undefined
-        ? [resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
+        ? [yield* resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
         : [target],
   };
 });
@@ -632,13 +628,13 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
     shouldUseWindowsHostFromWsl(platform, env) &&
     env.WSL_DISTRO_NAME !== undefined
   ) {
-    const explorerTarget = resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME);
+    const explorerTarget = yield* resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME);
     if (yield* isCommandAvailable(WSL_POWERSHELL_COMMAND, { env })) {
       // WSL names may contain quotes that Explorer's /select cannot encode.
       // Open the parent through the shell so replacement managers still apply.
       const path = yield* Path.Path;
       // .NET path parsing rejects characters that are legal in WSL filenames.
-      const parent = resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME);
+      const parent = yield* resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME);
       const source = explorerTarget.includes('"')
         ? `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(parent)}`
         : buildFileManagerRevealPowerShellSource(explorerTarget, parent);
@@ -653,7 +649,7 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
       editor: "file-manager",
       target,
       command: "explorer.exe",
-      args: [resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME)],
+      args: [yield* resolveWslFileManagerPath(path.dirname(target), env.WSL_DISTRO_NAME)],
     };
   }
 
