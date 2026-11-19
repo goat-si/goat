@@ -18,6 +18,9 @@ import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
+import { delayedLoadResponse } from "./acpMockLateLoad.ts";
+import { availableModels } from "./acpMockModels.ts";
+import { promptIdFromRequestMeta } from "./acpMockPrompt.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
@@ -109,6 +112,10 @@ const emitLoadReplay = process.env.GOAT_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.GOAT_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.GOAT_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
 const loadSessionDelayMs = Number(process.env.GOAT_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
+const holdLoadAfterReplay = process.env.GOAT_ACP_HOLD_LOAD_AFTER_REPLAY === "1";
+const modeNotifiedBeforeDelayedLoadReply = process.env.GOAT_ACP_NOTIFY_MODE_BEFORE_LOAD_REPLY;
+const holdSetConfigOptionUntilLoadReply =
+  process.env.GOAT_ACP_HOLD_SET_CONFIG_OPTION_UNTIL_LOAD_REPLY === "1";
 const emitStaleXAiPromptCompleteBeforeSecondHang =
   process.env.GOAT_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
 const emitOverlappingXAiPromptCompleteOutOfOrder =
@@ -175,16 +182,6 @@ let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
 let configuredProvider: AcpSchema.ProviderCurrentConfig | null = null;
-function promptIdFromRequestMeta(
-  request: Pick<AcpSchema.PromptRequest, "_meta">,
-): string | undefined {
-  const meta = request._meta;
-  if (meta === null || typeof meta !== "object") {
-    return undefined;
-  }
-  const promptId = meta.promptId ?? meta.requestId;
-  return typeof promptId === "string" && promptId.length > 0 ? promptId : undefined;
-}
 function logExit(reason: string): void {
   if (!exitLogPath) {
     return;
@@ -402,23 +399,6 @@ function modelConfigOptionsFor(modelId: string): ReadonlyArray<AcpSchema.Session
     currentModelId = previousModelId;
   }
 }
-function availableModels(): ReadonlyArray<{
-  readonly value: string;
-  readonly name: string;
-  readonly configOptions: ReadonlyArray<AcpSchema.SessionConfigOption>;
-}> {
-  return [
-    { value: "default", name: "Auto" },
-    { value: "composer-2", name: "Composer 2" },
-    { value: "gpt-5.4", name: "GPT-5.4" },
-    { value: "claude-opus-4-6", name: "Opus 4.6" },
-  ].map((model) => ({
-    value: model.value,
-    name: model.name,
-    configOptions: modelConfigOptionsFor(model.value),
-  }));
-}
-
 const antigravityModels = [
   { modelId: "gemini-test-low", name: "Gemini Test Low" },
   { modelId: "gemini-test-high", name: "Gemini Test High" },
@@ -498,6 +478,8 @@ const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
   const loadRelease = yield* Deferred.make<void>();
+  const delayedLoadReplied = yield* Deferred.make<void>();
+  const configRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
   const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
@@ -722,18 +704,31 @@ const program = Effect.gen(function* () {
       }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);
-        yield* agent.client.sessionUpdate({
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            messageId: "mock-user-message",
-            content: { type: "text", text: "replay-tail" },
-          },
+        return yield* delayedLoadResponse({
+          replay: agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              messageId: "mock-user-message",
+              content: { type: "text", text: "replay-tail" },
+            },
+          }),
+          config: configOptions,
+          hold: holdLoadAfterReplay,
+          release: loadRelease,
+          replied: delayedLoadReplied,
+          delayMs: loadSessionDelayMs,
+          notify:
+            modeNotifiedBeforeDelayedLoadReply === undefined
+              ? Effect.void
+              : Effect.suspend(() => {
+                  currentModeId = modeNotifiedBeforeDelayedLoadReply;
+                  return agent.client.sessionUpdate({
+                    sessionId: requestedSessionId,
+                    update: { sessionUpdate: "current_mode_update", currentModeId },
+                  });
+                }),
         });
-        yield* Effect.sleep(loadSessionDelayMs);
-        return {
-          configOptions: configOptions(),
-        };
       }
       if (emitLoadReplay) {
         emitLoadReplayNotifications(requestedSessionId);
@@ -833,6 +828,10 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionConfigOption((request) =>
     Effect.gen(function* () {
+      if (holdSetConfigOptionUntilLoadReply) {
+        yield* Deferred.await(delayedLoadReplied);
+        yield* Deferred.await(configRelease);
+      }
       if (exitOnSetConfigOption) {
         return yield* Effect.sync(() => {
           process.exit(7);
@@ -2616,6 +2615,9 @@ const program = Effect.gen(function* () {
     if (method === "_test/release-load") {
       return Deferred.succeed(loadRelease, undefined).pipe(Effect.as({}));
     }
+    if (method === "_test/release-config") {
+      return Deferred.succeed(configRelease, undefined).pipe(Effect.as({}));
+    }
     if (method === "_test/release-resume") {
       return Deferred.succeed(resumeRelease, undefined).pipe(Effect.as({}));
     }
@@ -2667,7 +2669,7 @@ const program = Effect.gen(function* () {
     }
     if (method === "cursor/list_available_models") {
       return Effect.succeed({
-        models: availableModels(),
+        models: availableModels(modelConfigOptionsFor),
       });
     }
     if (method !== "session/mode/set") {

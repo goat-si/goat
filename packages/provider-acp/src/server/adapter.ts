@@ -1,3 +1,4 @@
+import { acpCanSwitchModelInSession } from "./capabilities.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
   acpSupportsImagePrompts,
@@ -76,7 +77,6 @@ import {
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
   type OrchestrationV2ProviderFailure,
-  type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderThreadNativeMetadata,
@@ -244,147 +244,17 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
   }
 }
 
-interface ActiveTextSegment {
-  readonly nativeItemId: string;
-  readonly startedAt: DateTime.Utc;
-  sourceMessageId: string | null;
-  text: string;
-  // The running node and first text have been emitted.
-  emitted: boolean;
-  // Text changed since the last emission; a delayed flush is scheduled.
-  dirty: boolean;
-}
-
-interface ActiveTextStream {
-  current: ActiveTextSegment | null;
-  nextSegment: number;
-  /** Closed messages a later chunk can resume, oldest first, up to MAX_RESUMABLE_TEXT_SEGMENTS. */
-  readonly closedNamedSegments: Map<string, ActiveTextSegment>;
-}
-
-// A message resumed after this many newer named messages closed starts over from its new text.
-export const MAX_RESUMABLE_TEXT_SEGMENTS = 64;
-
-interface AcpNativeBuildConfiguration {
-  readonly modeId?: string;
-  readonly configOptions: ReadonlyArray<{ readonly id: string; readonly value: string }>;
-}
-
-export interface ActiveAcpTurn {
-  readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly nativeThreadId: string;
-  readonly nativeTurnId: string;
-  readonly startedAt: DateTime.Utc;
-  readonly completed: Deferred.Deferred<void, never>;
-  readonly itemOrdinals: Map<string, number>;
-  readonly outgoingPrompt?: ReadonlyArray<EffectAcpSchema.ContentBlock> | undefined;
-  consumedPromptMessageId?: string;
-  readonly user: ActiveTextStream;
-  readonly assistant: ActiveTextStream;
-  readonly reasoning: ActiveTextStream;
-  providerRetry?:
-    | {
-        readonly failure: OrchestrationV2ProviderFailure;
-        readonly retry: OrchestrationV2ProviderRetry;
-        readonly startedAt: DateTime.Utc;
-        readonly itemOrdinal: number;
-      }
-    | undefined;
-  contextUsage: ThreadTokenUsageSnapshot | null;
-  nativeMetadata: OrchestrationV2ProviderThreadNativeMetadata | null;
-  readonly tools: Map<string, AcpToolCallState & { readonly backgroundCommandTaskId?: string }>;
-  readonly toolUpdatesSkipped: Map<string, number>;
-  readonly toolStartedAt: Map<string, DateTime.Utc>;
-  readonly subagents: Map<string, ActiveAcpSubagent>;
-  readonly subagentsBySessionId: Map<string, ActiveAcpSubagent>;
-  readonly pendingSubagentNotifications: Map<string, Array<EffectAcpSchema.SessionNotification>>;
-  readonly toolCallIdsByBackgroundTaskId: Map<string, string>;
-  /** Command ACKs register null; terminal results wait here for prompt settlement. */
-  readonly backgroundCommands: Map<
-    string,
-    { readonly status: "completed" | "failed"; readonly output?: string } | null
-  >;
-  readonly persistentBackgroundTaskIds: Set<string>;
-  /** Monitor end notices lack output; wait for hydration or the safety timeout. */
-  readonly awaitingBackgroundHydration: Set<string>;
-  readonly pendingInjectedReport: Set<string>;
-  /** Reports can precede monitor end notices; consume their completion marker without re-arming. */
-  earlyInjectedReportObserved: boolean;
-  readonly plans: Map<
-    string,
-    {
-      readonly id: OrchestrationV2PlanArtifact["id"];
-      readonly startedAt: DateTime.Utc;
-      /** The turn that first reported the plan; later turns update its rows. */
-      readonly origin: {
-        readonly runId: ActiveAcpTurn["input"]["runId"];
-        readonly rootNodeId: ActiveAcpTurn["input"]["rootNodeId"];
-        readonly providerThreadId: ActiveAcpTurn["input"]["providerThread"]["id"];
-        readonly providerTurnId: ActiveAcpTurn["providerTurnId"];
-        readonly nativeItemId: string;
-        readonly ordinal: number;
-      };
-      latest: OrchestrationV2PlanArtifact | null;
-    }
-  >;
-  interrupted: boolean;
-  finalized: boolean;
-  finalizedStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
-  promptSettled: boolean;
-  promptSettledStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
-  workAccepted: boolean;
-  readonly promptWireSettled: Deferred.Deferred<void, never>;
-  promptUsage: EffectAcpSchema.Usage | undefined;
-  backgroundFinalizeGeneration: number;
-  lastProgressAt: number;
-  inactivityWatchdog: Fiber.Fiber<void> | undefined;
-  readonly promptDispatched: Deferred.Deferred<void>;
-  /** Frees the runtime for the next prompt while the agent still holds this one's response. */
-  readonly foregroundIdle: Deferred.Deferred<void>;
-}
-
-type AcpRuntimeTeardownState =
-  | { readonly _tag: "Idle" }
-  | {
-      readonly _tag: "InProgress";
-      readonly completed: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>;
-    }
-  | { readonly _tag: "Failed"; readonly error: ProviderAdapter.ProviderAdapterProtocolError };
-
-interface ActiveAcpSubagent {
-  task: OrchestrationV2Subagent;
-  readonly childThreadId: ThreadId;
-  readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
-  readonly turnItemId: OrchestrationV2TurnItem["id"];
-  turnItemOrdinal: number;
-  providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly parentProviderThreadId: ProviderThreadId;
-  childSessionId: string | null;
-  assistantText: string;
-  readonly assistantMessages: Map<string, string>;
-  // Messages whose latest text waits for a delayed flush.
-  readonly pendingAssistantMessages: Set<string>;
-  assistantFlushScheduled: boolean;
-  readonly childItemOrdinals: Map<string, number>;
-  nextChildOrdinal: number;
-  terminalStatusProjected: boolean;
-  readonly toolState: Pick<ActiveAcpTurn, "tools" | "toolUpdatesSkipped" | "toolStartedAt">;
-  // ACP has no interrupted tool status; keep forced interruption across late updates.
-  readonly interruptedToolIds: Set<string>;
-  readonly toolSessionIds: Map<string, string>;
-}
-
-interface AcpNativeChildSession {
-  parentSessionId: string | null;
-  status: "running" | "completed" | "failed" | "cancelled";
-  result: string | null;
-  delegationId: string | null;
-  prompt: string;
-  subagent: ActiveAcpSubagent | undefined;
-  owner: ActiveAcpTurn | undefined;
-  readonly pending: Array<EffectAcpSchema.SessionNotification>;
-}
+import {
+  MAX_RESUMABLE_TEXT_SEGMENTS,
+  type ActiveTextSegment,
+  type ActiveTextStream,
+  type ActiveAcpTurn,
+  type ActiveAcpSubagent,
+  type AcpNativeChildSession,
+  type AcpNativeBuildConfiguration,
+  type AcpRuntimeTeardownState,
+} from "./activeTurn.ts";
+export { MAX_RESUMABLE_TEXT_SEGMENTS, type ActiveAcpTurn } from "./activeTurn.ts";
 
 function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
   return (
@@ -1074,6 +944,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           Queue.offer(events, event).pipe(Effect.asVoid);
         let scheduleDeferredFinalize: (context: ActiveAcpTurn) => Effect.Effect<void> = () =>
           Effect.void;
+        let refreshModelSwitchCapability: Effect.Effect<void> = Effect.void;
+        // openSession configures the session itself; a late setup that lands
+        // first waits here and is adopted once that configuration is in place.
+        const lateSessionSetup: {
+          openSessionConfigured: boolean;
+          pending: Effect.Effect<void> | null;
+        } = { openSessionConfigured: false, pending: null };
 
         const nativeLogging = options.nativeLogging?.(input.threadId);
         const promptInactivityTimeoutMillis =
@@ -5345,6 +5222,41 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           );
         });
 
+        // The adopted response never passes through the raw session-update
+        // handler, so this is its one catalog publication.
+        const adoptLateSessionSetup = Effect.fnUntraced(function* (
+          targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+          result: AcpSessionRuntime.AcpSessionRuntimeStartResult,
+          provisionalBuildSnapshot: AcpNativeBuildConfiguration | undefined,
+        ) {
+          const current = yield* Ref.get(activeSessionSetup);
+          if (current === null || current.sessionId !== result.sessionId) {
+            return;
+          }
+          yield* Ref.set(activeSessionSetup, result);
+          // The selection was configured against the provisional setup's
+          // options, so the next turn re-applies it against the real ones.
+          yield* Ref.set(activeSelection, null);
+          yield* Ref.set(activeInteractionMode, null);
+          // A build snapshot saved before the adoption was seen holds the
+          // provisional state; one saved by a deferred openSession
+          // configuration already read the adopted options and stays.
+          if (
+            provisionalBuildSnapshot !== undefined &&
+            nativeBuildConfigurationBySessionId.get(result.sessionId) === provisionalBuildSnapshot
+          ) {
+            nativeBuildConfigurationBySessionId.delete(result.sessionId);
+          }
+          yield* refreshModelSwitchCapability;
+          yield* (
+            flavor.onSessionConfigurationUpdate?.(
+              yield* targetRuntime.getConfigOptions,
+              yield* targetRuntime.getModeState,
+              result.sessionSetupResult.models,
+            ) ?? Effect.void
+          );
+        });
+
         const wireAcpRuntimeHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
           handlerGeneration: number,
@@ -5362,7 +5274,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               return runRuntimeCallbackAtGeneration(
                 handlerGeneration,
-                flavor.onSessionEvent?.(event) ?? Effect.void,
+                Effect.andThen(
+                  event._tag === "ConfigOptionsUpdated"
+                    ? refreshModelSwitchCapability
+                    : event._tag === "SessionSetupAdopted"
+                      ? Effect.suspend(() => {
+                          const adopt = adoptLateSessionSetup(
+                            targetRuntime,
+                            event.result,
+                            nativeBuildConfigurationBySessionId.get(event.result.sessionId),
+                          );
+                          if (lateSessionSetup.openSessionConfigured) return adopt;
+                          lateSessionSetup.pending = adopt;
+                          return Effect.void;
+                        })
+                      : Effect.void,
+                  flavor.onSessionEvent?.(event) ?? Effect.void,
+                ),
               ).pipe(Effect.asVoid);
             }),
             Effect.forkIn(handlerOptions.scope ?? runtimeScope ?? sessionScope),
@@ -6470,18 +6398,60 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         yield* Ref.set(activeSelection, input.modelSelection);
         yield* Ref.set(activeInteractionMode, input.runtimePolicy.interactionMode);
         const createdAt = yield* DateTime.now;
-        const providerSession: OrchestrationV2ProviderSession = {
+        let providerSession: OrchestrationV2ProviderSession = {
           id: input.providerSessionId,
           driver,
           providerInstanceId: options.instanceId,
           status: "ready",
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
           model: input.modelSelection.model,
-          capabilities,
+          capabilities: {
+            ...capabilities,
+            sessions: {
+              ...capabilities.sessions,
+              supportsModelSwitchInSession:
+                capabilities.sessions.supportsModelSwitchInSession ||
+                acpCanSwitchModelInSession(
+                  yield* runtime.getConfigOptions,
+                  (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+                ),
+            },
+          },
           createdAt,
           updatedAt: createdAt,
           lastError: null,
         };
+        // Config options can first offer a model after setup, e.g. when a
+        // session/load response arrives after replay idle. Upgrade-only: a
+        // later partial config update must not revoke the switch mid-session.
+        refreshModelSwitchCapability = Effect.gen(function* () {
+          const { capabilities } = providerSession;
+          if (capabilities.sessions.supportsModelSwitchInSession) {
+            return;
+          }
+          const supportsModelSwitchInSession = acpCanSwitchModelInSession(
+            yield* runtime.getConfigOptions,
+            (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+          );
+          if (!supportsModelSwitchInSession) {
+            return;
+          }
+          providerSession = {
+            ...providerSession,
+            capabilities: {
+              ...capabilities,
+              sessions: { ...capabilities.sessions, supportsModelSwitchInSession },
+            },
+            updatedAt: yield* DateTime.now,
+          };
+          yield* emitProviderEvent({ type: "provider_session.updated", driver, providerSession });
+        });
+        lateSessionSetup.openSessionConfigured = true;
+        const pendingLateSessionSetup = lateSessionSetup.pending;
+        lateSessionSetup.pending = null;
+        if (pendingLateSessionSetup !== null) {
+          yield* pendingLateSessionSetup;
+        }
 
         const providerTurnPayload = (
           context: ActiveAcpTurn,
@@ -7688,7 +7658,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           instanceId: options.instanceId,
           driver,
           providerSessionId: input.providerSessionId,
-          providerSession,
+          get providerSession() {
+            return providerSession;
+          },
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ...(flavor.getModelContextWindow === undefined
             ? {}
