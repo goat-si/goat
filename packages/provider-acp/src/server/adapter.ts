@@ -5279,7 +5279,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 );
               }
               yield* handleSessionUpdate(
-                flavor.normalizeSessionUpdate?.(notification) ?? notification,
+                flavor.normalizeSessionUpdate?.(notification, runtime) ?? notification,
               );
             },
             Effect.mapError(
@@ -5728,6 +5728,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }).pipe(holdingAgentRequest(handlerGeneration)),
           );
           if (flavor.registerExtensions !== undefined) {
+            if (flavor.releaseRuntime !== undefined) {
+              yield* Scope.addFinalizer(
+                handlerOptions.scope ?? runtimeScope ?? sessionScope,
+                flavor.releaseRuntime(targetRuntime),
+              );
+            }
             yield* flavor.registerExtensions({
               runtime: targetRuntime,
               reportProviderRetry: (notice) =>
