@@ -1,4 +1,9 @@
 import {
+  applyClaudeSessionTitle,
+  claudeReportedSessionTitle,
+  type ClaudeSessionTitleState,
+} from "./ClaudeSessionTitles.ts";
+import {
   isClaudeConversationNotFound,
   MAX_CLAUDE_MISSING_NATIVE_THREADS,
 } from "./ClaudeQueryRunnerErrors.ts";
@@ -1960,6 +1965,7 @@ interface ActiveClaudeSubagent {
 }
 
 interface ClaudeLiveQueryContext {
+  readonly titleState: ClaudeSessionTitleState;
   readonly modelCatalog: ClaudeModelCatalog;
   readonly environment: NodeJS.ProcessEnv;
   readonly settingsCwd: string | null;
@@ -6760,6 +6766,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const message = input.message;
+          if (
+            claudeReportedSessionTitle(message) === liveQuery.titleState.pendingTitle &&
+            liveQuery.titleState.pendingTitle !== undefined
+          )
+            return;
           // Track before routing: idle-wake Monitors report tasks before replaying their tool calls.
           yield* trackClaudeMonitorCalls(message);
           yield* trackClaudeScheduledWakeup(liveQuery.nativeThreadId, message);
@@ -9156,6 +9167,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const closed = yield* Deferred.make<void, never>();
           const context: ClaudeLiveQueryContext = {
             modelCatalog: catalog,
+            titleState: {
+              appliedTitle: turnInput.providerThread.nativeMetadata?.title ?? undefined,
+              pendingTitle: undefined,
+              reportedTitle: undefined,
+            },
             environment: launch.environment,
             queryPolicy,
             nativeThreadId,
@@ -9420,6 +9436,29 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             )
               return;
             const querySession = yield* openQuery(turnInput, nativeThreadId, queryPolicy);
+            if (
+              yield* applyClaudeSessionTitle(
+                querySession.titleState,
+                querySession.query,
+                turnInput.appThread.title,
+              )
+            ) {
+              const previous = (yield* Ref.get(lastProviderThreadByNativeThread)).get(
+                nativeThreadId,
+              );
+              if (previous !== undefined) {
+                const updated = {
+                  ...previous,
+                  nativeMetadata: { ...previous.nativeMetadata, title: turnInput.appThread.title },
+                };
+                yield* rememberProviderThread(updated);
+                yield* emitProviderEvent({
+                  type: "provider_thread.updated",
+                  driver: CLAUDE_PROVIDER,
+                  providerThread: updated,
+                });
+              }
+            }
             const context: ActiveClaudeTurnContext = {
               autoCompactWindow: yield* resolveAutoCompactWindow({
                 configured: adapterOptions.settings.autoCompactWindow,

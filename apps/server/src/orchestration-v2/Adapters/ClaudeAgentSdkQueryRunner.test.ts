@@ -944,3 +944,31 @@ it.effect("filters only the synchronous SDK shadow warning during query startup"
     }).pipe(Effect.provide(realQueryRunner)),
   ),
 );
+
+it.effect("sends a native session rename on the SDK control channel", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const request = vi.fn(async () => ({ response: {} }));
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+        () =>
+          ({
+            initializationResult: async () => ({}),
+            setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
+            request,
+            close: () => {},
+            [Symbol.asyncDispose]: async () => {},
+          }) as unknown as ClaudeSdk.Query,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open(resumedMcpQueryInput);
+      yield* Effect.addFinalizer(() => session.close.pipe(Effect.orDie));
+      assert.isDefined(session.renameSession);
+      if (session.renameSession === undefined) return;
+      yield* session.renameSession("A title");
+      assert.deepEqual(request.mock.calls, [
+        [{ subtype: "rename_session", title: "A title", source: "host" }],
+      ]);
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);

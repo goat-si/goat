@@ -1,3 +1,4 @@
+import { renameClaudeSession } from "./ClaudeSessionRenameControl.ts";
 import { withoutClaudeCanUseToolShadowedWarning } from "./ClaudeSdkWarning.ts";
 import { interruptedResumeOptions } from "./ClaudeInterruptedResume.ts";
 import {
@@ -116,6 +117,7 @@ export interface ClaudeAgentSdkQuerySession {
     onQueued?: () => void,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly renameSession?: (title: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly applyFlagSettings: (
     settings: ClaudeFlagSettings,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
@@ -773,6 +775,7 @@ export const layerQueryRunner: Layer.Layer<
                   }),
                 ),
               ),
+            renameSession: (title) => renameClaudeSession(queryRuntime, title),
             setMcpServers: (servers) =>
               Effect.tryPromise({
                 try: async () => {
