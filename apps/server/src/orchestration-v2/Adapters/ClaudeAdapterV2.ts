@@ -16,6 +16,9 @@ import {
 import {
   isClaudePromptEchoGatedFrame,
   claudeFrameToolUseIds,
+  isClaudeActiveSteeringAbortResult,
+  isClaudeProviderContinuationTurn,
+  withoutMemoryBody,
   claudeEchoedPromptUuids,
   claudePromptLifecycle,
   answersClaudeRequest,
@@ -1717,18 +1720,6 @@ const awaitClaudeUserInputAnswers = Effect.fn("awaitClaudeUserInputAnswers")(fun
   return yield* Effect.raceFirst(Deferred.await(answers), cancellation);
 });
 
-function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
-  return (
-    message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
-  );
-}
-
-function isClaudeProviderContinuationTurn(
-  input: ProviderAdapter.ProviderAdapterV2TurnInput,
-): boolean {
-  return input.message.createdBy === "agent" && input.message.creationSource === "provider";
-}
-
 // Without an echo, non-human origin proves a foreign turn only on CLIs known to echo prompts.
 function isClaudeResultForOtherTurn(input: {
   readonly message: SDKResultMessage;
@@ -1748,11 +1739,6 @@ function isClaudeResultForOtherTurn(input: {
 }
 
 const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryContextSnapshot));
-
-const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
-  const { memoryContext: _body, ...rest } = input;
-  return rest;
-};
 
 interface ActiveClaudeTurnContext {
   nativeSessionTitle?: string | undefined;

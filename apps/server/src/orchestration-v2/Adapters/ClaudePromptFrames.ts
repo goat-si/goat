@@ -1,4 +1,5 @@
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import type { SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export function isClaudePromptEchoGatedFrame(message: SDKMessage): boolean {
   switch (message.type) {
@@ -68,3 +69,20 @@ export function answersClaudeRequest(message: SDKMessage, promptUuid: string | n
   }
   return true;
 }
+
+export function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
+  return (
+    message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
+  );
+}
+
+export function isClaudeProviderContinuationTurn(
+  input: ProviderAdapter.ProviderAdapterV2TurnInput,
+): boolean {
+  return input.message.createdBy === "agent" && input.message.creationSource === "provider";
+}
+
+export const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
+  const { memoryContext: _body, ...rest } = input;
+  return rest;
+};
