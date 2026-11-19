@@ -497,9 +497,14 @@ export const make = Effect.gen(function* () {
         const labels =
           location === null
             ? pullRequest.labels
-            : yield* cli
-                .listLabels({ cwd: input.cwd, location, number: input.number })
-                .pipe(Effect.orElseSucceed(() => pullRequest.labels));
+            : yield* cli.listLabels({ cwd: input.cwd, location, number: input.number }).pipe(
+                Effect.catch(() =>
+                  Effect.logWarning("Azure pull request label read failed", {
+                    repository: input.repository,
+                    number: input.number,
+                  }).pipe(Effect.as(pullRequest.labels)),
+                ),
+              );
         const detail: ProviderChangeRequestDetail = {
           ...toChangeRequest(pullRequest),
           labels,
