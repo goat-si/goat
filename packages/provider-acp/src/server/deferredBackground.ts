@@ -1,3 +1,5 @@
+import * as Ref from "effect/Ref";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import type { AcpAdapterV2SubagentUpdate } from "./adapterFlavor.ts";
 import type { ActiveAcpTurn } from "./adapter.ts";
@@ -70,3 +72,28 @@ export const idleReportedSubagents = Effect.fn("AcpAdapterV2.idleReportedSubagen
     });
   }
 });
+
+export function makeAcpAwaitBackgroundTasks(
+  flavor: AcpAdapterV2Flavor,
+  activeTurn: Ref.Ref<ActiveAcpTurn | null>,
+) {
+  return Effect.fn("AcpAdapterV2.awaitBackgroundTasks")(function* ({
+    providerThread,
+    taskIds,
+  }: Parameters<
+    NonNullable<ProviderAdapter.ProviderAdapterV2SessionRuntime["awaitBackgroundTasks"]>
+  >[0]) {
+    const outlives = flavor.toolOutlivesPrompt;
+    const context = yield* Ref.get(activeTurn);
+    const holdsCommand =
+      outlives !== undefined &&
+      flavor.deferFinalizeForBackgroundWork === true &&
+      context !== null &&
+      !context.finalized &&
+      context.nativeThreadId === providerThread.nativeThreadRef?.nativeId &&
+      [...context.tools.values()].some(
+        (tool) => toolStatus(tool.status) === "running" && outlives(tool),
+      );
+    return { matched: holdsCommand ? [...new Set(taskIds)] : [] };
+  });
+}

@@ -1,4 +1,8 @@
-import { hasAcpDeferredBackgroundWork, idleReportedSubagents } from "./deferredBackground.ts";
+import {
+  hasAcpDeferredBackgroundWork,
+  idleReportedSubagents,
+  makeAcpAwaitBackgroundTasks,
+} from "./deferredBackground.ts";
 import {
   AcpModelSelectionError,
   ACP_STOP_CONFIRM_TIMEOUT_MS,
@@ -7878,6 +7882,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 providerThreadId: turnInput.providerThread.id,
               }),
             ),
+          ...(flavor.toolOutlivesPrompt === undefined
+            ? {}
+            : { awaitBackgroundTasks: makeAcpAwaitBackgroundTasks(flavor, activeTurn) }),
           interruptTurn: Effect.fn("AcpAdapterV2.interruptTurn")(
             function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
               return yield* Effect.uninterruptibleMask((restore) =>
