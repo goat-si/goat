@@ -212,7 +212,13 @@ export const layer = Layer.unwrap(
       ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
     >
   > {
-    if ((yield* HostProcess.Platform) === "win32") return SpawnWorker.layer;
+    const platform = yield* HostProcess.Platform;
+    if (
+      platform === "win32" ||
+      (platform === "linux" && !(yield* Effect.promise(supportsEnvChdir)))
+    ) {
+      return SpawnWorker.layer;
+    }
     return Layer.effect(ChildProcessSpawner.ChildProcessSpawner, make);
   }),
 );
