@@ -1534,6 +1534,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(treeRefs === null || treeRefs.nativeTurnRef === undefined
               ? {}
               : { nativeTurnRef: treeRefs.nativeTurnRef }),
+            ...(state.providerThread.nativeThreadRef === null
+              ? {}
+              : { nativeThreadRef: state.providerThread.nativeThreadRef }),
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
@@ -2785,6 +2788,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               nodeId: turnInput.rootNodeId,
               runAttemptId: turnInput.attemptId,
               nativeTurnRef: providerRef(syntheticNativeTurnId, "weak"),
+              ...(state.providerThread.nativeThreadRef === null
+                ? {}
+                : { nativeThreadRef: state.providerThread.nativeThreadRef }),
               ordinal: turnInput.providerTurnOrdinal,
               status: "running",
               startedAt,
@@ -3366,24 +3372,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (forkInput.providerTurnId !== undefined && target === undefined) {
               return yield* protocolError("Pi fork target turn is missing");
             }
+            const targetFile = target?.nativeThreadRef?.nativeId ?? undefined;
             const boundary: PiForkBoundary =
               target === undefined
                 ? { type: "nothing" }
                 : piForkBoundary({
                     target: { type: "provider_turn", providerTurn: target },
                     providerThreadTurns: sourceTurns,
+                    sessionFile: targetFile,
                   });
-            const nativeId = yield* forkPiSession({
-              sourceFile,
-              boundary,
-              createdAt: source.createdAt,
-              cwd,
-              driver,
-              profile,
-              options,
-              launchArgs: resolvedLaunchArgs.args,
-              spawner,
-            });
+            const nativeId = yield* forkPiSession(
+              {
+                sourceFile: targetFile ?? sourceFile,
+                boundary,
+                createdAt: source.createdAt,
+                cwd,
+                driver,
+                profile,
+                options,
+                launchArgs: resolvedLaunchArgs.args,
+                spawner,
+              },
+              fileSystem,
+              path,
+            );
             const now = yield* DateTime.now;
             return yield* registerThread(
               {

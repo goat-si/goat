@@ -2,6 +2,8 @@ import type { ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { PiAdapterV2Options } from "./adapter.ts";
@@ -13,9 +15,10 @@ import {
   piRecordString as recordString,
 } from "./rpc.ts";
 import { readPiEntries } from "./entries.ts";
+import { findHistoricalForkSession } from "./historicalForkSession.ts";
 import { piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 
-export const forkPiSession = Effect.fnUntraced(function* ({
+export const forkPiSessionOnce = Effect.fnUntraced(function* ({
   sourceFile,
   boundary,
   createdAt,
@@ -87,4 +90,36 @@ export const forkPiSession = Effect.fnUntraced(function* ({
       return file;
     }),
   ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+});
+
+export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
+  input: Parameters<typeof forkPiSessionOnce>[0],
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+) {
+  const sourceFile =
+    input.boundary.type === "nothing"
+      ? input.sourceFile
+      : (input.boundary.target?.nativeThreadRef?.nativeId ??
+        input.boundary.turn.nativeThreadRef?.nativeId ??
+        input.sourceFile);
+  return yield* forkPiSessionOnce({ ...input, sourceFile }).pipe(
+    Effect.catchTags({
+      PiRpcError: (error) => {
+        if (
+          input.boundary.type !== "entry" ||
+          input.boundary.turn.nativeThreadRef != null ||
+          input.boundary.target?.nativeThreadRef != null ||
+          error.operation !== "fork" ||
+          error.detail !== "Invalid entry ID for forking"
+        )
+          return Effect.fail(error);
+        return findHistoricalForkSession(input.sourceFile, input.boundary, input.driver).pipe(
+          Effect.flatMap((sourceFile) => forkPiSessionOnce({ ...input, sourceFile })),
+        );
+      },
+    }),
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
+  );
 });

@@ -1,4 +1,4 @@
-import { forkPiSession } from "./forkSession.ts";
+import { forkPiSessionOnce } from "./forkSession.ts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -38,9 +38,9 @@ export const initialPiSessionPath = Effect.fnUntraced(function* (
 
 export const sessionFileInCwd = Effect.fnUntraced(function* (
   fileSystem: FileSystem.FileSystem,
-  input: Parameters<typeof forkPiSession>[0],
+  input: Parameters<typeof forkPiSessionOnce>[0],
 ) {
   if (yield* sessionHeaderNamesCwd(fileSystem, input.cwd, input.sourceFile))
     return input.sourceFile;
-  return yield* forkPiSession(input);
+  return yield* forkPiSessionOnce(input);
 });

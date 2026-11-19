@@ -3,14 +3,20 @@ import {
   CheckpointId,
   NodeId,
   ProviderTurnId,
+  ThreadId,
   type OrchestrationV2ProviderTurn,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { PI_PROVIDER } from "../adapter.ts";
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function registerPiModelAndRollbackChecks({
   makeFakePi,
@@ -33,6 +39,182 @@ export function registerPiModelAndRollbackChecks({
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
 }) {
+  it.effect("forks a historical Pi turn from its recorded session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const oldRef = {
+        driver: PI_PROVIDER,
+        nativeId: "/fake/old.jsonl",
+        strength: "strong",
+      } as const;
+      const newRef = {
+        driver: PI_PROVIDER,
+        nativeId: "/fake/new.jsonl",
+        strength: "strong",
+      } as const;
+      const turn = (ordinal: number) => ({
+        id: ProviderTurnId.make(`historical-${ordinal}`),
+        providerThreadId: source.id,
+        nodeId: NodeId.make(`historical-node-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: {
+          driver: PI_PROVIDER,
+          nativeId: `entry-${ordinal}`,
+          strength: "strong" as const,
+        },
+        nativeThreadRef: oldRef,
+        ordinal,
+        status: "completed" as const,
+        startedAt: null,
+        completedAt: null,
+      });
+      forkFake.queueState({ sessionFile: "/fake/result.jsonl" });
+      fake.queueState({ sessionFile: "/fake/result.jsonl" });
+      yield* runtime.forkThread({
+        sourceProviderThread: { ...source, nativeThreadRef: newRef },
+        sourceProviderTurns: [turn(1), turn(2)],
+        providerTurnId: turn(1).id,
+        targetThreadId: ThreadId.make("historical-fork"),
+      });
+      const args = forkFake.lastSpawn().args;
+      assert.equal(args[args.indexOf("--fork") + 1], oldRef.nativeId);
+      assert.equal(
+        forkFake.allRequests().find((request) => request.type === "fork")?.entryId,
+        "entry-2",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([
+    "match",
+    "wrong-branch",
+    "wrong-time",
+    "ambiguous",
+    "malformed",
+    "missing",
+    "unreadable",
+  ] as const)("recovers a legacy Pi fork only from verified session data: %s", (scenario) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const entry = (id: string, parentId: string | null, seconds: number) => ({
+        type: "message",
+        id,
+        parentId,
+        timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+        message: { role: "user" },
+      });
+      const history = [
+        entry(scenario === "missing" ? "other" : "entry-1", null, 10),
+        entry(
+          "entry-2",
+          scenario === "wrong-branch" ? null : "entry-1",
+          scenario === "wrong-time" ? 100 : 30,
+        ),
+      ];
+      const content =
+        scenario === "malformed"
+          ? "not-json\n"
+          : [{ type: "session", version: 3 }, ...history]
+              .map((record) => encodeJson(record))
+              .join("\n") + "\n";
+      yield* fs.writeFileString(`${dir}/old.jsonl`, content);
+      if (scenario === "ambiguous") yield* fs.writeFileString(`${dir}/also-old.jsonl`, content);
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (ordinal: number) => ({
+        id: ProviderTurnId.make(`legacy-${ordinal}`),
+        providerThreadId: source.id,
+        nodeId: NodeId.make(`legacy-node-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: {
+          driver: PI_PROVIDER,
+          nativeId: `entry-${ordinal}`,
+          strength: "strong" as const,
+        },
+        ordinal,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe((ordinal === 1 ? 5 : 20) * 1000),
+        completedAt: DateTime.makeUnsafe((ordinal === 1 ? 20 : 40) * 1000),
+      });
+      forkFake.failNextFork();
+      forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      const fork = runtime.forkThread({
+        sourceProviderThread: {
+          ...source,
+          nativeThreadRef: {
+            driver: PI_PROVIDER,
+            nativeId:
+              scenario === "unreadable" ? `${dir}/missing/current.jsonl` : `${dir}/current.jsonl`,
+            strength: "strong",
+          },
+        },
+        sourceProviderTurns: [turn(1), turn(2)],
+        providerTurnId: turn(1).id,
+        targetThreadId: ThreadId.make("legacy-fork"),
+      });
+      if (scenario === "match") {
+        yield* fork;
+        const args = forkFake.lastSpawn().args;
+        assert.equal(args[args.indexOf("--fork") + 1], `${dir}/old.jsonl`);
+      } else {
+        const error = yield* Effect.flip(fork);
+        assert.include(String(error.cause), "Cannot recover Pi fork session");
+      }
+      assert.equal(yield* fs.readFileString(`${dir}/old.jsonl`), content);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["completed", "interrupted"] as const)(
+    "records the Pi session before and after a %s turn",
+    (outcome) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        const running = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+        );
+        if (running.type !== "provider_turn.updated") return assert.fail("expected a running turn");
+        assert.deepEqual(running.providerTurn.nativeThreadRef, providerThread.nativeThreadRef);
+        if (outcome === "interrupted") {
+          yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+        } else {
+          yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+        }
+        yield* fake.emit({ type: "agent_settled" });
+        const finished = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === outcome,
+        );
+        if (finished.type !== "provider_turn.updated")
+          return assert.fail("expected a terminal turn");
+        assert.deepEqual(finished.providerTurn.nativeThreadRef, providerThread.nativeThreadRef);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("selects the provider and id Pi reported when either contains a slash", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
