@@ -478,7 +478,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$" "$STATE_DIR/server-log-next.$$"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
@@ -727,6 +727,9 @@ while [ -z "$REMOTE_PORT" ]; do
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
   touch "$LOG_FILE"
+  LAUNCH_LOG_RETAIN_BYTES=1048576
+  tail -c "$LAUNCH_LOG_RETAIN_BYTES" "$LOG_FILE" >"$STATE_DIR/server-log-next.$$" &&
+    mv "$STATE_DIR/server-log-next.$$" "$LOG_FILE" || rm -f "$STATE_DIR/server-log-next.$$" || :
   LAUNCH_LOG_OFFSET="$(wc -c <"$LOG_FILE")"
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
     # Windows OpenSSH ends every process left in the session, so the server starts outside it.
@@ -735,7 +738,7 @@ while [ -z "$REMOTE_PORT" ]; do
     export GOAT_RUNTIME_ORIGIN=ssh; REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
     if ! valid_positive "$REMOTE_PID"; then
       printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
-      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+      tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | tail -n 80 >&2 || true
       exit 1
     fi
   else
@@ -776,7 +779,11 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     printf 'Remote GOAT server did not become ready with its own listener on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
-      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+      if [ "$(wc -c <"$LOG_FILE")" -gt "$LAUNCH_LOG_OFFSET" ]; then
+        tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | tail -n 80 >&2 || true
+      else
+        printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
+      fi
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
