@@ -56,6 +56,15 @@ it.effect("drops unrecognized attributes even on child spans", () =>
       const span = yield* Effect.currentSpan;
       if (span.attributes instanceof Map) span.attributes.set("direct.secret", "sentinel-id");
       span.event("sentinel-id", 0n, { "unexpected.secret": "sentinel-id" });
+      if (Array.isArray(span.links)) {
+        span.links.push({
+          span: Tracer.externalSpan({
+            spanId: "abcdef1234567890",
+            traceId: "abcdef1234567890abcdef1234567890",
+          }),
+          attributes: { secret: "sentinel-id" },
+        });
+      }
       span.addLinks([
         {
           span: Tracer.externalSpan({

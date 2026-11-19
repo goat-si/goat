@@ -161,6 +161,12 @@ export function nonInterferingTracer(delegate: Tracer.Tracer): Tracer.Tracer {
               if (!isSafeRelayAttribute(key, value)) span.attributes.delete(key);
             }
           }
+          if (Array.isArray(span.links)) {
+            for (let index = 0; index < span.links.length; index += 1) {
+              const link = span.links[index];
+              if (link !== undefined) span.links[index] = { ...link, attributes: {} };
+            }
+          }
           end(endTime, traceSafeExit(exit));
         } catch {}
       };
