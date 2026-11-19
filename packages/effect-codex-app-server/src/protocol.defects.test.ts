@@ -14,6 +14,13 @@ import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
 const encode = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.match({
+      onFailure: (error) => error,
+      onSuccess: () => assert.fail("Expected request failure"),
+    }),
+  );
 
 it.layer(NodeServices.layer)("Codex protocol defect isolation", (it) => {
   it.effect("answers an incoming request when its handler dies", () =>
@@ -44,7 +51,7 @@ it.layer(NodeServices.layer)("Codex protocol defect isolation", (it) => {
         }),
         onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
       });
-      const failure = yield* transport.request("thread/read", {}).pipe(Effect.flip);
+      const failure = yield* expectFailure(transport.request("thread/read", {}));
       assert.instanceOf(failure, CodexError.CodexAppServerTransportError);
       assert.strictEqual(yield* Deferred.await(terminated), failure);
     }),
@@ -59,7 +66,7 @@ it.layer(NodeServices.layer)("Codex protocol defect isolation", (it) => {
       const request = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
       yield* Queue.take(output);
       yield* Queue.end(input);
-      const error = yield* Fiber.join(request).pipe(Effect.flip);
+      const error = yield* expectFailure(Fiber.join(request));
       assert.instanceOf(error, CodexError.CodexAppServerTransportError);
     }),
   );
@@ -102,7 +109,7 @@ it.layer(NodeServices.layer)("Codex protocol defect isolation", (it) => {
         }),
         terminationError: Effect.succeed(exited),
       });
-      assert.strictEqual(yield* transport.request("initialize", {}).pipe(Effect.flip), exited);
+      assert.strictEqual(yield* expectFailure(transport.request("initialize", {})), exited);
     }),
   );
 });
