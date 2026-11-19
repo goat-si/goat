@@ -1,3 +1,4 @@
+import { runInEnvironment } from "./environmentRun.ts";
 import { revalidateOnMount } from "./runtimeRevalidation.ts";
 import { environmentConnectionAtoms } from "./environmentConnections.ts";
 export { environmentSessionGenerationAtom } from "./environmentConnections.ts";
@@ -149,6 +150,15 @@ export interface AtomCommand<W, A, E> {
   readonly label: string;
   readonly run: (registry: AtomRegistry.AtomRegistry, input: W) => Promise<AtomCommandResult<A, E>>;
 }
+
+export const withEnvironmentRpcGuard = <R, ER>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  registry: AtomRegistry.AtomRegistry,
+) =>
+  Effect.provideService(RpcPermissionGuard, {
+    authorize: (id, method, payload) =>
+      createCommandPermissions(runtime, method).authorize(registry, id, payload),
+  });
 
 export type AtomCommandConcurrency<W> =
   | { readonly mode: "parallel" }
@@ -499,19 +509,6 @@ function parseEnvironmentRpcKey<Input>(key: string): {
     environmentId: EnvironmentId.make(decoded[0]),
     input: decoded[1],
   };
-}
-
-function runInEnvironment<A, E, R>(
-  environmentId: EnvironmentIdType,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  A,
-  E | EnvironmentRegistry.EnvironmentNotRegisteredError,
-  EnvironmentRegistry.EnvironmentRegistry | Exclude<R, EnvironmentSupervisor.EnvironmentSupervisor>
-> {
-  return EnvironmentRegistry.EnvironmentRegistry.pipe(
-    Effect.flatMap((registry) => registry.run(environmentId, effect)),
-  );
 }
 
 /**

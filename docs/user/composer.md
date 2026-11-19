@@ -280,6 +280,13 @@ may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 
+With a supported speech model, the composer and review comments show a live
+transcript while you record. To transcribe only after recording stops, choose
+**Transcribe after I stop recording** in the microphone's options; this choice
+belongs to the device. If live transcription is interrupted, GOAT transcribes
+the full recording when you stop. Desktop Browser annotation comments and iPhone
+dictation continue to transcribe after recording stops.
+
 Model management requires the explicit `voice:manage` permission; ordinary pairing
 does not grant it. On the environment's machine, create a pairing with:
 

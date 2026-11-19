@@ -12,6 +12,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
+  SPEECH_STREAM_WS_METHODS,
   CHANNEL_GATEWAY_WS_METHODS,
   WsMemoryRpcGroup,
   supportsMemoryProtocol,
@@ -116,6 +117,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges;
 
 export type EnvironmentStreamCommandRpcTag =
+  | typeof SPEECH_STREAM_WS_METHODS.events
   | typeof WS_METHODS.chatGptHandoffSubscribe
   | typeof WS_METHODS.cloudInstallRelayClient
   | typeof WS_METHODS.serverUpdateServerWithProgress

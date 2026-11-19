@@ -1,6 +1,7 @@
 import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ, type DesktopBridge } from "@goat/contracts";
 import { VOICE_RECORDING_LIMIT_SECONDS } from "@goat/client-runtime/voice-input";
 import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding";
+import { StreamingPcmEncoder } from "../speech/streamingPcmEncoder";
 import { requestVoiceMicrophone } from "./requestVoiceMicrophone";
 
 export const MAX_WAVEFORM_SAMPLES = 160;
@@ -92,8 +93,16 @@ export interface VoiceRecordingPayload {
   readonly durationMs: number;
 }
 
+export interface VoiceRecordingCapture {
+  readonly encode: () => VoiceRecordingPayload | null;
+}
+
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
+  readonly onPcmFrame?: (frame: Uint8Array) => void;
+  readonly onPcmSamples?: (samples: Float32Array, sampleRate: number) => void;
+  readonly onPcmError?: () => void;
+  readonly shouldEncodePcm?: () => boolean;
   readonly onLimitReached?: () => void;
   /** A recording that started but then failed, such as one that never received sound. */
   readonly onError?: (error: VoiceMicrophoneError) => void;
@@ -114,6 +123,8 @@ interface RecorderRuntime {
   readonly processor: ScriptProcessorNode;
   readonly gain: GainNode;
   readonly chunks: Float32Array[];
+  pcmEncoder: StreamingPcmEncoder | null;
+  readonly pcmFailure: (() => void) | undefined;
   streamingChunks: Float32Array[];
   streamingSamples: number;
   sampleCount: number;
@@ -235,6 +246,14 @@ export class BrowserVoiceRecorder {
       processor = context.createScriptProcessor(2_048, 1, 1);
       gain = context.createGain();
       gain.gain.value = 0;
+      let pcmEncoder: StreamingPcmEncoder | null = null;
+      if (options.onPcmFrame && !options.onPcmSamples) {
+        try {
+          pcmEncoder = new StreamingPcmEncoder(context.sampleRate, options.onPcmFrame);
+        } catch {
+          options.onPcmError?.();
+        }
+      }
       const runtime: RecorderRuntime = {
         stream,
         context,
@@ -242,6 +261,8 @@ export class BrowserVoiceRecorder {
         processor,
         gain,
         chunks: [],
+        pcmEncoder,
+        pcmFailure: options.onPcmError,
         streamingChunks: [],
         streamingSamples: 0,
         sampleCount: 0,
@@ -274,6 +295,16 @@ export class BrowserVoiceRecorder {
         runtime.hasAudioSignal = true;
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
+        if (options.shouldEncodePcm?.() === false) runtime.pcmEncoder = null;
+        else {
+          try {
+            if (options.onPcmSamples) options.onPcmSamples(mono, runtime.context.sampleRate);
+            else runtime.pcmEncoder?.push(mono);
+          } catch {
+            runtime.pcmEncoder = null;
+            runtime.pcmFailure?.();
+          }
+        }
         if (options.onStreamingChunk) {
           runtime.streamingChunks.push(mono);
           runtime.streamingSamples += mono.length;
@@ -368,10 +399,19 @@ export class BrowserVoiceRecorder {
     return runtime;
   }
 
-  readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
+  readonly stopRecordingDeferred = async (): Promise<VoiceRecordingCapture | null> => {
     const runtime = await this.teardown();
-    return runtime ? encodePayload(runtime.chunks, runtime.context.sampleRate) : null;
+    try {
+      runtime?.pcmEncoder?.finish();
+    } catch {
+      runtime?.pcmFailure?.();
+    }
+    if (!runtime || runtime.sampleCount === 0) return null;
+    return { encode: () => encodePayload(runtime.chunks, runtime.context.sampleRate) };
   };
+
+  readonly stopRecording = async (): Promise<VoiceRecordingPayload | null> =>
+    (await this.stopRecordingDeferred())?.encode() ?? null;
 
   readonly cancelRecording = async (): Promise<void> => {
     await this.teardown();

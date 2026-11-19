@@ -3,6 +3,7 @@ import {
   GLOBAL_SKILLS_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   REMOTE_LAUNCHES_WS_METHODS,
+  SPEECH_STREAM_WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
@@ -22,6 +23,11 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [SPEECH_STREAM_WS_METHODS.start]: "speech",
+  [SPEECH_STREAM_WS_METHODS.feed]: "speech",
+  [SPEECH_STREAM_WS_METHODS.finish]: "speech",
+  [SPEECH_STREAM_WS_METHODS.cancel]: "speech",
+  [SPEECH_STREAM_WS_METHODS.events]: "speech",
   [GLOBAL_SKILLS_WS_METHODS.globalRemove]: "skills",
   [GLOBAL_SKILLS_WS_METHODS.globalRescan]: "skills",
   [WS_METHODS.browserClaimsWindows]: "browserClaims",
@@ -386,6 +392,7 @@ const DEFAULT_RPC_SPAN_ATTRIBUTES = {
   "rpc.system": "effect-rpc",
 } as const;
 const RPC_METHODS_WITH_TRACING_DISABLED: ReadonlySet<string> = new Set([
+  ...Object.values(SPEECH_STREAM_WS_METHODS),
   WS_METHODS.serverGetTraceDiagnostics,
   WS_METHODS.serverGetProcessDiagnostics,
   WS_METHODS.serverGetProcessResourceHistory,

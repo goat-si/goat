@@ -22,9 +22,15 @@ import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 import { WS_METHODS, ServerSettingsUpdateInput } from "./rpc.ts";
 import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 import { isSecretReference } from "./secretReference.ts";
+import { SPEECH_STREAM_WS_METHODS } from "./voice.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [SPEECH_STREAM_WS_METHODS.start]: AuthOrchestrationOperateScope,
+  [SPEECH_STREAM_WS_METHODS.feed]: AuthOrchestrationOperateScope,
+  [SPEECH_STREAM_WS_METHODS.finish]: AuthOrchestrationOperateScope,
+  [SPEECH_STREAM_WS_METHODS.cancel]: AuthOrchestrationOperateScope,
+  [SPEECH_STREAM_WS_METHODS.events]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [GLOBAL_SKILLS_WS_METHODS.globalRemove]: AuthSettingsWriteScope,
   [GLOBAL_SKILLS_WS_METHODS.globalRescan]: AuthSettingsWriteScope,

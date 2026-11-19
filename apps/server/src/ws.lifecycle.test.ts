@@ -1,4 +1,5 @@
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
+import * as SpeechManagement from "./speech/SpeechManagement.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
@@ -168,6 +169,7 @@ const layerLifecycleEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedLifecycleRpcServices = Layer.mergeAll(
+  Layer.mock(SpeechManagement.SpeechManagement)({}),
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
   }),
