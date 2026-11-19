@@ -23,6 +23,8 @@ import { cn } from "~/lib/utils";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { noteDraftWorkspacePick } from "~/lib/draftWorkspacePicks";
 import {
+  GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS,
+  RUNNING_SOURCE_CONTROL_ACTIONS,
   COMMIT_DIALOG_TITLE,
   COMMIT_DIALOG_DESCRIPTION,
   buildMenuItems,
@@ -141,10 +143,6 @@ interface RunGitActionWithToastInput {
   featureBranch?: boolean;
   filePaths?: string[];
 }
-
-const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
-
-const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 export default function GitActionsControl({
   presentation = "toolbar",

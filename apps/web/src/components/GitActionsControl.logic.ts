@@ -634,3 +634,11 @@ export function getMenuActionDisabledReason({
 export const COMMIT_DIALOG_TITLE = "Commit changes";
 export const COMMIT_DIALOG_DESCRIPTION =
   "Review and confirm your commit. Leave the message blank to auto-generate one.";
+
+export const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
+
+export const RUNNING_SOURCE_CONTROL_ACTIONS = [
+  "runStackedAction",
+  "pull",
+  "publishRepository",
+] as const;
