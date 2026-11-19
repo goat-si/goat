@@ -486,7 +486,9 @@ export default function DiffPanel({
   );
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(shownFileKeys, collapsedDiffFileKeys);
   const diffLineStat = sourceLineStat ?? getDiffLineStat(renderableFiles);
-  const fileTreeEntries = diffFileTreeEntries(visibleFiles);
+  const fileTreeEntries = diffFileTreeEntries(visibleFiles).map((entry) =>
+    fileStates.get(entry.path)?.unknownChangeType ? { path: entry.path } : entry,
+  );
   const treeRevealScope = JSON.stringify([collapseScopeKey, diffSelection]);
   const remainingFileCount = renderableFiles.length - settledFileCount;
   const {
@@ -1121,7 +1123,7 @@ export default function DiffPanel({
                           filePath={path}
                           hasStat={fileStats.has(path)}
                           error={state?.error ?? false}
-                          truncated={state?.truncated ?? false}
+                          {...state}
                           onRetry={retry}
                         />
                       );

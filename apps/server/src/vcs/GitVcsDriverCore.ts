@@ -2938,7 +2938,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       env?: NodeJS.ProcessEnv,
       cached = false,
     ) {
-      const args = [...diffArgs, ...(cached ? ["--cached"] : []), "--numstat", "-z"];
+      const args = [...diffArgs, ...(cached ? ["--cached"] : []), "--raw", "--numstat", "-z"];
       const result = yield* executeGit(
         "GitVcsDriver.getReviewDiffPreview.stat",
         cwd,

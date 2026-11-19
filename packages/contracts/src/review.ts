@@ -32,10 +32,28 @@ export type ReviewDiffPreviewInput = typeof ReviewDiffPreviewInput.Type;
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
+  changeType: Schema.optionalKey(Schema.String),
   additions: Schema.Number,
   deletions: Schema.Number,
 });
 export type ReviewDiffFileStat = typeof ReviewDiffFileStat.Type;
+
+export function reviewFileChangeType(
+  stat: Pick<ReviewDiffFileStat, "changeType" | "previousPath">,
+) {
+  switch (stat.changeType) {
+    case undefined:
+      return stat.previousPath ? "rename-changed" : "change";
+    case "change":
+    case "rename-pure":
+    case "rename-changed":
+    case "new":
+    case "deleted":
+      return stat.changeType;
+    default:
+      return "unknown";
+  }
+}
 
 export const ReviewDiffPreviewSource = Schema.Struct({
   id: TrimmedNonEmptyString,

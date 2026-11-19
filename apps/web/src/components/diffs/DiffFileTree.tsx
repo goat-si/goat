@@ -85,10 +85,11 @@ function DiffFileTreeContent({
       },
     };
   });
-  const gitStatus: ReadonlyArray<GitStatusEntry> = entries.map((entry) => ({
-    path: presented.modelPath(entry.path),
-    status: entry.status,
-  }));
+  const gitStatus: ReadonlyArray<GitStatusEntry> = entries.flatMap((entry) =>
+    entry.status === undefined
+      ? []
+      : [{ path: presented.modelPath(entry.path), status: entry.status }],
+  );
   const syncingSelectionRef = useRef(false);
   const handledRevealRef = useRef<{ path: string; revealRequestId: number } | null>(null);
   const mountedPresentationRef = useRef<ReturnType<typeof diffFileTreeModel> | null>(null);
