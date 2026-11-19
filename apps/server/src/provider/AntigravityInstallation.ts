@@ -15,6 +15,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type { PlatformError } from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -147,6 +149,18 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   );
   const versionsDirectory = path.join(managedDirectory, "versions");
   const activePath = path.join(managedDirectory, "active.json");
+  // Windows briefly keeps handles on fresh runtime files after taskkill or an antivirus scan; retry for up to 10 seconds.
+  const retryWhileWindowsHoldsHandles = <A, R>(effect: Effect.Effect<A, PlatformError, R>) =>
+    effect.pipe(
+      Effect.retry({
+        times: platform === "win32" ? 40 : 0,
+        schedule: Schedule.spaced("250 millis"),
+        while: (error) =>
+          error.reason._tag === "PermissionDenied" ||
+          error.reason._tag === "Busy" ||
+          error.reason._tag === "Unknown",
+      }),
+    );
   const gate = yield* Semaphore.make(1);
   const leases = new Map<string, number>();
   let running: { readonly operationId: string; readonly fiber: Fiber.Fiber<void> } | undefined;
@@ -498,6 +512,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         { flag: "wx", mode: 0o600 },
       );
       yield* fs.rename(pairDirectory, destination).pipe(
+        retryWhileWindowsHoldsHandles,
         Effect.catch((cause) =>
           completedRelease(releaseId).pipe(
             Effect.flatMap((existing) =>
