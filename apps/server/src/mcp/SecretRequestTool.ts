@@ -208,7 +208,11 @@ export const makeRequestSecret = (deps: {
           return item.secretStatus;
         }
         const current = projection.runs.find((candidate) => candidate.id === runId);
-        if (current === undefined || ThreadManagementService.isTerminalRunStatus(current.status)) {
+        if (
+          current === undefined ||
+          ThreadManagementService.isTerminalRunStatus(current.status) ||
+          current.rootNodeId !== nodeId
+        ) {
           yield* record("cancelled");
           return "cancelled" as const;
         }
