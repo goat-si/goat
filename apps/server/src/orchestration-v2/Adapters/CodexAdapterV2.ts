@@ -57,6 +57,7 @@ import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts"
 import { buildCodexInitializeParams } from "../../provider/CodexProvider.ts";
 import {
   codexRateLimitsToUpdate,
+  codexTimeZone,
   codexUsageLimitResetAt,
   mergeCodexRateLimits,
   type CodexRateLimitSnapshot,
@@ -5443,7 +5444,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   failure.class === "usage_limit"
                     ? {
                         ...failure,
-                        resetAt: failureResetAt(failure, yield* Ref.get(rateLimitSnapshot)),
+                        resetAt: failureResetAt(failure, yield* Ref.get(rateLimitSnapshot), {
+                          failedAt: yield* DateTime.now,
+                          zone: codexTimeZone(sessionEnvironment),
+                        }),
                       }
                     : settledCodexFailure(failure),
                 ...(input.providerRetry === undefined
