@@ -1,13 +1,12 @@
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
+import { homeListFilterEnvironments } from "./home-list-filter-menu";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { use } from "react";
 import {
   NativePrimaryColumnContext,
   NativeWorkspaceTabActivityContext,
 } from "../../native/v5-workspace-context";
-import * as Arr from "effect/Array";
-import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
@@ -148,22 +147,10 @@ export function HomeRouteScreen() {
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } =
     usePendingTaskListActions(selectThreadRoute);
-  const environments = useMemo(() => {
-    const connectionStateByEnvironmentId = new Map(
-      workspaceEnvironments.map(
-        (environment) => [environment.environmentId, environment.connectionState] as const,
-      ),
-    );
-    return Arr.sort(
-      Object.values(savedConnectionsById).map((connection) => ({
-        environmentId: connection.environmentId,
-        label: connection.environmentLabel,
-        connectionState:
-          connectionStateByEnvironmentId.get(connection.environmentId) ?? "available",
-      })),
-      Order.mapInput(Order.String, (environment: { readonly label: string }) => environment.label),
-    );
-  }, [savedConnectionsById, workspaceEnvironments]);
+  const environments = useMemo(
+    () => homeListFilterEnvironments(workspaceEnvironments),
+    [workspaceEnvironments],
+  );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
