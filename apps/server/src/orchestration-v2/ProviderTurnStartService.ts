@@ -1,3 +1,8 @@
+import {
+  isProviderTurnStartError,
+  isCloudTaskSourceError,
+  isProviderAdapterOpenSessionError,
+} from "./goat/ProviderTurnStartErrorChecks.ts";
 import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
@@ -48,7 +53,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -85,12 +89,6 @@ import {
   pendingRestartCancelledBackgroundWork,
   restartCancelledBackgroundWorkNote,
 } from "./RestartBackgroundNote.ts";
-
-const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
-const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError);
-const isProviderAdapterOpenSessionError = Schema.is(
-  ProviderAdapter.ProviderAdapterOpenSessionError,
-);
 
 export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2,
