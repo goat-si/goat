@@ -1,5 +1,11 @@
 import { makeResolvePublishBranchName } from "./gitPublishBranchName.ts";
-import { makeRemoteRefContainsHead, pushesOnlyToFetchUrl } from "./gitPushDestinationChecks.ts";
+import {
+  makeRemoteRefContainsHead,
+  pushesOnlyToFetchUrl,
+  liveUpstreamRef,
+  isAliasOfUpstreamHead,
+  resolveGonePushDestination,
+} from "./gitPushDestinationChecks.ts";
 import { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 export { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
@@ -1242,7 +1248,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
 
   const resolvePublishBranchName = makeResolvePublishBranchName(listRemoteNames);
-
   const findPrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
     if (yield* originRemoteExists(cwd)) {
       return "origin";
@@ -1293,13 +1298,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolvePushRemoteName = Effect.fn("resolvePushRemoteName")(function* (
     cwd: string,
     refName: string,
+    fallbackRemoteName: string | null = null,
   ) {
     const configuredRemote = yield* resolveConfiguredPushRemoteName(cwd, refName);
     if (configuredRemote) {
       return configuredRemote;
     }
 
-    return yield* resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
+    return (
+      fallbackRemoteName ??
+      (yield* resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null)))
+    );
   });
 
   const remoteRefContainsHead = makeRemoteRefContainsHead(executeGit);
@@ -1803,6 +1812,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
+    upstreamRef = liveUpstreamRef(statusStdout, upstreamRef);
     const isDefaultBranch =
       refName !== null &&
       (refName === defaultBranch ||
@@ -2189,12 +2199,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     branch: string,
     hasUpstream: boolean,
   ) {
-    if (!hasUpstream) {
-      const remoteName = yield* resolvePushRemoteName(cwd, branch);
-      if (!remoteName) return null;
-      const branchName = yield* resolvePublishBranchName(cwd, branch);
-      return { remoteName, branchName, publishes: true, upstream: null, pushRemote: null };
-    }
+    if (!hasUpstream)
+      return yield* resolveGonePushDestination(
+        cwd,
+        branch,
+        readConfigValue,
+        resolvePushRemoteName,
+        resolvePublishBranchName,
+      );
 
     const local = yield* localTrackingDestination(
       cwd,
@@ -2208,10 +2220,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
     if (!upstream) return null;
     // Differently named upstreams are bases, not publish targets; pushing HEAD there would write features to shared branches.
-    const isAliasOfUpstreamHead =
-      branch === upstream.branchName ||
-      (branch.endsWith(`/${upstream.branchName}`) && upstream.upstreamRef.endsWith(`/${branch}`));
-    if (isAliasOfUpstreamHead) {
+    if (isAliasOfUpstreamHead(branch, upstream.branchName, upstream.upstreamRef)) {
       // A fork workflow pushes to the configured push remote and keeps the upstream for pulls, as plain `git push` does.
       const configuredPushRemote = yield* resolveConfiguredPushRemoteName(cwd, branch).pipe(
         Effect.orElseSucceed(() => null),

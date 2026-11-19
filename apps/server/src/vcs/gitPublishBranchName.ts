@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { GitCommandError } from "@goat/contracts";
-import { parseRemoteRefWithRemoteNames } from "./gitRemoteParsing.ts";
+import { parseRemoteRefWithRemoteNames } from "../git/remoteRefs.ts";
 
 export function makeResolvePublishBranchName(
   listRemoteNames: (cwd: string) => Effect.Effect<ReadonlyArray<string>, GitCommandError>,

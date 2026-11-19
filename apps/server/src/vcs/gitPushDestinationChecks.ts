@@ -56,3 +56,63 @@ export const pushesOnlyToFetchUrl = Effect.fn("GitVcsDriver.pushesOnlyToFetchUrl
   },
   Effect.orElseSucceed(() => false),
 );
+
+export function liveUpstreamRef(status: string, upstreamRef: string | null) {
+  const records = status.split("\0");
+  return records.some(
+    (line) => line.startsWith("# branch.ab ") || line === "# branch.oid (initial)",
+  )
+    ? upstreamRef
+    : null;
+}
+
+export const isAliasOfUpstreamHead = (
+  branch: string,
+  upstreamBranch: string,
+  upstreamRef: string,
+) =>
+  branch === upstreamBranch ||
+  (branch.endsWith(`/${upstreamBranch}`) && upstreamRef.endsWith(`/${branch}`));
+
+export const resolveGonePushDestination = Effect.fn("GitVcsDriver.resolveGonePushDestination")(
+  function* (
+    cwd: string,
+    branch: string,
+    readConfig: (cwd: string, key: string) => Effect.Effect<string | null, GitCommandError>,
+    resolveRemote: (
+      cwd: string,
+      branch: string,
+      fallback: string | null,
+    ) => Effect.Effect<string | null, GitCommandError>,
+    resolveBranch: (cwd: string, branch: string) => Effect.Effect<string>,
+  ) {
+    const mergeRef = yield* readConfig(cwd, `branch.${branch}.merge`);
+    const mergeBranch = mergeRef?.startsWith("refs/heads/")
+      ? mergeRef.slice("refs/heads/".length)
+      : null;
+    const configuredRemoteName = yield* readConfig(cwd, `branch.${branch}.remote`);
+    const gone =
+      mergeBranch && configuredRemoteName && configuredRemoteName !== "."
+        ? {
+            remoteName: configuredRemoteName,
+            branchName: mergeBranch,
+            upstreamRef: `${configuredRemoteName}/${mergeBranch}`,
+          }
+        : null;
+    const own = gone !== null && isAliasOfUpstreamHead(branch, gone.branchName, gone.upstreamRef);
+    const remoteName = yield* resolveRemote(cwd, branch, own ? gone.remoteName : null);
+    if (!remoteName) return null;
+    const branchName = own
+      ? gone.branchName
+      : configuredRemoteName === "."
+        ? branch
+        : yield* resolveBranch(cwd, branch);
+    return {
+      remoteName,
+      branchName,
+      publishes: true as const,
+      upstream: own ? null : gone,
+      pushRemote: null,
+    };
+  },
+);
