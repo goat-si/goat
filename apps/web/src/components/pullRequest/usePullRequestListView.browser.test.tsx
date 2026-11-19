@@ -17,6 +17,7 @@ vi.mock(import("~/state/environments"), () => ({
       environments: ["own", "readable"].map((environmentId) => ({
         environmentId,
         label: environmentId,
+        connection: { phase: "connected" },
         serverConfig: { environment: { capabilities: { pullRequests: true } } },
       })),
     }) as ReturnType<typeof import("~/state/environments").useEnvironments>,
