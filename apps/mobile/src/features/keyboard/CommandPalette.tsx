@@ -712,9 +712,14 @@ export function CommandPalette(props: {
                 }
                 // Message results from slower environments may still arrive below.
                 ListFooterComponent={
-                  results.length > 0 && search.isPending && !query.startsWith(">") ? (
-                    <Text className="px-5 pt-2 text-xs text-foreground-muted">
-                      Searching messages…
+                  results.length > 0 &&
+                  !query.startsWith(">") &&
+                  (search.isPending || search.failed) ? (
+                    <Text
+                      accessibilityRole="alert"
+                      className="px-5 pt-2 text-xs text-foreground-muted"
+                    >
+                      {search.isPending ? "Searching messages…" : "Couldn't search messages"}
                     </Text>
                   ) : undefined
                 }

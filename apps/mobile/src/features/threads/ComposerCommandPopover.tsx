@@ -268,6 +268,14 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
           keyboardShouldPersistTaps="always"
           showsVerticalScrollIndicator={false}
         >
+          {props.error ? (
+            <Text
+              accessibilityRole="alert"
+              className="px-3.5 py-2.5 text-xs text-foreground-tertiary"
+            >
+              {props.error}
+            </Text>
+          ) : null}
           {props.items.map((item, index) => (
             <CommandRow
               key={item.id}

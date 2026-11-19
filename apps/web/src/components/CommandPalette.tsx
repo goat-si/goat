@@ -3008,6 +3008,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
+        searchFailed={isThreadSearchFailed}
         onDragStart={() => props.setOpen(false)}
         rows={resultRows.rows}
         listRef={resultListRef}
