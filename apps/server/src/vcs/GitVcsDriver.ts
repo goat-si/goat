@@ -1,3 +1,4 @@
+import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
 import * as Context from "effect/Context";
@@ -1541,19 +1542,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid };
         yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
       }
-      // Restoring away the last tracked file can remove a nested workspace directory.
-      const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new VcsProcessExitError({
-              operation,
-              command: "git restore",
-              cwd: input.cwd,
-              exitCode: 0,
-              detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
-            }),
-        ),
-      );
+      const recreateWorkspace = recreateCheckpointWorkspace(fileSystem, input.cwd, operation);
       yield* recreateWorkspace;
       const cleaned = yield* execute({
         operation,
