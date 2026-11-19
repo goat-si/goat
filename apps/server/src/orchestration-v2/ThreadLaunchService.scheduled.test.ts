@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../config.ts";
@@ -546,4 +547,71 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect.each(["legacy progress", "different accepted pin"] as const)(
+  "uses a durable worktree pin in the presence of $case",
+  (scenario) =>
+    Effect.gen(function* () {
+      const resolving = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        git: {
+          resolveCommit: () =>
+            Deferred.succeed(resolving, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({ commitSha: "proposed-head" }),
+            ),
+        },
+        runSetup: () => Effect.succeed({ status: "no-script" as const }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const launch = yield* launches.launch(
+          launchInput({
+            command: "launch:old-progress",
+            thread: "thread:old-progress",
+            message: "Start",
+            workspace: {
+              type: "worktree",
+              baseRef: "main",
+              startFromOrigin: false,
+              branch: "feature/pin",
+            },
+          }),
+        );
+        yield* Deferred.await(resolving);
+        const run = launch.projection.runs[0];
+        if (run === undefined) return assert.fail("Expected preparing run");
+        if (scenario === "legacy progress") {
+          yield* threads.dispatch({
+            type: "prepared-run.progress",
+            commandId: CommandId.make("launch:old-progress:progress:worktree"),
+            threadId: launch.threadId,
+            runId: run.id,
+            phase: "worktree",
+          });
+        } else {
+          yield* threads.dispatch({
+            type: "prepared-run.pin-base",
+            commandId: CommandId.make("other:pin"),
+            threadId: launch.threadId,
+            runId: run.id,
+            basePin: { commitSha: "accepted-head", baseRefName: "stable" },
+          });
+        }
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* preparationSettled(launch.threadId);
+        const expected =
+          scenario === "legacy progress"
+            ? { commitSha: "proposed-head", baseRefName: "main" }
+            : { commitSha: "accepted-head", baseRefName: "stable" };
+        assert.deepEqual(result.runs[0]?.workspacePreparationBasePin, expected);
+        assert.deepInclude(harness.createWorktree.mock.calls[0]?.[0], {
+          refName: expected.commitSha,
+          baseRefName: expected.baseRefName,
+        });
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );

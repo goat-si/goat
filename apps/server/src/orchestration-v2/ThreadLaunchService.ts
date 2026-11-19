@@ -530,7 +530,7 @@ const make = Effect.gen(function* () {
             {
               cwd: project.workspaceRoot,
               refName: base.commitSha,
-              newRefName: branch!,
+              newRefName: base.checkoutBranch ?? branch!,
               baseRefName: base.baseRefName,
               path: null,
             },
@@ -600,7 +600,7 @@ const make = Effect.gen(function* () {
           .verifyManagedCheckout({
             projectCwd: project.workspaceRoot,
             worktreePath: worktree.worktree.path,
-            branch: branch!,
+            branch: base.checkoutBranch ?? branch!,
             expectedHead: base.commitSha,
           })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));

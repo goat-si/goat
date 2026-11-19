@@ -47,7 +47,11 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
     };
     if (runId !== null) {
       const identity = {
-        commandId: CommandId.make(`${input.commandId}:progress:worktree`),
+        commandId: CommandId.make(
+          input.alreadyPinned
+            ? `${input.commandId}:progress:worktree`
+            : `${input.commandId}:pin-base`,
+        ),
         threadId: input.threadId,
         runId,
       };
@@ -56,6 +60,16 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
           ? { ...identity, type: "prepared-run.progress", phase: "worktree" }
           : { ...identity, type: "prepared-run.pin-base", basePin: pin },
       );
+      const { runs } = yield* threads.getThreadRecords(input.threadId, ["runs"], {
+        runIds: [runId],
+      });
+      const persisted = runs.find((run) => run.id === runId)?.workspacePreparationBasePin;
+      if (persisted === undefined) {
+        return yield* Effect.fail(
+          new Error(`No accepted worktree base was recorded for run ${runId}.`),
+        );
+      }
+      return persisted;
     }
     return pin;
   },
