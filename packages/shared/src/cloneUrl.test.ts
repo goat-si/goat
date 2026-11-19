@@ -175,6 +175,25 @@ describe("cloneUrlForProtocol", () => {
 });
 
 describe("cloneUrlRepositoryPath", () => {
+  it("decodes URI path segments safely while retaining literal SCP paths", () => {
+    for (const prefix of ["https://host.example/", "ssh://git@host.example/"]) {
+      expect(cloneUrlRepositoryPath(`${prefix}Research%20Tools/r%C3%A9sum%C3%A9.git`)).toBe(
+        "host.example/Research Tools/résumé",
+      );
+      for (const path of [
+        "team/%2e%2e/repo.git",
+        "team/a%2fb.git",
+        "team/a%5cb.git",
+        "team/bad%FF.git",
+        "team/repo%20.git",
+      ]) {
+        expect(cloneUrlRepositoryPath(`${prefix}${path}`)).toBeNull();
+      }
+    }
+    expect(cloneUrlRepositoryPath("git@host.example:team/repo%20name.git")).toBe(
+      "host.example/team/repo%20name",
+    );
+  });
   it("rejects Windows device names and trailing dots or spaces in every folder", () => {
     for (const segment of [
       "CON",
