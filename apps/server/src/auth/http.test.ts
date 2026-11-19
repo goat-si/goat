@@ -126,6 +126,31 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           expect(await retiredScopeResponse.json()).toMatchObject({ reason: "invalid_scope" });
 
           const devCookies = devResponse.headers.getSetCookie();
+          expect(devCookies.every((cookie) => !/;\s*Secure/i.test(cookie))).toBe(true);
+          const tailnetResponse = await environmentA.handler(
+            postJson(
+              "/api/auth/browser-session",
+              { credential: DEV_TOKEN },
+              { host: "100.64.0.1:3773" },
+            ),
+            requestContext,
+          );
+          expect(tailnetResponse.headers.getSetCookie()).toHaveLength(devCookies.length);
+          expect(
+            tailnetResponse.headers.getSetCookie().every((cookie) => !/;\s*Secure/i.test(cookie)),
+          ).toBe(true);
+          const secureResponse = await environmentA.handler(
+            postJson(
+              "/api/auth/browser-session",
+              { credential: DEV_TOKEN },
+              { "x-forwarded-proto": "https" },
+            ),
+            requestContext,
+          );
+          expect(secureResponse.headers.getSetCookie()).toHaveLength(devCookies.length);
+          expect(
+            secureResponse.headers.getSetCookie().every((cookie) => /;\s*Secure/i.test(cookie)),
+          ).toBe(true);
           const devCookie = devCookies.find((cookie) => cookie.startsWith("goat_dev_session_"));
           expect(devCookie).toContain("HttpOnly");
           expect(devCookie).toContain(`=${DEV_TOKEN};`);
@@ -191,6 +216,13 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           );
           expect(await upgradedSession.json()).toMatchObject({ authenticated: true });
           expect(upgradedSession.headers.getSetCookie()[0]).toMatch(/^goat_session_/);
+          const secureUpgrade = await environmentA.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: { cookie: legacyCookieHeader, "x-forwarded-proto": "https" },
+            }),
+            requestContext,
+          );
+          expect(secureUpgrade.headers.getSetCookie()[0]).toMatch(/;\s*Secure/i);
         }),
       ([environmentA, environmentB]) =>
         Effect.promise(() => Promise.all([environmentA.dispose(), environmentB.dispose()])),
