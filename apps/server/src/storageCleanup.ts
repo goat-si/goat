@@ -682,11 +682,9 @@ const make = Effect.gen(function* () {
         if (!deleted && group.some((member) => member.pinnedAt != null))
           return keep("thread is pinned");
         if (project === undefined) return keep("project is unavailable");
-        if (
-          thread.branch === null ||
-          !group.every((member) => storageCleanupThreadIdle(member, now, serverSettings))
-        )
+        if (!group.every((member) => storageCleanupThreadIdle(member, now, serverSettings)))
           return keep(waitForStop("thread is running or has pending work"));
+        if (thread.branch === null) return keep("thread has no branch");
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
         if (yield* hasTerminal(worktreePaths)) return keep(waitForStop("open terminal"));
