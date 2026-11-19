@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
 
 import {
@@ -867,7 +868,11 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly ref: string;
     readonly strict: boolean;
     readonly previousCheckpointRef?: VcsDriver.VcsCaptureCheckpointInput["previousCheckpointRef"];
-  }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
+  }): Effect.fn.Return<
+    GitWorkspaceSnapshotResult,
+    VcsError | GitWorkspaceSnapshotError,
+    Scope.Scope
+  > {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     // Git batch fsync nests a temporary object store and can lose private bulk packs.
     const privateDurableWrite = [...durableWrite, "-c", "core.fsyncMethod=fsync"];
