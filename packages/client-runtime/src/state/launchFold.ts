@@ -404,6 +404,7 @@ export const foldedKeysIn = (
 export function paletteListedThreads<T extends EnvironmentThreadShell>(
   threads: readonly T[],
   now: string,
+  hiddenParentKeys: ReadonlySet<string> = new Set(),
 ): readonly T[] {
   const visible = threads.filter(
     (thread) =>
@@ -412,13 +413,14 @@ export function paletteListedThreads<T extends EnvironmentThreadShell>(
       thread.lineage.relationshipToParent !== "subagent" &&
       !isSideChatThread(thread),
   );
+  const groupable = visible.filter((thread) => !hiddenParentKeys.has(keyOf(thread)));
   const delegated = new Map<string, LaunchAttention>();
-  for (const thread of visible) {
+  for (const thread of groupable) {
     if (thread.pendingSubagentRequest === "approval") delegated.set(keyOf(thread), "approval");
     else if (thread.pendingSubagentRequest === "user_input") delegated.set(keyOf(thread), "input");
   }
-  return foldLaunchedThreads({
-    visible,
+  const fold = foldLaunchedThreads({
+    visible: groupable,
     all: threads,
     now,
     delegatedAttentionByKey: delegated,
@@ -426,5 +428,7 @@ export function paletteListedThreads<T extends EnvironmentThreadShell>(
       !effectiveSnoozed(thread, { now }) &&
       (hasUnseenCompletion(thread) ||
         isThreadWoke(threadWokeAt(thread, { now }), thread.lastVisitedAt ?? undefined)),
-  }).roots;
+  });
+  const folded = new Set(fold.folded.map(keyOf));
+  return visible.filter((thread) => !folded.has(keyOf(thread)));
 }

@@ -213,3 +213,33 @@ it("keeps a pinned launched thread eligible as its own row", () => {
     }),
   ).toBe(child.id);
 });
+
+it("can fall back to a task whose launcher is hidden from the sidebar", () => {
+  const parent = makeThread({ id: ThreadId.make("hidden-parent") });
+  const base = makeThread({ id: ThreadId.make("child"), createdAt: "2026-03-09T10:02:00.000Z" });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  const active = makeThread({ id: ThreadId.make("active"), createdAt: "2026-03-09T10:03:00.000Z" });
+  const hiddenParentKeys = new Set([`${parent.environmentId}:${parent.id}`]);
+  expect(
+    getFallbackThreadIdAfterDelete({
+      threads: [parent, child, active],
+      deletedThreadId: active.id,
+      sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
+      hiddenParentKeys,
+    }),
+  ).toBe(child.id);
+});

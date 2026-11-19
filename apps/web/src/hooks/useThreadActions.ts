@@ -1,3 +1,4 @@
+import { usePaletteHiddenParentKeys } from "../components/sidebar/usePaletteVisibility";
 import { topOfPinnedRunOrderKey } from "./threadPinOrder";
 import {
   parseScopedThreadKey,
@@ -272,6 +273,7 @@ function threadOperationFailure(target: ScopedThreadRef) {
 }
 
 export function useThreadActions() {
+  const hiddenParentKeys = usePaletteHiddenParentKeys();
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
     reportFailure: false,
   });
@@ -556,6 +558,7 @@ export function useThreadActions() {
       threads,
       deletedThreadId: threadRef.threadId,
       deletedThreadIds,
+      hiddenParentKeys,
       sortOrder: sidebarThreadSortOrder,
       now: new Date().toISOString(),
     });

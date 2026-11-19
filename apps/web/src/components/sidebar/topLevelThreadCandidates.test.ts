@@ -63,3 +63,28 @@ it("keeps promoted, orphan, fork and parked rows in both palettes", () => {
     ).map((thread) => thread.id),
   ).toEqual([parent.id, promoted.id, orphan.id, fork.id, parked.id]);
 });
+
+it("keeps a task discoverable when its launcher is hidden from the sidebar", () => {
+  const parent = makeThreadFixture({ id: ThreadId.make("hidden-parent") });
+  const base = makeThreadFixture({ id: ThreadId.make("visible-child") });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  const hidden = new Set([`${parent.environmentId}:${parent.id}`]);
+  expect(
+    paletteListedThreads([parent, child], "2026-11-19T00:00:00Z", hidden).map(
+      (thread) => thread.id,
+    ),
+  ).toContain(child.id);
+});

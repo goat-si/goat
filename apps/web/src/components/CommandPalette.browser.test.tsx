@@ -1,3 +1,5 @@
+import { DraftId } from "../composerDraftStore";
+import { useGlobalAgentStore } from "../globalAgentStore";
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -137,4 +139,39 @@ it("omits a launched task nested under a visible parent from thread results", as
   await act(() => openCommandPalette({ query: "Task" }));
   await expect.element(page.getByRole("option", { name: /Task parent/ })).toBeVisible();
   await expect.element(page.getByRole("option", { name: /Task child/ })).not.toBeInTheDocument();
+});
+
+it("keeps a task searchable when its global-agent launcher has no sidebar row", async () => {
+  const parent = makeThreadFixture({ id: ThreadId.make("global-parent"), title: "Global parent" });
+  const base = makeThreadFixture({
+    id: ThreadId.make("global-child"),
+    title: "Task from global agent",
+  });
+  const child = {
+    ...base,
+    source: {
+      ...base.source,
+      launchedBy: {
+        kind: "launch" as const,
+        threadId: parent.id,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: null,
+        via: "thread_launch" as const,
+      },
+    },
+  };
+  const previous = useGlobalAgentStore.getState().ref;
+  useGlobalAgentStore.setState({
+    ref: {
+      environmentId: parent.environmentId,
+      threadId: parent.id,
+      draftId: DraftId.make("global-draft"),
+    },
+  });
+  using _restore = { [Symbol.dispose]: () => useGlobalAgentStore.setState({ ref: previous }) };
+  setup({ threads: [parent, child] });
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+  await act(() => openCommandPalette({ query: "Task from global agent" }));
+  await expect.element(page.getByRole("option", { name: /Task from global agent/ })).toBeVisible();
 });

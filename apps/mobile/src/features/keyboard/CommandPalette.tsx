@@ -1,3 +1,4 @@
+import { hiddenGoatBotThreadKeysAtom } from "../threads/goatBotThreadVisibility";
 import { paletteListedThreads } from "@goat/client-runtime/state/launch-fold";
 import { useAtomValue } from "@effect/atom-react";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
@@ -226,6 +227,7 @@ export function CommandPalette(props: {
   const runCommand = props.onCommand;
   const projects = useProjects();
   const threads = useThreadShells();
+  const hiddenParents = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
@@ -452,6 +454,7 @@ export function CommandPalette(props: {
     const threadItems: CommandPaletteItem[] = paletteListedThreads(
       threads,
       new Date(now).toISOString(),
+      hiddenParents,
     ).map((thread) => {
       const project = projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId));
       const environment =
@@ -491,6 +494,7 @@ export function CommandPalette(props: {
     memoryConfigs,
     activeThreadRef,
     environments.length,
+    hiddenParents,
     navigation,
     now,
     projects,

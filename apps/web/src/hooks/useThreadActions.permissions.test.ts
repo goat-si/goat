@@ -91,6 +91,9 @@ const loadSession = async (environmentId: string) =>
         scopes: [...(state.scopes.get(environmentId) ?? [])],
         auth: { serverUpdateScope: "environment:maintain" },
       });
+vi.mock("../components/sidebar/usePaletteVisibility", () => ({
+  usePaletteHiddenParentKeys: () => new Set<string>(),
+}));
 vi.mock("../state/threads", () => ({
   threadEnvironment: Object.fromEntries(
     [

@@ -89,3 +89,5 @@ export function useSortedProjectGroups(environmentLabelById: ReadonlyMap<Environ
     clientSettings.sidebarProjectSortOrder,
   );
 }
+
+export { useProjectOpenThreadShells } from "./sidebar/usePaletteVisibility";

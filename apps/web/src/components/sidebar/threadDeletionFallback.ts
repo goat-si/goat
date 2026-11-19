@@ -16,8 +16,9 @@ export function getFallbackThreadIdAfterDelete<T extends Thread>(input: {
   sortOrder: SidebarThreadSortOrder;
   now: string;
   deletedThreadIds?: ReadonlySet<T["id"]>;
+  hiddenParentKeys?: ReadonlySet<string>;
 }): T["id"] | null {
-  const { deletedThreadId, deletedThreadIds, sortOrder, now, threads } = input;
+  const { deletedThreadId, deletedThreadIds, sortOrder, now, threads, hiddenParentKeys } = input;
   const deletedThread = threads.find((thread) => thread.id === deletedThreadId);
   if (!deletedThread) {
     return null;
@@ -30,6 +31,7 @@ export function getFallbackThreadIdAfterDelete<T extends Thread>(input: {
           (thread) => thread.id !== deletedThreadId && !deletedThreadIds?.has(thread.id),
         ),
         now,
+        hiddenParentKeys,
       ).filter(
         (thread) =>
           thread.projectId === deletedThread.projectId &&

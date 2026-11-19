@@ -151,7 +151,7 @@ import {
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import { useProjects, useServerConfigs, waitForProject } from "../state/entities";
 import { useCanPromoteThread, usePromoteThread } from "./promoteThread";
 import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -238,6 +238,7 @@ import {
   selectCommandPaletteClientSettings,
   useEnvironmentLookups,
   useProjectLookups,
+  useProjectOpenThreadShells,
   useSortedProjectGroups,
 } from "./CommandPaletteLookups";
 import {
@@ -544,7 +545,7 @@ function OpenCommandPaletteDialog(props: {
         : target,
     );
   };
-  const allThreads = useThreadShells();
+  const allThreads = useProjectOpenThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, changeStyleItem, themeEditorItem } =
