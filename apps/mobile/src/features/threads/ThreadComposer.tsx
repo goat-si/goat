@@ -1,3 +1,5 @@
+import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
+export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import * as Dialog from "../../components/ui/Dialog";
@@ -31,7 +33,6 @@ import {
   composerAttachmentUploadsAtom,
 } from "../../state/composer-attachment-uploads";
 import Animated, {
-  FadeIn,
   FadeOut,
   ReduceMotion,
   useAnimatedStyle,
@@ -111,15 +112,6 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 import type { ThreadComposerProps } from "./thread-composer-props";
-
-export const COMPOSER_COLLAPSED_CHROME = 60;
-// Share of the one-row composer the draft keeps; a long model name truncates first.
-const INLINE_EDITOR_MIN_WIDTH = "40%";
-
-const COMPOSER_ATTACHMENT_ENTERING =
-  Platform.OS === "android"
-    ? FadeIn.duration(160)
-    : FadeIn.delay(COMPOSER_TRANSITION_DURATION_MS).duration(160).reduceMotion(ReduceMotion.System);
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
