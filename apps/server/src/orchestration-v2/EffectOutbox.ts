@@ -833,6 +833,14 @@ export const layer = Layer.effect(
             FROM orchestration_v2_effect_outbox
             WHERE status IN ('succeeded', 'cancelled')
               AND completed_at < ${cutoff}
+              AND NOT (effect_type = 'provider-runtime.continue' AND EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs AS recovery_run
+                WHERE recovery_run.thread_id = orchestration_v2_effect_outbox.thread_id
+                  AND recovery_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                  AND CASE WHEN json_valid(recovery_run.payload_json) AND json_valid(orchestration_v2_effect_outbox.payload_json)
+                    THEN json_extract(recovery_run.payload_json, '$.restartContinuationOfRunId') = json_extract(orchestration_v2_effect_outbox.payload_json, '$.sourceRunId')
+                    ELSE 0 END
+              ))
             LIMIT ${PRUNE_BATCH_SIZE}
           )
           RETURNING effect_id

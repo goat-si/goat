@@ -1,4 +1,5 @@
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { hasPlannedContinuationAncestor } from "./goat/ContinuationCrashBudget.ts";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -46,7 +47,12 @@ export const makeRestartContinuation = Effect.fn("RestartContinuation.make")(fun
 ) {
   const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
   const outbox = yield* Effect.serviceOption(EffectOutbox.EffectOutboxV2);
-  return (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) => {
+  return (input: {
+    readonly threadId: ThreadId;
+    readonly sourceRunId: RunId;
+    readonly processLossCount?: number;
+    readonly plannedRestart?: boolean;
+  }) => {
     const continuation = continueRestartedRun(input).pipe(
       Effect.provideService(ProviderTurnStart.ProviderTurnStartServiceV2, starter),
     );
@@ -206,7 +212,12 @@ export function restartContinuationRun(
 }
 
 export const continueRestartedRun = Effect.fn("RestartContinuation.continueRestartedRun")(
-  function* (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) {
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly sourceRunId: RunId;
+    readonly processLossCount?: number;
+    readonly plannedRestart?: boolean;
+  }) {
     const settings = yield* ServerSettings.ServerSettingsService;
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
     const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -293,10 +304,29 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       if (DateTime.toEpochMillis(run.requestedAt) < loopWindowStart) break;
       chainLength += 1;
     }
-    if (!survivor && chainLength >= MAX_CONTINUATION_CHAIN) {
+    const plannedReset =
+      input.plannedRestart === true ||
+      (input.processLossCount === undefined &&
+        chainLength >= MAX_CONTINUATION_CHAIN &&
+        Option.isSome(outbox) &&
+        (yield* hasPlannedContinuationAncestor(outbox.value, source, projection.runs)));
+    if (
+      !survivor &&
+      (input.processLossCount === undefined
+        ? !plannedReset && chainLength >= MAX_CONTINUATION_CHAIN
+        : input.processLossCount >= MAX_CONTINUATION_CHAIN)
+    ) {
       yield* Effect.logWarning("Not continuing a run restarted too many times in a row", {
         threadId: input.threadId,
         sourceRunId: input.sourceRunId,
+      });
+      yield* threads.dispatch({
+        type: "thread.notice.record",
+        commandId: CommandId.make(`command:restart-budget:${source.id}`),
+        threadId: input.threadId,
+        recordKey: `restart-budget:${source.id}`,
+        message: "Automatic recovery stopped after repeated crashes. Send a message to retry.",
+        severity: "warning",
       });
       return;
     }

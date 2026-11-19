@@ -1970,6 +1970,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const delayMs = continuationStartRetryDelayMs(run, projection);
     if (delayMs === undefined) return;
     const commandId = CommandId.make(`command:restart-continuation-retry:${run.id}`);
+    const processLossCount = yield* priorContinuationCrashCount(effectOutbox, run);
     yield* writeSystemEvents(
       [],
       [
@@ -1977,7 +1978,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           id: `effect:restart-continuation:${run.id}`,
           commandId,
           threadId,
-          request: { type: "provider-runtime.continue", sourceRunId: run.id },
+          request: {
+            type: "provider-runtime.continue",
+            sourceRunId: run.id,
+            ...(processLossCount === undefined ? {} : { processLossCount }),
+          },
           availableAt: DateTime.add(yield* DateTime.now, { milliseconds: delayMs }),
         },
       ],
@@ -13433,3 +13438,4 @@ export const layer: Layer.Layer<
   Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(RuntimeAdmission.layer),
 );
+import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";

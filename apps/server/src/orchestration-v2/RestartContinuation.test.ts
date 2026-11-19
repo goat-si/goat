@@ -290,6 +290,7 @@ it.effect.each([
         assert.deepEqual(committed!.effects[0]?.request, {
           type: "provider-runtime.continue",
           sourceRunId: runId,
+          processLossCount: 1,
         });
     }),
 );
@@ -422,7 +423,7 @@ it.effect.each(["running", "waiting"])(
       ]);
       assert.deepEqual(
         committed?.effects.map((effect) => effect.request),
-        [{ type: "provider-runtime.continue", sourceRunId: runId }],
+        [{ type: "provider-runtime.continue", sourceRunId: runId, processLossCount: 1 }],
       );
     }),
 );
@@ -665,7 +666,15 @@ it.effect.each([
         const recorded = [...writes.flatMap((write) => write.effects), ...commits[0]!.effects];
         assert.deepEqual(
           recorded.map((effect) => effect.request),
-          wakes ? [{ type: "provider-runtime.continue", sourceRunId: runId }] : [],
+          wakes
+            ? [
+                {
+                  type: "provider-runtime.continue",
+                  sourceRunId: runId,
+                  ...(trigger === "startup" ? { processLossCount: 1 } : {}),
+                },
+              ]
+            : [],
         );
         assert.lengthOf(commits, 1);
         const events = commits[0]!.events;

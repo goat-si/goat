@@ -2,6 +2,7 @@ import {
   providerThreadHasPendingBackgroundTasks,
   resolveStaleBackgroundItemProviderInstanceId,
 } from "./goat/RecoveryBackground.ts";
+import { continuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
 import {
   nonterminalRuns,
   isNonterminalTurnItemStatus,
@@ -701,7 +702,20 @@ export const make = Effect.gen(function* () {
               id: `effect:restart-continuation:${continuationRun.id}`,
               commandId,
               threadId: projection.thread.id,
-              request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
+              request: {
+                type: "provider-runtime.continue",
+                sourceRunId: continuationRun.id,
+                processLossCount: yield* continuationCrashCount(outbox, continuationRun).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderRuntimeRecoveryError({
+                        operation: "reconcile",
+                        threadId: projection.thread.id,
+                        cause,
+                      }),
+                  ),
+                ),
+              },
             },
           ]
         : [];
