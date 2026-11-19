@@ -3826,10 +3826,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 SELECT thread_id FROM orchestration_v2_projection_runtime_requests
                 WHERE status = 'pending'
                 UNION
-                SELECT bindings.thread_id
+                SELECT (SELECT bindings.thread_id
+                  FROM orchestration_v2_projection_provider_session_bindings AS bindings
+                  JOIN orchestration_v2_projection_threads AS threads ON threads.thread_id = bindings.thread_id
+                  WHERE bindings.provider_session_id = sessions.provider_session_id
+                    AND threads.deleted_at IS NULL ORDER BY bindings.thread_id LIMIT 1)
                 FROM orchestration_v2_projection_provider_sessions AS sessions
-                CROSS JOIN orchestration_v2_projection_provider_session_bindings AS bindings
-                  ON bindings.provider_session_id = sessions.provider_session_id
                 WHERE sessions.status NOT IN ('stopped', 'error') OR (sessions.status = 'error' AND CASE WHEN json_valid(sessions.payload_json) THEN json_array_length(sessions.payload_json, '$.extensionStatuses') > 0 ELSE 0 END)
                 UNION
                 -- A detach drops the binding but keeps the session's status.
