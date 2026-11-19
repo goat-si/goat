@@ -7104,6 +7104,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
           }
 
+          if (message.type === "conversation_reset") {
+            if (context.streamUsage !== null) context.streamUsage.usage = null;
+            lastContextUsage.delete(context);
+            yield* emitContextUsage(context, 0);
+            return;
+          }
+
           if (
             message.type === "system" &&
             (message.subtype === "compact_boundary" ||
