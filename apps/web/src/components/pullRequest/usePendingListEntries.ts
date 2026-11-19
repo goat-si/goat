@@ -9,7 +9,7 @@ const heldRowReaders = new WeakMap<
   Map<string, ReturnType<typeof heldPullRequestListEntriesAtom<EnvironmentPullRequestEntry>>>
 >();
 
-export function usePendingListEntries(
+function usePendingListEntries(
   input: PullRequestListInput,
   entries: ReadonlyArray<EnvironmentPullRequestEntry> | undefined,
 ) {

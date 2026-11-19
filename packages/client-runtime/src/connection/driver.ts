@@ -211,7 +211,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   );
 });
 
-export const preflightRoute = (
+const preflightRoute = (
   check: Effect.Effect<RouteCheck>,
   prepare: Effect.Effect<unknown, ConnectionAttemptError>,
 ): Effect.Effect<RoutePreflight> =>
