@@ -8,7 +8,7 @@ async function* sseDataLines(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder();
-  let line = "";
+  let lineParts: string[] = [];
   let dataLines: string[] = [];
   let eventSize = 0;
   let afterCR = false;
@@ -27,8 +27,9 @@ async function* sseDataLines(
       const length = end - start;
       eventSize += length;
       if (eventSize > MAX_SSE_EVENT_SIZE) throw new Error("SSE event exceeds the maximum size");
-      line += text.slice(start, end);
+      lineParts.push(text.slice(start, end));
       if (next === -1) break;
+      const line = lineParts.join("");
       if (line.length === 0) {
         const data = dataLines.join("\n");
         dataLines = [];
@@ -37,7 +38,7 @@ async function* sseDataLines(
       } else if (line.startsWith("data:")) {
         dataLines.push(line.slice("data:".length).trimStart());
       }
-      line = "";
+      lineParts = [];
       const isCR = text[end] === "\r";
       start = end + 1;
       if (isCR && start === text.length) afterCR = true;
@@ -45,6 +46,28 @@ async function* sseDataLines(
     }
   }
 }
+
+async function readText(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return parts.join("") + decoder.decode();
+    parts.push(decoder.decode(value, { stream: true }));
+  }
+}
+
+const scopedReader = (body: ReadableStream<Uint8Array>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => body.getReader()),
+    (reader) =>
+      Effect.promise(() =>
+        reader
+          .cancel()
+          .catch(() => undefined)
+          .then(() => reader.releaseLock()),
+      ),
+  );
 
 export const discardResponseBody = (response: Response): Effect.Effect<void> =>
   Effect.promise(() => response.body?.cancel().catch(() => undefined) ?? Promise.resolve());
@@ -56,27 +79,23 @@ export function responsePayloads<E>(
   if (response.status === 202 || response.status === 204) {
     return Stream.unwrap(discardResponseBody(response).pipe(Effect.as(Stream.empty)));
   }
+  const body = response.body;
+  if (body === null) return Stream.empty;
   const contentType = response.headers.get("content-type") ?? "";
   const separator = contentType.indexOf(";");
   const mediaType = (separator < 0 ? contentType : contentType.slice(0, separator)).trim();
   if (mediaType.toLowerCase() === "text/event-stream") {
-    const body = response.body;
-    if (body === null) return Stream.empty;
     return Stream.unwrap(
-      Effect.acquireRelease(
-        Effect.sync(() => body.getReader()),
-        (reader) =>
-          Effect.promise(() =>
-            reader
-              .cancel()
-              .catch(() => undefined)
-              .then(() => reader.releaseLock()),
-          ),
-      ).pipe(Effect.map((reader) => Stream.fromAsyncIterable(sseDataLines(reader), onError))),
+      scopedReader(body).pipe(
+        Effect.map((reader) => Stream.fromAsyncIterable(sseDataLines(reader), onError)),
+      ),
     ).pipe(Stream.mapEffect((data) => Effect.try({ try: () => JSON.parse(data), catch: onError })));
   }
   return Stream.unwrap(
-    Effect.tryPromise({ try: () => response.text(), catch: onError }).pipe(
+    scopedReader(body).pipe(
+      Effect.flatMap((reader) =>
+        Effect.tryPromise({ try: () => readText(reader), catch: onError }),
+      ),
       Effect.flatMap((text) =>
         text.trim().length === 0
           ? Effect.succeed(Stream.empty)

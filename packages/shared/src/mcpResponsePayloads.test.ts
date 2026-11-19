@@ -131,3 +131,32 @@ it.effect("releases a stalled SSE response body when its consumer is interrupted
     }
   }),
 );
+
+it.effect("releases a stalled JSON response body when its consumer is interrupted", () =>
+  Effect.gen(function* () {
+    const reading = Promise.withResolvers<void>();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start(value) {
+          controller = value;
+        },
+        pull() {
+          reading.resolve();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const response = new Response(body, { headers: { "content-type": "application/json" } });
+    const consumer = yield* Stream.runDrain(responsePayloads(response, String)).pipe(
+      Effect.forkChild,
+    );
+    yield* Effect.promise(() => reading.promise);
+    yield* Fiber.interrupt(consumer);
+    try {
+      expect(body.locked, "interrupted JSON response must release its body").toBe(false);
+    } finally {
+      if (body.locked) controller.close();
+    }
+  }),
+);
