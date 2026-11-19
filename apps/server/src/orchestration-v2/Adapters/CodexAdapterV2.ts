@@ -1,4 +1,4 @@
-import { codexItemStatus, codexUserMessageText, providerTurnStatusToTerminal } from "./CodexItemProjection.ts";
+import { codexItemStatus, codexUserMessageText, providerTurnStatusToTerminal, codexPlanStepStatus } from "./CodexItemProjection.ts";
 import { type CodexWebSearchItem, trimText, webSearchPatterns } from "./CodexWebSearch.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
@@ -373,19 +373,6 @@ function codexNativeItemRef(nativeItemId: string) {
 
 function nonEmptyText(value: string | null | undefined, fallback: string): string {
   return trimText(value) ?? fallback;
-}
-
-function codexPlanStepStatus(
-  status: CodexSchema.V2TurnPlanUpdatedNotification__TurnPlanStepStatus,
-): OrchestrationV2PlanStep["status"] {
-  switch (status) {
-    case "completed":
-      return "completed";
-    case "inProgress":
-      return "running";
-    case "pending":
-      return "pending";
-  }
 }
 
 function providerSession(input: {

@@ -1,3 +1,4 @@
+import type { OrchestrationV2PlanStep } from "@goat/contracts";
 import type { OrchestrationV2ProviderTurn } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { OrchestrationV2ExecutionNode, OrchestrationV2TurnItem } from "@goat/contracts";
@@ -52,5 +53,18 @@ export function providerTurnStatusToTerminal(
     case "pending":
     case "running":
       return "failed";
+  }
+}
+
+export function codexPlanStepStatus(
+  status: CodexSchema.V2TurnPlanUpdatedNotification__TurnPlanStepStatus,
+): OrchestrationV2PlanStep["status"] {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "inProgress":
+      return "running";
+    case "pending":
+      return "pending";
   }
 }
