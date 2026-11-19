@@ -176,6 +176,65 @@ const fakeHost = (input: {
 };
 
 describe("pull request watch host events", () => {
+  it.effect("wakes once for a rebase change at an unchanged PR timestamp", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest("pr-rebase-watch", 64);
+      let rebaseRequired = false;
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => ({
+              ...watchedPullRequestDetail({
+                projectId,
+                number: 64,
+                at: "2026-10-02T12:00:00.000Z",
+              }),
+              headSha: "aaaaaaaaaa",
+              rebaseRequired,
+            })),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () =>
+            Effect.sync(() => ({
+              status: String(rebaseRequired),
+              remarks: "same",
+              coversDetail: true,
+            })),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      const wakes = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) => messages.filter((message) => message.notification != null),
+      );
+      yield* sweep;
+      rebaseRequired = true;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      const first = yield* wakes;
+      assert.lengthOf(first, 1);
+      assert.include(first[0]!.text, "requires a rebase");
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.lengthOf(yield* wakes, 1);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("a complete GitLab fingerprint avoids detail reads for unchanged running checks", () =>
     Effect.gen(function* () {
       const { projectId } = yield* watchPullRequest("pr-complete-fingerprint", 63);

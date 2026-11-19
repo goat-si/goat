@@ -15,3 +15,8 @@ export function toMergeability(
       return "unknown";
   }
 }
+
+export function rebaseRequiredFromStatus(status: string | null | undefined): boolean | undefined {
+  const normalized = status?.trim().toLowerCase();
+  return normalized === "need_rebase" ? true : normalized === "mergeable" ? false : undefined;
+}

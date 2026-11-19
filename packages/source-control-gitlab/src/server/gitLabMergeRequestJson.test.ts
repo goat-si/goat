@@ -53,6 +53,21 @@ function expectSuccess<A>(result: Result.Result<A, unknown>): A {
 }
 
 describe("decodeMergeRequestListJson", () => {
+  it.each([
+    { value: "need_rebase", expected: true },
+    { value: "mergeable", expected: false },
+    { value: "checking", expected: undefined },
+    { value: null, expected: undefined },
+  ])("maps detailed merge status $value to rebase status", ({ value, expected }) => {
+    const raw = { detailed_merge_status: value };
+    expect(
+      expectSuccess(decodeMergeRequestListJson(listJson([raw]))).items[0]?.rebaseRequired,
+    ).toBe(expected);
+    expect(expectSuccess(decodeMergeRequestDetailJson(detailJson(raw))).rebaseRequired).toBe(
+      expected,
+    );
+  });
+
   it("reads a merge request as a change request", () => {
     const batch = expectSuccess(
       decodeMergeRequestListJson(
@@ -921,6 +936,12 @@ describe("decodeMergeRequestWatchFingerprintJson", () => {
       read({ mergeStatusEnum: "UNCHECKED", userPermissions: { updateMergeRequest: false } })
         ?.coversDetail,
     ).toBe(true);
+  });
+
+  it("changes fingerprint when only detailed rebase state changes", () => {
+    expect(read({ detailedMergeStatus: "NEED_REBASE" })?.status).not.toBe(
+      read({ detailedMergeStatus: "MERGEABLE" })?.status,
+    );
   });
 
   it("answers null when GitLab returned no merge request", () => {

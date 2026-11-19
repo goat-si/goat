@@ -254,6 +254,7 @@ function snapshotFieldsOf(summary: PullRequestSummary): SnapshotFields {
     ...(summary.reviewDecision === undefined ? {} : { reviewDecision: summary.reviewDecision }),
     ...(summary.checksState === undefined ? {} : { checksState: summary.checksState }),
     ...(summary.mergeability === undefined ? {} : { mergeability: summary.mergeability }),
+    ...(summary.rebaseRequired == null ? {} : { rebaseRequired: summary.rebaseRequired }),
   };
 }
 
@@ -263,6 +264,9 @@ function withKnownMergeability(
   fields: SnapshotFields,
   provider: PullRequestSummary["provider"],
 ): SnapshotFields {
+  if (fields.rebaseRequired == null && previous?.rebaseRequired !== undefined) {
+    fields = { ...fields, rebaseRequired: previous.rebaseRequired };
+  }
   if (
     provider !== "github" ||
     fields.state !== "open" ||
@@ -302,7 +306,8 @@ function snapshotFieldsEqual(left: SnapshotFields, right: SnapshotFields): boole
     left.changedFiles === right.changedFiles &&
     (left.reviewDecision ?? null) === (right.reviewDecision ?? null) &&
     (left.checksState ?? null) === (right.checksState ?? null) &&
-    left.mergeability === right.mergeability
+    left.mergeability === right.mergeability &&
+    left.rebaseRequired === right.rebaseRequired
   );
 }
 

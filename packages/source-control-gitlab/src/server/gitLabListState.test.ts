@@ -153,6 +153,38 @@ describe("decodeListStatesJson", () => {
 });
 
 describe("decodeMergeRequestGraphqlListJson", () => {
+  it.each([
+    { status: "NEED_REBASE", expected: true },
+    { status: "MERGEABLE", expected: false },
+    { status: null, expected: undefined },
+  ])("maps GraphQL detailed status $status to rebaseRequired", ({ status, expected }) => {
+    const row = {
+      iid: "7",
+      title: "PR",
+      webUrl: "https://gitlab.com/o/r/-/merge_requests/7",
+      state: "opened",
+      draft: false,
+      createdAt: "2026-07-01T00:00:00Z",
+      updatedAt: "2026-07-02T00:00:00Z",
+      sourceBranch: "feature",
+      targetBranch: "main",
+      detailedMergeStatus: status,
+    };
+    const result = expectSuccess(
+      decodeMergeRequestGraphqlListJson(
+        JSON.stringify({
+          data: {
+            metadata: { enterprise: false },
+            project: {
+              mergeRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [row] },
+            },
+          },
+        }),
+      ),
+    );
+    expect(result.items[0]?.rebaseRequired).toBe(expected);
+  });
+
   it("reads a row and its review state in one page, counting rows it cannot read", () => {
     const page = expectSuccess(
       decodeMergeRequestGraphqlListJson(
