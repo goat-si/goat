@@ -255,12 +255,6 @@ describe("RPC authorization scopes", () => {
     }
   });
 
-  it("lets thread readers observe and refresh checkout branches", () => {
-    for (const method of [WS_METHODS.subscribeVcsBranch, WS_METHODS.vcsRefreshBranch]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
-  });
-
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(
@@ -754,6 +748,7 @@ it.effect(
       const reads = [
         WS_METHODS.memorySearch,
         WS_METHODS.memoryList,
+        WS_METHODS.memorySuggestionsList,
         WS_METHODS.memoryRead,
         WS_METHODS.memoryHistory,
         WS_METHODS.memoryChanges,
@@ -763,6 +758,9 @@ it.effect(
       const writes = [
         WS_METHODS.memoryUpsert,
         WS_METHODS.memoryForget,
+        WS_METHODS.memoryMove,
+        WS_METHODS.memorySuggestionsAccept,
+        WS_METHODS.memorySuggestionsDismiss,
         WS_METHODS.memoryRevertResolution,
         WS_METHODS.memoryProjectBindingGet,
         WS_METHODS.memoryProjectBindingUpdate,

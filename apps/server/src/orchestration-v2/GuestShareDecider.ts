@@ -6,6 +6,7 @@ import {
   type GuestMessageId,
   type OrchestrationMessageContext,
   type OrchestrationV2AppThread,
+  type OrchestrationV2Command,
   type OrchestrationV2ServerCommand,
   type ThreadGuestMessage,
   type ThreadGuestShare,
@@ -308,3 +309,13 @@ export function editedQueuedPayload<
     stored,
   );
 }
+
+export const rootDispatchAttribution = (
+  command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
+) => ({
+  createdBy: command.createdBy,
+  creationSource: command.creationSource,
+  ...(command.ingress === undefined ? {} : { ingress: command.ingress }),
+  ...(command.scheduledTaskId === undefined ? {} : { scheduledTaskId: command.scheduledTaskId }),
+  ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+});

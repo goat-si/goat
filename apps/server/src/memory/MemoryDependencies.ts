@@ -11,6 +11,49 @@ const decode = <A, E>(effect: Effect.Effect<A, E>) =>
 const decodeDependencyEdges = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(M.MemoryRevisionId)),
 );
+export const closureCap = Effect.fn("MemoryService.closureCap")(function* (space: M.MemorySpaceId) {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ derived_cap: number }>`
+    SELECT derived_cap FROM memory_space_features WHERE space=${space}`.pipe(
+    Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "derived-cap", cause })),
+  );
+  return row?.derived_cap === M.MEMORY_DERIVED_REVISIONS_MAX
+    ? M.MEMORY_DERIVED_REVISIONS_MAX
+    : M.MEMORY_DERIVED_REVISIONS_MAX_V1;
+});
+
+export const validateCheckpointClosureCapacity = Effect.fn(
+  "MemorySyncService.validateCheckpointClosureCapacity",
+)(function* (page: M.MemoryHubCheckpointPage) {
+  const cap = yield* closureCap(page.memorySpaceId);
+  if (
+    cap === M.MEMORY_DERIVED_REVISIONS_MAX_V1 &&
+    page.identities.some((identity) => identity.origin)
+  )
+    return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
+  for (const entry of [...page.items, ...page.revisions]) {
+    if (
+      "revision" in entry &&
+      entry.revision &&
+      (entry.revision.provenance.unverified || entry.revision.provenance.originThreadId) &&
+      cap === M.MEMORY_DERIVED_REVISIONS_MAX_V1
+    )
+      return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
+    if ("payload" in entry && entry.payload)
+      yield* requireClosureCapacity(entry.payload.derivedFromMemoryRevisions.length, cap);
+  }
+});
+
+export const relatedExposureCap = (space: M.MemorySpaceId) =>
+  closureCap(space).pipe(Effect.map((cap) => (cap === M.MEMORY_DERIVED_REVISIONS_MAX ? 750 : 80)));
+
+export const requireClosureCapacity = (count: number, limit: number) =>
+  count > limit
+    ? Effect.fail(
+        new Store.MemoryCapacityError({ dimension: "dependencies", current: count, limit }),
+      )
+    : Effect.void;
+
 /** Expand direct edges at authoritative writes. Internally captured closed sets may
  * outlive their bodies; they still require canonical live owners and all available edges. */
 export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMemoryDependencies")(
@@ -20,12 +63,14 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
     allowPruned = false,
     resolutionHeads: ReadonlyArray<M.MemoryRevisionId> = [],
     resolvingMemoryId?: M.MemoryId,
+    capacityOverride?: number,
   ) {
     const sql = yield* SqlClient.SqlClient;
-    const revisions = [...new Set(payload.derivedFromMemoryRevisions)];
+    const limit = capacityOverride ?? (yield* closureCap(space));
+    const revisions = new Set(payload.derivedFromMemoryRevisions);
+    yield* requireClosureCapacity(revisions.size, limit);
+    const allowedHeads = encodeHeads(resolutionHeads);
     for (const revision of revisions) {
-      if (revisions.length > 100)
-        return yield* new Store.MemoryStoreConflict({ code: "invalid_output" });
       // Only authoritative resolution inputs may use this memory's own history
       // while its current frontier is quarantined. Foreign owners still need visibility.
       const rows = yield* sql<{ dependencies_json: string | null }>`
@@ -35,7 +80,7 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
         WHERE r.space=${space} AND r.revision_id=${revision}
         AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending q WHERE q.space=r.space AND q.operation_id=r.operation_id AND q.record_kind='operation')
         AND (i.status='active' AND json_extract(i.availability_json,'$.exposure')='visible'
-          OR r.memory_id=${resolvingMemoryId ?? null} AND r.revision_id IN (SELECT value FROM json_each(${encodeHeads(resolutionHeads)})))
+          OR r.memory_id=${resolvingMemoryId ?? null} AND r.revision_id IN (SELECT value FROM json_each(${allowedHeads})))
         AND i.status NOT IN ('forgotten','blocked')
         AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=r.space AND f.memory_id=r.memory_id)
       `.pipe(
@@ -47,10 +92,11 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
         return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
       if (rows[0].dependencies_json !== null) {
         const edges = yield* decode(decodeDependencyEdges(rows[0].dependencies_json, strict));
-        for (const edge of edges) if (!revisions.includes(edge)) revisions.push(edge);
+        for (const edge of edges) revisions.add(edge);
+        yield* requireClosureCapacity(revisions.size, limit);
       }
     }
-    return { ...payload, derivedFromMemoryRevisions: revisions };
+    return { ...payload, derivedFromMemoryRevisions: [...revisions] };
   },
 );
 /** Consumers of a previously admitted closed set verify every still-available edge. */
@@ -62,6 +108,7 @@ export const validateSummaryDependencies = Effect.fn("MemoryService.validateSumm
       readonly memoryId: M.MemoryId;
       readonly revisions: ReadonlyArray<M.MemoryRevisionId>;
     },
+    capacityOverride?: number,
   ) {
     const normalized = yield* normalizeMemoryDependencies(
       space,
@@ -69,6 +116,7 @@ export const validateSummaryDependencies = Effect.fn("MemoryService.validateSumm
       true,
       resolution?.revisions ?? [],
       resolution?.memoryId,
+      capacityOverride,
     );
     if (
       normalized.derivedFromMemoryRevisions.length !==

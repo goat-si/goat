@@ -64,6 +64,7 @@ export function presentMemoryItem(item: MemoryItem) {
     ...availability,
     label: item.status === "quarantined" ? "Conflicting memory on hold" : availability.label,
     syncLabel: item.pendingSync ? "Waiting to sync" : null,
+    provenanceLabel: item.marks?.provenance === "unverified" ? "Provenance unverified" : null,
     cleanupLabel: item.localAvailability.cleanupPending ? "Cleaning up remaining content" : null,
     canEdit: item.status === "active" && availability.detailsAvailable,
   };

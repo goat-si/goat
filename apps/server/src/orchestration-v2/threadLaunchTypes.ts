@@ -34,6 +34,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly ingress?: "person" | undefined;
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;

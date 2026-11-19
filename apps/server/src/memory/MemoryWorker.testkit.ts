@@ -16,7 +16,7 @@ import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
@@ -402,4 +402,18 @@ export const lineageSetup = Effect.gen(function* () {
   yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run',${threadId},1,'running','{}')`;
   yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
   yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic',NULL)`;
+});
+
+export const lineageUpsert = (
+  n: number,
+  deps: readonly M.MemoryRevisionId[] = [],
+): M.MemoryUpsertInput => ({
+  memorySpaceId: space,
+  memoryId: M.MemoryId.make(id(n)),
+  operationId: M.MemoryOperationId.make(id(n + 1000)),
+  expectedHeads: [],
+  scope: { kind: "user" },
+  assertionKind: "inference",
+  payload: { text: `synthetic lineage ${n}`, evidence: [], derivedFromMemoryRevisions: deps },
+  baseBoundary: null,
 });

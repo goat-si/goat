@@ -18,6 +18,10 @@ const flaky = new M.TextGenerationError({
   operation: "generateMemorySummary",
   detail: "Codex returned invalid structured output.",
 });
+const HOUR = 3_600_000;
+
+const rejectSelection = (hold: Hold.MemoryGenerationHold["Service"], key: string) =>
+  hold.guard(key, Effect.fail(rejected)).pipe(Effect.flip);
 
 describe("MemoryGenerationHold", () => {
   it.effect("probes after 1 minute, 10 minutes and 1 hour, then once a day", () =>
@@ -84,6 +88,119 @@ describe("MemoryGenerationHold", () => {
       // A flaky answer never opens a hold.
       yield* hold.guard("c", Effect.fail(flaky)).pipe(Effect.flip);
       assert.isFalse(yield* hold.isHeld("c"));
+    }),
+  );
+
+  it.effect("an idle hold expires 48 hours after its last failed probe and not before", () =>
+    Effect.gen(function* () {
+      const hold = yield* Hold.make;
+      yield* rejectSelection(hold, "model");
+      yield* TestClock.adjust(60_000);
+      assert.strictEqual((yield* rejectSelection(hold, "model"))._tag, "TextGenerationError");
+
+      yield* TestClock.adjust(48 * HOUR - 60_000);
+      assert.isDefined(yield* hold.status("model"));
+      yield* TestClock.adjust(59_999);
+      assert.isDefined(yield* hold.status("model"));
+      yield* TestClock.adjust(1);
+      assert.isUndefined(yield* hold.status("model"));
+    }),
+  );
+
+  it.effect("the 65th selection evicts the oldest idle hold", () =>
+    Effect.gen(function* () {
+      const hold = yield* Hold.make;
+      yield* rejectSelection(hold, "model-0");
+      yield* TestClock.adjust(1);
+      for (let index = 1; index < 64; index++) {
+        yield* rejectSelection(hold, `model-${index}`);
+      }
+      yield* TestClock.adjust(60_000);
+      yield* rejectSelection(hold, "model-0");
+      assert.isDefined(yield* hold.status("model-1"));
+      yield* rejectSelection(hold, "model-64");
+
+      assert.isUndefined(yield* hold.status("model-1"));
+      assert.isDefined(yield* hold.status("model-0"));
+      for (let index = 2; index <= 64; index++) {
+        assert.isDefined(yield* hold.status(`model-${index}`));
+      }
+    }),
+  );
+
+  it.effect("an active probe survives expiry and cap pressure", () =>
+    Effect.gen(function* () {
+      const hold = yield* Hold.make;
+      yield* rejectSelection(hold, "active");
+      yield* TestClock.adjust(60_000);
+      const started = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const probe = yield* hold
+        .guard(
+          "active",
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+
+      yield* TestClock.adjust(48 * HOUR);
+      for (let index = 0; index < 64; index++) {
+        yield* rejectSelection(hold, `idle-${index}`);
+      }
+      assert.isDefined(yield* hold.status("active"));
+      assert.isFalse(yield* hold.release("active"));
+      assert.strictEqual((yield* rejectSelection(hold, "active"))._tag, "MemoryGenerationHeld");
+      assert.isUndefined(yield* hold.status("idle-0"));
+
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(probe);
+      assert.isUndefined(yield* hold.status("active"));
+      assert.strictEqual(yield* hold.guard("active", Effect.succeed("ran")), "ran");
+    }),
+  );
+
+  it.effect("with all holds pinned a new failure is not recorded", () =>
+    Effect.gen(function* () {
+      const hold = yield* Hold.make;
+      for (let index = 0; index < 64; index++) {
+        yield* rejectSelection(hold, `model-${index}`);
+      }
+      yield* TestClock.adjust(60_000);
+      const finish = yield* Deferred.make<void>();
+      for (let index = 0; index < 64; index++) {
+        const started = yield* Deferred.make<void>();
+        yield* hold
+          .guard(
+            `model-${index}`,
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+      }
+
+      assert.strictEqual((yield* rejectSelection(hold, "overflow"))._tag, "TextGenerationError");
+      assert.isUndefined(yield* hold.status("overflow"));
+      assert.strictEqual((yield* rejectSelection(hold, "overflow"))._tag, "TextGenerationError");
+      for (let index = 0; index < 64; index++) {
+        assert.isTrue(yield* hold.isHeld(`model-${index}`));
+      }
+    }),
+  );
+
+  it.effect("an idle hold survives until its probe is due", () =>
+    Effect.gen(function* () {
+      const hold = yield* Hold.make;
+      yield* rejectSelection(hold, "model");
+      for (const wait of [60_000, 600_000, HOUR]) {
+        yield* TestClock.adjust(wait);
+        yield* rejectSelection(hold, "model");
+      }
+      yield* TestClock.adjust(24 * HOUR - 1);
+      assert.isDefined(yield* hold.status("model"));
+      assert.strictEqual((yield* rejectSelection(hold, "model"))._tag, "MemoryGenerationHeld");
+      yield* TestClock.adjust(1);
+      assert.isDefined(yield* hold.status("model"));
+      assert.strictEqual(yield* hold.guard("model", Effect.succeed("ran")), "ran");
     }),
   );
 

@@ -1,6 +1,10 @@
+import { makeOriginCatchup } from "./store/OriginCatchup.ts";
+import { areAutomaticallyUsable } from "./MemoryRevisionMarks.ts";
+import { makeThreadLineage } from "./store/ThreadLineage.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import { metadataCodec, metadataOf, stored } from "./store/StoreCodecs.ts";
 import { MemoryStoreConflict, Transaction } from "./store/StoreModel.ts";
 import type { MemoryStoreShape } from "./store/StoreShape.ts";
@@ -30,6 +34,8 @@ import { makeResolutionTickets } from "./store/ResolutionTickets.ts";
 import { makeReports } from "./store/Reports.ts";
 import { makeCheckpoints } from "./store/Checkpoints.ts";
 import { makeLocalIntents } from "./store/LocalIntents.ts";
+import { makeFloorWrites } from "./store/FloorWrites.ts";
+import { makeHubFloor } from "./store/HubFloor.ts";
 import { makeHubMembership } from "./store/HubMembership.ts";
 import { makeHubUsage } from "./store/HubUsage.ts";
 import { makeHubLedger } from "./store/HubLedger.ts";
@@ -160,12 +166,10 @@ const make = Effect.gen(function* () {
   const recallStore = makeRecallStore(kernel);
   const searchModule = makeSearch(kernel, coreReads);
   const { readCursor, withReceivedCursor, list, searchCoverage, search } = searchModule;
+  const lineage = makeThreadLineage(kernel);
   const workQueue = makeWorkQueue(kernel, itemWrites);
   const {
     readWork,
-    readThreadLineage,
-    appendThreadLineage,
-    deleteThreadLineage,
     retryWork,
     rearmGenerationWork,
     renewWork,
@@ -329,6 +333,7 @@ const make = Effect.gen(function* () {
     readLocalProcessingStatus,
     readBootstrap,
     discardBootstrapTx,
+    resetExpiredTailTx,
     retireFrozenClaimTx,
     advanceBootstrapTx,
   } = hubAdmin;
@@ -409,8 +414,11 @@ const make = Effect.gen(function* () {
     readLocalProcessingStatus,
     readBootstrap,
     discardBootstrapTx,
+    resetExpiredTailTx,
     retireFrozenClaimTx,
     advanceBootstrapTx,
+    ...makeHubFloor(kernel),
+    ...makeFloorWrites(kernel, itemWrites),
     readHubMembers,
     readHubMember,
     findHubMemberByCredential,
@@ -474,6 +482,7 @@ const make = Effect.gen(function* () {
     readAncestry: (space, id, parents) => transact(readAncestry(space, id, parents)),
     withReceivedCursor,
     readCursor,
+    ...makeOriginCatchup(kernel),
     readOperation,
     readWorkOperation,
     pendingReceived,
@@ -502,9 +511,11 @@ const make = Effect.gen(function* () {
     rebindWorkModel,
     readThreadHookWatermark,
     cancelThreadWork,
-    readThreadLineage,
-    appendThreadLineage,
-    deleteThreadLineage,
+    ...lineage,
+    areAutomaticallyUsable: (space, revisions) =>
+      areAutomaticallyUsable(space, revisions).pipe(
+        Effect.provideService(SqlClient.SqlClient, kernel.sql),
+      ),
     commitThreadHook,
     readParked,
     enqueueWork,

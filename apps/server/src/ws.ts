@@ -1,5 +1,6 @@
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
+import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -10,6 +11,7 @@ import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
 import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
 import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
+import { personIngress, stampClientCommand } from "./orchestration-v2/ThreadPersonIngress.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import { threadForkRpcHandlers } from "./orchestration-v2/goat/ThreadForkRpc.ts";
@@ -22,7 +24,7 @@ import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
-import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
+import { memoryLegacyError as memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
 import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
@@ -56,7 +58,6 @@ import {
   EnvironmentAuthorizationError,
   FilesystemBrowseError,
   MemoryImportRpcError,
-  MemoryMutationReceipt,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -446,7 +447,6 @@ export const makeMemoryImportHandlers = <E>(
     });
   });
 
-const decodeMemoryMutationReceipt = Schema.decodeUnknownEffect(MemoryMutationReceipt);
 const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcInstrumentation);
 // Validate the full handler map, but register smaller groups to bound layer inference.
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
@@ -1286,16 +1286,7 @@ export const layerWsRpc = (
           memorySync.hubDiagnostics(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memorySyncStatus]: (input) =>
           memorySync.syncStatus(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryUpsert]: (input) =>
-          memory.upsert(input, memoryWrite).pipe(
-            Effect.flatMap((stored) => decodeMemoryMutationReceipt(stored.receipt)),
-            Effect.mapError(memoryError),
-          ),
-        [WS_METHODS.memoryForget]: (input) =>
-          memory.forget(input, memoryWrite).pipe(
-            Effect.flatMap((stored) => decodeMemoryMutationReceipt(stored.receipt)),
-            Effect.mapError(memoryError),
-          ),
+        ...makeMemoryMutationHandlers(memory, currentSession, memoryRead, memoryWrite),
         [WS_METHODS.memoryRevertResolution]: (input) =>
           memory.revertResolution(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryReadSource]: (input) =>
@@ -1774,11 +1765,7 @@ export const layerWsRpc = (
                 (command.type === "prepared-run.retry"
                   ? retryPreparedRun(command).pipe(Effect.provide(intakeContext))
                   : ThreadMessageIntake.dispatchCommand(
-                      ThreadManagementService.withCreationProvenance(command, {
-                        createdBy: "user",
-                        creationSource:
-                          "creationSource" in command ? command.creationSource : "web",
-                      }),
+                      stampClientCommand(command, currentSession),
                       channelOwner,
                     )
                 ).pipe(Effect.provide(intakeContext)),
@@ -1956,6 +1943,7 @@ export const layerWsRpc = (
                                 ...(input.initialMessage.messageId === undefined
                                   ? {}
                                   : { messageId: input.initialMessage.messageId }),
+                                ingress: personIngress(currentSession),
                                 text: input.initialMessage.text,
                                 attachments: input.initialMessage.attachments,
                                 ...(input.initialMessage.context === undefined

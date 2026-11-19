@@ -72,11 +72,14 @@ describe("memory client guards", () => {
     for (const method of ["siteNotes.write", "siteNotes.delete", "siteNotes.restoreSeed"] as const)
       expect(clientRpcRequiredScopes(method, {})).toEqual(["memory:write"]);
   });
-  it("guards all three memory mutations", () => {
+  it("guards memory mutations and suggestion reads", () => {
+    expect(clientRpcRequiredScopes(WS_METHODS.memorySuggestionsList, {})).toEqual(["memory:read"]);
     for (const method of [
       WS_METHODS.memoryUpsert,
       WS_METHODS.memoryForget,
       WS_METHODS.memoryRevertResolution,
+      WS_METHODS.memorySuggestionsAccept,
+      WS_METHODS.memorySuggestionsDismiss,
     ])
       expect(clientRpcRequiredScopes(method, {})).toEqual(["memory:write"]);
   });

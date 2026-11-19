@@ -1,14 +1,4 @@
-/**
- * Pauses memory generation for a model whose provider rejects every request the same way,
- * such as an output schema the provider refuses or a sign-in it needs. Without it, each queued
- * summary fails on its own schedule and the same rejection repeats once per item.
- *
- * A hold belongs to one model selection on one provider version: changing the model, its
- * provider, or the provider's CLI version starts clean. Holds live in memory, so a restart allows
- * one new attempt.
- *
- * @module MemoryGenerationHold
- */
+/** Holds are local to a server process and keyed by model selection and provider version. */
 import * as M from "@goat/contracts";
 import {
   configuredMemoryModelSelection,
@@ -24,6 +14,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -43,6 +34,8 @@ export type MemoryGenerationHoldReason = M.MemoryGenerationHold["reason"];
 /** Waits before each probe after consecutive failures; then one probe per cycle. */
 const MEMORY_HOLD_PROBE_DELAYS_MS = [60_000, 600_000, 3_600_000] as const;
 const MEMORY_HOLD_CYCLE_MS = 86_400_000;
+const MEMORY_HOLD_IDLE_EXPIRY_MS = 2 * MEMORY_HOLD_CYCLE_MS;
+const MAX_MEMORY_HOLDS = 64;
 /** Throttling and outages usually clear on their own, so they never wait more than an hour. */
 const TRANSIENT_HOLD_CYCLE_MS = 3_600_000;
 const cycleFor = (reason: MemoryGenerationHoldReason) =>
@@ -55,6 +48,13 @@ export interface HoldState {
   readonly since: number;
   readonly failures: number;
   readonly retryAt: number;
+  readonly lastFailedAt: number;
+  readonly probing: boolean;
+}
+
+interface HoldRegistry {
+  readonly entries: ReadonlyMap<string, HoldState>;
+  readonly saturationLogged: boolean;
 }
 
 /** The hold after one more deterministic failure. */
@@ -69,7 +69,29 @@ function nextHold(
     since: previous?.since ?? now,
     failures,
     retryAt: now + (MEMORY_HOLD_PROBE_DELAYS_MS[failures - 1] ?? cycleFor(reason)),
+    lastFailedAt: now,
+    probing: false,
   };
+}
+
+function expireIdleHolds(entries: HoldRegistry["entries"], now: number) {
+  let pruned: Map<string, HoldState> | undefined;
+  for (const [key, hold] of entries) {
+    if (!hold.probing && now - hold.lastFailedAt >= MEMORY_HOLD_IDLE_EXPIRY_MS) {
+      (pruned ??= new Map(entries)).delete(key);
+    }
+  }
+  return pruned ?? entries;
+}
+
+function oldestIdleHold(entries: HoldRegistry["entries"]) {
+  let oldest: { key: string; lastFailedAt: number } | undefined;
+  for (const [key, hold] of entries) {
+    if (!hold.probing && (oldest === undefined || hold.lastFailedAt < oldest.lastFailedAt)) {
+      oldest = { key, lastFailedAt: hold.lastFailedAt };
+    }
+  }
+  return oldest?.key;
 }
 
 /** The provider call was not made because its model is held. */
@@ -141,7 +163,7 @@ export class MemoryGenerationHold extends Context.Service<
       key: string,
       call: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | MemoryGenerationHeld, R>;
-    /** Forgets the hold for a key that is no longer in use. */
+    /** Forgets an idle hold for a key that is no longer in use. */
     readonly release: (key: string) => Effect.Effect<boolean>;
     /** The hold to report for a key, if any. */
     readonly status: (key: string) => Effect.Effect<M.MemoryGenerationHold | undefined>;
@@ -153,8 +175,7 @@ const iso = (millis: number) =>
 
 export const make = Effect.gen(function* () {
   const providers = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-  const holds = yield* Ref.make(new Map<string, HoldState>());
-  const probing = yield* Ref.make(new Set<string>());
+  const holds = yield* Ref.make<HoldRegistry>({ entries: new Map(), saturationLogged: false });
 
   const resolveModel = Effect.fn("MemoryGenerationHold.resolveModel")(function* (
     settings: M.ServerSettings,
@@ -169,112 +190,146 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const keyFor = (selection: M.MemoryModelSelection) =>
-    Effect.gen(function* () {
-      const version = Option.isNone(providers)
-        ? null
-        : ((yield* providers.value.getProviders).find(
-            (provider) => provider.instanceId === selection.instanceId,
-          )?.version ?? null);
-      // Settings and queued work may spell the same selection differently (absent vs empty
-      // options), so the key uses its parts.
-      return encodeKey([
-        selection.instanceId,
-        selection.model,
-        (selection.options ?? [])
-          .map((option) => [option.id, option.value] as const)
-          .toSorted(([a], [b]) => a.localeCompare(b)),
-        version ?? "unknown",
-      ]);
-    });
+  const keyFor = Effect.fn("MemoryGenerationHold.keyFor")(function* (
+    selection: M.MemoryModelSelection,
+  ) {
+    const version = Option.isNone(providers)
+      ? null
+      : ((yield* providers.value.getProviders).find(
+          (provider) => provider.instanceId === selection.instanceId,
+        )?.version ?? null);
+    // Settings and queued work may spell the same selection differently (absent vs empty
+    // options), so the key uses its parts.
+    return encodeKey([
+      selection.instanceId,
+      selection.model,
+      (selection.options ?? [])
+        .map((option) => [option.id, option.value] as const)
+        .toSorted(([a], [b]) => a.localeCompare(b)),
+      version ?? "unknown",
+    ]);
+  });
 
-  const isHeld = (key: string) =>
-    Effect.gen(function* () {
-      const hold = (yield* Ref.get(holds)).get(key);
-      if (hold === undefined) return false;
-      return (yield* Ref.get(probing)).has(key) || hold.retryAt > (yield* Clock.currentTimeMillis);
-    });
-
-  const acquire = (key: string) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const hold = (yield* Ref.get(holds)).get(key);
-      if (hold === undefined) return { probe: false } as const;
-      const claimed = yield* Ref.modify(probing, (current): [boolean, Set<string>] =>
-        current.has(key) || hold.retryAt > now
-          ? [false, current]
-          : [true, new Set([...current, key])],
-      );
-      if (!claimed)
-        return yield* new MemoryGenerationHeld({ reason: hold.reason, retryAt: hold.retryAt });
-      return { probe: true } as const;
-    });
-
-  const settle = <A, E, R>(key: string, call: Effect.Effect<A, E, R>) =>
-    call.pipe(
-      Effect.tap(() => Ref.update(holds, (current) => withoutKey(current, key))),
-      Effect.tapError((error) =>
-        Effect.gen(function* () {
-          const reason = deterministicFailure(error);
-          if (reason === undefined) {
-            // Any other outcome means the provider answered; per-item retries take over.
-            yield* Ref.update(holds, (current) => withoutKey(current, key));
-            return;
-          }
-          const now = yield* Clock.currentTimeMillis;
-          const previous = (yield* Ref.get(holds)).get(key);
-          const next = nextHold(previous, reason, now);
-          yield* Ref.update(holds, (current) => new Map([...current, [key, next]]));
-          // The cause is logged once per opening; probes that fail again stay quiet.
-          if (previous === undefined)
-            yield* Effect.logWarning("memory generation paused for this model", {
-              reason,
-              key,
-              retryAt: iso(next.retryAt),
-              cause: error,
-            });
+  const modifyHolds = <A>(update: (state: HoldRegistry, now: number) => [A, HoldRegistry]) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        Ref.modify(holds, (current) => {
+          const entries = expireIdleHolds(current.entries, now);
+          return update(entries === current.entries ? current : { ...current, entries }, now);
         }),
       ),
     );
 
-  const guard = <A, E, R>(key: string, call: Effect.Effect<A, E, R>) =>
-    Effect.acquireUseRelease(
-      acquire(key),
-      () => settle(key, call),
-      (slot) =>
-        slot.probe
-          ? Ref.update(probing, (current) => {
-              const next = new Set(current);
-              next.delete(key);
-              return next;
-            })
-          : Effect.void,
+  const isHeld = (key: string) =>
+    modifyHolds((current, now) => {
+      const hold = current.entries.get(key);
+      return [hold !== undefined && (hold.probing || hold.retryAt > now), current];
+    });
+
+  const acquire = (key: string) =>
+    modifyHolds<boolean | MemoryGenerationHeld>((current, now) => {
+      const hold = current.entries.get(key);
+      if (hold === undefined) return [false, current];
+      if (hold.probing || hold.retryAt > now) {
+        return [new MemoryGenerationHeld({ reason: hold.reason, retryAt: hold.retryAt }), current];
+      }
+      const entries = new Map(current.entries).set(key, { ...hold, probing: true });
+      return [true, { ...current, entries }];
+    }).pipe(
+      Effect.filterOrElse(
+        (probe) => typeof probe === "boolean",
+        (error) => error,
+      ),
     );
+
+  // Settlement shares the guard's span and releases probe ownership in the same update.
+  const settle = Effect.fnUntraced(function* (
+    key: string,
+    probe: boolean,
+    exit: Exit.Exit<unknown, unknown>,
+  ) {
+    const error = Exit.findErrorOption(exit);
+    const reason = Option.isSome(error) ? deterministicFailure(error.value) : undefined;
+    if (!probe && reason === undefined) return;
+
+    const update = yield* modifyHolds((current, now): [Effect.Effect<void>, HoldRegistry] => {
+      const previous = current.entries.get(key);
+      // An unheld call can finish after another call has opened a hold and a probe has claimed it.
+      if (!probe && previous !== undefined) return [Effect.void, current];
+      if (reason === undefined) {
+        if (previous === undefined) return [Effect.void, current];
+        const entries = new Map(current.entries);
+        if (Exit.isSuccess(exit) || Option.isSome(error)) entries.delete(key);
+        else entries.set(key, { ...previous, probing: false });
+        return [Effect.void, { ...current, entries }];
+      }
+
+      const entries = new Map(current.entries);
+      if (previous === undefined && entries.size >= MAX_MEMORY_HOLDS) {
+        const oldest = oldestIdleHold(entries);
+        if (oldest === undefined) {
+          return current.saturationLogged
+            ? [Effect.void, current]
+            : [
+                Effect.logWarning("memory generation hold capacity reached; failure will retry", {
+                  capacity: MAX_MEMORY_HOLDS,
+                }),
+                { ...current, saturationLogged: true },
+              ];
+        }
+        entries.delete(oldest);
+      }
+
+      const next = nextHold(previous, reason, now);
+      entries.delete(key);
+      entries.set(key, next);
+      const log =
+        previous === undefined
+          ? Effect.logWarning("memory generation paused for this model", {
+              reason,
+              key,
+              retryAt: iso(next.retryAt),
+              cause: Option.getOrUndefined(error),
+            })
+          : Effect.void;
+      return [log, { ...current, entries }];
+    });
+    yield* update;
+  });
+
+  const guard = Effect.fn("MemoryGenerationHold.guard")(function* <A, E, R>(
+    key: string,
+    call: Effect.Effect<A, E, R>,
+  ) {
+    return yield* Effect.acquireUseRelease(
+      acquire(key),
+      () => call,
+      (probe, exit) => settle(key, probe, exit),
+    );
+  });
 
   const release = (key: string) =>
-    Ref.modify(holds, (current): [boolean, Map<string, HoldState>] =>
-      current.has(key) ? [true, withoutKey(current, key)] : [false, current],
-    );
+    modifyHolds((current) => {
+      const hold = current.entries.get(key);
+      if (hold === undefined || hold.probing) return [false, current];
+      const entries = new Map(current.entries);
+      entries.delete(key);
+      return [true, { ...current, entries }];
+    });
 
   const status = (key: string) =>
-    Ref.get(holds).pipe(
-      Effect.map((current) => {
-        const hold = current.get(key);
-        return hold === undefined
+    modifyHolds((current) => {
+      const hold = current.entries.get(key);
+      return [
+        hold === undefined
           ? undefined
-          : { reason: hold.reason, since: iso(hold.since), nextAttemptAt: iso(hold.retryAt) };
-      }),
-    );
+          : { reason: hold.reason, since: iso(hold.since), nextAttemptAt: iso(hold.retryAt) },
+        current,
+      ];
+    });
 
   return MemoryGenerationHold.of({ resolveModel, keyFor, isHeld, guard, release, status });
 });
-
-const withoutKey = (current: Map<string, HoldState>, key: string) => {
-  if (!current.has(key)) return current;
-  const next = new Map(current);
-  next.delete(key);
-  return next;
-};
 
 export const layer = Layer.effect(MemoryGenerationHold, make);
 

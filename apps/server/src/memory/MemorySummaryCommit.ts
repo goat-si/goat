@@ -1,11 +1,13 @@
+import { closureCap, requireClosureCapacity } from "./MemoryDependencies.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type * as SqlClient from "effect/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./MemoryStore.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
 import type { MemoryServiceError } from "./MemoryService.ts";
 
 export type SummaryPromotionCommit = {
@@ -77,6 +79,7 @@ export const makeCommitSummary = (deps: {
     op: M.MemoryOperation,
     admission: Store.MemoryAdmissionContext,
     permit: Effect.Effect<void>,
+    promotion?: PromotionPrerequisite,
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly validateDependencies: (
     space: M.MemorySpaceId,
@@ -84,7 +87,7 @@ export const makeCommitSummary = (deps: {
   ) => Effect.Effect<void, MemoryServiceError>;
   readonly stableUuid: (text: string) => string;
 }) => {
-  const { store, environmentId, apply } = deps;
+  const { store, environmentId, apply, sql } = deps;
   const now = Effect.map(Clock.currentTimeMillis, (millis) =>
     M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(millis))),
   );
@@ -98,6 +101,7 @@ export const makeCommitSummary = (deps: {
     commit: SummaryCommit,
     summaryRevision: M.MemoryRevisionId,
     summaryDependencies: ReadonlyArray<M.MemoryRevisionId>,
+    staged = false,
   ) {
     const promotions = commit.promotions;
     const meta = commit.work.metadata;
@@ -117,6 +121,7 @@ export const makeCommitSummary = (deps: {
       if (scanMemoryValue(candidate).kind !== "allowed") continue;
       const safe = redactMemoryText(candidate);
       let scope: M.MemoryScope = { kind: "user" };
+      let promotionBinding: PromotionPrerequisite["promotionBinding"];
       let key = "user";
       if (destination === "project") {
         if (!promotions.project) continue;
@@ -128,6 +133,7 @@ export const makeCommitSummary = (deps: {
           encodeProjectKey(binding.projectKey) !== encodeProjectKey(projectKey)
         )
           continue;
+        promotionBinding = { project: promotions.project.project, version: binding.version };
         scope = { kind: "project", projectKey };
         key = `project:${encodeProjectKey(projectKey)}`;
       }
@@ -152,22 +158,37 @@ export const makeCommitSummary = (deps: {
           (owner?.environmentId !== thread.environmentId || owner.threadId !== thread.threadId)
         )
           return;
+        if (!staged && !(yield* store.areAutomaticallyUsable(space, [summaryRevision]))) return;
         if (head && !promotions.replace) return;
+        const dependencies = [...new Set([summaryRevision, ...summaryDependencies])];
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(space).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload(
             {
               text: safe.text,
               evidence: safe.evidence,
-              derivedFromMemoryRevisions: [...new Set([summaryRevision, ...summaryDependencies])],
+              derivedFromMemoryRevisions: dependencies,
             },
             strict,
           ),
         );
-        yield* deps.validateDependencies(space, payload);
+        yield* deps.validateDependencies(
+          space,
+          staged ? { ...payload, derivedFromMemoryRevisions: summaryDependencies } : payload,
+        );
         yield* apply(
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(current.identity?.scopeVersion
+              ? { expectedScopeVersion: current.identity.scopeVersion }
+              : {}),
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId,
@@ -197,6 +218,12 @@ export const makeCommitSummary = (deps: {
           },
           Store.localIntent,
           Effect.void,
+          staged
+            ? {
+                summaryPrerequisite: summaryRevision,
+                ...(promotionBinding ? { promotionBinding } : {}),
+              }
+            : undefined,
         );
       });
       // Inside the summary's transaction this is a savepoint: a refused promotion rolls back alone.
@@ -270,19 +297,29 @@ export const makeCommitSummary = (deps: {
             return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
           return undefined;
         }
+        if (
+          input.input.previousSummary &&
+          !(yield* store.areAutomaticallyUsable(space, current.heads))
+        )
+          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         // The final input also carries lineage across in-memory generation chunks. Rebuilds
         // without the old summary must not inherit dependencies from the discarded head.
+        const dependencies = [
+          ...new Set([
+            ...lineage.revisions,
+            ...(input.input.previousSummary?.derivedFromMemoryRevisions ?? []),
+          ]),
+        ];
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(space).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload(
             {
               text: generated.result.text,
               evidence: generated.result.evidence,
-              derivedFromMemoryRevisions: [
-                ...new Set([
-                  ...lineage.revisions,
-                  ...(input.input.previousSummary?.derivedFromMemoryRevisions ?? []),
-                ]),
-              ],
+              derivedFromMemoryRevisions: dependencies,
             },
             strict,
           ),
@@ -293,6 +330,12 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(current.identity?.scopeVersion
+              ? { expectedScopeVersion: current.identity.scopeVersion }
+              : {}),
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId: meta.operationId,
@@ -323,7 +366,11 @@ export const makeCommitSummary = (deps: {
           Store.localIntent,
           Effect.void,
         );
-        yield* promote(input, meta.revisionId, payload.derivedFromMemoryRevisions);
+        const staged =
+          "pendingSync" in receipt.receipt &&
+          receipt.receipt.pendingSync &&
+          receipt.receipt.revisionId === null;
+        yield* promote(input, meta.revisionId, payload.derivedFromMemoryRevisions, staged);
         if (!(yield* store.completeSummaryWork(work)))
           return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
         return receipt;

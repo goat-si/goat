@@ -125,7 +125,15 @@ export const makeSourceReads = (
     request: M.MemorySourceReadRequest,
   ) {
     const aggregate = yield* loadAggregate(space, request.memoryId, { heads: true }, {});
-    if (aggregate.tombstone || aggregate.pendingForget) return false;
+    if (
+      aggregate.tombstone ||
+      aggregate.pendingForget ||
+      !aggregate.identity ||
+      aggregate.identity.scopeVersion !== request.scopeVersion ||
+      (aggregate.identity.scope.kind === "thread" &&
+        aggregate.identity.scope.thread.environmentId !== request.requesterEnvironmentId)
+    )
+      return false;
     if (!aggregate.item || aggregate.item.localAvailability.exposure !== "visible") return false;
     for (const pair of aggregate.revisions) {
       if (!aggregate.heads.includes(pair.revision.revisionId) || !pair.payload) continue;
@@ -270,7 +278,7 @@ export const makeSourceReads = (
       if (old.deadline <= now || old.state === "expired")
         return yield* new M.MemoryHubError({ code: "source_unavailable" });
       const request = yield* relayRequest(input.memorySpaceId, old);
-      if (!request) {
+      if (!request || !(yield* relayEligible(input.memorySpaceId, request))) {
         yield* settleDenied(input.memorySpaceId, old, 0);
         return yield* new M.MemoryHubError({ code: "source_unavailable" });
       }
@@ -293,6 +301,7 @@ export const makeSourceReads = (
       memoryId: request.memoryId,
       sourceThread: request.sourceThread,
       sourceWatermark: request.sourceWatermark,
+      ...(request.scopeVersion === undefined ? {} : { scopeVersion: request.scopeVersion }),
       messageIds: request.messageIds,
       limit: request.limit,
       ...(request.cursor === undefined ? {} : { cursor: request.cursor }),

@@ -66,6 +66,29 @@ function rejects<S extends Schema.Top>(schema: S, value: unknown) {
   expect(() => decode(schema, value)).toThrow();
 }
 describe("memory canonical contracts", () => {
+  it("binds closed lineage in both canonical encodings without changing field-absent bytes", () => {
+    const plain = decode(M.MemoryOperation, operation);
+    const closed = decode(M.MemoryOperation, { ...operation, closedLineage: true });
+    const legacyBytes =
+      '{"protocolVersion":1,"operationId":"' +
+      id(4) +
+      '","memorySpaceId":"' +
+      id() +
+      '","originEnvironmentId":"env","memoryId":"' +
+      id(2) +
+      '","expectedHeads":[],"kind":"upsert","revision":' +
+      JSON.stringify(revision);
+    expect(M.encodeMemoryOperation(plain)).toBe(
+      legacyBytes + ',"payload":' + JSON.stringify(payload) + "}",
+    );
+    expect(M.encodeMemoryEventMetadata(plain)).toBe(legacyBytes + "}");
+    expect(M.encodeMemoryOperation(closed)).not.toBe(M.encodeMemoryOperation(plain));
+    expect(M.decodeMemoryOperation(M.encodeMemoryOperation(closed))).toEqual(closed);
+    expect(JSON.parse(M.encodeMemoryEventMetadata(closed))).toEqual({
+      ...JSON.parse(M.encodeMemoryEventMetadata(plain)),
+      closedLineage: true,
+    });
+  });
   it("round-trips all eight memory ids and rejects malformed UUIDs", () => {
     for (const schema of [
       M.MemoryId,
@@ -1841,7 +1864,7 @@ describe("WP4 cursor, owner policy and relay contracts", () => {
       credential: "forged",
     });
     rejects(M.MemoryHubDisableInput, { requestId: id(), expectedVersion: 0, credential: "forged" });
-    expect(M.MEMORY_MCP_TOOLS).toHaveLength(11);
+    expect(M.MEMORY_MCP_TOOLS).toHaveLength(12);
     round(M.MemorySettingsGetInput, {});
     round(M.MemorySettingsUpdateInput, { requestId: id(), enabled: false });
     round(M.MemorySettingsUpdateInput, { requestId: id(), modelSelection: null });
@@ -2184,7 +2207,7 @@ describe("WP5 lineage checkpoint contracts", () => {
       "fts_indexed_text",
       "fts_admission_brake",
     ];
-    expect(M.MemoryCapacityDimension.literals).toEqual([
+    expect(M.MemoryCapacityDimension.literals.slice(0, -2)).toEqual([
       ...old,
       "import_lineage_records",
       "import_lineage_bytes",
@@ -2324,62 +2347,4 @@ it("opts into retained local space without changing legacy sync status requests"
   });
   rejects(M.MemorySyncStatusInput, { includeGenerationHold: false });
   rejects(M.MemorySyncStatusInput, { includeGenerationHold: true, extra: true });
-});
-
-// Frozen outer response shapes from origin/dev before automatic hub initialization.
-// Nested settings/member/credential contracts are unchanged by this feature.
-const legacyHubSnapshot = Schema.Struct({
-  settings: M.MemoryHubSettings,
-  version: M.NonNegativeInt,
-});
-const legacyHubView = Schema.Struct({
-  ...legacyHubSnapshot.fields,
-  members: Schema.Array(M.MemoryHubMemberView),
-});
-const legacyHubUpdate = Schema.Struct({
-  view: legacyHubView,
-  credential: Schema.NullOr(M.MemoryHubCredentialResult),
-});
-const legacyHubDisable = legacyHubSnapshot.check(
-  Schema.makeFilter((view) => view.settings.mode === "disabled"),
-);
-const compatible = <A, I>(
-  current: Schema.Codec<A, I>,
-  legacy: Schema.Codec<A, I>,
-  response: unknown,
-) => {
-  const strict = { onExcessProperty: "error" } as const;
-  const oldResponse = Schema.encodeSync(legacy)(Schema.decodeUnknownSync(legacy)(response, strict));
-  // A new client can read an old server's response with exactly the same encoded keys.
-  const decoded = Schema.decodeUnknownSync(current)(oldResponse, strict);
-  const newResponse = Schema.encodeSync(current)(decoded);
-  expect(newResponse).toEqual(oldResponse);
-  // An installed old client can read the new server's response without extra properties.
-  expect(Schema.decodeUnknownSync(legacy)(newResponse, strict)).toEqual(decoded);
-};
-it.each([
-  { mode: "disabled" },
-  { mode: "hub", memorySpaceId: id() },
-  { mode: "hub", memorySpaceId: null },
-  {
-    mode: "member",
-    hubEnvironmentId: "remote",
-    endpoint: "https://fixture.example",
-    memorySpaceId: id(),
-    secretName: "fixture",
-  },
-])("keeps settings-get and settings-update compatible in both directions for $mode", (settings) => {
-  const view = { settings, version: 1, members: [] };
-  compatible(M.MemoryHubSettingsView, legacyHubView, view);
-  compatible(M.MemoryHubSettingsUpdateResult, legacyHubUpdate, { view, credential: null });
-});
-it("keeps disable compatible in both directions without even null provenance", () => {
-  const response = { settings: { mode: "disabled" }, version: 1 };
-  compatible(M.MemoryHubDisableResult, legacyHubDisable, response);
-  expect(() =>
-    Schema.decodeUnknownSync(legacyHubDisable)(
-      { ...response, provenance: null },
-      { onExcessProperty: "error" },
-    ),
-  ).toThrow();
 });

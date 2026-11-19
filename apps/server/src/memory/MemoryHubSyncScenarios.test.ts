@@ -1,4 +1,6 @@
 import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
+import { movedSourceScenario } from "./testkit/MovedSourceScenario.ts";
+import { availableSourceReply } from "./testkit/MemoryHubProtocolFixtures.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -1372,7 +1374,7 @@ const sourceFixture = (ownerIsHub = false) =>
       sourceOperation: op,
     };
   });
-
+export type SourceFixture = Effect.Success<ReturnType<typeof sourceFixture>>;
 it.effect.each([false, true])(
   `scenario g: reads original on its owner, consumes transient body (owner=hub %s)`,
   (localOwner) =>
@@ -1411,6 +1413,10 @@ it.effect.each([false, true])(
           }),
         );
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a move to an owner thread fences original reads by the former shared audience", () =>
+  sourceFixture().pipe(Effect.flatMap(movedSourceScenario), Effect.provide(NodeServices.layer)),
 );
 
 it.effect.each([false, true])(
@@ -1589,22 +1595,7 @@ it.effect(
       const requested = yield* c.a.run(
         Client.MemoryHubClient.use((client) => client.requestSourceRead(connection, submission)),
       );
-      const oldResponse: M.MemoryHubSourceReadRespondInput = {
-        protocolVersion: 1,
-        kind: "normal",
-        memorySpaceId: c.space,
-        requestId: submission.requestId,
-        ownerPolicyEpoch: 1,
-        outcome: {
-          kind: "available",
-          page: {
-            sourceThread: c.thread,
-            watermark: c.watermark,
-            messages: [{ messageId: c.messageId, text: "synthetic original" }],
-            nextCursor: null,
-          },
-        },
-      };
+      const oldResponse = availableSourceReply(submission, c.messageId);
       const ownerConnection = yield* c.owner.connection;
       yield* c.owner.run(
         Client.MemoryHubClient.use((client) =>
@@ -1704,7 +1695,12 @@ it.effect(
           );
           const staleResult = yield* hub
             .resultSourceRead(
-              { protocolVersion: 1, memorySpaceId: c.space, requestId: submission.requestId },
+              {
+                protocolVersion: 1,
+                memorySpaceId: c.space,
+                requestId: submission.requestId,
+                features: M.MEMORY_FLOOR_2,
+              },
               newPrincipal,
             )
             .pipe(Effect.flip);
@@ -1712,7 +1708,11 @@ it.effect(
           if (staleResult._tag === "MemoryHubError")
             assert.strictEqual(staleResult.code, "identity_mismatch");
           const next = yield* hub.requestSourceRead(
-            { ...submission, requestId: M.MemorySourceReadRequestId.make(id(52001)) },
+            {
+              ...submission,
+              requestId: M.MemorySourceReadRequestId.make(id(52001)),
+              features: M.MEMORY_FLOOR_2,
+            },
             newPrincipal,
           );
           assert.strictEqual(

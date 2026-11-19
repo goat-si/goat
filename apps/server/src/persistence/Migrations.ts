@@ -170,7 +170,14 @@ import Migration0155 from "./Migrations/155_DisposableMachines.ts";
 import Migration0156 from "./Migrations/156_DisposableMachineRequests.ts";
 import Migration0157 from "./Migrations/157_DisposableMachineEnrollment.ts";
 import Migration0158 from "./Migrations/158_AuthSessionPenMember.ts";
-import Migration0159 from "./Migrations/159_ScheduledTaskFirstBindIntent.ts";
+import Migration0159 from "./Migrations/159_MemoryThreadLineage.ts";
+import Migration0160 from "./Migrations/160_MemorySaveSuggestions.ts";
+import Migration0161 from "./Migrations/161_MemoryHubFloor.ts";
+import Migration0162 from "./Migrations/162_MemoryScopeVersion.ts";
+import Migration0163 from "./Migrations/163_MemoryCompactMoveReceipts.ts";
+import Migration0164 from "./Migrations/164_MemoryOriginCatchup.ts";
+import Migration0165 from "./Migrations/165_MemorySuggestionQuota.ts";
+import Migration0166 from "./Migrations/166_ScheduledTaskFirstBindIntent.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -339,7 +346,14 @@ export const migrationEntries = [
   [156, "DisposableMachineRequests", Migration0156],
   [157, "DisposableMachineEnrollment", Migration0157],
   [158, "AuthSessionPenMember", Migration0158],
-  [159, "ScheduledTaskFirstBindIntent", Migration0159],
+  [159, "MemoryThreadLineage", Migration0159],
+  [160, "MemorySaveSuggestions", Migration0160],
+  [161, "MemoryHubFloor", Migration0161],
+  [162, "MemoryScopeVersion", Migration0162],
+  [163, "MemoryCompactMoveReceipts", Migration0163],
+  [164, "MemoryOriginCatchup", Migration0164],
+  [165, "MemorySuggestionQuota", Migration0165],
+  [166, "ScheduledTaskFirstBindIntent", Migration0166],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

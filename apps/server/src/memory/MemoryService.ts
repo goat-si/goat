@@ -1,3 +1,12 @@
+import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
+import { makeMoveMemory } from "./MemoryMove.ts";
+import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
+import { makeMemoryForget, type ForgetRequest } from "./MemoryForget.ts";
+import {
+  makeMemorySaveSuggestions,
+  settleMemorySuggestion,
+  type MemorySuggestionService,
+} from "./MemorySaveSuggestions.ts";
 import * as NodeUtil from "node:util";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned hashes.
 import * as NodeCrypto from "node:crypto";
@@ -14,7 +23,13 @@ import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
-import { normalizeMemoryDependencies, validateSummaryDependencies } from "./MemoryDependencies.ts";
+import {
+  closureCap,
+  normalizeMemoryDependencies,
+  requireClosureCapacity,
+  validateSummaryDependencies,
+} from "./MemoryDependencies.ts";
+import type { FloorWriteMetadata } from "./store/FloorWrites.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -29,10 +44,23 @@ import type {
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
-import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
-import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import {
+  decideMemoryOperation,
+  memoryOperationDigest,
+  matchesMemoryOperationDigest,
+  legacyClosedLineageDigest,
+} from "./MemoryDecider.ts";
+import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
-import { makeRemember, type MemoryRememberScopeUnavailable } from "./MemoryRemember.ts";
+import { makeUpsert, type MemorySuggestionAcceptance } from "./MemoryUpsert.ts";
+import {
+  makeRemember,
+  MemoryRefusedSaveHook,
+  type MemoryRememberScopeUnavailable,
+  type MemoryRememberMoveRequiresNoText,
+} from "./MemoryRemember.ts";
+import { makeMemoryViewProjection } from "./MemoryViewProjection.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -86,6 +114,10 @@ export class MemoryService extends Context.Service<
       pairs: ReadonlyArray<{ revision: M.MemoryRevision; payload: M.MemoryPayload | null }>,
     ) => Store.InTx<void, MemoryServiceError>;
     readonly importProvider: ImportProviderFacade;
+    readonly listSuggestions: MemorySuggestionService["list"];
+    readonly listSuggestionMetadata: MemorySuggestionService["listMetadata"];
+    readonly acceptSuggestion: MemorySuggestionService["accept"];
+    readonly dismissSuggestion: MemorySuggestionService["dismiss"];
     /** L5 adds readiness/requireBootstrap/syncStatus from its existing Sync instance. */
     readonly importPorts: Omit<ImportPorts, "readiness" | "requireBootstrap" | "syncStatus">;
     readonly commitLocalIntent: (
@@ -102,11 +134,16 @@ export class MemoryService extends Context.Service<
     readonly prepareSourceRead: (
       input: M.MemoryReadSourceInput,
       permit: Permit,
+      requesterEnvironmentId?: M.EnvironmentId,
     ) => Effect.Effect<ValidatedSourceRequest, MemoryServiceError>;
     readonly validateSourceOutcome: (
       input: { request: ValidatedSourceRequest; outcome: M.MemorySourceReadOutcome },
       permit: Permit,
     ) => Effect.Effect<M.MemorySourceReadOutcome, MemoryServiceError>;
+    readonly applyOriginUpdatesTx: (
+      input: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
+      updates: readonly M.MemoryOriginUpdate[],
+    ) => Store.InTx<void, Store.MemoryStorageError>;
     readonly admitHubOperation: (input: {
       authority: Store.HubAuthority;
       operation: M.MemoryOperation;
@@ -141,6 +178,7 @@ export class MemoryService extends Context.Service<
       hubEnvironmentId: M.EnvironmentId;
       localEnvironmentId: M.EnvironmentId;
       expectedSequence: number;
+      afterOriginSequence?: number;
       page: M.MemoryHubPullResult;
       reauthorize: Permit;
     }) => Effect.Effect<readonly Store.Settlement[], MemoryServiceError>;
@@ -190,16 +228,28 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    readonly acceptSuggestionWrite: (
+      input: M.MemoryUpsertInput,
+      acceptance: MemorySuggestionAcceptance,
+      permit: Permit,
+    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    readonly move: (
+      input: M.MemoryMoveRequest,
+      permit: Permit,
+    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly remember: (
       input: M.MemoryRememberInput & { readonly memorySpaceId: M.MemorySpaceId },
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
-    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError | MemoryRememberScopeUnavailable>;
+    ) => Effect.Effect<
+      Store.StoredReceipt,
+      MemoryServiceError | MemoryRememberScopeUnavailable | MemoryRememberMoveRequiresNoText
+    >;
     readonly retryForgetExpansion: (
       intent: Store.PendingForgetIntent,
     ) => Effect.Effect<void, MemoryServiceError>;
     readonly forget: (
-      input: M.MemoryForgetInput,
+      input: ForgetRequest,
       permit: Permit,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly revertResolution: (
@@ -293,8 +343,6 @@ const encodeBindingUpdate = Schema.encodeSync(
   Schema.fromJsonString(M.MemoryProjectBindingUpdateInput),
 );
 const decodeChanges = Schema.decodeUnknownEffect(M.MemoryChangesInput);
-const decodeUpsert = Schema.decodeUnknownEffect(M.MemoryUpsertInput);
-const decodeForget = Schema.decodeUnknownEffect(M.MemoryForgetInput);
 const decodeRevert = Schema.decodeUnknownEffect(M.MemoryRevertResolutionInput);
 const decodeRead = Schema.decodeUnknownEffect(M.MemoryReadInput);
 const decodeList = Schema.decodeUnknownEffect(M.MemoryListInput);
@@ -326,6 +374,7 @@ const decode = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapErro
 export { validateSummaryDependencies };
 const make = Effect.fnUntraced(function* (
   sourceReadAuthority?: MemorySourceReadAuthority["readSource"],
+  submitFloorWrite?: Effect.Effect<void, MemoryServiceError>,
 ) {
   const repositoryResolver = yield* RepositoryResolver.RepositoryIdentityResolver;
   const store = yield* Store.MemoryStore;
@@ -338,6 +387,14 @@ const make = Effect.fnUntraced(function* (
     effect.pipe(
       Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "service-read", cause })),
     );
+  const readBoundMemoryHubId = Effect.fn("MemoryService.readBoundMemoryHubId")(function* (
+    space: M.MemorySpaceId,
+  ) {
+    const { settings } = yield* committedSettings.read;
+    if (settings.mode === "disabled" || settings.memorySpaceId !== space)
+      return yield* new MemoryAccessError({ code: "bootstrap_required" });
+    return settings.mode === "hub" ? environmentId : settings.hubEnvironmentId;
+  });
   const requireSharing = Effect.fnUntraced(function* (space: M.MemorySpaceId) {
     const binding = yield* committedSettings.read;
     if (binding.settings.mode === "disabled" || binding.settings.memorySpaceId !== space)
@@ -505,8 +562,8 @@ const make = Effect.fnUntraced(function* (
     const stream = yield* store.changes(value.memorySpaceId);
     return stream.pipe(Stream.tap(() => permit));
   });
-  const requireScope = (scope: M.MemoryScope) =>
-    scope.kind === "thread" && scope.thread.environmentId !== environmentId
+  const requireScope = (scope: M.MemoryScope, requester = environmentId) =>
+    scope.kind === "thread" && scope.thread.environmentId !== requester
       ? Effect.fail(new MemoryAccessError({ code: "identity_mismatch" }))
       : Effect.void;
   const decide = (
@@ -529,7 +586,7 @@ const make = Effect.fnUntraced(function* (
       catch: (cause) => (isConflict(cause) ? cause : invalid()),
     });
   const requireImportNotSuppressed = Effect.fnUntraced(function* (op: M.MemoryOperation) {
-    if (op.kind === "forget" || !op.revision.provenance.importSource) return;
+    if (!M.isMemoryRevisionOperation(op) || !op.revision.provenance.importSource) return;
     const source = op.revision.provenance.importSource;
     const keys = [
       {
@@ -562,8 +619,11 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
+    floorMetadata?: FloorWriteMetadata,
   ) {
-    const digest = yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid });
+    const digest =
+      approval?.operationDigest ??
+      (yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid }));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
@@ -584,6 +644,15 @@ const make = Effect.fnUntraced(function* (
           )
             return old;
         }
+        if (M.isMemoryRevisionOperation(op)) {
+          yield* requireClosureCapacity(
+            op.payload.derivedFromMemoryRevisions.length,
+            yield* closureCap(op.memorySpaceId).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ),
+          );
+          if (admission.kind === "localIntent") yield* requireMemoryTailFit(op);
+        }
         // The decider needs the DAG, head/restored payloads, and only the reverted resolution.
         const current = yield* store.loadAggregate(
           op.memorySpaceId,
@@ -591,7 +660,7 @@ const make = Effect.fnUntraced(function* (
           op.kind === "forget"
             ? {}
             : { heads: true, revisionIds: op.kind === "revert" ? [op.restoredRevisionId] : [] },
-          op.kind === "forget"
+          !M.isMemoryRevisionOperation(op)
             ? {}
             : {
                 ...(op.kind === "revert" ? { resolutionId: op.revertsResolutionId } : {}),
@@ -604,7 +673,13 @@ const make = Effect.fnUntraced(function* (
         if (admission.kind !== "approvedReplica" && current.pendingForget && op.kind !== "forget")
           return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
         let ancestry: Store.MemoryAncestry | undefined;
-        if (op.kind !== "forget") {
+        if (op.kind === "move" && admission.kind !== "approvedReplica") {
+          yield* requireScope(op.fromScope);
+          yield* requireScope(op.toScope);
+          if (!(yield* store.hubFloorActive(op.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        }
+        if (M.isMemoryRevisionOperation(op)) {
           if (admission.kind !== "approvedReplica") yield* requireScope(op.revision.scope);
           ancestry = yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
           if (ancestry.parents.some((p) => p.status === "crossMemory"))
@@ -617,6 +692,29 @@ const make = Effect.fnUntraced(function* (
         }
         if (admission.kind !== "approvedReplica") yield* requireImportNotSuppressed(op);
         const decision = yield* decide(current, op, admission, approval, ancestry);
+        if (
+          admission.kind === "localIntent" &&
+          (op.kind === "upsert" || op.kind === "move") &&
+          (op.kind === "move" || M.requiresMemoryLineageFloor2(op))
+        ) {
+          if (!(yield* store.hubFloorActive(op.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          return yield* quota.withAdmission(
+            { operation: op, admission, environmentId, receipt: decision.receipt },
+            Effect.andThen(permit, store.stageFloorWrite(op, floorMetadata)).pipe(
+              Effect.as({
+                operationDigest: digest,
+                receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
+              }),
+            ),
+          );
+        }
+        if (
+          admission.kind === "approvedReplica" &&
+          M.requiresMemoryFloor2(op) &&
+          !(yield* store.hubFloorActive(op.memorySpaceId))
+        )
+          return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
         return yield* quota.commit(decision, environmentId, permit);
       }).pipe(
         Effect.tap(() =>
@@ -898,11 +996,28 @@ const make = Effect.fnUntraced(function* (
             observation.contentFingerprint !== candidate.contentFingerprint
           )
             return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
+          const markedAlias =
+            alias &&
+            !(yield* store.areAutomaticallyUsable(batch.memorySpaceId, [
+              alias.revision.revisionId,
+            ]));
+          if (markedAlias && !(yield* store.hubFloorActive(batch.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          const forgetFence = markedAlias
+            ? yield* store.readCursor(
+                batch.memorySpaceId,
+                yield* readBoundMemoryHubId(batch.memorySpaceId),
+              )
+            : undefined;
           const operation = yield* decode(
             decodeOperation(
               {
                 protocolVersion: 1,
                 kind: "upsert",
+                ...(current.identity?.scopeVersion
+                  ? { expectedScopeVersion: current.identity.scopeVersion }
+                  : {}),
+                ...(forgetFence === undefined ? {} : { forgetFence }),
                 memorySpaceId: batch.memorySpaceId,
                 memoryId: next.memoryId,
                 operationId: selection.operationId,
@@ -920,6 +1035,7 @@ const make = Effect.fnUntraced(function* (
                   createdAtUtc: batch.createdAtUtc,
                   provenance: {
                     environmentId,
+                    ...(markedAlias ? { unverified: true as const } : {}),
                     importSource: {
                       sourceId: registration.sourceId,
                       format: provenanceImportFormat(registration.source.format),
@@ -1094,7 +1210,7 @@ const make = Effect.fnUntraced(function* (
           ...input.assignment,
           environmentId,
         });
-        if (materialized.operation.kind !== "forget") {
+        if (M.isMemoryRevisionOperation(materialized.operation)) {
           const payload = yield* normalizeMemoryDependencies(
             materialized.operation.memorySpaceId,
             materialized.operation.payload,
@@ -1146,326 +1262,61 @@ const make = Effect.fnUntraced(function* (
       revisions.add(pair.revision.revisionId);
       for (const id of closed.derivedFromMemoryRevisions) revisions.add(id);
     }
-    yield* store.appendThreadLineage(thread, space, [...revisions]);
+    const bodies = pairs
+      .filter((pair) => pair.payload !== null)
+      .map((pair) => pair.revision.revisionId);
+    const unknown = !(yield* store.areAutomaticallyUsable(space, bodies));
+    if (!(yield* store.appendThreadLineage(thread, space, [...revisions], unknown)))
+      return yield* new Store.MemoryStoreConflict({ code: "space_mismatch" });
   });
-  const upsert = Effect.fn("MemoryService.upsert")(function* (
-    input: M.MemoryUpsertInput,
-    permit: Permit,
-    sourceThread?: M.ScopedThreadRef,
-  ) {
-    const value = yield* decode(decodeUpsert(input, strict));
-    return yield* store.transact(
-      Effect.gen(function* () {
-        yield* permit;
-        yield* requireSharing(value.memorySpaceId);
-        yield* requireCaller(sourceThread);
-        const requestDigest = hash(
-          yield* decode(
-            Schema.encodeEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  input: M.MemoryUpsertInput,
-                  caller: Schema.NullOr(M.ScopedThreadRef),
-                }),
-              ),
-            )({ input: value, caller: sourceThread ?? null }),
-          ),
-        );
-        const prior = yield* store.receipt(value.memorySpaceId, value.operationId);
-        if (prior) {
-          const rows = yield* query(sql<{
-            request_digest: string | null;
-            origin_environment_id: string;
-          }>`
-            SELECT json_extract(compact_json,'$.upsertRequestDigest') AS request_digest,
-              json_extract(compact_json,'$.originEnvironmentId') AS origin_environment_id
-            FROM memory_compact_receipts WHERE space=${value.memorySpaceId} AND operation_id=${value.operationId}
-            UNION ALL SELECT json_extract(metadata_json,'$.revision.provenance.upsertRequestDigest') AS request_digest,origin_environment_id
-            FROM memory_events WHERE memory_space_id=${value.memorySpaceId} AND operation_id=${value.operationId} LIMIT 1`);
-          if (
-            rows[0]?.origin_environment_id !== environmentId ||
-            rows[0]?.request_digest !== requestDigest
-          )
-            return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-          // Receipt recovery precedes the new-write lineage fence and dependency reads.
-          // Never reconstruct the first operation with today's context or revive its body.
-          if (!("hubSequence" in prior.receipt)) return prior;
-          const acknowledged = prior.receipt;
-          const receipt: M.MemoryMutationReceipt = {
-            operationId: acknowledged.operationId,
-            memoryId: acknowledged.memoryId,
-            outcome: acknowledged.outcome,
-            revisionId:
-              acknowledged.outcome === "rejected"
-                ? null
-                : M.MemoryRevisionId.make(
-                    memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-                  ),
-            pendingSync: false,
-            ...(acknowledged.failureCode ? { failureCode: acknowledged.failureCode } : {}),
-            ...(acknowledged.capacity ? { capacity: acknowledged.capacity } : {}),
-            ...(acknowledged.forgetExpansion
-              ? { forgetExpansion: acknowledged.forgetExpansion }
-              : {}),
-            ...(acknowledged.forgetRetryOf ? { forgetRetryOf: acknowledged.forgetRetryOf } : {}),
-          };
-          return { operationDigest: prior.operationDigest, receipt };
-        }
-        yield* requireScope(value.scope);
-        const lineage = yield* requireCompleteLineage(value.memorySpaceId, sourceThread);
-        const revisionId = M.MemoryRevisionId.make(
-          memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-        );
-        let payload: M.MemoryPayload = yield* normalizeMemoryDependencies(
-          value.memorySpaceId,
-          redactMemoryText(value.payload),
-        ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        if (lineage) {
-          payload = yield* decode(
-            decodeSummaryPayload(
-              {
-                ...payload,
-                derivedFromMemoryRevisions: [
-                  ...new Set([...payload.derivedFromMemoryRevisions, ...lineage.revisions]),
-                ],
-              },
-              strict,
-            ),
-          );
-          yield* validateSummaryDependencies(value.memorySpaceId, payload).pipe(
-            Effect.provideService(SqlClient.SqlClient, sql),
-          );
-        }
-        const op: M.MemoryOperation = {
-          protocolVersion: 1,
-          kind: "upsert",
-          memorySpaceId: value.memorySpaceId,
-          memoryId: value.memoryId,
-          operationId: value.operationId,
-          originEnvironmentId: environmentId,
-          expectedHeads: value.expectedHeads,
-
-          revision: {
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
-            operationId: value.operationId,
-            revisionId,
-            payloadRef: revisionId,
-            parents: value.expectedHeads,
-            scope: value.scope,
-            assertionKind: value.assertionKind,
-            provenance: { environmentId, upsertRequestDigest: requestDigest },
-            createdAtUtc: M.MemoryUtcTimestamp.make(
-              DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-            ),
-          },
-          payload,
-        };
-        return yield* apply(op, Store.localIntent, permit);
-      }),
-    );
-  }, Quota.withStoreReclaim(environmentId));
+  const suggestionStore = makeMemorySaveSuggestions({
+    sql,
+    store,
+    requireSharing,
+    stableUuid: memoryStableUuid,
+  });
+  const refusedSave = yield* Effect.serviceOption(MemoryRefusedSaveHook);
+  const { upsert, stageAcceptedSuggestion } = makeUpsert({
+    onRefusedSave:
+      refusedSave._tag === "Some" ? refusedSave.value.onRefusedSave : suggestionStore.onRefusedSave,
+    sql,
+    store,
+    environmentId,
+    ...(submitFloorWrite ? { submitFloorWrite } : {}),
+    requireSharing,
+    readBoundMemoryHubId,
+    requireCaller,
+    requireScope,
+    apply,
+    stableUuid: memoryStableUuid,
+    hash,
+  });
+  const move = makeMoveMemory({
+    store,
+    sql,
+    environmentId,
+    apply: (op, permit, metadata) => apply(op, Store.localIntent, permit, undefined, metadata),
+    requireSharing,
+    ...(submitFloorWrite ? { submitFloorWrite } : {}),
+  });
   const remember = makeRemember({
     sql,
     environmentId,
     store,
     resolveProjectKey,
     upsert,
+    move,
     stableUuid: memoryStableUuid,
   });
-  const forget = Effect.fn("MemoryService.forget")(function* (
-    input: M.MemoryForgetInput,
-    permit: Permit,
-  ) {
-    const value = yield* decode(decodeForget(input, strict));
-    return yield* store
-      .transact(
-        Effect.gen(function* () {
-          yield* permit;
-          yield* requireSharing(value.memorySpaceId);
-          const current = yield* store.loadAggregate(
-            value.memorySpaceId,
-            value.memoryId,
-            {
-              when: Store.hasSourceEvidence,
-            },
-            {},
-          );
-          if (current.identity) yield* requireScope(current.identity.scope);
-          const old = yield* store.readOperation(value.memorySpaceId, value.operationId);
-          if (
-            old &&
-            (old.kind !== "forget" ||
-              old.memoryId !== value.memoryId ||
-              encodeHeads(old.expectedHeads) !== encodeHeads(value.expectedHeads))
-          )
-            return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-          if (current.tombstone && !old)
-            return {
-              operationDigest: "0".repeat(64),
-              receipt: {
-                operationId: current.tombstone.deleteOperationId,
-                memoryId: value.memoryId,
-                outcome: "noop" as const,
-                revisionId: null,
-                pendingSync: false,
-              },
-            };
-          // Lifetime evidence survives compaction and is captured before base deletion purges payloads.
-          const lineage = yield* store.readImportLineage(value.memorySpaceId, value.memoryId);
-          const suppressedSourceKeys = lineage.flatMap((r) =>
-            r.kind === "sourceKey" ? [r.sourceKey] : [],
-          );
-          const suppressedContent = lineage.flatMap((r) =>
-            r.kind === "content" ? [r.content] : [],
-          );
-          // A consolidation that rereads the same run shares its source and watermark with the
-          // summary before it; one exclusion per source keeps the tombstone's entries distinct.
-          const exclusionsBySource = new Map<string, M.MemorySourceExclusion>();
-          for (const { revision, payload } of current.revisions) {
-            const p = revision.provenance;
-            if (p.sourceThread && p.sourceWatermark) {
-              const w = p.sourceWatermark;
-              const key = [
-                p.sourceThread.environmentId,
-                p.sourceThread.threadId,
-                w.fromEventId,
-                w.toEventId,
-                w.throughSequence,
-              ].join("\u0000");
-              const messageIds = [
-                ...new Set([
-                  ...(exclusionsBySource.get(key)?.messageIds ?? []),
-                  ...(payload?.evidence ?? []).flatMap((e) => e.messageIds),
-                ]),
-              ];
-              if (messageIds.length)
-                exclusionsBySource.set(key, {
-                  sourceThread: p.sourceThread,
-                  sourceWatermark: p.sourceWatermark,
-                  messageIds,
-                });
-            }
-          }
-          // Merged ids still respect the per-exclusion bound of 100 messages.
-          const sourceExclusions = [...exclusionsBySource.values()].flatMap((exclusion) =>
-            Array.from({ length: Math.ceil(exclusion.messageIds.length / 100) }, (_, page) => ({
-              ...exclusion,
-              messageIds: exclusion.messageIds.slice(page * 100, page * 100 + 100),
-            })),
-          );
-          const op: Extract<M.MemoryOperation, { kind: "forget" }> = old ?? {
-            protocolVersion: 1,
-            kind: "forget",
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
-            operationId: value.operationId,
-            originEnvironmentId: environmentId,
-            expectedHeads: value.expectedHeads,
-            tombstone: {
-              memorySpaceId: value.memorySpaceId,
-              memoryId: value.memoryId,
-              deleteOperationId: value.operationId,
-              deletingEnvironmentId: environmentId,
-              deletedAtUtc: M.MemoryUtcTimestamp.make(
-                DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-              ),
-              suppressedSourceKeys,
-              suppressedContent,
-              sourceExclusions,
-            },
-          };
-          if (old) return yield* apply(old, Store.localIntent, permit);
-          // Every operation stays within the v1 tombstone bound. IDs and digests are immutable;
-          // the base receipt and each expansion retain their own local/remote outcome.
-          const records = [
-            ...suppressedSourceKeys.map((sourceKey) => ({ kind: "sourceKey" as const, sourceKey })),
-            ...suppressedContent.map((content) => ({ kind: "content" as const, content })),
-            ...sourceExclusions.map((exclusion) => ({ kind: "exclusion" as const, exclusion })),
-          ];
-          const operations: Extract<M.MemoryOperation, { kind: "forget" }>[] = [];
-          for (let offset = 0; offset < Math.max(1, records.length); offset += 100) {
-            const fragment = records.slice(offset, offset + 100);
-            const operationId =
-              offset === 0
-                ? value.operationId
-                : M.MemoryOperationId.make(
-                    memoryStableUuid(`${value.operationId}:lineage-fragment:${offset / 100}`),
-                  );
-            operations.push({
-              ...op,
-              operationId,
-              expectedHeads: offset === 0 ? value.expectedHeads : [],
-              tombstone: {
-                ...op.tombstone,
-                deleteOperationId: operationId,
-                suppressedSourceKeys: fragment.flatMap((r) =>
-                  r.kind === "sourceKey" ? [r.sourceKey] : [],
-                ),
-                suppressedContent: fragment.flatMap((r) =>
-                  r.kind === "content" ? [r.content] : [],
-                ),
-                sourceExclusions: fragment.flatMap((r) =>
-                  r.kind === "exclusion" ? [r.exclusion] : [],
-                ),
-              },
-            });
-          }
-          let base: Store.StoredReceipt | undefined;
-          let previous: Store.StoredReceipt | undefined;
-          for (const operation of operations) {
-            const result = yield* apply(operation, Store.localIntent, permit);
-            if (previous) {
-              const linked = yield* store.settleForgetExpansion(value.memorySpaceId, {
-                ...previous,
-                receipt: {
-                  ...previous.receipt,
-                  forgetExpansion: {
-                    requestDigest: previous.operationDigest,
-                    operationId: operation.operationId,
-                    operationDigest: result.operationDigest,
-                    status:
-                      result.receipt.outcome === "rejected"
-                        ? "rejected"
-                        : "pendingSync" in result.receipt && result.receipt.pendingSync
-                          ? "pending"
-                          : "accepted",
-                  },
-                },
-              });
-              if (previous.receipt.operationId === base?.receipt.operationId) base = linked;
-            } else base = result;
-            previous = result;
-          }
-          return base!;
-        }),
-      )
-      .pipe(
-        Effect.catchTags({
-          MemoryCapacityError: (error) =>
-            store
-              .transact(
-                Effect.gen(function* () {
-                  yield* permit;
-                  yield* store.preserveForgetIntent({
-                    memorySpaceId: value.memorySpaceId,
-                    memoryId: value.memoryId,
-                    operationId: value.operationId,
-                    requestedAtUtc: M.MemoryUtcTimestamp.make(
-                      DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-                    ),
-                    attempts: 0,
-                    lastFailureCode: "capacity_exceeded",
-                    operationDigest: null,
-                    submissionState: "unsubmitted",
-                  });
-                }),
-              )
-              .pipe(Effect.andThen(Effect.fail(error))),
-        }),
-      );
+  const forget = makeMemoryForget({
+    store,
+    environmentId,
+    requireSharing,
+    requireScope,
+    apply,
+    stableUuid: memoryStableUuid,
+    hash,
   });
-
   const retryForgetExpansion = Effect.fn("MemoryService.retryForgetExpansion")(function* (
     intent: Store.PendingForgetIntent,
   ) {
@@ -1608,35 +1459,53 @@ const make = Effect.fnUntraced(function* (
         );
         if (!original?.payload || !resolution.inputRevisionIds.includes(value.restoredRevisionId))
           return yield* refuse("revision_changed");
+        yield* validateSummaryDependencies(value.memorySpaceId, original.payload).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+        const unverified = !(yield* store.areAutomaticallyUsable(value.memorySpaceId, [
+          original.revision.revisionId,
+        ]));
+        if (unverified && !(yield* store.hubFloorActive(value.memorySpaceId)))
+          return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        const forgetFence = unverified
+          ? yield* store.readCursor(
+              value.memorySpaceId,
+              yield* readBoundMemoryHubId(value.memorySpaceId),
+            )
+          : undefined;
         const revisionId = M.MemoryRevisionId.make(memoryStableUuid(`${value.operationId}:revert`));
-        yield* store.stageRevertIntent({
-          requestDigest: hash(encodeRevert(value)),
-          operation: {
-            protocolVersion: 1,
-            kind: "revert",
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
+        const operation = {
+          protocolVersion: 1 as const,
+          ...(forgetFence === undefined ? {} : { forgetFence }),
+          kind: "revert" as const,
+          ...(current.identity?.scopeVersion
+            ? { expectedScopeVersion: current.identity.scopeVersion }
+            : {}),
+          memorySpaceId: value.memorySpaceId,
+          memoryId: value.memoryId,
+          operationId: value.operationId,
+          originEnvironmentId: environmentId,
+          expectedHeads: value.expectedHeads,
+          revertsResolutionId: value.resolutionId,
+          restoredRevisionId: value.restoredRevisionId,
+          payload: original.payload,
+          revision: {
+            ...original.revision,
+            revisionId,
             operationId: value.operationId,
-            originEnvironmentId: environmentId,
-            expectedHeads: value.expectedHeads,
-            revertsResolutionId: value.resolutionId,
-            restoredRevisionId: value.restoredRevisionId,
-            payload: original.payload,
-            revision: {
-              ...original.revision,
-              revisionId,
-              operationId: value.operationId,
-              parents: value.expectedHeads,
-              payloadRef: revisionId,
-              provenance: { environmentId },
-              createdAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(now))),
-            },
+            parents: value.expectedHeads,
+            payloadRef: revisionId,
+            provenance: { environmentId, ...(unverified ? { unverified: true as const } : {}) },
+            createdAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(now))),
           },
-        });
+        };
+        yield* requireMemoryTailFit(operation);
+        yield* store.stageRevertIntent({ requestDigest: hash(encodeRevert(value)), operation });
         return { ...result, status: "pending" as const };
       }),
     );
   });
+  const viewProjection = makeMemoryViewProjection(sql);
   const read = Effect.fn("MemoryService.read")(function* (
     input: M.MemoryReadInput,
     permit: Permit,
@@ -1655,7 +1524,11 @@ const make = Effect.fnUntraced(function* (
           sourceThread,
           current.item.status === "active" ? [current.item] : [],
         );
-        return current.item;
+        return yield* viewProjection.item(
+          current.item,
+          value.includeMarks,
+          value.includeScopeVersion,
+        );
       }),
     );
   });
@@ -1676,13 +1549,14 @@ const make = Effect.fnUntraced(function* (
             ? `repository:${scope.projectKey.groupingKey}`
             : `explicit:${scope.projectKey.sharedProjectId}`;
     const normalizedQuery = "query" in input ? input.query.normalize("NFC").trim() : undefined;
+    const originKey = input.origin ? yield* decode(encodeSourceThread(input.origin)) : undefined;
     const binding =
-      "query" in input
+      "query" in input || originKey
         ? {
             memorySpaceId: input.memorySpaceId,
-            queryDigest: NodeCrypto.createHash("sha256").update(normalizedQuery!).digest("hex"),
-            mode: input.mode,
-            scopeKey: NodeCrypto.createHash("sha256").update(scopeKey).digest("hex"),
+            queryDigest: hash(normalizedQuery ?? ""),
+            mode: "mode" in input ? input.mode : ("fts" as const),
+            scopeKey: hash(originKey ? `${scopeKey.length}:${scopeKey}:${originKey}` : scopeKey),
           }
         : undefined;
     const cursor = input.cursor
@@ -1734,6 +1608,7 @@ const make = Effect.fnUntraced(function* (
           scope,
           limit: input.limit,
           ...(cursor ? { afterMemoryId: cursor } : {}),
+          ...(input.origin ? { origin: input.origin } : {}),
         };
         const coverage = "query" in input ? yield* store.searchCoverage(filter) : undefined;
         const searched =
@@ -1743,33 +1618,40 @@ const make = Effect.fnUntraced(function* (
         if ("query" in input && input.mode === "substring" && !coverage?.ready)
           return yield* new Store.MemoryStoreConflict({ code: "unavailable" });
         let items = "query" in input ? (searched?.items ?? []) : yield* store.list(filter);
-        let nextCursor =
+        const encodeCursor = (id: M.MemoryId) =>
+          binding ? M.encodeMemorySearchCursor(binding, id) : id;
+        const continuation =
           "query" in input
-            ? searched && !searched.exhausted && searched.examinedAfterMemoryId
-              ? M.encodeMemorySearchCursor(binding!, searched.examinedAfterMemoryId)
+            ? searched && !searched.exhausted
+              ? searched.examinedAfterMemoryId
               : null
             : items.length === input.limit
-              ? (items.at(-1)?.memoryId ?? null)
+              ? items.at(-1)?.memoryId
               : null;
-        if (!("query" in input)) {
+        let nextCursor = continuation ? encodeCursor(continuation) : null;
+        let visible = yield* Effect.forEach(items, (item) =>
+          viewProjection.item(item, input.includeMarks, input.includeScopeVersion),
+        );
+        if (!("query" in input) || input.includeMarks || input.includeScopeVersion) {
           let bytes = 2048;
-          const bounded: M.MemoryItem[] = [];
-          for (const item of items) {
+          for (const [index, item] of visible.entries()) {
             const encoded = yield* query(encodePageItem(item));
             const size = new TextEncoder().encode(encoded).length + 1;
             if (bytes + size > M.MEMORY_PAGE_MAX_UTF8_BYTES) {
-              if (!bounded.length)
-                return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
-              nextCursor = bounded.at(-1)!.memoryId;
+              const last = visible[index - 1]?.memoryId;
+              if (!last) return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
+              nextCursor = encodeCursor(last);
+              items = items.slice(0, index);
+              visible = visible.slice(0, index);
               break;
             }
             bytes += size;
-            bounded.push(item);
           }
-          items = bounded;
         }
-        if ("includeQuarantined" in input && !input.includeQuarantined)
-          items = items.filter((i) => i.status !== "quarantined");
+        if ("includeQuarantined" in input && !input.includeQuarantined) {
+          items = items.filter((item) => item.status !== "quarantined");
+          visible = visible.filter((item) => item.status !== "quarantined");
+        }
         const rows = yield* query(
           sql<{
             watermark: number;
@@ -1792,7 +1674,7 @@ const make = Effect.fnUntraced(function* (
         );
         return yield* checkedPage(
           {
-            items,
+            items: visible,
             projectionWatermark: state.watermark,
             nextCursor,
             ...("query" in input
@@ -1813,7 +1695,7 @@ const make = Effect.fnUntraced(function* (
                 }
               : {}),
           },
-          items,
+          visible,
         );
       }),
     );
@@ -1851,7 +1733,7 @@ const make = Effect.fnUntraced(function* (
             resolutionInputsFor: value.resolutionInputsFor,
           });
           yield* permit;
-          yield* consume(value.memorySpaceId, sourceThread, result.page.revisions);
+          yield* consume(value.memorySpaceId, sourceThread, result.consumed);
           return result.page;
         }
         const { page, consumed } = yield* store.historyPage(value, current.item, environmentId);
@@ -1864,7 +1746,7 @@ const make = Effect.fnUntraced(function* (
   const reconnectParked = Effect.fn("MemoryService.reconnectParked")(function* (
     op: M.MemoryOperation,
   ) {
-    if (op.kind === "forget") return false;
+    if (!M.isMemoryRevisionOperation(op)) return false;
     return yield* store.transact(
       Effect.gen(function* () {
         const current = yield* store.loadAggregate(
@@ -1897,7 +1779,8 @@ const make = Effect.fnUntraced(function* (
     store,
     sql,
     environmentId,
-    apply,
+    apply: (operation, admission, permit, prerequisite) =>
+      apply(operation, admission, permit, undefined, prerequisite),
     validateDependencies: (space, payload) =>
       validateSummaryDependencies(space, payload).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
@@ -1913,6 +1796,32 @@ const make = Effect.fnUntraced(function* (
       return yield* new Store.MemoryStoreConflict({ code: "unsupported_operation" });
     yield* store.transact(store.enqueueWork(work));
   });
+  const automaticallyUsableCandidates = Effect.fn("MemoryService.automaticCandidates")(function* (
+    space: M.MemorySpaceId,
+    items: readonly M.MemoryItem[],
+  ) {
+    const selected: M.MemoryContextCandidate[] = [];
+    for (const item of items) {
+      if (
+        item.status !== "active" ||
+        item.localAvailability.exposure !== "visible" ||
+        !(yield* store.areAutomaticallyUsable(space, [item.revision.revisionId]))
+      )
+        continue;
+      const [identity] = yield* query(sql<{ scope_version: number }>`
+        SELECT scope_version FROM memory_identity_ledger WHERE space=${space} AND memory_id=${item.memoryId}`);
+      selected.push({
+        ...(identity?.scope_version ? { scopeVersion: identity.scope_version } : {}),
+        memoryId: item.memoryId,
+        revisionId: item.revision.revisionId,
+        scope: item.scope,
+        provenance: item.revision.provenance,
+        assertionKind: item.revision.assertionKind,
+        text: item.payload.text,
+      });
+    }
+    return selected;
+  });
   const readContextCandidates = Effect.fn("MemoryService.readContextCandidates")(function* (
     input: M.MemoryListInput,
     permit: Permit,
@@ -1922,20 +1831,7 @@ const make = Effect.fnUntraced(function* (
       memorySpaceId: input.memorySpaceId,
       projectionWatermark: result.projectionWatermark,
       nextCursor: result.nextCursor,
-      items: result.items.flatMap((i) =>
-        i.status === "active" && i.localAvailability.exposure === "visible"
-          ? [
-              {
-                memoryId: i.memoryId,
-                revisionId: i.revision.revisionId,
-                scope: i.scope,
-                provenance: i.revision.provenance,
-                assertionKind: i.revision.assertionKind,
-                text: i.payload.text,
-              },
-            ]
-          : [],
-      ),
+      items: yield* automaticallyUsableCandidates(input.memorySpaceId, result.items),
     };
   });
   const readContextRevisions = Effect.fn("MemoryService.readContextRevisions")(function* (
@@ -1961,26 +1857,14 @@ const make = Effect.fnUntraced(function* (
           memorySpaceId: space,
           projectionWatermark: rows[0]?.watermark ?? 0,
           nextCursor: null,
-          items: items.flatMap((i) =>
-            i.status === "active" && i.localAvailability.exposure === "visible"
-              ? [
-                  {
-                    memoryId: i.memoryId,
-                    revisionId: i.revision.revisionId,
-                    scope: i.scope,
-                    provenance: i.revision.provenance,
-                    assertionKind: i.revision.assertionKind,
-                    text: i.payload.text,
-                  },
-                ]
-              : [],
-          ),
+          items: yield* automaticallyUsableCandidates(space, items),
         };
       }),
     );
   });
   const sourceLocator = Effect.fn("MemoryService.sourceLocator")(function* (
     input: M.MemoryReadSourceInput,
+    requesterEnvironmentId = environmentId,
   ) {
     const aggregate = yield* store.loadAggregate(
       input.memorySpaceId,
@@ -1990,8 +1874,13 @@ const make = Effect.fnUntraced(function* (
     );
     if (aggregate.tombstone || aggregate.pendingForget)
       return yield* new Store.MemoryStoreConflict({ code: "forgotten" });
-    if (!aggregate.item || aggregate.item.localAvailability.exposure !== "visible")
+    if (
+      !aggregate.identity ||
+      !aggregate.item ||
+      aggregate.item.localAvailability.exposure !== "visible"
+    )
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+    yield* requireScope(aggregate.identity.scope, requesterEnvironmentId);
     const thread = yield* decode(encodeSourceThread(input.sourceThread));
     for (const pair of aggregate.revisions) {
       const provenance = pair.revision.provenance;
@@ -2019,6 +1908,7 @@ const make = Effect.fnUntraced(function* (
       if (input.messageIds.every((id) => evidence.has(id)))
         return {
           generation: aggregate.generation,
+          scopeVersion: aggregate.identity.scopeVersion,
           sourceWatermark: provenance.sourceWatermark,
           pair,
         };
@@ -2027,12 +1917,12 @@ const make = Effect.fnUntraced(function* (
   });
   const prepareSourceRead: MemoryService["Service"]["prepareSourceRead"] = Effect.fn(
     "MemoryService.prepareSourceRead",
-  )(function* (input, permit) {
+  )(function* (input, permit, requesterEnvironmentId) {
     const value = yield* decode(decodeReadSource(input, strict));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
-        const locator = yield* sourceLocator(value);
+        const locator = yield* sourceLocator(value, requesterEnvironmentId);
         const encoded = yield* decode(encodeReadSource(value));
         return {
           generation: locator.generation,
@@ -2040,6 +1930,7 @@ const make = Effect.fnUntraced(function* (
             ...value,
             protocolVersion: 1 as const,
             sourceWatermark: locator.sourceWatermark,
+            ...(locator.scopeVersion === undefined ? {} : { scopeVersion: locator.scopeVersion }),
             requestId: M.MemorySourceReadRequestId.make(
               memoryStableUuid(`${environmentId}:${locator.generation}:${encoded}`),
             ),
@@ -2070,6 +1961,7 @@ const make = Effect.fnUntraced(function* (
         });
         if (
           locator.generation !== input.request.generation ||
+          locator.scopeVersion !== request.scopeVersion ||
           (yield* decode(encodeSourceWatermark(locator.sourceWatermark))) !==
             (yield* decode(encodeSourceWatermark(request.sourceWatermark)))
         )
@@ -2149,13 +2041,36 @@ const make = Effect.fnUntraced(function* (
       op.originEnvironmentId !== member.environmentId
     )
       return yield* new M.MemoryHubForbiddenError({});
+    const active = input.authority.negotiateFloor
+      ? yield* input.authority.negotiateFloor
+      : yield* store.hubFloorActive(op.memorySpaceId);
     const digest = memoryOperationDigest(op);
     const replay = yield* store.readHubReceiptTx(op.memorySpaceId, op.operationId);
     if (replay) {
-      if (replay.entry.receipt.operationDigest !== digest)
+      const retained = replay.entry.kind === "operation" ? replay.entry.operation : undefined;
+      if (
+        (retained?.kind === "upsert" &&
+          op.kind === "upsert" &&
+          retained.closedLineage !== op.closedLineage) ||
+        (replay.entry.receipt.operationDigest !== digest &&
+          (!retained ||
+            memoryOperationDigest(retained) !== digest ||
+            replay.entry.receipt.operationDigest !== legacyClosedLineageDigest(op)))
+      )
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
+    if (input.authority.beforeAdmission) yield* input.authority.beforeAdmission;
+    if (M.requiresMemoryFloor2(op) && !active)
+      return {
+        operationId: op.operationId,
+        memoryId: op.memoryId,
+        operationDigest: digest,
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "hub_upgrade_required",
+        upgradeRequiredMembers: yield* store.blockingMembers(op.memorySpaceId),
+      };
     // Resolve recomputes lineage from its input payloads; the decider needs heads and restored.
     const current = yield* store.loadAggregate(
       op.memorySpaceId,
@@ -2171,7 +2086,7 @@ const make = Effect.fnUntraced(function* (
                   ? [op.restoredRevisionId]
                   : [],
           },
-      op.kind === "forget"
+      !M.isMemoryRevisionOperation(op)
         ? {}
         : {
             ...(op.kind === "revert" ? { resolutionId: op.revertsResolutionId } : {}),
@@ -2183,6 +2098,38 @@ const make = Effect.fnUntraced(function* (
     );
     // Only the read-only semantic decision is caught; every subsequent write can fail the outer transaction.
     const prepared = yield* Effect.gen(function* () {
+      if (
+        M.isMemoryRevisionOperation(op) &&
+        (op.forgetFence !== undefined || op.revision.provenance.unverified)
+      )
+        yield* store.checkForgetFence(op.memorySpaceId, op.forgetFence);
+      if (
+        M.isMemoryRevisionOperation(op) &&
+        op.revision.provenance.originThreadId &&
+        (op.revision.provenance.environmentId !== op.originEnvironmentId ||
+          (current.identity && current.identity.creatingEnvironmentId !== op.originEnvironmentId) ||
+          (current.identity?.origin &&
+            current.identity.origin.threadId !== op.revision.provenance.originThreadId))
+      )
+        return yield* new M.MemoryHubError({ code: "identity_mismatch" });
+      if (
+        active &&
+        M.isMemoryRevisionOperation(op) &&
+        op.kind !== "resolve" &&
+        !op.revision.provenance.unverified &&
+        !(yield* store.areAutomaticallyUsable(
+          op.memorySpaceId,
+          op.kind === "revert" ? [op.restoredRevisionId] : op.expectedHeads,
+        ))
+      )
+        return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+      if (
+        op.kind === "move" &&
+        [op.fromScope, op.toScope].some(
+          (scope) => scope.kind === "thread" && scope.thread.environmentId !== member.environmentId,
+        )
+      )
+        return yield* new M.MemoryHubError({ code: "identity_mismatch" });
       yield* requireImportNotSuppressed(op);
       if (op.kind !== "forget" && current.pendingForget)
         return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
@@ -2222,10 +2169,16 @@ const make = Effect.fnUntraced(function* (
         );
         if (inputs.length !== op.expectedHeads.length || inputs.some((pair) => !pair.payload))
           return yield* new Store.MemoryStoreConflict({ code: "missing_parent" });
+        if (!(yield* store.areAutomaticallyUsable(op.memorySpaceId, op.expectedHeads)))
+          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         const inherited = inputs.flatMap((pair) => pair.payload!.derivedFromMemoryRevisions);
         const dependencies = [...new Set([...op.expectedHeads, ...inherited])];
         // Recompute from authoritative payloads inside the admission transaction. A
         // member may neither omit inherited lineage nor race an external forget.
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(op.memorySpaceId).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload({ ...op.payload, derivedFromMemoryRevisions: dependencies }, strict),
         );
@@ -2251,7 +2204,11 @@ const make = Effect.fnUntraced(function* (
         };
       } else if (input.resolutionRequest)
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
-      if (op.kind !== "forget") {
+      if (op.kind === "upsert" && op.closedLineage)
+        yield* validateSummaryDependencies(op.memorySpaceId, op.payload).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+      else if (M.isMemoryRevisionOperation(op)) {
         const normalized = yield* normalizeMemoryDependencies(
           op.memorySpaceId,
           op.payload,
@@ -2266,10 +2223,9 @@ const make = Effect.fnUntraced(function* (
         )
           return yield* invalid();
       }
-      const ancestry =
-        op.kind === "forget"
-          ? undefined
-          : yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
+      const ancestry = !M.isMemoryRevisionOperation(op)
+        ? undefined
+        : yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
       const decision = yield* Effect.try({
         try: () =>
           decideMemoryOperation(
@@ -2311,6 +2267,7 @@ const make = Effect.fnUntraced(function* (
       return ledger.entry.receipt;
     }
     const { decision, approval } = prepared;
+    if (op.kind !== "forget") yield* requireMemoryTailFit(op, approval);
     return yield* quota.withAdmission(
       { operation: op, admission: Store.hubAdmission, environmentId, receipt: decision.receipt },
       Effect.gen(function* () {
@@ -2372,6 +2329,7 @@ const make = Effect.fnUntraced(function* (
                 input.operation.originEnvironmentId !== member.environmentId
               )
                 return yield* new M.MemoryHubForbiddenError({});
+              if (input.authority.negotiateFloor) yield* input.authority.negotiateFloor;
               const digest = memoryOperationDigest(input.operation);
               const replay = yield* store.readHubReceiptTx(
                 input.operation.memorySpaceId,
@@ -2413,7 +2371,7 @@ const make = Effect.fnUntraced(function* (
     if (
       entry.kind === "operation" &&
       (entry.operation.memorySpaceId !== input.memorySpaceId ||
-        memoryOperationDigest(entry.operation) !== entry.receipt.operationDigest)
+        !matchesMemoryOperationDigest(entry.operation, entry.receipt.operationDigest))
     )
       return yield* invalid();
     const old = yield* store.receipt(input.memorySpaceId, entry.receipt.operationId);
@@ -2458,6 +2416,12 @@ const make = Effect.fnUntraced(function* (
       work.metadata.operationId === entry.receipt.operationId
     )
       yield* store.acknowledgeOutbox(work.id, entry.receipt);
+    yield* settleMemorySuggestion(
+      sql,
+      input.memorySpaceId,
+      entry.receipt,
+      input.workId === undefined ? "ordered" : "acknowledgement",
+    );
     return {
       receipt: entry.receipt,
       incorporated,
@@ -2483,163 +2447,60 @@ const make = Effect.fnUntraced(function* (
     }
     if (previous !== page.throughSequence || page.throughSequence < input.expectedSequence)
       return yield* new Store.MemoryStoreConflict({ code: "invalid_cursor" });
-    return yield* store.transact(
+    const settled = yield* store.transact(
       Effect.gen(function* () {
         yield* input.reauthorize;
+        if (page.upgradeRequiredMembers)
+          yield* store.rememberUpgradeBlockers(
+            input.memorySpaceId,
+            input.hubEnvironmentId,
+            page.upgradeRequiredMembers,
+          );
+        if (page.derivedCap)
+          yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);
-        if (current >= page.throughSequence) return [];
-        return yield* store.withReceivedCursor(
-          {
-            memorySpaceId: input.memorySpaceId,
-            hubEnvironmentId: input.hubEnvironmentId,
-            expectedSequence: input.expectedSequence,
-            afterSequence: page.throughSequence,
-          },
-          Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
+        return current >= page.throughSequence
+          ? []
+          : yield* store.withReceivedCursor(
+              {
+                memorySpaceId: input.memorySpaceId,
+                hubEnvironmentId: input.hubEnvironmentId,
+                expectedSequence: input.expectedSequence,
+                afterSequence: page.throughSequence,
+              },
+              Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
+            );
+      }),
+    );
+    if (page.originPage && input.afterOriginSequence !== undefined)
+      yield* store
+        .transact(
+          input.reauthorize.pipe(
+            Effect.andThen(
+              store.receiveOriginPageTx(
+                input.memorySpaceId,
+                input.hubEnvironmentId,
+                input.afterOriginSequence,
+                page.originPage,
+              ),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.catchTags({
+            MemoryStoreConflict: (error) =>
+              Effect.logWarning("Memory origin catch-up was refused", error.code),
+            MemoryStorageError: (error) =>
+              Effect.logWarning("Memory origin catch-up could not be installed", error.stage),
+          }),
         );
-      }),
-    );
+    return settled;
   });
-  const reconcileResolutionSubmission: MemoryService["Service"]["reconcileResolutionSubmission"] =
-    Effect.fn("MemoryService.reconcileResolutionSubmission")(function* (input) {
-      return yield* store.transact(
-        Effect.gen(function* () {
-          yield* input.reauthorize;
-          const result = yield* store.reconcileResolutionSubmissionTx(input);
-          if (!result || result.outcome !== "admitted") return result;
-          const operation = result.row.submission!.operation;
-          yield* settleHubEntryTx({
-            memorySpaceId: input.ownership.memorySpaceId,
-            hubEnvironmentId: input.hubEnvironmentId,
-            localEnvironmentId: input.localEnvironmentId,
-            entry: {
-              kind: "operation",
-              operation,
-              receipt: result.receipt,
-              hubSequence: result.receipt.hubSequence!,
-            },
-          });
-          yield* input.reauthorize;
-          const row = yield* store.transitionResolutionTicketTx({
-            ownership: { ...input.ownership, version: result.row.version },
-            now: input.now,
-            nextState: "terminal",
-            ownedUntil: null,
-            nextAttemptAt: input.now,
-          });
-          if (!row) return yield* new Store.MemoryStoreConflict({ code: "fenced" });
-          return { ...result, row };
-        }),
-      );
-    });
-  const settleHubAcknowledgement: MemoryService["Service"]["settleHubAcknowledgement"] = Effect.fn(
-    "MemoryService.settleHubAcknowledgement",
-  )(function* (input) {
-    const receipt = yield* decode(decodeHubReceipt(input.receipt, strict));
-    return yield* store.transact(
-      Effect.gen(function* () {
-        yield* input.reauthorize;
-        const work = yield* store.readWork(input.workId);
-        if (
-          !work ||
-          work.space !== input.memorySpaceId ||
-          !("operationId" in work.metadata) ||
-          work.metadata.operationId !== input.operation.operationId ||
-          receipt.operationId !== input.operation.operationId ||
-          receipt.operationDigest !== input.operation.operationDigest ||
-          work.memoryId !== receipt.memoryId
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-        const stored = yield* store.receipt(input.memorySpaceId, input.operation.operationId);
-        const operation = yield* store.readWorkOperation(input.workId);
-        if (
-          (stored && stored.operationDigest !== input.operation.operationDigest) ||
-          (operation && memoryOperationDigest(operation) !== input.operation.operationDigest)
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-        if (!stored && !operation)
-          return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-        if (receipt.hubSequence === null) {
-          if (receipt.outcome !== "rejected") return yield* invalid();
-          yield* store.acknowledgeOutbox(input.workId, receipt);
-          return {
-            receipt,
-            incorporated: false,
-            intent: work.kind === "revert_intent" ? ("rejected" as const) : ("none" as const),
-          };
-        }
-        if (
-          !M.validateMemoryResolutionApproval(
-            work.metadata.kind === "resolve" ? "resolve" : (operation?.kind ?? "upsert"),
-            operation?.kind === "resolve"
-              ? operation.resolution.resolutionId
-              : work.metadata.kind === "resolve"
-                ? work.metadata.resolution?.resolutionId
-                : null,
-            receipt,
-          )
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
-        if (operation)
-          return yield* settleHubEntryTx({
-            ...input,
-            entry: { kind: "operation", operation, receipt, hubSequence: receipt.hubSequence },
-          });
-        if (!("protocolVersion" in work.metadata)) return yield* invalid();
-        const meta = work.metadata;
-        const resolutionId =
-          meta.kind === "resolve"
-            ? meta.resolution?.resolutionId
-            : meta.kind === "revert"
-              ? meta.revertsResolutionId
-              : null;
-        const compactReceipt: M.MemoryCompactReceipt = {
-          memorySpaceId: input.memorySpaceId,
-          originEnvironmentId: meta.originEnvironmentId,
-          operationKind: meta.kind,
-          ...(meta.kind === "upsert" && meta.revision?.provenance.upsertRequestDigest !== undefined
-            ? { upsertRequestDigest: meta.revision.provenance.upsertRequestDigest }
-            : {}),
-          receipt,
-          revisionId:
-            receipt.outcome === "rejected" || meta.kind === "forget"
-              ? null
-              : (meta.revision?.revisionId ?? null),
-          resolutionId: resolutionId ?? null,
-          revertsResolutionId: meta.kind === "revert" ? (resolutionId ?? null) : null,
-          attemptId: meta.kind === "resolve" ? meta.operationId : null,
-          fencingToken: meta.kind === "resolve" ? (meta.fencingToken ?? null) : null,
-          reportGuard:
-            resolutionId && receipt.outcome !== "rejected"
-              ? {
-                  reportId: Store.resolutionReportId(
-                    input.memorySpaceId,
-                    meta.operationId,
-                    resolutionId,
-                  ),
-                  resolvingEnvironmentId: meta.originEnvironmentId,
-                  resolutionId,
-                  outcome: meta.kind === "resolve" ? "resolved" : "reverted",
-                }
-              : null,
-        };
-        return yield* settleHubEntryTx({
-          ...input,
-          entry: {
-            kind: "metadata",
-            operationKind: work.metadata.kind,
-            compactReceipt,
-            ...(meta.revision ? { revision: meta.revision } : {}),
-            memoryId: receipt.memoryId,
-            receipt,
-            hubSequence: receipt.hubSequence,
-            ...(work.metadata.kind === "resolve" && work.metadata.resolution
-              ? { resolutionId: work.metadata.resolution.resolutionId }
-              : {}),
-          },
-        });
-      }),
-    );
+  const { reconcileResolutionSubmission, settleHubAcknowledgement } = makeHubAcknowledgement({
+    store,
+    settleHubEntryTx,
+    settleSuggestion: (space, receipt) =>
+      settleMemorySuggestion(sql, space, receipt, "acknowledgement"),
   });
   return MemoryService.of({
     consumeReturned: (space, thread, pairs) =>
@@ -2657,6 +2518,7 @@ const make = Effect.fnUntraced(function* (
     readSource,
     prepareSourceRead,
     validateSourceOutcome,
+    applyOriginUpdatesTx: (input, updates) => publishMemoryOriginUpdatesTx(sql, input, updates),
     admitHubOperation,
     admitHubOperationTx,
     settleHubEntryTx,
@@ -2669,8 +2531,15 @@ const make = Effect.fnUntraced(function* (
     resolveProjectKey,
     changes,
     upsert,
+    acceptSuggestionWrite: stageAcceptedSuggestion,
     remember,
+    move,
     forget,
+    listSuggestions: suggestionStore.list,
+    listSuggestionMetadata: suggestionStore.listMetadata,
+    acceptSuggestion: (input, permit) =>
+      suggestionStore.accept(input, permit, stageAcceptedSuggestion),
+    dismissSuggestion: suggestionStore.dismiss,
     retryForgetExpansion,
     revertResolution,
     read,
@@ -2708,5 +2577,7 @@ const make = Effect.fnUntraced(function* (
 });
 export const layer = Layer.effect(MemoryService, make());
 /** Bind an application-owned callback, without importing Sync or constructing a cyclic layer. */
-export const layerWithSourceReadAuthority = (authority: MemorySourceReadAuthority["readSource"]) =>
-  Layer.effect(MemoryService, make(authority));
+export const layerWithSourceReadAuthority = (
+  authority: MemorySourceReadAuthority["readSource"],
+  submitFloorWrite?: Effect.Effect<void, MemoryServiceError>,
+) => Layer.effect(MemoryService, make(authority, submitFloorWrite));

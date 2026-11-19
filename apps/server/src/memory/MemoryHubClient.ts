@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -12,7 +13,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Secrets from "../auth/ServerSecretStore.ts";
-import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { sourceReadInput, sourceReadLocatorDigest } from "./MemoryOwnerSourceReader.ts";
 import * as Settings from "../serverSettings.ts";
 
@@ -62,6 +63,7 @@ export class MemoryHubClient extends Context.Service<
     readonly push: (
       connection: HubConnection,
       input: M.MemoryHubPushInput,
+      prepare?: Effect.Effect<M.MemoryHubPushInput, HubClientFailure>,
     ) => Effect.Effect<M.MemoryHubPushResult, HubClientFailure>;
     readonly pull: (
       connection: HubConnection,
@@ -105,6 +107,8 @@ export class MemoryHubClient extends Context.Service<
 
 const make = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
+  const floorEnabled = yield* MemoryFloor2Enabled;
+  const floor = memoryFloorAdvertisement(floorEnabled);
   const secrets = yield* Secrets.ServerSecretStore;
   const settings = yield* Settings.ServerSettingsService;
 
@@ -223,18 +227,27 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const call = <I, IE, O, OE>(
+  const call = <I extends { features?: readonly M.MemoryFloor2Feature[] }, IE, O, OE>(
     path: string,
     inputSchema: Schema.Codec<I, IE>,
     outputSchema: Schema.Codec<O, OE>,
     validate: (connection: HubConnection, input: I, output: O) => boolean = () => true,
+    needsFloor: (input: I) => boolean = () => false,
   ) => {
     const encode = Schema.encodeEffect(Schema.fromJsonString(inputSchema));
     const decode = Schema.decodeUnknownEffect(outputSchema);
     return (connection: HubConnection, input: I, prepare?: Effect.Effect<I, HubClientFailure>) =>
       bounded(
         Effect.gen(function* () {
-          yield* preflightOnce(connection);
+          const descriptor = yield* preflightOnce(connection);
+          const advertised = descriptor.capabilities.memory?.derivedCap === 1000;
+          if (
+            ((!advertised || !floorEnabled) && needsFloor(input)) ||
+            ("originUpdates" in input &&
+              input.originUpdates !== undefined &&
+              descriptor.capabilities.memory?.originUpdates !== true)
+          )
+            return yield* new M.MemoryHubError({ code: "hub_upgrade_required" });
           const credential = yield* secrets
             .get(connection.secretName)
             .pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
@@ -245,7 +258,14 @@ const make = Effect.gen(function* () {
           yield* ensureEpoch(connection);
           // Descriptor/credential waits are complete. Revalidate source for each attempt.
           const prepared = prepare ? yield* prepare : input;
-          const body = yield* encode(prepared).pipe(
+          const wire = { ...prepared };
+          delete wire.features;
+          if (
+            descriptor.capabilities.memory?.originCatchup !== true &&
+            "afterOriginSequence" in wire
+          )
+            delete (wire as { afterOriginSequence?: number }).afterOriginSequence;
+          const body = yield* encode(advertised ? { ...wire, ...floor } : wire).pipe(
             Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
           );
           if (new TextEncoder().encode(body).length > RESPONSE_MAX_BYTES)
@@ -288,15 +308,17 @@ const make = Effect.gen(function* () {
           return (
             operation !== undefined &&
             r.operationId === operation.operationId &&
-            r.operationDigest === memoryOperationDigest(operation)
+            matchesMemoryOperationDigest(operation, r.operationDigest)
           );
         }),
+      (input) => input.originUpdates !== undefined || input.operations.some(M.requiresMemoryFloor2),
     ),
     pull: call(
       M.MEMORY_HUB_PATHS.pull,
       M.MemoryHubPullInput,
       M.MemoryHubPullResult,
       (_c, i, o) =>
+        (o.derivedCap === undefined || floorEnabled) &&
         (i.highWatermark === undefined || i.highWatermark === o.highWatermark) &&
         (o.checkpoint === undefined || o.checkpoint.memorySpaceId === i.memorySpaceId),
     ),
@@ -309,6 +331,7 @@ const make = Effect.gen(function* () {
       (_c, i, o) =>
         o.operationId === i.operation.operationId &&
         o.operationDigest === memoryOperationDigest(i.operation),
+      (input) => M.requiresMemoryFloor2(input.operation),
     ),
     release: call(M.MEMORY_HUB_PATHS.release, M.MemoryHubReleaseInput, M.MemoryHubReleaseResult),
     requestSourceRead: call(

@@ -10,6 +10,8 @@ import {
   migrationManifest,
   runMigrations,
 } from "./Migrations.ts";
+import firstBindMigration from "./Migrations/166_ScheduledTaskFirstBindIntent.ts";
+import { migrationLedgerProblem } from "./migrationPreflight.ts";
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 import {
   currentRow,
@@ -37,10 +39,17 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.slice(-2), [
-        [158, "AuthSessionPenMember"],
-        [159, "ScheduledTaskFirstBindIntent"],
-      ]);
+      assert.deepStrictEqual(
+        migrationManifest.filter(([id]) => id === 158 || id === 166),
+        [
+          [158, "AuthSessionPenMember"],
+          [166, "ScheduledTaskFirstBindIntent"],
+        ],
+      );
+      assert.deepStrictEqual(
+        migrationManifest.find(([id]) => id === 165),
+        [165, "MemorySuggestionQuota"],
+      );
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -64,7 +73,7 @@ describe("GOAT migrations after upstream 080-089", () => {
           [156, "DisposableMachineRequests"],
           [157, "DisposableMachineEnrollment"],
           [158, "AuthSessionPenMember"],
-          [159, "ScheduledTaskFirstBindIntent"],
+          [166, "ScheduledTaskFirstBindIntent"],
         ]);
         assert.deepStrictEqual(yield* userData, before);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -90,10 +99,56 @@ describe("GOAT migrations after upstream 080-089", () => {
       assert.isTrue(yield* hasPendingMigrations());
       assert.deepStrictEqual(yield* reconcileGoatMigrationIds(migrationEntries), []);
       assert.deepStrictEqual(yield* history, nightlyLedger);
-      assert.deepStrictEqual(yield* runMigrations(), [[159, "ScheduledTaskFirstBindIntent"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [159, "MemoryThreadLineage"],
+        [160, "MemorySaveSuggestions"],
+        [161, "MemoryHubFloor"],
+        [162, "MemoryScopeVersion"],
+        [163, "MemoryCompactMoveReceipts"],
+        [164, "MemoryOriginCatchup"],
+        [165, "MemorySuggestionQuota"],
+        [166, "ScheduledTaskFirstBindIntent"],
+      ]);
       assert.deepStrictEqual(yield* snapshot, yield* fresh);
       assert.isFalse(yield* hasPendingMigrations());
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "moves the integration build's applied first-bind migration and fills the memory gap",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 158 });
+        yield* firstBindMigration;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (159, 'ScheduledTaskFirstBindIntent')`;
+        const nightlyLedger = yield* history;
+        const broken = yield* failingAfterWork(165);
+        yield* Effect.flip(reconcileGoatMigrationIds(broken));
+        assert.deepStrictEqual(yield* history, nightlyLedger);
+        assert.isUndefined(
+          migrationLedgerProblem(
+            {
+              history: nightlyLedger.map(([migration_id, name]) => ({ migration_id, name })),
+              hasMemoryTables: true,
+            },
+            "test",
+          ),
+        );
+        assert.deepStrictEqual(yield* runMigrations(), [
+          [159, "MemoryThreadLineage"],
+          [160, "MemorySaveSuggestions"],
+          [161, "MemoryHubFloor"],
+          [162, "MemoryScopeVersion"],
+          [163, "MemoryCompactMoveReceipts"],
+          [164, "MemoryOriginCatchup"],
+          [165, "MemorySuggestionQuota"],
+        ]);
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("an upgrade stopped after reconciliation resumes with the remaining migrations", () =>
@@ -150,16 +205,16 @@ describe("GOAT migrations after upstream 080-089", () => {
   );
 
   it.effect(
-    "the previous build refuses a database this build migrated and leaves it unchanged",
+    "the pre-shift build refuses a database migrated through the shift and leaves it unchanged",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations();
+        yield* runMigrations({ toMigrationInclusive: 157 });
         const before = yield* history;
         const tables = yield* schema;
         // The previous build's manifest: no upstream 080-089, GOAT ten ids lower.
         const upstream80s = new Set(UPSTREAM_80S.map(([, name]) => name));
         const previousEntries = migrationEntries.flatMap(([id, name, migration]) =>
-          upstream80s.has(name)
+          upstream80s.has(name) || id > 157
             ? []
             : [[GOAT_MIGRATION_NAMES.has(name) ? id - 10 : id, name, migration] as const],
         );

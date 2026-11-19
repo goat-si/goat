@@ -47,13 +47,17 @@ export const sourceReadInput = (
   requestId: request.requestId,
   sourceThread: request.sourceThread,
   sourceWatermark: request.sourceWatermark,
+  ...(request.scopeVersion === undefined ? {} : { scopeVersion: request.scopeVersion }),
   messageIds: request.messageIds,
   limit: request.limit,
   ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
   authorizedScopes: request.authorizedScopes,
 });
-export const sourceReadLocatorDigest = (input: M.MemoryHubSourceReadRequestInput) =>
-  NodeCrypto.createHash("sha256").update(encodeInput(input)).digest("hex");
+export const sourceReadLocatorDigest = ({
+  features: _features,
+  ...locator
+}: M.MemoryHubSourceReadRequestInput) =>
+  NodeCrypto.createHash("sha256").update(encodeInput(locator)).digest("hex");
 const denied = Effect.fail(new Service.MemoryAccessError({ code: "route_unavailable" }));
 const strict = { onExcessProperty: "error" } as const;
 const decodeRequest = Schema.decodeUnknownEffect(M.MemorySourceReadRequest);
@@ -168,10 +172,15 @@ const make = Effect.gen(function* () {
           limit: request.limit,
           ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
         };
-        const before = yield* service.prepareSourceRead(input, fence);
+        const before = yield* service.prepareSourceRead(
+          input,
+          fence,
+          request.requesterEnvironmentId,
+        );
         if (
+          before.request.scopeVersion !== request.scopeVersion ||
           encodeWatermark(before.request.sourceWatermark) !==
-          encodeWatermark(request.sourceWatermark)
+            encodeWatermark(request.sourceWatermark)
         )
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         const thread = yield* query(
@@ -235,7 +244,11 @@ const make = Effect.gen(function* () {
           Effect.mapError(() => new Store.MemoryStoreConflict({ code: "payload_too_large" })),
         );
         yield* query(encodeOutcome(checked));
-        const after = yield* service.prepareSourceRead(input, fence);
+        const after = yield* service.prepareSourceRead(
+          input,
+          fence,
+          request.requesterEnvironmentId,
+        );
         if (
           before.generation !== after.generation ||
           encodeWatermark(after.request.sourceWatermark) !==
@@ -258,13 +271,21 @@ const make = Effect.gen(function* () {
       limit: request.limit,
       ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
     };
-    const before = yield* service.prepareSourceRead(input, reauthorize);
+    const before = yield* service.prepareSourceRead(
+      input,
+      reauthorize,
+      request.requesterEnvironmentId,
+    );
     const outcome = yield* readCommitted(request, reauthorize);
     // Re-run bounded source SQL in a fresh transaction after transport preparation,
     // including every retry. The closure lasts only for this in-flight response.
     const validate = Effect.gen(function* () {
       const current = yield* readCommitted(request, reauthorize);
-      const after = yield* service.prepareSourceRead(input, reauthorize);
+      const after = yield* service.prepareSourceRead(
+        input,
+        reauthorize,
+        request.requesterEnvironmentId,
+      );
       if (
         before.generation !== after.generation ||
         (yield* query(encodeOutcome(current))) !== (yield* query(encodeOutcome(outcome)))

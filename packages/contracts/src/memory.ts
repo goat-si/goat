@@ -4,54 +4,49 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { EnvironmentId, EventId, MessageId, NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  EventId,
+  MessageId,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+} from "./baseSchemas.ts";
 import { ScopedThreadRef, ScopedProjectRef } from "./environment.ts";
-import { strictSchema } from "./memoryStrictSchema.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
-const utf8 = (s: string) => new TextEncoder().encode(s).length;
-const jsonBytes = (value: unknown) => utf8(JSON.stringify(value));
-const unique = (values: readonly unknown[]) =>
-  new Set(values.map((v) => JSON.stringify(v))).size === values.length;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const sameSet = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((v) => b.includes(v));
-const bounded = <S extends Schema.Top>(schema: S, max: number) =>
-  schema.check(
-    Schema.makeFilter((value) => jsonBytes(value) <= max, {
-      expected: `at most ${max} encoded UTF-8 bytes`,
-    }),
-  );
-const array = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
-  Schema.Array(schema).check(
-    Schema.makeFilter((values) => values.length >= min && values.length <= max),
-  );
-const distinct = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
-  array(schema, max, min).check(Schema.makeFilter(unique));
-const struct = <F extends Schema.Struct.Fields>(fields: F) => {
-  const schema = Schema.Struct(fields);
-  // Effect's empty struct parser only rejects nullish values and preserves all others.
-  return strictSchema(
-    Object.keys(fields).length === 0
-      ? schema.check(
-          Schema.makeFilter(
-            (value) =>
-              typeof value === "object" &&
-              value !== null &&
-              !Array.isArray(value) &&
-              Reflect.ownKeys(value).length === 0,
-            { expected: "an object with no own keys" },
-          ),
-        )
-      : schema,
-  );
-};
-// TaggedError construction uses its internal struct rather than the overridden ast.
-const strictMakeOptions = (options?: Schema.MakeOptions): Schema.MakeOptions => ({
-  ...options,
-  disableChecks: false,
-  parseOptions: { ...options?.parseOptions, onExcessProperty: "error", disableChecks: false },
-});
+import {
+  MEMORY_BODY_MAX_UTF8_BYTES,
+  MEMORY_CONTEXT_MAX_CHARS,
+  MEMORY_CONTEXT_MAX_UTF8_BYTES,
+  MEMORY_CONTEXT_OUTER_FRAME,
+  MEMORY_DERIVED_REVISIONS_MAX,
+  MEMORY_PAGE_MAX_UTF8_BYTES,
+  MEMORY_PAYLOAD_MAX_UTF8_BYTES,
+  MEMORY_REVERT_WINDOW_MS,
+  MEMORY_LEGACY_LINEAGE_GUIDANCE,
+  MEMORY_LINEAGE_GUIDANCE,
+  MEMORY_HUB_UPGRADE_GUIDANCE,
+} from "./memoryLimits.ts";
+import {
+  array,
+  bounded,
+  distinct,
+  jsonBytes,
+  same,
+  sameSet,
+  strictMakeOptions,
+  strictSchema,
+  struct,
+  unique,
+  utf8,
+} from "./memoryCodec.ts";
+import { validateCheckpointRecordsStructure } from "./memoryCheckpointValidation.ts";
+export { memoryImportLineageRecordKey } from "./memoryCodec.ts";
+import { MemoryFloor2Feature } from "./memoryFloor.ts";
+export * from "./memoryLimits.ts";
+export * from "./memoryFloor.ts";
+
 const canonical = Schema.String.check(
   Schema.makeFilter((s) => s.length > 0 && s === s.trim() && Array.from(s).length <= 1024),
 );
@@ -72,57 +67,11 @@ export const MemoryUtcTimestamp = Schema.String.check(
   ),
 );
 export const MEMORY_PROTOCOL_VERSION = 1;
-export const MEMORY_CONTEXT_MAX_CHARS = 6000;
-export const MEMORY_CONTEXT_MAX_UTF8_BYTES = 24 * 1024;
-export const MEMORY_CONTEXT_OUTER_FRAME = "<external_goat_memory></external_goat_memory>";
-export const MEMORY_PAGE_MAX_ITEMS = 100;
-export const MEMORY_PAGE_MAX_UTF8_BYTES = 64 * 1024;
-export const MEMORY_PAYLOAD_MAX_UTF8_BYTES = 64 * 1024;
 export const MEMORY_LEASE_MS = 120000;
 export const MEMORY_LEASE_RENEW_MS = 30000;
 export const MEMORY_RESOLUTION_ATTEMPT_MAX_MS = 600000;
 export const MEMORY_SOURCE_READ_TIMEOUT_MS = 75000;
 export const MEMORY_SOURCE_READ_POLL_MS = 1000;
-export const MEMORY_DEFERRED_SWEEP_MAX_ITEMS = 256;
-export const MEMORY_DEFERRED_SWEEP_MAX_BYTES = 8 * 1024 * 1024;
-export const MEMORY_BODY_MAX_UTF8_BYTES = 16384;
-export const MEMORY_USER_MAX_ITEMS = 2000;
-export const MEMORY_PROJECT_MAX_ITEMS = 2000;
-export const MEMORY_THREAD_MAX_SUMMARIES = 1;
-export const MEMORY_THREAD_MAX_EXPLICIT_ITEMS = 100;
-export const MEMORY_SPACE_MAX_LIVE_ITEMS = 20000;
-export const MEMORY_ENVIRONMENT_MAX_LIVE_ITEMS = 20000;
-export const MEMORY_LIVE_MAX_PAYLOAD_BYTES = 134217728;
-export const MEMORY_SUBSTRING_MAX_ITEMS = 2000;
-export const MEMORY_SUBSTRING_MAX_UTF8_BYTES = 8388608;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_BODY_BYTES = 33554432;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_ITEMS = 5000;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_ALLOCATED_BYTES = 67108864;
-export const MEMORY_IMPORT_SNAPSHOT_MAX_UTF8_BYTES = 8388608;
-export const MEMORY_IMPORT_PREVIEW_MAX_ITEMS = 128;
-export const MEMORY_IMPORT_APPLY_MAX_ITEMS = 32;
-export const MEMORY_IMPORT_SESSION_MAX_NEW_ITEMS = 128;
-export const MEMORY_IMPORT_SESSION_MAX_BODY_BYTES = 2097152;
-export const MEMORY_IMPORT_MAX_LIVE_ITEMS = 10000;
-export const MEMORY_IMPORT_MAX_LIVE_BODY_BYTES = 67108864;
-export const MEMORY_IMPORT_MAX_SOURCE_ITEMS = 50000;
-export const MEMORY_IMPORT_MAX_ALIASES = 100000;
-export const MEMORY_IMPORT_MAX_CONTENT_DIGESTS = 100000;
-export const MEMORY_IMPORT_LINEAGE_MAX_RECORDS_PER_MEMORY = 1000;
-export const MEMORY_IMPORT_LINEAGE_MAX_BYTES = 33554432;
-export const MEMORY_IMPORT_KEY_MAX_UTF8_BYTES = 512;
-export const MEMORY_IMPORT_DIGEST_MAX_UTF8_BYTES = 64;
-export const MEMORY_REVERT_WINDOW_MS = 2592000000;
-export const MEMORY_REPLACED_PAYLOAD_RETENTION_MS = 2592000000;
-export const MEMORY_RESOLUTION_PAYLOAD_RETENTION_MS = 2592000000;
-export const MEMORY_HISTORY_MAX_PAYLOAD_BYTES = 134217728;
-export const MEMORY_CHECKPOINT_INTERVAL_MS = 86400000;
-export const MEMORY_CHECKPOINT_TRIGGER_TAIL_ROWS = 10000;
-export const MEMORY_CHECKPOINT_TRIGGER_TAIL_BYTES = 33554432;
-export const MEMORY_LOG_RETENTION_MS = 2592000000;
-export const MEMORY_LOG_MAX_TAIL_ROWS = 50000;
-export const MEMORY_LOG_MAX_TAIL_BYTES = 67108864;
-export const MEMORY_CANONICAL_STAGING_MAX_BYTES = 536870912;
 export const MEMORY_FTS_INDEXED_TEXT_MAX_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_WARNING_BYTES = 100663296;
 export const MEMORY_FTS_ALLOCATED_BRAKE_BYTES = 134217728;
@@ -305,6 +254,9 @@ export const MemoryFailureCode = Schema.Literals([
   "revert_expired",
   "scanner_pending",
   "forget_pending",
+  "hub_upgrade_required",
+  "hub_unavailable",
+  "move_receipt_missing",
 ]);
 export type MemoryFailureCode = typeof MemoryFailureCode.Type;
 
@@ -411,6 +363,8 @@ export type MemoryEvidence = typeof MemoryEvidence.Type;
 
 export const MemoryProvenance = struct({
   environmentId: EnvironmentId,
+  unverified: Schema.optionalKey(Schema.Literal(true)),
+  originThreadId: Schema.optionalKey(ThreadId),
   // Body-free identity of the original explicit upsert request and its caller.
   upsertRequestDigest: Schema.optionalKey(
     Schema.String.check(Schema.makeFilter((s) => /^[a-f0-9]{64}$/.test(s))),
@@ -438,7 +392,7 @@ export const MemoryPayload = bounded(
   struct({
     text,
     evidence: array(MemoryEvidence),
-    derivedFromMemoryRevisions: distinct(MemoryRevisionId),
+    derivedFromMemoryRevisions: distinct(MemoryRevisionId, MEMORY_DERIVED_REVISIONS_MAX),
   }),
   MEMORY_PAYLOAD_MAX_UTF8_BYTES,
 );
@@ -466,7 +420,6 @@ export const MemoryRevision = struct({
   ),
 );
 export type MemoryRevision = typeof MemoryRevision.Type;
-
 export const MemoryTombstone = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -540,17 +493,32 @@ const envelope = {
   expectedHeads: heads,
 };
 
+const moveFields = {
+  fromScope: MemoryScope,
+  toScope: MemoryScope,
+  expectedScopeVersion: NonNegativeInt,
+};
+
+const floorOperation = {
+  forgetFence: Schema.optionalKey(NonNegativeInt),
+  expectedScopeVersion: Schema.optionalKey(PositiveInt),
+};
+
 export const MemoryOperation = bounded(
   Schema.Union([
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("upsert"),
+      closedLineage: Schema.optionalKey(Schema.Literal(true)),
       revision: MemoryRevision,
       payload: MemoryPayload,
     }),
     struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
+    struct({ ...envelope, kind: Schema.Literal("move"), ...moveFields }),
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("resolve"),
       revision: MemoryRevision,
       payload: MemoryPayload,
@@ -561,6 +529,7 @@ export const MemoryOperation = bounded(
     }),
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("revert"),
       revision: MemoryRevision,
       payload: MemoryPayload,
@@ -571,6 +540,12 @@ export const MemoryOperation = bounded(
     Schema.makeFilter((v) => {
       if (v.kind === "forget")
         return v.tombstone.memorySpaceId === v.memorySpaceId && v.tombstone.memoryId === v.memoryId;
+      if (v.kind === "move")
+        return (
+          v.expectedHeads.length === 1 &&
+          !same(v.fromScope, v.toScope) &&
+          v.expectedScopeVersion < Number.MAX_SAFE_INTEGER
+        );
       const r = v.revision;
       if (
         r.memorySpaceId !== v.memorySpaceId ||
@@ -603,7 +578,37 @@ export const MemoryOperation = bounded(
   256 * 1024,
 );
 export type MemoryOperation = typeof MemoryOperation.Type;
+export type MemoryMoveOperation = Extract<MemoryOperation, { kind: "move" }>;
+export type MemoryRevisionOperation = Exclude<MemoryOperation, { kind: "forget" | "move" }>;
+export const isMemoryRevisionOperation = (
+  operation: MemoryOperation,
+): operation is MemoryRevisionOperation => operation.kind !== "forget" && operation.kind !== "move";
+
+export const MemoryMoveInput = struct({
+  memorySpaceId: MemorySpaceId,
+  memoryId: MemoryId,
+  operationId: MemoryOperationId,
+  expectedHeads: heads,
+  expectedScopeVersion: NonNegativeInt,
+  fromScope: MemoryScope,
+  toScope: MemoryScope,
+});
+export type MemoryMoveInput = typeof MemoryMoveInput.Type;
+export const MemoryMoveRequest = Schema.Union([
+  MemoryMoveInput,
+  struct({ receiptFor: MemoryMoveInput }),
+]);
+export type MemoryMoveRequest = typeof MemoryMoveRequest.Type;
+export const MemoryRevisionMarks = struct({
+  provenance: Schema.optionalKey(Schema.Literal("unverified")),
+  originThreadId: Schema.optionalKey(ThreadId),
+});
+export type MemoryRevisionMarks = typeof MemoryRevisionMarks.Type;
+const includeMarks = { includeMarks: Schema.optionalKey(Schema.Literal(true)) };
+const includeScopeVersion = { includeScopeVersion: Schema.optionalKey(Schema.Literal(true)) };
 const itemFields = {
+  scopeVersion: Schema.optionalKey(NonNegativeInt),
+  marks: Schema.optionalKey(MemoryRevisionMarks),
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
   pendingSync: Schema.Boolean,
@@ -663,33 +668,39 @@ const validateOperation = Schema.decodeUnknownSync(MemoryOperation, { onExcessPr
 const operationJson = Schema.fromJsonString(MemoryOperation);
 const encodeOperationJson = Schema.encodeSync(operationJson, { onExcessProperty: "error" });
 const decodeOperationJson = Schema.decodeUnknownSync(operationJson, { onExcessProperty: "error" });
+const operationEnvelope = (operation: MemoryOperation) => ({
+  protocolVersion: operation.protocolVersion,
+  operationId: operation.operationId,
+  memorySpaceId: operation.memorySpaceId,
+  originEnvironmentId: operation.originEnvironmentId,
+  memoryId: operation.memoryId,
+  expectedHeads: operation.expectedHeads,
+});
 /** Refuse unknown nested fields and construct only the selected transport arm. */
 export function encodeMemoryOperation(operation: MemoryOperation): string {
   const value = validateOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = value;
-  const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-  };
+  const { kind } = value;
+  const common = operationEnvelope(value);
   switch (kind) {
     case "upsert":
       return encodeOperationJson({
         ...common,
         kind,
+        ...(value.closedLineage ? { closedLineage: value.closedLineage } : {}),
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
+      });
+    case "move":
+      return encodeOperationJson({
+        ...common,
+        kind,
+        fromScope: value.fromScope,
+        toScope: value.toScope,
+        expectedScopeVersion: value.expectedScopeVersion,
       });
     case "forget":
       return encodeOperationJson({ ...common, kind, tombstone: value.tombstone });
@@ -699,6 +710,10 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         kind,
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
         resolution: value.resolution,
         resolutionPayload: value.resolutionPayload,
         conflictId: value.conflictId,
@@ -710,6 +725,10 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         kind,
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
         revertsResolutionId: value.revertsResolutionId,
         restoredRevisionId: value.restoredRevisionId,
       });
@@ -719,10 +738,18 @@ export function decodeMemoryOperation(json: string): MemoryOperation {
   return decodeOperationJson(json);
 }
 const eventSchema = Schema.Union([
-  struct({ ...envelope, kind: Schema.Literal("upsert"), revision: MemoryRevision }),
-  struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
   struct({
     ...envelope,
+    ...floorOperation,
+    kind: Schema.Literal("upsert"),
+    closedLineage: Schema.optionalKey(Schema.Literal(true)),
+    revision: MemoryRevision,
+  }),
+  struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
+  struct({ ...envelope, kind: Schema.Literal("move"), ...moveFields }),
+  struct({
+    ...envelope,
+    ...floorOperation,
     kind: Schema.Literal("resolve"),
     revision: MemoryRevision,
     resolution: MemoryResolution,
@@ -731,6 +758,7 @@ const eventSchema = Schema.Union([
   }),
   struct({
     ...envelope,
+    ...floorOperation,
     kind: Schema.Literal("revert"),
     revision: MemoryRevision,
     revertsResolutionId: MemoryResolutionId,
@@ -743,23 +771,16 @@ const encodeEventMetadata = Schema.encodeSync(Schema.fromJsonString(eventSchema)
 const decodeEventMetadata = Schema.decodeUnknownSync(eventSchema, { onExcessProperty: "error" });
 export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
   validateOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = operation;
+  if (operation.kind === "move") return encodeMemoryOperation(operation);
   const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
+    ...operationEnvelope(operation),
+    kind: operation.kind,
+    ...(operation.kind !== "forget" && operation.expectedScopeVersion !== undefined
+      ? { expectedScopeVersion: operation.expectedScopeVersion }
+      : {}),
+    ...(operation.kind !== "forget" && operation.forgetFence !== undefined
+      ? { forgetFence: operation.forgetFence }
+      : {}),
   };
   const value =
     operation.kind === "forget"
@@ -779,7 +800,11 @@ export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
               revertsResolutionId: operation.revertsResolutionId,
               restoredRevisionId: operation.restoredRevisionId,
             }
-          : { ...common, revision: operation.revision };
+          : {
+              ...common,
+              ...(operation.closedLineage ? { closedLineage: operation.closedLineage } : {}),
+              revision: operation.revision,
+            };
   return encodeEventMetadata(decodeEventMetadata(value));
 }
 
@@ -819,6 +844,8 @@ export const MemoryCapacityDimension = Schema.Literals([
   "fts_admission_brake",
   "import_lineage_records",
   "import_lineage_bytes",
+  "dependencies",
+  "payload_bytes",
 ]);
 export type MemoryCapacityDimension = typeof MemoryCapacityDimension.Type;
 
@@ -830,15 +857,20 @@ export const MemoryCapacityExceeded = struct({
   reclaimable: NonNegativeInt,
 });
 export type MemoryCapacityExceeded = typeof MemoryCapacityExceeded.Type;
+export const MemoryHubUpgradeBlockers = distinct(EnvironmentId, MEMORY_HUB_MAX_MEMBERS);
+const upgradeBlockers = { upgradeRequiredMembers: Schema.optionalKey(MemoryHubUpgradeBlockers) };
 const safeErrorFields = {
+  ...upgradeBlockers,
   code: MemoryFailureCode,
   memoryId: Schema.optionalKey(MemoryId),
   operationId: Schema.optionalKey(MemoryOperationId),
   capacity: Schema.optionalKey(MemoryCapacityExceeded),
   guidance: Schema.optionalKey(
-    Schema.Literal(
-      "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory.",
-    ),
+    Schema.Literals([
+      MEMORY_LEGACY_LINEAGE_GUIDANCE,
+      MEMORY_LINEAGE_GUIDANCE,
+      MEMORY_HUB_UPGRADE_GUIDANCE,
+    ]),
   ),
 };
 const safeDomainError = Schema.Struct(safeErrorFields).check(
@@ -863,9 +895,12 @@ export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()(
     return strictSchema(Schema.make(super.ast)).ast;
   }
   override get message(): string {
-    return this.code === "thread_lineage_incomplete"
-      ? "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory."
-      : `Memory request failed (${this.code}).`;
+    return (
+      this.guidance ??
+      (this.code === "thread_lineage_incomplete"
+        ? MEMORY_LEGACY_LINEAGE_GUIDANCE
+        : `Memory request failed (${this.code}).`)
+    );
   }
 }
 export class MemoryHubError extends Schema.TaggedError<MemoryHubError>()(
@@ -1242,6 +1277,7 @@ export const MemoryContextSnapshot = struct({
       memoryId: MemoryId,
       revisionId: MemoryRevisionId,
       scope: MemoryScope,
+      scopeVersion: Schema.optionalKey(PositiveInt),
       provenance: MemoryProvenance,
       assertionKind: MemoryAssertionKind,
       text,
@@ -1414,6 +1450,11 @@ export const MemoryPage = bounded(
 );
 export type MemoryPage = typeof MemoryPage.Type;
 const revisionPair = struct({ revision: MemoryRevision, payload: Schema.NullOr(MemoryPayload) });
+const projectedRevisionPair = struct({
+  revision: MemoryRevision,
+  payload: Schema.NullOr(MemoryPayload),
+  marks: Schema.optionalKey(MemoryRevisionMarks),
+});
 const resolutionPair = struct({
   resolution: MemoryResolution,
   payload: Schema.NullOr(MemoryResolutionPayload),
@@ -1423,7 +1464,7 @@ const resolutionPair = struct({
 export const MemoryHistoryPage = bounded(
   struct({
     memoryId: MemoryId,
-    revisions: array(revisionPair),
+    revisions: array(projectedRevisionPair),
     /** Selected resolution inputs retained on the server, including bodies too large to preview. */
     restorableRevisionIds: Schema.optionalKey(distinct(MemoryRevisionId)),
     resolutions: array(resolutionPair),
@@ -1575,7 +1616,13 @@ export type MemorySearchPage = {
   readonly exhausted: boolean;
 };
 
+const browseOptions = {
+  ...includeMarks,
+  ...includeScopeVersion,
+  origin: Schema.optionalKey(ScopedThreadRef),
+};
 export const MemorySearchInput = struct({
+  ...browseOptions,
   ...space,
   ...paging,
   cursor: Schema.optionalKey(
@@ -1598,6 +1645,7 @@ export const MemorySearchInput = struct({
 export type MemorySearchInput = typeof MemorySearchInput.Type;
 
 export const MemoryListInput = struct({
+  ...browseOptions,
   ...space,
   ...paging,
   scope: Schema.optionalKey(MemoryScope),
@@ -1605,7 +1653,12 @@ export const MemoryListInput = struct({
 });
 export type MemoryListInput = typeof MemoryListInput.Type;
 
-export const MemoryReadInput = struct({ ...space, memoryId: MemoryId });
+export const MemoryReadInput = struct({
+  ...space,
+  ...includeMarks,
+  ...includeScopeVersion,
+  memoryId: MemoryId,
+});
 export type MemoryReadInput = typeof MemoryReadInput.Type;
 
 export const MemoryResetReportAttemptsInput = struct({
@@ -1621,6 +1674,7 @@ export const MemoryResetReportAttemptsResult = struct({
 export type MemoryResetReportAttemptsResult = typeof MemoryResetReportAttemptsResult.Type;
 
 export const MemoryHistoryInput = struct({
+  ...includeMarks,
   ...space,
   ...paging,
   memoryId: MemoryId,
@@ -1646,27 +1700,30 @@ export const MemorySyncStatusInput = Schema.Union([
   }),
 ]);
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
-
-export const MemoryUpsertInput = struct({
+const mutation = {
   ...space,
   operationId: MemoryOperationId,
   memoryId: MemoryId,
   expectedHeads: heads,
+};
+const detailedFailure = { includeFailureDetails: Schema.optionalKey(Schema.Literal(true)) };
+const upsertInput = {
+  ...mutation,
   scope: MemoryScope,
   assertionKind: MemoryAssertionKind,
   payload: MemoryPayload,
   baseBoundary: Schema.NullOr(MemoryCausalBoundary),
-}).check(Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)));
+};
+export const MemoryUpsertInput = struct(upsertInput).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
 export type MemoryUpsertInput = typeof MemoryUpsertInput.Type;
-
-export const MemoryForgetInput = struct({
-  ...space,
-  operationId: MemoryOperationId,
-  memoryId: MemoryId,
-  expectedHeads: heads,
-});
+export const MemoryForgetInput = struct(mutation);
 export type MemoryForgetInput = typeof MemoryForgetInput.Type;
-
+export const MemoryUpsertRpcInput = struct({ ...upsertInput, ...detailedFailure }).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
+export const MemoryForgetRpcInput = struct({ ...mutation, ...detailedFailure });
 export const MemoryRevertResolutionInput = struct({
   ...space,
   operationId: MemoryOperationId,
@@ -1676,7 +1733,6 @@ export const MemoryRevertResolutionInput = struct({
   expectedHeads: heads.check(Schema.makeFilter((vs) => vs.length === 1)),
 });
 export type MemoryRevertResolutionInput = typeof MemoryRevertResolutionInput.Type;
-
 export const MemoryReadSourceInput = struct({
   ...space,
   ...paging,
@@ -1953,7 +2009,6 @@ export type MemoryProjectBinding = typeof MemoryProjectBinding.Type;
 
 export const MemoryProjectBindingGetInput = struct({ ...space, project: ScopedProjectRef });
 export type MemoryProjectBindingGetInput = typeof MemoryProjectBindingGetInput.Type;
-
 export const MemoryProjectBindingUpdateInput = Schema.Union([
   struct({
     ...space,
@@ -2322,7 +2377,7 @@ export type MemoryResolutionApproval = typeof MemoryResolutionApproval.Type;
 
 /** Approval validation works equally on operation bodies and purged metadata. */
 export function validateMemoryResolutionApproval(
-  kind: "upsert" | "forget" | "resolve" | "revert",
+  kind: MemoryOperation["kind"],
   resolutionId: MemoryResolutionId | null | undefined,
   receipt: MemoryHubReceipt,
 ): boolean {
@@ -2335,6 +2390,7 @@ export function validateMemoryResolutionApproval(
 }
 
 export const MemoryHubReceipt = struct({
+  ...upgradeBlockers,
   resolutionApproval: Schema.optionalKey(MemoryResolutionApproval),
   forgetExpansion: Schema.optionalKey(MemoryForgetExpansion),
   forgetRetryOf: Schema.optionalKey(MemoryForgetRetry),
@@ -2370,7 +2426,7 @@ export const MemoryCompactReceipt = struct({
   upsertRequestDigest: Schema.optionalKey(digest),
   memorySpaceId: MemorySpaceId,
   originEnvironmentId: EnvironmentId,
-  operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+  operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
   receipt: MemoryHubReceipt,
   revisionId: Schema.NullOr(MemoryRevisionId),
   resolutionId: Schema.NullOr(MemoryResolutionId),
@@ -2386,7 +2442,11 @@ export const MemoryCompactReceipt = struct({
       !validateMemoryResolutionApproval(v.operationKind, v.resolutionId, v.receipt)
     )
       return false;
-    if (v.operationKind === "forget" || v.receipt.outcome === "rejected") {
+    if (
+      v.operationKind === "forget" ||
+      v.operationKind === "move" ||
+      v.receipt.outcome === "rejected"
+    ) {
       if (v.revisionId !== null) return false;
     } else if (v.revisionId === null) return false;
     if (v.operationKind === "resolve") {
@@ -2420,7 +2480,6 @@ export const MemoryCompactReceipt = struct({
 export type MemoryCompactReceipt = typeof MemoryCompactReceipt.Type;
 
 const encodeHubReceiptIntegrity = Schema.encodeSync(Schema.fromJsonString(MemoryHubReceipt));
-
 export const MemoryHubEntry = Schema.Union([
   struct({
     kind: Schema.Literal("operation"),
@@ -2430,7 +2489,7 @@ export const MemoryHubEntry = Schema.Union([
   }),
   struct({
     kind: Schema.Literal("metadata"),
-    operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+    operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
     resolutionId: Schema.optionalKey(MemoryResolutionId),
     hubSequence: PositiveInt,
     receipt: MemoryHubReceipt,
@@ -2474,12 +2533,17 @@ export const MemoryIdentityRecord = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
   scope: MemoryScope,
+  scopeVersion: Schema.optionalKey(PositiveInt),
   creatingEnvironmentId: EnvironmentId,
   createOperationId: MemoryOperationId,
   createdAtUtc: MemoryUtcTimestamp,
-});
+  origin: Schema.optionalKey(ScopedThreadRef),
+}).check(
+  Schema.makeFilter(
+    (v) => v.origin === undefined || v.origin.environmentId === v.creatingEnvironmentId,
+  ),
+);
 export type MemoryIdentityRecord = typeof MemoryIdentityRecord.Type;
-
 export const MemoryFenceRecord = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -2495,7 +2559,6 @@ export const MemoryFenceRecord = struct({
   ),
 );
 export type MemoryFenceRecord = typeof MemoryFenceRecord.Type;
-
 export const MemorySuppressionRecord = Schema.Union([
   struct({
     memorySpaceId: MemorySpaceId,
@@ -2537,31 +2600,6 @@ export const MemoryImportLineageRecord = Schema.Union([
   }),
 ]);
 export type MemoryImportLineageRecord = typeof MemoryImportLineageRecord.Type;
-
-// Explicit tuples make duplicate identity independent of JSON property insertion order.
-const importProjectKey = (v: MemoryProjectKey) =>
-  v.kind === "repository" ? [v.kind, v.groupingKey] : [v.kind, v.sharedProjectId];
-const importScopeKey = (v: MemoryScope) =>
-  v.kind === "user"
-    ? [v.kind]
-    : v.kind === "project"
-      ? [v.kind, importProjectKey(v.projectKey)]
-      : [
-          v.kind,
-          v.thread.environmentId,
-          v.thread.threadId,
-          v.projectKey === undefined ? null : importProjectKey(v.projectKey),
-        ];
-/** Shared canonical key for ledger union, duplicate validation and checkpoint pagination. */
-export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): string =>
-  JSON.stringify([
-    v.memorySpaceId,
-    v.memoryId,
-    v.kind,
-    v.kind === "sourceKey"
-      ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
-      : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
-  ]);
 
 export const MemoryHubCheckpointPage = bounded(
   struct({
@@ -2615,8 +2653,10 @@ export const MemoryHubCheckpointPage = bounded(
 );
 export type MemoryHubCheckpointPage = typeof MemoryHubCheckpointPage.Type;
 const hub = { protocolVersion: Schema.Literal(1), memorySpaceId: MemorySpaceId };
+const hubFeatures = { features: Schema.optionalKey(distinct(MemoryFloor2Feature, 3)) };
 
 export const MemoryHubJoinInput = struct({
+  ...hubFeatures,
   protocolVersion: Schema.Literal(1),
   environmentId: EnvironmentId,
   memorySpaceId: Schema.NullOr(MemorySpaceId),
@@ -2639,12 +2679,31 @@ export const MemoryHubJoinResult = struct({
 );
 export type MemoryHubJoinResult = typeof MemoryHubJoinResult.Type;
 
+const memoryOriginUpdateFields = {
+  memoryId: MemoryId,
+  createOperationId: MemoryOperationId,
+  threadId: ThreadId,
+};
+export const MemoryOriginUpdate = struct(memoryOriginUpdateFields);
+export type MemoryOriginUpdate = typeof MemoryOriginUpdate.Type;
+export const MEMORY_ORIGIN_UPDATE_MAX = 100;
+
 export const MemoryHubPushInput = bounded(
-  struct({ ...hub, environmentId: EnvironmentId, operations: array(MemoryOperation) }).check(
+  struct({
+    ...hub,
+    ...hubFeatures,
+    environmentId: EnvironmentId,
+    operations: array(MemoryOperation),
+    originUpdates: Schema.optionalKey(array(MemoryOriginUpdate, MEMORY_ORIGIN_UPDATE_MAX)),
+  }).check(
     Schema.makeFilter((v) =>
-      v.operations.every(
-        (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
-      ),
+      v.originUpdates === undefined
+        ? v.operations.every(
+            (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
+          )
+        : v.operations.length === 0 &&
+          v.originUpdates.length > 0 &&
+          unique(v.originUpdates.map((o) => o.memoryId)),
     ),
   ),
   1048576,
@@ -2654,43 +2713,68 @@ export type MemoryHubPushInput = typeof MemoryHubPushInput.Type;
 export const MemoryHubPushResult = struct({ receipts: array(MemoryHubReceipt) });
 export type MemoryHubPushResult = typeof MemoryHubPushResult.Type;
 
+const memoryOriginPage = struct({
+  throughSequence: NonNegativeInt,
+  hasMore: Schema.Boolean,
+  updates: array(
+    struct({
+      ...memoryOriginUpdateFields,
+      environmentId: EnvironmentId,
+      sequence: PositiveInt,
+    }),
+    MEMORY_ORIGIN_UPDATE_MAX,
+  ),
+});
+export type MemoryOriginPage = typeof memoryOriginPage.Type;
+
 export const MemoryHubPullInput = struct({
   ...hub,
+  ...hubFeatures,
   environmentId: EnvironmentId,
   afterSequence: NonNegativeInt,
+  afterOriginSequence: Schema.optionalKey(NonNegativeInt),
   limit,
   highWatermark: Schema.optionalKey(NonNegativeInt),
   snapshotToken: Schema.optionalKey(canonical),
   cursor: Schema.optionalKey(canonical),
 }).check(
   Schema.makeFilter((v) =>
-    v.snapshotToken !== undefined ? v.highWatermark === undefined : v.cursor === undefined,
+    v.snapshotToken !== undefined
+      ? v.highWatermark === undefined && v.afterOriginSequence === undefined
+      : v.cursor === undefined,
   ),
 );
 export type MemoryHubPullInput = typeof MemoryHubPullInput.Type;
 
-export const MemoryHubPullResult = bounded(
-  struct({
-    highWatermark: NonNegativeInt,
-    throughSequence: NonNegativeInt,
-    hasMore: Schema.Boolean,
-    entries: array(MemoryHubEntry),
-    checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
-  }).check(
-    Schema.makeFilter(
-      (v) =>
-        v.throughSequence <= v.highWatermark &&
-        (v.checkpoint === undefined ||
-          (v.entries.length === 0 &&
-            v.throughSequence === v.checkpoint.checkpointSequence &&
-            v.hasMore === !v.checkpoint.bootstrapComplete)),
-    ),
+export const MemoryHubPullResult = struct({
+  ...upgradeBlockers,
+  highWatermark: NonNegativeInt,
+  throughSequence: NonNegativeInt,
+  hasMore: Schema.Boolean,
+  entries: array(MemoryHubEntry),
+  checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
+  originPage: Schema.optionalKey(memoryOriginPage),
+  originCatchupPending: Schema.optionalKey(Schema.Literal(true)),
+  derivedCap: Schema.optionalKey(Schema.Literal(1000)),
+}).check(
+  Schema.makeFilter(
+    (v) =>
+      v.throughSequence <= v.highWatermark &&
+      ((v.originPage === undefined && v.originCatchupPending === undefined) ||
+        (v.checkpoint === undefined && !v.hasMore && !(v.originPage && v.originCatchupPending))) &&
+      (v.checkpoint === undefined ||
+        (v.entries.length === 0 &&
+          v.throughSequence === v.checkpoint.checkpointSequence &&
+          v.hasMore === !v.checkpoint.bootstrapComplete)),
   ),
-  262144,
+  Schema.makeFilter(({ derivedCap: _derivedCap, ...page }) => jsonBytes(page) <= 262144, {
+    expected: "at most 262144 encoded UTF-8 bytes plus the negotiated derived cap",
+  }),
 );
 export type MemoryHubPullResult = typeof MemoryHubPullResult.Type;
 const leaseKey = {
   ...hub,
+  ...hubFeatures,
   memoryId: MemoryId,
   conflictId: MemoryConflictId,
   holderEnvironmentId: EnvironmentId,
@@ -2715,6 +2799,7 @@ export type MemoryHubReleaseResult = typeof MemoryHubReleaseResult.Type;
 
 export const MemoryHubApplyResolutionInput = struct({
   ...hub,
+  ...hubFeatures,
   holderEnvironmentId: EnvironmentId,
   attemptId: MemoryOperationId,
   operation: MemoryOperation.check(Schema.makeFilter((v) => v.kind === "resolve")),
@@ -2731,6 +2816,7 @@ const sourceRequestFields = {
   memoryId: MemoryId,
   sourceThread: ScopedThreadRef,
   sourceWatermark: MemorySourceWatermark,
+  scopeVersion: Schema.optionalKey(PositiveInt),
   messageIds: distinct(MessageId, 100, 1),
   ...paging,
   authorizedScopes: Schema.Tuple([
@@ -2754,7 +2840,11 @@ export const MemorySourceReadRequest = struct({
 });
 export type MemorySourceReadRequest = typeof MemorySourceReadRequest.Type;
 
-export const MemoryHubSourceReadRequestInput = struct({ ...hub, ...sourceRequestFields });
+export const MemoryHubSourceReadRequestInput = struct({
+  ...hub,
+  ...hubFeatures,
+  ...sourceRequestFields,
+});
 export type MemoryHubSourceReadRequestInput = typeof MemoryHubSourceReadRequestInput.Type;
 
 export const MemoryHubSourceReadRequestResult = struct({ request: MemorySourceReadRequest });
@@ -2762,6 +2852,7 @@ export type MemoryHubSourceReadRequestResult = typeof MemoryHubSourceReadRequest
 
 export const MemoryHubSourceReadCollectInput = struct({
   ...hub,
+  ...hubFeatures,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(32)),
 });
 export type MemoryHubSourceReadCollectInput = typeof MemoryHubSourceReadCollectInput.Type;
@@ -2795,6 +2886,7 @@ export type MemorySourceReadOutcome = typeof MemorySourceReadOutcome.Type;
 
 export const MemoryHubSourceReadNormalRespondInput = struct({
   ...hub,
+  ...hubFeatures,
   kind: Schema.Literal("normal").pipe(Schema.withDecodingDefault(Effect.succeed("normal"))),
   requestId: MemorySourceReadRequestId,
   ownerPolicyEpoch: MemoryOwnerPolicyEpoch.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
@@ -2804,6 +2896,7 @@ export type MemoryHubSourceReadNormalRespondInput =
   typeof MemoryHubSourceReadNormalRespondInput.Type;
 export const MemoryHubSourceReadRevokeInput = struct({
   ...hub,
+  ...hubFeatures,
   kind: Schema.Literal("revoke"),
   requesterEnvironmentId: EnvironmentId,
   ownerPolicyEpoch: MemoryOwnerPolicyEpoch,
@@ -2831,6 +2924,7 @@ export type MemoryHubSourceReadRespondResult = typeof MemoryHubSourceReadRespond
 
 export const MemoryHubSourceReadResultInput = struct({
   ...hub,
+  ...hubFeatures,
   requestId: MemorySourceReadRequestId,
 });
 export type MemoryHubSourceReadResultInput = typeof MemoryHubSourceReadResultInput.Type;
@@ -2860,232 +2954,13 @@ export const MEMORY_HUB_PATHS = {
 const checkpointDecode = Schema.decodeUnknownSync(MemoryHubCheckpointPage, {
   onExcessProperty: "error",
 });
-/**
- * Validate structural ledger links without stateful admission or quotas.
- * The server must separately verify report-key digests before installing the snapshot.
- */
-export function validateMemoryCheckpointRecords(
-  pages: readonly MemoryHubCheckpointPage[],
-): boolean {
-  if (pages.length === 0) return false;
-  const first = pages[0]!;
+export function validateMemoryCheckpointRecords(pages: readonly MemoryHubCheckpointPage[]) {
   try {
-    pages.forEach((p) => checkpointDecode(p));
+    pages.forEach((page) => checkpointDecode(page));
   } catch {
     return false;
   }
-  if (
-    !pages.every(
-      (p, i) =>
-        p.pageOrdinal === i &&
-        p.memorySpaceId === first.memorySpaceId &&
-        p.checkpointSequence === first.checkpointSequence &&
-        p.retentionFloor === first.retentionFloor &&
-        same(p.causalBoundary, first.causalBoundary) &&
-        p.bootstrapComplete === (i === pages.length - 1),
-    )
-  )
-    return false;
-  const identities = pages.flatMap((p) => p.identities),
-    fences = pages.flatMap((p) => p.fences),
-    receipts = pages.flatMap((p) => p.compactReceipts),
-    revisions = pages.flatMap((p) => p.revisions),
-    resolutions = pages.flatMap((p) => p.resolutions),
-    tombstones = pages.flatMap((p) => p.tombstones),
-    suppressions = pages.flatMap((p) => p.suppressions),
-    importLineage = pages.flatMap((p) => p.importLineage),
-    conflicts = pages.flatMap((p) => p.conflicts),
-    items = pages.flatMap((p) => p.items);
-  const identitiesById = uniqueIndex(identities, (v) => v.memoryId);
-  const fencesById = uniqueIndex(fences, (v) => v.memoryId);
-  const receiptsByOperation = uniqueIndex(receipts, (v) => v.receipt.operationId);
-  const revisionsById = uniqueIndex(revisions, (v) => v.revision.revisionId);
-  const resolutionsById = uniqueIndex(resolutions, (v) => v.resolution.resolutionId);
-  const tombstonesById = uniqueIndex(tombstones, (v) => v.memoryId);
-  const conflictsById = uniqueIndex(conflicts, (v) => v.conflictId);
-  const itemsById = uniqueIndex(items, (v) => v.memoryId);
-  const lineageRows = uniqueIndex(importLineage, memoryImportLineageRecordKey);
-  const suppressionRows = uniqueIndex(suppressions, (v) => JSON.stringify(v));
-  // Rejected attempts may share a resolution id; only committed results own that key.
-  const resolveReceiptsById = uniqueIndex(
-    receipts.filter(
-      (v) =>
-        v.operationKind === "resolve" &&
-        (v.receipt.outcome === "accepted" || v.receipt.outcome === "conflicted"),
-    ),
-    (v) => v.resolutionId,
-  );
-  if (
-    !identitiesById ||
-    !fencesById ||
-    !receiptsByOperation ||
-    !revisionsById ||
-    !resolutionsById ||
-    !tombstonesById ||
-    !conflictsById ||
-    !itemsById ||
-    !suppressionRows ||
-    !lineageRows ||
-    !resolveReceiptsById
-  )
-    return false;
-  const identity = (id: MemoryId) => identitiesById.get(id);
-  const fence = (id: MemoryId) => fencesById.get(id);
-  const receipt = (id: MemoryOperationId) => receiptsByOperation.get(id);
-  const metadata = [
-    ...identities,
-    ...fences,
-    ...receipts
-      .filter((r) => r.receipt.outcome !== "rejected")
-      .map((r) => ({ ...r, memoryId: r.receipt.memoryId })),
-    ...revisions.map((r) => r.revision),
-    ...resolutions.map((r) => r.resolution),
-    ...tombstones,
-    ...suppressions,
-    ...importLineage,
-    ...conflicts,
-    ...items,
-  ];
-  if (
-    !metadata.every(
-      (v) =>
-        v.memorySpaceId === first.memorySpaceId &&
-        identity(v.memoryId) !== undefined &&
-        fence(v.memoryId) !== undefined,
-    )
-  )
-    return false;
-  if (
-    !importLineage.every(
-      (v) =>
-        v.kind !== "content" ||
-        same(importScopeKey(v.content.scope), importScopeKey(identity(v.memoryId)!.scope)),
-    )
-  )
-    return false;
-  // Digest shape is enforced by the codec. WP2's server verifies report-key hashes
-  // with Node crypto before WP3 installs a snapshot; contracts do not compute hashes.
-  if (
-    !receipts.every(
-      (r) =>
-        r.receipt.outcome === "rejected" ||
-        r.operationKind !== "resolve" ||
-        (fence(r.receipt.memoryId)?.highestFencingToken ?? -1) >= (r.fencingToken ?? 0),
-    )
-  )
-    return false;
-  if (
-    !receipts.every(
-      (r) =>
-        r.memorySpaceId === first.memorySpaceId &&
-        r.receipt.hubSequence !== null &&
-        r.receipt.hubSequence <= first.checkpointSequence,
-    )
-  )
-    return false;
-  if (
-    !identities.every((i) => {
-      const r = receipt(i.createOperationId);
-      return (
-        r !== undefined &&
-        r.receipt.memoryId === i.memoryId &&
-        r.originEnvironmentId === i.creatingEnvironmentId &&
-        (((r.receipt.outcome === "accepted" || r.receipt.outcome === "conflicted") &&
-          r.operationKind === "upsert") ||
-          (r.receipt.outcome === "deleted" &&
-            r.operationKind === "forget" &&
-            tombstonesById.get(i.memoryId)?.deleteOperationId === i.createOperationId))
-      );
-    })
-  )
-    return false;
-  if (
-    !revisions.every(({ revision: r }) => {
-      const rec = receipt(r.operationId);
-      return (
-        same(r.scope, identity(r.memoryId)?.scope) &&
-        rec !== undefined &&
-        rec.receipt.memoryId === r.memoryId &&
-        rec.revisionId === r.revisionId
-      );
-    })
-  )
-    return false;
-  if (
-    !items.every((i) =>
-      i.status === "forgotten"
-        ? same(tombstonesById.get(i.memoryId), i.tombstone)
-        : same(i.scope, identity(i.memoryId)?.scope),
-    )
-  )
-    return false;
-  if (
-    !tombstones.every((t) => {
-      const r = receipt(t.deleteOperationId);
-      return (
-        r?.receipt.outcome === "deleted" &&
-        r.receipt.memoryId === t.memoryId &&
-        r.originEnvironmentId === t.deletingEnvironmentId &&
-        fence(t.memoryId)?.activeLease === null
-      );
-    })
-  )
-    return false;
-  if (
-    !suppressions.every(
-      (s) => tombstonesById.get(s.memoryId)?.deleteOperationId === s.deleteOperationId,
-    )
-  )
-    return false;
-  if (
-    !resolutions.every(({ resolution: r }) => {
-      const rec = resolveReceiptsById.get(r.resolutionId);
-      const result = revisionsById.get(r.resultRevisionId)?.revision;
-      return (
-        rec !== undefined &&
-        (rec.receipt.outcome === "accepted" || rec.receipt.outcome === "conflicted") &&
-        rec.receipt.memoryId === r.memoryId &&
-        rec.originEnvironmentId === r.resolvingEnvironmentId &&
-        rec.reportGuard?.resolvingEnvironmentId === r.resolvingEnvironmentId &&
-        rec.revisionId === r.resultRevisionId &&
-        rec.fencingToken === r.fencingToken &&
-        rec.receipt.resolutionApproval?.appliedAtUtc === r.appliedAtUtc &&
-        rec.receipt.resolutionApproval?.revertDeadlineUtc === r.revertDeadlineUtc &&
-        result !== undefined &&
-        result.memoryId === r.memoryId &&
-        result.operationId === rec.receipt.operationId &&
-        result.provenance.environmentId === r.resolvingEnvironmentId &&
-        sameSet(result.parents, r.inputRevisionIds) &&
-        r.inputRevisionIds.every((id, i) => {
-          const input = revisionsById.get(id)?.revision;
-          return input?.memoryId === r.memoryId && input.payloadRef === r.inputPayloadRefs[i];
-        }) &&
-        (fence(r.memoryId)?.highestFencingToken ?? -1) >= r.fencingToken
-      );
-    })
-  )
-    return false;
-  return fences.every((f) => {
-    if (f.activeLease === null) return true;
-    const conflict = conflictsById.get(f.activeLease.conflictId);
-    return (
-      conflict !== undefined &&
-      conflict.memoryId === f.memoryId &&
-      conflict.status !== "resolved" &&
-      same(conflict.heads, f.activeLease.conflictHeadSet)
-    );
-  });
-}
-
-/** Index one ledger collection without silently overwriting duplicate keys. */
-function uniqueIndex<T, K>(values: readonly T[], keyOf: (value: T) => K): Map<K, T> | undefined {
-  const index = new Map<K, T>();
-  for (const value of values) {
-    const key = keyOf(value);
-    if (index.has(key)) return undefined;
-    index.set(key, value);
-  }
-  return index;
+  return validateCheckpointRecordsStructure(pages);
 }
 
 /** Source admission still belongs to the owner; this only checks returned locators. */

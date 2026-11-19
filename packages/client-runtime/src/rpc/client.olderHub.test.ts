@@ -1,4 +1,12 @@
-import { EnvironmentId, WS_METHODS } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MemoryId,
+  MemoryOperationId,
+  MemoryRpcError,
+  MemorySpaceId,
+  type ServerConfig,
+  WS_METHODS,
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -25,10 +33,13 @@ const target = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://hub.example.test",
 });
 
-const supervisorFor = Effect.fn("TestOlderHub.supervisor")(function* (client: WsRpcProtocolClient) {
+const supervisorFor = Effect.fn("TestOlderHub.supervisor")(function* (
+  client: WsRpcProtocolClient,
+  config?: ServerConfig,
+) {
   const session: RpcSession.RpcSession = {
     client,
-    initialConfig: Effect.never,
+    initialConfig: config ? Effect.succeed(config) : Effect.never,
     subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
@@ -68,5 +79,140 @@ describe("environment RPC against an older hub", () => {
         expect(isHubMachinesUnsupportedError(failure)).toBe(true);
         expect(isHubNodesUnsupportedError(failure)).toBe(false);
       }),
+  );
+  it.effect.each([false, true])(
+    "negotiates mutation failures on the destination: %s",
+    (supported) =>
+      Effect.gen(function* () {
+        const memorySpaceId = MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+        const memoryId = MemoryId.make("00000000-0000-4000-8000-000000000002");
+        const wire: unknown[] = [];
+        const fail = (input: { readonly includeFailureDetails?: true }) => {
+          wire.push(input);
+          return Effect.fail(
+            new MemoryRpcError({
+              code: input.includeFailureDetails ? "thread_lineage_incomplete" : "invalid_output",
+            }),
+          );
+        };
+        const client = {
+          [WS_METHODS.memoryUpsert]: fail,
+          [WS_METHODS.memoryForget]: fail,
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = yield* supervisorFor(client, {
+          environment: {
+            capabilities: {
+              memory: {
+                protocolVersion: 1,
+                ...(supported ? { mutationFailureDetails: true } : {}),
+              },
+            },
+          },
+        } as ServerConfig);
+        const base = {
+          memorySpaceId,
+          memoryId,
+          expectedHeads: [],
+          operationId: MemoryOperationId.make("00000000-0000-4000-8000-000000000003"),
+        };
+        const upsert = {
+          ...base,
+          baseBoundary: null,
+          scope: { kind: "user" as const },
+          assertionKind: "inference" as const,
+          payload: { text: "synthetic", evidence: [], derivedFromMemoryRevisions: [] },
+        };
+        const provide = Effect.provideService(
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          supervisor,
+        );
+        const permit = Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void });
+        const upsertError = yield* requestGuarded(WS_METHODS.memoryUpsert, upsert).pipe(
+          provide,
+          permit,
+          Effect.flip,
+        );
+        const forgetError = yield* requestGuarded(WS_METHODS.memoryForget, {
+          ...base,
+          includeFailureDetails: true,
+        }).pipe(provide, permit, Effect.flip);
+        const hint = supported ? { includeFailureDetails: true } : {};
+        expect(wire).toEqual([
+          { ...upsert, ...hint },
+          { ...base, ...hint },
+        ]);
+        for (const error of [upsertError, forgetError])
+          expect(error).toMatchObject({
+            _tag: "MemoryRpcError",
+            code: supported ? "thread_lineage_incomplete" : "invalid_output",
+          });
+      }),
+  );
+  it.effect.each([
+    { scopeMoves: false },
+    { scopeMoves: true },
+    { scopeMoves: true, scopeMoveReceipts: true },
+  ])("negotiates scope move and read fields on the destination: %s", (capabilities) =>
+    Effect.gen(function* () {
+      const memorySpaceId = MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+      const memoryId = MemoryId.make("00000000-0000-4000-8000-000000000002");
+      const wire: unknown[] = [];
+      const receive = (input: unknown) => {
+        wire.push(input);
+        return Effect.void;
+      };
+      const client = {
+        [WS_METHODS.memoryRead]: receive,
+        [WS_METHODS.memoryMove]: receive,
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = yield* supervisorFor(client, {
+        environment: { capabilities: { memory: { protocolVersion: 1, ...capabilities } } },
+      } as ServerConfig);
+      const provide = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+      const permit = Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void });
+      const read = { memorySpaceId, memoryId };
+      const move = {
+        ...read,
+        operationId: MemoryOperationId.make("00000000-0000-4000-8000-000000000003"),
+        expectedHeads: [],
+        expectedScopeVersion: 0,
+        fromScope: { kind: "user" as const },
+        toScope: { kind: "user" as const },
+      };
+      yield* requestGuarded(WS_METHODS.memoryRead, { ...read, includeScopeVersion: true }).pipe(
+        provide,
+        permit,
+      );
+      const result = yield* requestGuarded(WS_METHODS.memoryMove, move).pipe(
+        provide,
+        permit,
+        Effect.result,
+      );
+      const lookup = { receiptFor: move };
+      const recovery = yield* requestGuarded(WS_METHODS.memoryMove, lookup).pipe(
+        provide,
+        permit,
+        Effect.result,
+      );
+      expect(wire).toEqual([
+        ...(capabilities.scopeMoves ? [{ ...read, includeScopeVersion: true }, move] : [read]),
+        ...(capabilities.scopeMoveReceipts ? [lookup] : []),
+      ]);
+      if (capabilities.scopeMoves) expect(result._tag).toBe("Success");
+      else
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "EnvironmentRpcUnavailableError" },
+        });
+      if (capabilities.scopeMoveReceipts) expect(recovery._tag).toBe("Success");
+      else if (capabilities.scopeMoves)
+        expect(recovery).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "EnvironmentRpcUnavailableError", reason: "move_receipt_unsupported" },
+        });
+    }),
   );
 });

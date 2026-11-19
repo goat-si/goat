@@ -21,6 +21,7 @@ export class MemoryStoreConflict extends Schema.TaggedError<MemoryStoreConflict>
   "MemoryStoreConflict",
   {
     code: M.MemoryFailureCode,
+    upgradeRequiredMembers: Schema.optionalKey(M.MemoryHubUpgradeBlockers),
   },
 ) {
   override get message() {
@@ -86,8 +87,28 @@ export const Metadata = Schema.Struct({
   memorySpaceId: M.MemorySpaceId,
   memoryId: M.MemoryId,
   originEnvironmentId: M.EnvironmentId,
-  kind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+  kind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
   expectedHeads: Schema.Array(M.MemoryRevisionId),
+  forgetFence: Schema.optionalKey(Schema.Int),
+  closedLineage: Schema.optionalKey(Schema.Literal(true)),
+  authorityFirst: Schema.optionalKey(digest),
+  fromScope: Schema.optionalKey(M.MemoryScope),
+  toScope: Schema.optionalKey(M.MemoryScope),
+  expectedScopeVersion: Schema.optionalKey(Schema.Int),
+  acceptanceGeneration: Schema.optionalKey(Schema.Int),
+  moveBinding: Schema.optionalKey(
+    Schema.Struct({
+      projectId: M.ProjectId,
+      version: M.NonNegativeInt,
+    }),
+  ),
+  summaryPrerequisite: Schema.optionalKey(M.MemoryRevisionId),
+  promotionBinding: Schema.optionalKey(
+    Schema.Struct({
+      project: M.ScopedProjectRef,
+      version: M.NonNegativeInt,
+    }),
+  ),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),
@@ -135,19 +156,7 @@ export const ThreadHookMetadata = Schema.Struct({
   kind: Schema.Literal("threadHook"),
   watermark: Schema.Int.check(Schema.makeFilter((n) => n >= 0)),
 });
-// One body-free cumulative set per native context owner, never one receipt per run.
-export const ThreadLineageMetadata = Schema.Struct({
-  kind: Schema.Literal("threadLineage"),
-  sourceThread: M.ScopedThreadRef,
-  memorySpaceId: M.MemorySpaceId,
-  state: Schema.Literals(["tracked", "unknown", "overflow"]),
-  revisions: Schema.Array(M.MemoryRevisionId).check(Schema.isMaxLength(100)),
-});
-export type ThreadLineage = typeof ThreadLineageMetadata.Type;
-export const threadLineageId = (thread: M.ScopedThreadRef) =>
-  `memory:thread-lineage:${JSON.stringify([thread.environmentId, thread.threadId])}`;
 export const WorkMetadata = Schema.Union([
-  ThreadLineageMetadata,
   ThreadHookMetadata,
   Metadata,
   LocalIntentMetadata,
@@ -252,6 +261,7 @@ export type ResolutionSnapshot = {
   readonly memoryId: M.MemoryId;
   readonly status: M.MemoryItem["status"] | null;
   readonly heads: readonly M.MemoryRevisionId[];
+  readonly scopeVersion?: number;
   readonly generation: number;
   readonly reasons: M.MemoryLocalAvailability["reasons"];
   readonly tombstone: boolean;
@@ -366,6 +376,7 @@ export type MemoryDecision = {
   readonly heads?: ReadonlyArray<M.MemoryRevisionId>;
   readonly conflict?: M.MemoryConflict;
   readonly identity?: M.MemoryIdentityRecord;
+  readonly movedIdentity?: M.MemoryIdentityRecord;
   readonly fence?: M.MemoryFenceRecord;
   readonly execution?: M.MemoryGenerationExecution;
   readonly work?: ReadonlyArray<MemoryWork>;
@@ -389,6 +400,8 @@ export type HubMember = {
   joinedAt: number | null;
 };
 export type HubAuthority = {
+  beforeAdmission?: InTx<unknown, M.MemoryHubError> | undefined;
+  negotiateFloor?: InTx<boolean, M.MemoryHubError | MemoryStorageError>;
   principal: M.MemoryHubPrincipal;
   now: InTx<number, MemoryStorageError>;
   reauthorize: InTx<
@@ -657,6 +670,7 @@ export type MemoryQuotaCharge = {
 export type MemoryReadFilter = {
   readonly memorySpaceId: M.MemorySpaceId;
   readonly scope: M.MemoryScope;
+  readonly origin?: M.ScopedThreadRef;
   readonly afterMemoryId?: M.MemoryId;
   readonly limit: number;
 };

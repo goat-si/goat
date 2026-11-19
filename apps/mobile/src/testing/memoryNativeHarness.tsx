@@ -220,6 +220,7 @@ vi.mock("@goat/client-runtime/state/session", () => ({
 }));
 vi.mock("../state/entities", () => ({
   useThreadShell: () => null,
+  useThreadShells: () => [],
   useProject: () => null,
   useProjects: () => {
     React.useSyncExternalStore(
@@ -278,18 +279,22 @@ vi.mock("../features/settings/components/SettingsActionRow", () => ({
 vi.mock("../features/settings/components/SettingsSwitchRow", () => ({
   SettingsSwitchRow: (props: {
     label: string;
+    subtitle?: string;
     value: boolean;
     onValueChange: (value: boolean) => void;
     disabled?: boolean;
   }) => (
-    <button
-      disabled={props.disabled}
-      role="switch"
-      aria-checked={props.value}
-      onClick={() => props.onValueChange(!props.value)}
-    >
-      {props.label}
-    </button>
+    <div>
+      <button
+        disabled={props.disabled}
+        role="switch"
+        aria-checked={props.value}
+        onClick={() => props.onValueChange(!props.value)}
+      >
+        {props.label}
+      </button>
+      {props.subtitle}
+    </div>
   ),
 }));
 vi.mock("../components/ui/Menu", () => ({
@@ -490,7 +495,9 @@ const scopes = (values: readonly AuthEnvironmentScope[]): AuthSessionState => ({
 });
 
 export type NativeMemoryHarness = ReturnType<typeof createNativeMemoryHarness>;
-export function createNativeMemoryHarness() {
+export function createNativeMemoryHarness(
+  extraCapabilities?: NonNullable<ServerConfig["environment"]["capabilities"]["memory"]>,
+) {
   bridge.projects = [];
   const registry = AtomRegistry.make();
   const configs = Atom.family((_id: EnvironmentId | null) => Atom.make<ServerConfig | null>(null));
@@ -511,6 +518,7 @@ export function createNativeMemoryHarness() {
           importProvider: true,
           resolutionInputs: true,
           retainedLocalSpace: true,
+          ...extraCapabilities,
         },
       },
     },

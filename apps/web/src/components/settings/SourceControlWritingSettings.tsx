@@ -8,7 +8,6 @@ import type {
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { createModelSelection } from "@goat/shared/model";
 import {
-  isReviewGuideDriver,
   isTextGenerationEligible,
   resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
@@ -172,9 +171,7 @@ export function SourceControlWritingSettingsSection() {
     now,
   );
   const reviewGuidePickerSelection = reviewGuideSelection ?? NO_PROVIDER_MODEL_SELECTION;
-  const reviewGuideEntries = instanceEntries.filter((entry) =>
-    isReviewGuideDriver(entry.driverKind),
-  );
+  const reviewGuideEntries = instanceEntries;
   const reviewGuideModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     textGenerationProviders,

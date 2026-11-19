@@ -29,7 +29,7 @@ const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const encodeError = Schema.encodeSync(M.MemoryRpcError);
 const decodeRefusal = Schema.decodeUnknownEffect(M.OrchestratorMcpFailure);
 
-it("registers all nine core tools", () => {
+it("registers all core memory tools", () => {
   expect(Object.keys(MemoryToolkit.tools).sort()).toEqual([...M.MEMORY_MCP_TOOLS].sort());
   for (const tool of Object.values(MemoryToolkit.tools))
     expect(Tool.getJsonSchema(tool).type).toBe("object");
@@ -195,7 +195,7 @@ it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"
               ? { memorySpaceId: Fixture.space, includeQuarantined: false }
               : name === "memory_search" || name === "memory_recall"
                 ? { memorySpaceId: Fixture.space, query: "synthetic" }
-                : name === "memory_sync_status"
+                : name === "memory_sync_status" || name === "goat_memory_suggestions"
                   ? {}
                   : name === "memory_forget"
                     ? {
@@ -614,7 +614,7 @@ it.effect(
           Fixture.space,
         )).revisions,
       ).toEqual((yield* store.loadAggregate(Fixture.space, input.memoryId)).heads);
-      yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_outbox WHEN NEW.space='_worker' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
+      yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_thread_lineage_revisions BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
       const failed = yield* Fixture.call("goat_memory_source_read", input, failedCaller);
       expect(failed.result.isError).toBe(true);
       expect(JSON.stringify(failed.body)).not.toContain("synthetic original");
@@ -882,5 +882,96 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
     );
     expect(noProject.result.isError).toBe(true);
     expect((yield* decodeRefusal(noProject.body)).message).toContain("no project memory");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("remember refuses scope moves before the hub floor and keeps the original memory", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const before = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    const caller = {
+      ...Fixture.scope(),
+      client: undefined,
+      thread: {
+        threadId: M.ThreadId.make("move-caller"),
+        providerSessionId: "synthetic",
+        providerInstanceId: M.ProviderInstanceId.make("codex"),
+      },
+    };
+    const call = yield* Fixture.call(
+      "goat_memory_remember",
+      { memoryId: Fixture.memoryId, scope: "thread" },
+      caller,
+    );
+    expect(call.result.isError).toBe(true);
+    expect(call.body).toMatchObject({ code: "hub_upgrade_required" });
+    expect(yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).toEqual(before);
+
+    const mixed = yield* Fixture.call(
+      "goat_memory_remember",
+      { memoryId: Fixture.memoryId, scope: "thread", text: "replacement must be explicit" },
+      caller,
+    );
+    expect(mixed.result.isError).toBe(true);
+    expect((yield* decodeRefusal(mixed.body)).message).toContain("without text");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("forgets by ID from a callerless session and keeps the original receipt on retry", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const [firstRevision] = (yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).heads;
+    if (!firstRevision) throw new Error("Expected the original revision");
+    yield* service.upsert(
+      {
+        ...Fixture.upsert(4),
+        expectedHeads: [firstRevision],
+        payload: { text: "edited synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
+      },
+      Effect.void,
+    );
+    const { heads: editedHeads } = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    expect(editedHeads).not.toEqual([firstRevision]);
+    const input = { memoryId: Fixture.memoryId };
+    const first = yield* Fixture.call("memory_forget", input);
+    expect(first.body).toMatchObject({ outcome: "deleted", memoryId: Fixture.memoryId });
+    const original = yield* decodeReceipt(first.body);
+    expect(yield* store.readOperation(Fixture.space, original.operationId)).toMatchObject({
+      kind: "forget",
+      expectedHeads: editedHeads,
+    });
+    expect((yield* Fixture.call("memory_forget", input)).body).toMatchObject({
+      outcome: "noop",
+      operationId: original.operationId,
+    });
+    expect(
+      yield* service.read({ ...input, memorySpaceId: Fixture.space }, Effect.void),
+    ).toMatchObject({ status: "forgotten" });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("forget by ID refuses an unknown memory without making a tombstone", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    expect(
+      (yield* Fixture.call("memory_forget", { memoryId: Fixture.memoryId })).body,
+    ).toMatchObject({ code: "not_found" });
+    expect((yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).tombstone).toBeUndefined();
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("forget by ID still requires a memory write grant", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const input = { memoryId: Fixture.memoryId, memorySpaceId: Fixture.space };
+    expect(
+      (yield* Fixture.call("memory_forget", input, Fixture.scope(["memory:read"]))).result.isError,
+    ).toBe(true);
+    expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "active" });
   }).pipe(Effect.provide(Fixture.layer)),
 );

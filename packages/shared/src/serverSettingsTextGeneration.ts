@@ -231,6 +231,10 @@ export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
 
 export type MemoryGenerationOperation = "summary" | "conflict";
 
+const hasLegacyMemoryCapabilities = (provider: ServerProvider): boolean =>
+  provider.memoryGeneration === undefined &&
+  (provider.driver === "pi" || provider.driver === "omo");
+
 export function supportsMemoryGeneration(
   settings: Pick<ServerSettings, "providerInstances">,
   provider: ServerProvider,
@@ -238,6 +242,9 @@ export function supportsMemoryGeneration(
 ): boolean {
   if (provider.memoryGeneration !== undefined) return provider.memoryGeneration[operation];
   if (provider.supportsTextGeneration === false) return false;
+  if (hasLegacyMemoryCapabilities(provider)) {
+    return provider.models.some((model) => model.supportsTextGeneration !== false);
+  }
   const instances = settings.providerInstances ?? {};
   const instance = Object.hasOwn(instances, provider.instanceId)
     ? instances[provider.instanceId]
@@ -290,9 +297,8 @@ export function isTextGenerationEligible(
     isModelTextGenerationCapable(provider, selection.model) &&
     !isTextGenerationQuotaExhausted(provider, selection.model, scope.now) &&
     (scope.purpose === undefined ||
-      (scope.purpose === "reviewGuide"
-        ? isReviewGuideDriver(provider.driver)
-        : supportsMemoryGeneration(settings, provider, scope.purpose)))
+      scope.purpose === "reviewGuide" ||
+      supportsMemoryGeneration(settings, provider, scope.purpose))
   );
 }
 
@@ -304,6 +310,13 @@ function eligiblePrimary(
 ) {
   if (selection === null) return null;
   const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+  if (
+    provider !== undefined &&
+    (scope.purpose === "reviewGuide" ||
+      (scope.purpose !== undefined && hasLegacyMemoryCapabilities(provider))) &&
+    !isModelTextGenerationCapable(provider, selection.model)
+  )
+    return null;
   const resolved =
     provider === undefined || textGenerator(settings, selection.instanceId) !== undefined
       ? { selection, reason: "saved" as const }
@@ -320,6 +333,12 @@ export function resolveTextGenerationFallback(
   for (const [instanceId] of textGenerationFallbackCandidates(settings.providerInstances)) {
     const provider = candidates.get(instanceId);
     if (provider === undefined || instanceId === scope.excludeInstanceId) continue;
+    if (
+      scope.purpose === "reviewGuide" &&
+      provider.models.length > 0 &&
+      provider.models.every((model) => model.supportsTextGeneration === false)
+    )
+      continue;
     const selection = { instanceId, model: textGenerationDefaultModel(provider) };
     if (isTextGenerationEligible(settings, selection, provider, scope)) return selection;
   }
@@ -376,48 +395,87 @@ export function configuredMemoryModelSelection(settings: ServerSettings): ModelS
 
 export function resolveMemoryModelSelection(
   settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider>,
-  now: number,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  timestamp: number | null = null,
   operation: MemoryGenerationOperation = "summary",
 ): ModelSelection | null {
-  const primary = eligiblePrimary(settings, settings.memoryModelSelection, providers, {
-    projectId: null,
-    now,
-    purpose: operation,
-  });
-  return (
-    primary?.selection ??
-    resolveTextGenerationRoute(
-      settings,
-      settings.textGenerationModelSelection,
-      providers,
-      null,
+  if (providers === undefined) return configuredMemoryModelSelection(settings);
+  const now = timestamp ?? Date.now();
+  const fallback = settings.textGenerationModelSelection;
+  const resolve = (candidates: ReadonlyArray<ServerProvider>) =>
+    eligiblePrimary(settings, settings.memoryModelSelection, candidates, {
+      projectId: null,
       now,
-      operation,
-    ).selection
-  );
+      purpose: operation,
+    })?.selection ??
+    resolveTextGenerationRoute(settings, fallback, candidates, null, now, operation).selection;
+  const known = providers.filter((provider) => !hasLegacyMemoryCapabilities(provider));
+  const selection =
+    resolve(known) ?? (known.length === providers.length ? null : resolve(providers));
+  if (selection !== null) return selection;
+  // Older snapshots supplied the configured text-generation fallback even before discovery.
+  return textGenerator(settings, fallback.instanceId) === undefined &&
+    !providers.some((provider) => provider.instanceId === fallback.instanceId) &&
+    providers.some(
+      (provider) =>
+        provider.instanceId === settings.memoryModelSelection?.instanceId &&
+        hasLegacyMemoryCapabilities(provider),
+    )
+    ? fallback
+    : null;
 }
 
 export function resolveReviewGuideModelSelection(
   settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider>,
+  providers: ReadonlyArray<ServerProvider> | undefined,
   projectId: ProjectId | null,
-  now: number,
+  now = Date.now(),
 ): ModelSelection | null {
+  const writer = resolveSourceControlWriterModelSelection(settings, providers, projectId);
+  const generator = textGenerator(settings, writer.instanceId);
+  if (providers === undefined) {
+    const guide = settings.reviewGuideModelSelection;
+    if (
+      guide !== null &&
+      textGenerator(settings, guide.instanceId) === undefined &&
+      resolveProjectProviderInstanceEnabled(settings, projectId, guide.instanceId)
+    )
+      return guide;
+    return generator?.enabled === true
+      ? (fallbackTextGenerationModelSelection(
+          settings.providerInstances,
+          (id, driver) =>
+            isReviewGuideDriver(driver) &&
+            textGenerator(settings, id) === undefined &&
+            resolveProjectProviderInstanceEnabled(settings, projectId, id),
+        ) ?? writer)
+      : writer;
+  }
   const scope = { projectId, now, purpose: "reviewGuide" } as const;
   const primary = eligiblePrimary(settings, settings.reviewGuideModelSelection, providers, scope);
   if (primary !== null) return primary.selection;
-  const writer = settings.sourceControlWriterModelSelection;
-  const inherited = eligiblePrimary(settings, writer, providers, scope);
-  if (inherited !== null) return inherited.selection;
-  return resolveTextGenerationRoute(
+  if (generator?.enabled === true) {
+    return (
+      resolveTextGenerationFallback(
+        settings,
+        providers.filter((provider) => isReviewGuideDriver(provider.driver)),
+        { ...scope, excludeInstanceId: writer.instanceId },
+      ) ?? writer
+    );
+  }
+  const route = resolveTextGenerationRoute(
     settings,
-    writer !== null && textGenerator(settings, writer.instanceId)?.enabled === true
-      ? writer
-      : settings.textGenerationModelSelection,
+    writer,
     providers,
     projectId,
     now,
     "reviewGuide",
-  ).selection;
+  );
+  return (
+    route.selection ??
+    (generator === undefined &&
+    !providers.some((provider) => provider.instanceId === writer.instanceId)
+      ? writer
+      : null)
+  );
 }

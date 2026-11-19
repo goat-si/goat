@@ -161,6 +161,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-haiku-5-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
+  [ProviderDriverKind.make("omo")]: "default",
   [OPENCODE_DRIVER_KIND]: "opencode/big-pickle",
   // OmO's text generation keeps the model OmO is configured with.
   [ProviderDriverKind.make("omo")]: "default",

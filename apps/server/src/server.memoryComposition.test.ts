@@ -56,7 +56,7 @@ it.effect(
           .map((name) => listedToolName(resolveAgentSurfaceEntry(name)!))
           .sort(),
       );
-      expect(new Set(names).size).toBe(18);
+      expect(new Set(names).size).toBe(19);
       const result = yield* Fixture.call(
         "memory_hub_disable",
         { requestId: M.MemoryOperationId.make(Fixture.id(30)), expectedVersion: 3 },

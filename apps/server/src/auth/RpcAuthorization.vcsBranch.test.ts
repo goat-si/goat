@@ -5,7 +5,13 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as RpcTest from "effect/rpc/RpcTest";
 import * as RpcAuthorization from "./RpcAuthorization.ts";
-import { RPC_REQUIRED_SCOPES } from "./RpcAuthorization.ts";
+import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
+
+it("lets thread readers observe and refresh checkout branches", () => {
+  for (const method of [WS_METHODS.subscribeVcsBranch, WS_METHODS.vcsRefreshBranch]) {
+    expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+  }
+});
 
 it.effect.each([
   WS_METHODS.subscribeVcsBranch,

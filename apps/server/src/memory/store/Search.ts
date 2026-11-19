@@ -37,6 +37,14 @@ export const makeSearch = (
         return result;
       }),
     );
+  const originPredicate = (filter: MemoryReadFilter) =>
+    filter.origin
+      ? sql`AND memory_id IN (
+          SELECT memory_id FROM memory_origins
+          WHERE space=${filter.memorySpaceId} AND environment_id=${filter.origin.environmentId}
+            AND thread_id=${filter.origin.threadId} AND memory_id>${filter.afterMemoryId ?? ""}
+        )`
+      : sql``;
   const list = Effect.fn("MemoryStore.list")(function* (filter: MemoryReadFilter) {
     if (
       !Number.isInteger(filter.limit) ||
@@ -49,7 +57,7 @@ export const makeSearch = (
       "list",
       sql<{
         memory_id: string;
-      }>`SELECT memory_id FROM memory_items WHERE space=${filter.memorySpaceId} AND scope_key=${scopeKey(scope)} AND memory_id>${filter.afterMemoryId ?? ""} ORDER BY memory_id LIMIT ${filter.limit}`,
+      }>`SELECT memory_id FROM memory_items WHERE space=${filter.memorySpaceId} AND scope_key=${scopeKey(scope)} AND memory_id>${filter.afterMemoryId ?? ""} ${originPredicate(filter)} ORDER BY memory_id LIMIT ${filter.limit}`,
     );
     return yield* Effect.forEach(rows, (row) =>
       Effect.gen(function* () {
@@ -137,13 +145,13 @@ export const makeSearch = (
             "fts-search",
             sql<{ memory_id: string; matches: number }>`WITH window AS MATERIALIZED (
         SELECT rowid,memory_id,status,index_state,indexed_generation,generation FROM memory_items
-        WHERE space=${filter.memorySpaceId} AND scope_key=${key} AND memory_id>${filter.afterMemoryId ?? ""} ORDER BY memory_id LIMIT 1000
+        WHERE space=${filter.memorySpaceId} AND scope_key=${key} AND memory_id>${filter.afterMemoryId ?? ""} ${originPredicate(filter)} ORDER BY memory_id LIMIT 1000
       ) SELECT memory_id,CASE WHEN status='active' AND index_state='ready' AND indexed_generation=generation THEN EXISTS(SELECT 1 FROM memory_items_fts WHERE rowid=window.rowid AND memory_items_fts MATCH ${ftsMatchQuery(text)}) ELSE 0 END AS matches FROM window ORDER BY memory_id`,
           )
         : yield* stored(
             "substring-search",
             sql<{ memory_id: string; matches: number }>`WITH window AS MATERIALIZED (
-        SELECT memory_id,status,payload_ref FROM memory_items WHERE space=${filter.memorySpaceId} AND scope_key=${key} AND memory_id>${filter.afterMemoryId ?? ""} ORDER BY memory_id LIMIT 1000
+        SELECT memory_id,status,payload_ref FROM memory_items WHERE space=${filter.memorySpaceId} AND scope_key=${key} AND memory_id>${filter.afterMemoryId ?? ""} ${originPredicate(filter)} ORDER BY memory_id LIMIT 1000
       ) SELECT memory_id,CASE WHEN status='active' THEN coalesce((SELECT instr(json_extract(body_json,'$.text'),${text})>0 FROM memory_payloads WHERE space=${filter.memorySpaceId} AND payload_ref=window.payload_ref),0) ELSE 0 END AS matches FROM window ORDER BY memory_id`,
           );
     const items: M.MemoryItem[] = [];

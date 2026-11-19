@@ -85,7 +85,7 @@ const onRestart = <A, E>(
 /** The build before cycle 261114: no upstream 080-089, GOAT ten ids lower. */
 const upstream80Names = new Set(UPSTREAM_80S.map(([, name]) => name));
 const previousEntries = migrationEntries.flatMap(([id, name, migration]) =>
-  upstream80Names.has(name)
+  upstream80Names.has(name) || id > currentRow("DisposableMachineEnrollment")[0]
     ? []
     : [[GOAT_MIGRATION_NAMES.has(name) ? id - 10 : id, name, migration] as const],
 );
@@ -310,7 +310,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
   it.effect("a kill in the later GOAT migrations keeps those that finished", () => {
     const { provide, reopen } = database();
     return Effect.gen(function* () {
-      // Old max 85: GOAT's first six move to 90-95 and 96-159 run after upstream 080-089.
+      // Old max 85: GOAT's first six move to 90-95; 96 and above run after upstream 080-089.
       yield* seedOldGoatLedger(85);
       const sql = yield* SqlClient.SqlClient;
       // 112 creates this table, so its body fails; the migrator writes the ledger row itself.
@@ -391,7 +391,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      159,
+      166,
     ],
     [
       "a ledger from before the shift that lost row 72",

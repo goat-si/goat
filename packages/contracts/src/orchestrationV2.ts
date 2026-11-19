@@ -10,6 +10,7 @@ export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2CreationFields,
   OrchestrationV2CreationSource,
   OrchestrationV2ThreadHistoryOrigin,
 } from "./orchestrationV2Attribution.ts";
@@ -158,11 +159,6 @@ import {
 } from "./threadTitle.ts";
 
 export * from "./providerReplay.ts";
-const OrchestrationV2CreationFields = {
-  createdBy: OrchestrationV2Actor,
-  creationSource: OrchestrationV2CreationSource,
-} as const;
-
 export const OrchestrationV2NativeRefStrength = Schema.Literals(["strong", "weak", "none"]);
 export type OrchestrationV2NativeRefStrength = typeof OrchestrationV2NativeRefStrength.Type;
 
@@ -1128,6 +1124,7 @@ export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpire
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  ingress: Schema.optional(Schema.Literal("person")),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -3133,6 +3130,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    ingress: Schema.optional(Schema.Literal("person")),
     memoryGrantCeiling: MemoryTaskGrantCeilingField,
     notification: Schema.optional(OrchestrationV2Notification),
     /** Sends this pending guest message; the server uses the guest's text, not `text`. */

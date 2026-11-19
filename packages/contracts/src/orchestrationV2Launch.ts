@@ -32,6 +32,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 // Server-owned input attached to a fresh launch's create command.
 export const OrchestrationV2ThreadCreateInitialMessage = Schema.Struct({
   messageId: MessageId,
+  ingress: Schema.optional(Schema.Literal("person")),
   legacyCommandId: Schema.optional(CommandId),
   text: Schema.String,
   attachments: Schema.Array(ChatAttachment),

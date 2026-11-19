@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerSettings,
 } from "@goat/contracts";
 import { createModelSelection } from "./model.ts";
 import {
@@ -46,24 +47,51 @@ const piProvider = (model: Partial<ServerProviderModel>) =>
     skills: [],
   }) satisfies ServerProvider;
 
-it("the writer skips a session-only model and accepts an older snapshot without a capability flag", () => {
-  expect(
-    resolveSourceControlWriterModelSelection(
-      settings,
-      [piProvider({ supportsTextGeneration: false })],
-      null,
-    ),
-  ).toEqual(settings.textGenerationModelSelection);
-  expect(resolveSourceControlWriterModelSelection(settings, [piProvider({})], null)).toEqual(
-    extensionModel,
-  );
+it("memory fallback from a standalone generator picks OmO's default instead of gpt-6-luna", () => {
+  const omo = ProviderInstanceId.make("omo");
+  const standalone = ProviderInstanceId.make("standalone");
+  const driver = ProviderDriverKind.make("omo");
+  const selection = createModelSelection(standalone, "standalone-model");
+  const onlyOmo = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: { [omo]: { driver, enabled: true, config: {} } },
+    textGenerators: {
+      [standalone]: {
+        kind: "openaiCompatible",
+        baseUrl: "https://model.example/v1",
+        apiKey: "",
+        enabled: true,
+      },
+    },
+    textGenerationModelSelection: selection,
+  } satisfies ServerSettings;
+  const providers = [
+    { ...piProvider({ slug: "default", name: "OmO default" }), instanceId: omo, driver },
+  ];
+  expect(resolveMemoryModelSelection(onlyOmo, providers)).toEqual({
+    instanceId: omo,
+    model: "default",
+  });
+  expect(resolveReviewGuideModelSelection(onlyOmo, providers, null)).toEqual(selection);
 });
 
-it("legacy Pi snapshots are ineligible for memory and guides", () => {
-  const capable = [piProvider({})];
-  expect(resolveMemoryModelSelection(settings, capable, 0)).toBeNull();
-  expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
-});
+it.each([
+  ["writer", resolveSourceControlWriterModelSelection],
+  ["review guide", resolveReviewGuideModelSelection],
+  [
+    "memory",
+    (input: typeof settings, providers: ReadonlyArray<ServerProvider>) =>
+      resolveMemoryModelSelection(input, providers),
+  ],
+] as const)(
+  "the %s selection skips a model its provider cannot use for text generation, and keeps it when an older server omits the flag",
+  (_label, resolve) => {
+    expect(resolve(settings, [piProvider({ supportsTextGeneration: false })], null)).toEqual(
+      settings.textGenerationModelSelection,
+    );
+    expect(resolve(settings, [piProvider({})], null)).toEqual(extensionModel);
+  },
+);
 
 it.each([{ modelRoute: "opencodex" }, { serverUrl: "https://opencode.example" }])(
   "legacy OpenCode snapshots use the configured route %j for both memory operations",
