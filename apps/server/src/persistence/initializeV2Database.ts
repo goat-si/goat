@@ -73,18 +73,27 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
       prefix: `.v2-import-${process.pid}-`,
     });
     const snapshotPath = path.join(temporaryDirectory, "snapshot.sqlite");
-    yield* Effect.callback<void, unknown>((resume) => {
+    yield* Effect.callback<void, V2DatabaseImportError>((resume) => {
       const worker = guardErrors(
         new NodeWorkerThreads.Worker(snapshotWorkerSource, {
           eval: true,
           workerData: { sourcePath, snapshotPath },
         }),
-        (cause) => resume(Effect.fail(cause)),
+        (cause) =>
+          resume(Effect.fail(new V2DatabaseImportError({ sourcePath, destinationPath, cause }))),
       );
       worker.once("exit", (code) =>
         code === 0
           ? resume(Effect.void)
-          : resume(Effect.fail(new Error(`Snapshot worker exited with ${code}`))),
+          : resume(
+              Effect.fail(
+                new V2DatabaseImportError({
+                  sourcePath,
+                  destinationPath,
+                  cause: `Snapshot worker exited with ${code}`,
+                }),
+              ),
+            ),
       );
       return Effect.promise(() => worker.terminate());
     });
