@@ -234,6 +234,8 @@ export class AzureDevOpsCli extends Context.Service<
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
+      readonly organization?: string;
+      readonly project?: string;
     }) => Effect.Effect<NormalizedAzureDevOpsPullRequestRecord, AzureDevOpsCliError>;
 
     readonly getRepositoryCloneUrls: (input: {
@@ -263,12 +265,6 @@ export class AzureDevOpsCli extends Context.Service<
       readonly project?: string;
       readonly organization?: string;
     }) => Effect.Effect<string | null, AzureDevOpsCliError>;
-
-    readonly checkoutPullRequest: (input: {
-      readonly cwd: string;
-      readonly reference: string;
-      readonly remoteName?: string;
-    }) => Effect.Effect<void, AzureDevOpsCliError>;
   }
 >()("@goat/source-control-azure-devops/server/AzureDevOpsCli") {}
 
@@ -500,8 +496,10 @@ export const make = Effect.gen(function* () {
           "repos",
           "pr",
           "show",
-          "--detect",
-          "true",
+          ...(input.organization === undefined
+            ? ["--detect", "true"]
+            : [`--organization=${input.organization}`]),
+          ...(input.project === undefined ? [] : [`--project=${input.project}`]),
           "--id",
           normalizeChangeRequestId(input.reference),
         ],
@@ -627,23 +625,6 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((repo) => normalizeDefaultBranch(repo.defaultBranch)),
       );
-    }),
-    checkoutPullRequest: Effect.fn("AzureDevOpsCli.checkoutPullRequest")(function (input) {
-      return execute({
-        cwd: input.cwd,
-        args: [
-          "repos",
-          "pr",
-          "checkout",
-          "--only-show-errors",
-          "--detect",
-          "true",
-          "--id",
-          normalizeChangeRequestId(input.reference),
-          "--remote-name",
-          input.remoteName ?? "origin",
-        ],
-      }).pipe(Effect.asVoid);
     }),
   });
 });
