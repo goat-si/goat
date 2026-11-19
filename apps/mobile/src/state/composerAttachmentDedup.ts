@@ -10,12 +10,21 @@ export function deduplicateComposerAttachments(
   for (const attachment of incoming) {
     const duplicate = seen.some(
       (item) =>
-        item.mimeType === attachment.mimeType &&
-        item.sizeBytes === attachment.sizeBytes &&
-        item.name === attachment.name &&
-        (item.type !== "image" ||
-          attachment.type !== "image" ||
-          item.dataUrl === attachment.dataUrl),
+        (item.fileUri !== undefined &&
+          item.fileUri !== "" &&
+          item.fileUri === attachment.fileUri) ||
+        (item.type === "image" &&
+          attachment.type === "image" &&
+          item.name === attachment.name &&
+          item.mimeType === attachment.mimeType &&
+          item.sizeBytes === attachment.sizeBytes &&
+          item.dataUrl !== undefined &&
+          item.dataUrl !== "" &&
+          item.dataUrl === attachment.dataUrl) ||
+        (item.uploadedAttachmentId !== undefined &&
+          item.uploadEnvironmentId !== undefined &&
+          item.uploadedAttachmentId === attachment.uploadedAttachmentId &&
+          item.uploadEnvironmentId === attachment.uploadEnvironmentId),
     );
     if (duplicate) duplicates.push(attachment);
     else {
