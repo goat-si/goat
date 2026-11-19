@@ -441,6 +441,79 @@ it.layer(layerTest)("GrokDriver", (it) => {
     });
   }
 
+  it.effect.each([true, false])(
+    "updates the %s recognized script home without changing unrelated installs",
+    (recognized) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "goat-grok-home-" }),
+        );
+        const scriptHome = path.join(home, ".grok");
+        const otherHome = path.join(home, ".grok-other");
+        const binaryPath = path.join(scriptHome, "bin", windowsHost ? "grok.exe" : "grok");
+        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        if (recognized)
+          yield* fs.makeDirectory(path.join(scriptHome, "downloads"), { recursive: true });
+        const actual =
+          recognized && !windowsHost
+            ? path.join(scriptHome, "downloads", "grok-linux-x86_64")
+            : binaryPath;
+        yield* fs.writeFileString(actual, "#!/bin/sh\n", { mode: 0o755 });
+        if (actual !== binaryPath) yield* fs.symlink(actual, binaryPath);
+        const instance = yield* GrokDriver.create({
+          instanceId: ProviderInstanceId.make("grok-home"),
+          displayName: "Grok test",
+          enabled: false,
+          environment: [{ name: "GROK_HOME", value: otherHome, sensitive: false }],
+          config: { ...GrokDriver.defaultConfig(), binaryPath },
+        });
+        const update = (yield* instance.snapshot.resolveMaintenance()).update;
+        expect(update?.env?.GROK_HOME).toBe(recognized ? scriptHome : otherHome);
+        expect(update?.executable).toBe(binaryPath);
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner)),
+  );
+
+  it.effect("does not offer an update when script installation ownership cannot be checked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "goat-grok-unreadable-" }),
+      );
+      const binaryPath = path.join(home, ".grok", "bin", windowsHost ? "grok.exe" : "grok");
+      const downloads = path.join(home, ".grok", "downloads");
+      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n", { mode: 0o755 });
+      const unavailable = FileSystem.FileSystem.of({
+        ...fs,
+        exists: (candidate) =>
+          candidate === downloads
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "exists",
+                  pathOrDescriptor: candidate,
+                }),
+              )
+            : fs.exists(candidate),
+      });
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-unreadable"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [],
+        config: { ...GrokDriver.defaultConfig(), binaryPath },
+      }).pipe(Effect.provideService(FileSystem.FileSystem, unavailable));
+      const result = yield* instance.snapshot
+        .resolveMaintenance()
+        .pipe(Effect.provideService(FileSystem.FileSystem, unavailable));
+      expect(result.update === null).toBe(true);
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner)),
+  );
+
   it.effect("keeps a script install off the npm updater under npx", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

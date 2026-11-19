@@ -96,6 +96,33 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
         })
       );
     }
+    const path = yield* Path.Path;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const name = path.basename(context.realCommandPath).toLowerCase();
+    const installDir = path.dirname(context.realCommandPath);
+    const installDirName = path.basename(installDir).toLowerCase();
+    const home = path.dirname(installDir);
+    let isScriptInstall = installDirName === "downloads" && name.startsWith("grok-");
+    if (installDirName === "bin") {
+      if (/^grok-\d/.test(name)) {
+        isScriptInstall = true;
+      } else if (name === "grok" || name === "grok.exe") {
+        const downloads = yield* fileSystem
+          .exists(path.join(home, "downloads"))
+          .pipe(Effect.result);
+        if (downloads._tag === "Failure") {
+          yield* Effect.logWarning("Could not determine Grok installation ownership", {
+            cause: downloads.failure,
+          });
+          return makeManualOnlyProviderMaintenanceCapabilities({
+            provider: DRIVER_KIND,
+            packageName: GROK_NPM_PACKAGE,
+            installPath: context.realCommandPath,
+          });
+        }
+        isScriptInstall = downloads.success;
+      }
+    }
     return makeProviderMaintenanceCapabilities({
       provider: DRIVER_KIND,
       packageName: GROK_NPM_PACKAGE,
@@ -105,6 +132,7 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
       platform: context.platform,
       env: {
         ...context.env,
+        ...(isScriptInstall ? { GROK_HOME: home } : {}),
         npm_config_allow_scripts: GROK_NPM_PACKAGE,
         // An npx-launched server's npm_config_user_agent outranks Grok's `[cli] installer`, steering
         // a script install to npm. The runner extends process.env; only undefined removes a key.
