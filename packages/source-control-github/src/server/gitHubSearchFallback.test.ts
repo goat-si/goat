@@ -67,7 +67,7 @@ layer("GitHub search fallback", (it) => {
   );
   it.effect.each([
     { status: 404, cursor: undefined },
-    { status: 502, cursor: "2026-01-01T00:00:00.000Z" },
+    { status: 502, cursor: { updatedBefore: "2026-01-01T00:00:00.000Z", delivered: 10 } },
   ])("does not fall back for a non-5xx response or a cursor (%j)", ({ status, cursor }) =>
     Effect.gen(function* () {
       mockedExecute.mockReset();
