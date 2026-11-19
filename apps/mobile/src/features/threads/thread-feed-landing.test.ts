@@ -24,3 +24,15 @@ it("waits for actual end landing while allowing explicit jumps and manual scroll
     feedHasLanded({ loaded: false, distanceFromEnd: 0, followsEnd: true, jumping: false }),
   ).toBe(false);
 });
+
+it("does not reveal a feed before its viewport and content have been measured", () => {
+  expect(
+    feedHasLanded({
+      loaded: true,
+      distanceFromEnd: 0,
+      followsEnd: true,
+      jumping: false,
+      measured: false,
+    }),
+  ).toBe(false);
+});

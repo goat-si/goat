@@ -7,6 +7,10 @@ export function feedHasLanded(input: {
   distanceFromEnd: number;
   followsEnd: boolean;
   jumping: boolean;
+  measured?: boolean;
 }): boolean {
-  return input.loaded && (input.distanceFromEnd <= 2 || !input.followsEnd || input.jumping);
+  return (
+    input.loaded &&
+    (!input.followsEnd || input.jumping || (input.measured !== false && input.distanceFromEnd <= 2))
+  );
 }

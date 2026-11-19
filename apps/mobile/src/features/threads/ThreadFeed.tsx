@@ -2586,6 +2586,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       state &&
       feedHasLanded({
         loaded,
+        measured: state.contentLength > 0 && state.scrollLength > 0,
         distanceFromEnd: Math.max(0, state.contentLength - state.scrollLength - state.scroll),
         followsEnd,
         jumping: !!jumpToMessageId,
