@@ -176,6 +176,66 @@ const fakeHost = (input: {
 };
 
 describe("pull request watch host events", () => {
+  it.effect("a complete GitLab fingerprint avoids detail reads for unchanged running checks", () =>
+    Effect.gen(function* () {
+      const { projectId } = yield* watchPullRequest("pr-complete-fingerprint", 63);
+      let complete = true;
+      let details = 0;
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => {
+              details += 1;
+              return {
+                ...watchedPullRequestDetail({
+                  projectId,
+                  number: 63,
+                  at: "2026-10-02T12:00:00.000Z",
+                }),
+                headSha: "aaaaaaaaaa",
+                checks: [
+                  {
+                    name: "lint",
+                    status: "pending" as const,
+                    description: null,
+                    url: null,
+                    required: true,
+                  },
+                ],
+              };
+            }),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () =>
+            Effect.sync(() => ({ status: "same", remarks: "same", coversDetail: complete })),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      yield* sweep;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.strictEqual(details, 1);
+      complete = false;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.strictEqual(details, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("reports check changes even when activity fails and retries remarks", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));

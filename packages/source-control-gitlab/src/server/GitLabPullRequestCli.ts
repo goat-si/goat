@@ -1,4 +1,8 @@
 import { makeGitLabPullRequestStats } from "./gitLabPullRequestStats.ts";
+import {
+  decodeMergeRequestWatchFingerprintJson,
+  MERGE_REQUEST_WATCH_FINGERPRINT_GRAPHQL_QUERY,
+} from "./gitLabMergeRequestWatchFingerprint.ts";
 import { makeGitLabProjectUsers, makeReviewerCandidates } from "./gitLabProjectUsers.ts";
 import { makeReferenceSearch } from "./gitLabReferenceSearch.ts";
 export { referenceSearches } from "./gitLabReferenceSearch.ts";
@@ -105,6 +109,7 @@ import {
 import { decodeProjectLabelsJson } from "./gitLabProjectLabels.ts";
 import type {
   ProviderChangeRequestSummary,
+  ProviderChangeRequestWatchFingerprint,
   ProviderFileStats,
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
@@ -216,6 +221,13 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<ProviderFileStats, GitLabPullRequestCliError>;
+
+    readonly getMergeRequestWatchFingerprint: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<ProviderChangeRequestWatchFingerprint | null, GitLabPullRequestCliError>;
 
     readonly listNotes: (input: {
       readonly cwd: string;
@@ -1198,6 +1210,19 @@ export const make = Effect.gen(function* () {
     listMergeRequestStats,
 
     getMergeRequestFileStats,
+
+    getMergeRequestWatchFingerprint: Effect.fn(
+      "GitLabPullRequestCli.getMergeRequestWatchFingerprint",
+    )((input) =>
+      graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getMergeRequestWatchFingerprint",
+        query: MERGE_REQUEST_WATCH_FINGERPRINT_GRAPHQL_QUERY,
+        variables: { fullPath: input.repository, iid: String(input.number) },
+        decode: decodeMergeRequestWatchFingerprintJson,
+      }),
+    ),
 
     listNotes: Effect.fn("GitLabPullRequestCli.listNotes")(function (input) {
       return notesPage({ ...input, page: 1, collected: [] });
