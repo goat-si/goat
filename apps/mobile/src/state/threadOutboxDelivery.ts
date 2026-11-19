@@ -25,7 +25,7 @@ import {
   settledCreationOutcomeKeysAtom,
   setQueuedMessageRetrying,
 } from "./threadOutboxDeliverySupport";
-import * as Dialog from "../components/ui/Dialog";
+import { loadThreadOutbox } from "./threadOutboxLoading";
 import {
   threadRuntimeIsActive,
   type EnvironmentThreadShell,
@@ -91,12 +91,25 @@ interface ThreadOutboxRetry {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
-/** Delivers one message at a time as its inputs change or a retry backoff expires. */
+interface ThreadDispatch {
+  readonly messageId: MessageId;
+  started: boolean;
+  retiring: boolean;
+}
+
+/** Delivers one message per thread as inputs change or a retry backoff expires. */
 export function createThreadOutboxDelivery(): {
   readonly drain: () => void;
   readonly dispose: () => void;
 } {
   let disposed = false;
+  const dispatchingThreads = new Map<string, ThreadDispatch>();
+  const markSending = (message: QueuedThreadMessage) => {
+    const dispatch = dispatchingThreads.get(
+      scopedThreadKey(message.environmentId, message.threadId),
+    );
+    if (dispatch?.messageId === message.messageId) dispatch.started = true;
+  };
   const retries = new Map<MessageId, ThreadOutboxRetry>();
   const uploadFailures = new Map<MessageId, number>();
   const exhaustedUploads = new Set<MessageId>();
@@ -151,10 +164,12 @@ export function createThreadOutboxDelivery(): {
 
   // A delivery that throws backs off like any failure. Releasing the slot
   // without a retry would re-run the drain straight into the same message.
-  const settle = (messageId: MessageId, delivery: Promise<boolean>): void => {
+  const settle = (threadKey: string, messageId: MessageId, delivery: Promise<boolean>): void => {
+    const dispatch = dispatchingThreads.get(threadKey);
     void delivery
       .then(
         (sent) => {
+          if (dispatchingThreads.get(threadKey) !== dispatch || dispatch?.retiring) return;
           if (!sent) return scheduleRetry(messageId);
           const queued = Object.values(
             appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
@@ -163,11 +178,17 @@ export function createThreadOutboxDelivery(): {
           if (outcome === "delivered") clearRetry(messageId);
         },
         (error: unknown) => {
+          if (dispatchingThreads.get(threadKey) !== dispatch || dispatch?.retiring) return;
           console.warn("[thread-outbox] queued message delivery threw", { messageId, error });
           scheduleRetry(messageId);
         },
       )
-      .finally(() => finishDispatchingQueuedMessage(messageId));
+      .finally(() => {
+        if (dispatchingThreads.get(threadKey) !== dispatch) return;
+        dispatchingThreads.delete(threadKey);
+        finishDispatchingQueuedMessage(messageId);
+        drain();
+      });
   };
 
   // An over-cap draft blocks recovery until the user changes its attachments;
@@ -274,6 +295,7 @@ export function createThreadOutboxDelivery(): {
     let persistedMessage: QueuedThreadMessage;
     let deliveryRevision: number;
     if (!hasAccess()) return true;
+    const uploadRevision = threadOutboxRevision(queuedMessage.messageId);
     try {
       const preparedResult = await prepareQueuedMessageAttachments(
         queuedMessage,
@@ -290,7 +312,8 @@ export function createThreadOutboxDelivery(): {
         return true;
       }
     } catch (error) {
-      if (!hasAccess()) return true;
+      if (!hasAccess() || !isQueuedMessagePayloadCurrent(queuedMessage, uploadRevision))
+        return true;
       logThreadOutboxUploadFailure(queuedMessage, error);
       if (!shouldRetryThreadOutboxDelivery(error)) {
         return restoreQueuedMessage(
@@ -329,6 +352,7 @@ export function createThreadOutboxDelivery(): {
     );
     if (queuedMessage.compactBeforeSend === true) {
       if (!hasAccess()) return true;
+      markSending(queuedMessage);
       const compactionResult = await runDeliveryCommand(threadEnvironment.startTurn, {
         environmentId: queuedMessage.environmentId,
         input: {
@@ -358,6 +382,7 @@ export function createThreadOutboxDelivery(): {
       if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)) return true;
     }
     if (!hasAccess()) return true;
+    markSending(queuedMessage);
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
       input: {
@@ -447,6 +472,7 @@ export function createThreadOutboxDelivery(): {
     let prepared: PreparedTurnAttachments;
     let persistedMessage: QueuedThreadMessage;
     let deliveryRevision: number;
+    const uploadRevision = threadOutboxRevision(queuedMessage.messageId);
     try {
       const preparedResult = await prepareQueuedMessageAttachments(
         queuedMessage,
@@ -463,7 +489,8 @@ export function createThreadOutboxDelivery(): {
         return true;
       }
     } catch (error) {
-      if (!hasAccess()) return true;
+      if (!hasAccess() || !isQueuedMessagePayloadCurrent(queuedMessage, uploadRevision))
+        return true;
       logThreadOutboxUploadFailure(queuedMessage, error);
       if (!shouldRetryThreadOutboxDelivery(error)) {
         return restoreQueuedMessage(
@@ -532,6 +559,7 @@ export function createThreadOutboxDelivery(): {
       };
     }
     launchedCreations.set(persistedMessage.messageId, { revision: deliveryRevision, workspace });
+    markSending(queuedMessage);
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
       input: buildProjectThreadStartTurnInput({
@@ -611,7 +639,6 @@ export function createThreadOutboxDelivery(): {
 
   function drainPass(): void {
     const {
-      dispatchingQueuedMessageId,
       editingQueuedMessageIds,
       queuedMessagesByThreadKey,
       shellStatuses,
@@ -630,6 +657,12 @@ export function createThreadOutboxDelivery(): {
       if (!queuedMessageIds.has(messageId)) clearRetry(messageId);
     }
     const reconnected = new Set<string>();
+    const currentEnvironmentIds = new Set<string>(
+      connectedEnvironments.map((environment) => environment.environmentId),
+    );
+    for (const environmentId of connectionStates.keys()) {
+      if (!currentEnvironmentIds.has(environmentId)) connectionStates.delete(environmentId);
+    }
     for (const environment of connectedEnvironments) {
       const previous = connectionStates.get(environment.environmentId);
       if (
@@ -644,8 +677,19 @@ export function createThreadOutboxDelivery(): {
     for (const message of Object.values(queuedMessagesByThreadKey).flat()) {
       if (reconnected.has(message.environmentId)) clearRetry(message.messageId);
     }
-    if (dispatchingQueuedMessageId !== null) {
-      return;
+    for (const [threadKey, dispatch] of dispatchingThreads) {
+      if (
+        !queuedMessagesByThreadKey[threadKey]?.some(
+          (message) => message.messageId === dispatch.messageId,
+        )
+      ) {
+        if (dispatch.started) {
+          dispatch.retiring = true;
+          continue;
+        }
+        dispatchingThreads.delete(threadKey);
+        finishDispatchingQueuedMessage(dispatch.messageId);
+      }
     }
 
     for (const messageId of acknowledgedExistingThreadMessageIds) {
@@ -664,6 +708,7 @@ export function createThreadOutboxDelivery(): {
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
+      if (dispatchingThreads.has(threadKey)) continue;
       const nextQueuedMessage = queuedMessages[0];
       if (!nextQueuedMessage) {
         continue;
@@ -677,15 +722,17 @@ export function createThreadOutboxDelivery(): {
         if (retryNotBefore(messageId) > Date.now()) {
           continue;
         }
+        dispatchingThreads.set(threadKey, { messageId, started: false, retiring: false });
         beginDispatchingQueuedMessage(messageId);
         settle(
+          threadKey,
           messageId,
           removeAcknowledgedExistingThreadMessage(
             nextQueuedMessage,
             acknowledgedExistingThreadMessageIds,
           ),
         );
-        return;
+        continue;
       }
       if (editingQueuedMessageIds[messageId]) {
         continue;
@@ -805,8 +852,10 @@ export function createThreadOutboxDelivery(): {
       }
       if (dispatchStep.step === "restore") {
         const attachmentError = dispatchStep.reason;
+        dispatchingThreads.set(threadKey, { messageId, started: false, retiring: false });
         beginDispatchingQueuedMessage(messageId);
         settle(
+          threadKey,
           messageId,
           confirmThreadOutboxMessageQueued(nextQueuedMessage).then((queued) =>
             !queued || appAtomRegistry.get(editingQueuedMessageIdsAtom)[messageId]
@@ -814,7 +863,7 @@ export function createThreadOutboxDelivery(): {
               : restoreQueuedMessage(nextQueuedMessage, attachmentError),
           ),
         );
-        return;
+        continue;
       }
       const creationProjectCwd =
         creation !== undefined
@@ -831,6 +880,7 @@ export function createThreadOutboxDelivery(): {
         }
       }
 
+      dispatchingThreads.set(threadKey, { messageId, started: false, retiring: false });
       beginDispatchingQueuedMessage(messageId);
       const removeQueuedMessage = (warning: string) =>
         removeThreadOutboxMessage(nextQueuedMessage).then(
@@ -883,8 +933,7 @@ export function createThreadOutboxDelivery(): {
               ? sendQueuedMessage(nextQueuedMessage, thread)
               : Promise.resolve(false);
       });
-      settle(messageId, delivery);
-      return;
+      settle(threadKey, messageId, delivery);
     }
   }
 
@@ -909,6 +958,9 @@ export function createThreadOutboxDelivery(): {
       stopDraining();
       stopRetryRequests();
       stopCollectingOutcomes();
+      for (const { messageId } of dispatchingThreads.values())
+        finishDispatchingQueuedMessage(messageId);
+      dispatchingThreads.clear();
       for (const retry of retries.values()) clearTimeout(retry.timer);
       retries.clear();
       appAtomRegistry.set(retryingQueuedMessageIdsAtom, {});
@@ -919,20 +971,6 @@ export function createThreadOutboxDelivery(): {
       familyMounts.clear();
     },
   };
-}
-
-function loadThreadOutbox(isActive: () => boolean): void {
-  void threadOutboxManager.load().then((loaded) => {
-    if (loaded || !isActive()) return;
-    Dialog.alert(
-      "Some queued messages could not be loaded",
-      "Unreadable records and attachment files are still saved. Other messages can still be sent.",
-      [
-        { text: "Dismiss", style: "cancel" },
-        { text: "Retry", onPress: () => loadThreadOutbox(isActive) },
-      ],
-    );
-  });
 }
 
 /** App-lifetime: loads the persisted outbox and delivers queued messages. */
