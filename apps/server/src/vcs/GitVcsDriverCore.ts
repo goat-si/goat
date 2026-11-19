@@ -2036,7 +2036,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       );
     } else {
-      yield* checkConflictMarkers(cwd, env, fileSystem, path, executeGit);
+      yield* checkConflictMarkers(cwd, env, executeGit, readEmptyTreeHash);
       yield* runGit(
         "GitVcsDriver.commit.addAll",
         cwd,
