@@ -76,3 +76,75 @@ it("replans pending project changes and retires only writes covered by the echo"
   };
   expect(reconcilePendingScopedWrites(completedBoth, [finalEcho])).toEqual([]);
 });
+
+it("retires a matching echo even when an unrelated setting changed", () => {
+  const environmentId = EnvironmentId.make("concurrent-echo");
+  const environment: ScopedSettingsEnvironment = {
+    environmentId,
+    label: "Test",
+    connection: { phase: "connected" },
+    serverConfig: { settings: DEFAULT_SERVER_SETTINGS },
+  };
+  const scope = {
+    kind: "environment",
+    environmentId,
+    environmentIds: [environmentId],
+    members: [],
+    label: "Test",
+  } as const;
+  const save = {};
+  const plan = (environments: readonly ScopedSettingsEnvironment[]) =>
+    planScopedSettingsPatch(scope, environments, { defaultAutoPull: true });
+  const writes: PendingScopedWrite[] = [{ save, environmentId, environments: [environment], plan }];
+  const saved = { ...DEFAULT_SERVER_SETTINGS, defaultAutoPull: true };
+  const settled = settlePendingScopedWrite(writes, save, environmentId, saved);
+  const echo = {
+    ...environment,
+    serverConfig: {
+      settings: { ...saved, enableProviderUpdateChecks: !saved.enableProviderUpdateChecks },
+    },
+  };
+  expect(reconcilePendingScopedWrites(settled, [echo])).toEqual([]);
+});
+
+it("retires a matching project echo when another project setting changed", () => {
+  const environmentId = EnvironmentId.make("project-concurrent-echo");
+  const projectId = ProjectId.make("project");
+  const environment: ScopedSettingsEnvironment = {
+    environmentId,
+    label: "Test",
+    connection: { phase: "connected" },
+    serverConfig: {
+      settings: DEFAULT_SERVER_SETTINGS,
+      environment: { capabilities: { projectSettingsOverrides: true } },
+    },
+  };
+  const scope = {
+    kind: "project",
+    members: [{ id: projectId, environmentId }],
+    environmentIds: [environmentId],
+    label: "Project",
+  } as unknown as Parameters<typeof planScopedSettingsPatch>[0];
+  const save = {};
+  const plan = (environments: readonly ScopedSettingsEnvironment[]) =>
+    planScopedSettingsPatch(scope, environments, { defaultAutoPull: true });
+  const writes: PendingScopedWrite[] = [{ save, environmentId, environments: [environment], plan }];
+  const saved = {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+  };
+  const settled = settlePendingScopedWrite(writes, save, environmentId, saved);
+  const echo = {
+    ...environment,
+    serverConfig: {
+      ...environment.serverConfig!,
+      settings: {
+        ...saved,
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true, enableAgentBrowserAccess: false },
+        },
+      },
+    },
+  };
+  expect(reconcilePendingScopedWrites(settled, [echo])).toEqual([]);
+});
