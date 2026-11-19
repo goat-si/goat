@@ -151,6 +151,15 @@ export interface AtomCommand<W, A, E> {
   readonly run: (registry: AtomRegistry.AtomRegistry, input: W) => Promise<AtomCommandResult<A, E>>;
 }
 
+export const withEnvironmentRpcGuard = <R, ER>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  registry: AtomRegistry.AtomRegistry,
+) =>
+  Effect.provideService(RpcPermissionGuard, {
+    authorize: (id, method, payload) =>
+      createCommandPermissions(runtime, method).authorize(registry, id, payload),
+  });
+
 export type AtomCommandConcurrency<W> =
   | { readonly mode: "parallel" }
   | {
