@@ -3342,7 +3342,15 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         const changes = preview.sources.find((source) => source.kind === "branch-range")!;
         expect
           .soft(changes.files)
-          .toEqual([{ path: "feature.txt", previousPath: null, additions: 1, deletions: 0 }]);
+          .toEqual([
+            {
+              path: "feature.txt",
+              previousPath: null,
+              additions: 1,
+              deletions: 0,
+              changeType: "new",
+            },
+          ]);
         yield* runGit(worktreePath, ["push", "-u", "origin", "feature/remote-base"]);
 
         const generatedInputs: TextGeneration.PrContentGenerationInput[] = [];
