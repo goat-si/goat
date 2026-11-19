@@ -24,6 +24,47 @@ describe("appendTerminalOutput", () => {
     expect(feed(["[1/3]", "\r[2/3]", "\r[3/3] done\nnext"]).text).toBe("[3/3] done\nnext");
   });
 
+  it.each([
+    ["😀\u001b[1Gx", "x "],
+    ["界a\u001b[3GZ", "界Z"],
+    ["e\u0301a\u001b[2GZ", "e\u0301Z"],
+    ["𐐀a\u001b[2GZ", "𐐀Z"],
+    ["界a\bZ", "界Z"],
+    ["界a\u001b[2GZ", " Za"],
+    ["a界b\rXY", "XY b"],
+    ["e\u0301a\rZ", "Za"],
+    ["界a\u001b[2G\u001b[K", " "],
+    ["界a\u001b[1G\u001b[1K", "  a"],
+    ["\u001b[31m界\u001b[32ma\u001b[3GZ", "界Z"],
+    ["e\u001b[31m\u0301a\u001b[1GZ", "Za"],
+  ])("overwrites Unicode at terminal columns across chunk boundaries: %j", (input, expected) => {
+    expect(terminalOutputPlainText(feed([input]).text)).toBe(expected);
+    for (let cut = 1; cut < input.length; cut += 1) {
+      const source = feed([input.slice(0, cut)]);
+      const chunk = input.slice(cut);
+      expect(terminalOutputPlainText(appendTerminalOutput(source, chunk).text)).toBe(expected);
+      expect(terminalOutputPlainText(feed([terminalOutputResumeText(source), chunk]).text)).toBe(
+        expected,
+      );
+    }
+  });
+
+  it("handles an unmatched high surrogate followed by ASCII without losing output", () => {
+    const state = feed(["\ud800", "x"]);
+    expect(state.text).toBe("\ud800x");
+    expect(state.pending).toBe("");
+  });
+
+  it("keeps Unicode tails bounded without shifting saved cursor columns", () => {
+    const source = feed(["界界e\u0301\u001b7ab"], 4);
+    expect(source.text).toBe("e\u0301ab");
+    expect(source.screen.col).toBe(3);
+    expect(source.screen.saved?.col).toBe(1);
+    expect(appendTerminalOutput(source, "\u001b8Z", 4).text).toBe("e\u0301Zb");
+    expect(feed(["𐐀a"], 2).text).toBe("a");
+    expect(feed(["e\u0301ab"], 3).text).toBe("ab");
+  });
+
   it("redraws several lines in place when the cursor moves up", () => {
     const frames = [
       "layer a: 10%\nlayer b: 10%\n",
