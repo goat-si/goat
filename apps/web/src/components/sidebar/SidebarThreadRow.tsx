@@ -1,3 +1,4 @@
+import { synchronizeSidebarSpinner } from "./sidebarSpinner";
 import { useSidebarBranch, withoutRemovedCheckout } from "./useSidebarBranch";
 import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
@@ -53,7 +54,6 @@ import {
   memo,
   useRef,
   useState,
-  type AnimationEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -140,17 +140,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-
-function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
-  if (event.animationName !== "spin") return;
-
-  // Every running row shares the document timeline phase.
-  for (const animation of event.currentTarget.getAnimations()) {
-    if ("animationName" in animation && animation.animationName === "spin") {
-      animation.startTime = 0;
-    }
-  }
-}
 
 function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
