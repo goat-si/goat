@@ -1,4 +1,9 @@
 import {
+  TOOL_CALL_CONTENT_MAX_CHARS,
+  TOOL_CALL_CONTENT_TRUNCATION_MARKER,
+  retainedToolCallOutputTail,
+} from "./toolOutputText.ts";
+import {
   LEGACY_SESSION_LOAD_READY_KEY,
   GOAT_SESSION_LOAD_READY_KEY,
 } from "@goat/contracts/legacyT3Names";
@@ -647,15 +652,9 @@ function locationsFromToolCallInput(input: {
 }
 
 // Agents resend cumulative output; bound it to avoid flooding event ingestion.
-const TOOL_CALL_CONTENT_MAX_CHARS = 8_000;
-const TOOL_CALL_CONTENT_TRUNCATION_MARKER = "[Earlier output truncated]\n\n";
-
 function boundToolCallOutputText(text: string): string {
-  if (text.length <= TOOL_CALL_CONTENT_MAX_CHARS) {
-    return text;
-  }
-  const tail = text.slice(text.length - TOOL_CALL_CONTENT_MAX_CHARS);
-  return `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`;
+  const tail = retainedToolCallOutputTail(text);
+  return tail === undefined ? text : `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`;
 }
 
 const RAW_OUTPUT_TEXT_FIELDS = ["content", "stdout", "stderr", "output"] as const;
@@ -728,13 +727,12 @@ function extractTextContentFromToolCallContent(
     return { text: undefined, content: boundToolCallContentEntries(content) };
   }
   const joined = chunks.join("\n");
-  if (joined.length <= TOOL_CALL_CONTENT_MAX_CHARS) {
+  const tail = retainedToolCallOutputTail(joined);
+  if (tail === undefined) {
     return { text: joined, content: boundToolCallContentEntries(content) };
   }
-  const bounded = boundToolCallOutputText(joined);
-  const tail = joined.slice(joined.length - TOOL_CALL_CONTENT_MAX_CHARS);
   return {
-    text: bounded,
+    text: `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`,
     content: distributeRetainedTailAcrossContent(content, tail),
   };
 }
