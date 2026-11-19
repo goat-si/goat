@@ -288,6 +288,7 @@ describe("PiAdapterV2", () => {
   registerPiToolChecks({
     SESSION_ID,
     makeFakePi,
+    makeAdapter,
     openRuntime,
     startTurn,
     THREAD_ID,
@@ -1472,6 +1473,7 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       fake.vetoNextSwitch();
       yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       const replacement = yield* runtime.ensureThread({
@@ -1535,6 +1537,7 @@ describe("PiAdapterV2", () => {
         runtimePolicy,
       });
       fake.deferNextLifecycle("switch_session");
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       const resumed = yield* runtime.resumeThread({ providerThread }).pipe(Effect.forkChild);
       yield* fake.takeRequest("switch_session");
       yield* Fiber.interrupt(resumed);

@@ -1,3 +1,9 @@
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as FileSystem from "effect/FileSystem";
@@ -11,6 +17,7 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function registerPiToolChecks({
   makeFakePi,
+  makeAdapter,
   openRuntime,
   startTurn,
   THREAD_ID,
@@ -20,6 +27,7 @@ export function registerPiToolChecks({
   layerTest,
 }: {
   makeFakePi: typeof FakePiModule.makeFakePi;
+  makeAdapter: typeof Fixture.makeAdapter;
   openRuntime: typeof Fixture.openRuntime;
   startTurn: typeof Fixture.startTurn;
   THREAD_ID: typeof Fixture.THREAD_ID;
@@ -190,6 +198,7 @@ export function registerPiToolChecks({
       );
       const forkFile = "/fake/forked-into-worktree.jsonl";
       forkFake.queueState({ sessionFile: forkFile });
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       fake.queueState({ sessionFile: forkFile });
       const resumed = yield* runtime.resumeThread({
         providerThread: {
@@ -314,5 +323,196 @@ export function registerPiToolChecks({
         pending: [false],
       });
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("attaches an initial session at startup without a redundant extension reload", () =>
+    Effect.gen(function* () {
+      const source = yield* makeFakePi;
+      const { runtime: prior } = yield* openRuntime(source);
+      const existing = yield* prior.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const fake = yield* makeFakePi;
+      const session = "/fake/attached.jsonl";
+      fake.queueState({ sessionFile: session });
+      const adapter = yield* makeAdapter(fake);
+      const runtime = yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: SESSION_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        initialNativeThreadId: session,
+      });
+      assert.include(fake.lastSpawn().args, "--session");
+      assert.include(fake.lastSpawn().args, session);
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        existingProviderThread: {
+          ...existing,
+          nativeThreadRef: { driver: PI_PROVIDER, nativeId: session, strength: "strong" },
+        },
+      });
+      assert.equal(thread.nativeThreadRef?.nativeId, session);
+      assert.isFalse(fake.allRequests().some((request) => request.type === "switch_session"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("keeps a resumed session already attached to the same file", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      fake.queueState({ sessionFile: thread.nativeThreadRef?.nativeId });
+      yield* runtime.resumeThread({ providerThread: thread });
+      assert.isFalse(fake.allRequests().some((request) => request.type === "switch_session"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("reserves the session while same-file registration reads state", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.takeRequest("get_state");
+      fake.deferNextState();
+      const registration = yield* runtime
+        .resumeThread({ providerThread: thread })
+        .pipe(Effect.forkChild);
+      yield* fake.takeRequest("get_state");
+      const overlapping = yield* startTurn(runtime, thread).pipe(Effect.result);
+      assert.equal(overlapping._tag, "Failure");
+      yield* fake.resolveDeferredState({ sessionFile: thread.nativeThreadRef?.nativeId });
+      yield* Fiber.join(registration);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("recovers when a startup attachment exits before Pi accepts requests", () =>
+    Effect.gen(function* () {
+      const source = yield* makeFakePi;
+      const { runtime: original } = yield* openRuntime(source);
+      const thread = yield* original.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const failed = yield* makeFakePi;
+      const replacement = yield* makeFakePi;
+      let count = 0;
+      const fake = {
+        ...replacement,
+        spawner: ChildProcessSpawner.make((command) => {
+          count += 1;
+          return count === 1 ? failed.spawner.spawn(command) : replacement.spawner.spawn(command);
+        }),
+      };
+      yield* failed.closeStdout;
+      const adapter = yield* makeAdapter(fake);
+      const runtime = yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: SESSION_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        initialNativeThreadId: thread.nativeThreadRef!.nativeId!,
+      });
+      const resumed = yield* runtime.resumeThread({ providerThread: thread }).pipe(Effect.result);
+      assert.equal(resumed._tag, "Success");
+      assert.equal(count, 2);
+      assert.notInclude(replacement.lastSpawn().args, "--session");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("buffers native work arriving before the attached session is registered", () =>
+    Effect.gen(function* () {
+      const source = yield* makeFakePi;
+      const { runtime: prior } = yield* openRuntime(source);
+      const thread = yield* prior.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const fake = yield* makeFakePi;
+      fake.queueState({ sessionFile: thread.nativeThreadRef!.nativeId });
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const adapter = yield* makeAdapter(fake, "", undefined, {
+        offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: SESSION_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        initialNativeThreadId: thread.nativeThreadRef!.nativeId!,
+      });
+      const observed = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(observed, event)),
+        Effect.forkScoped,
+      );
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "barrier",
+        statusText: "ready",
+      });
+      const event = yield* Queue.take(observed);
+      assert.isFalse(
+        event.type === "provider_session.updated" && event.providerSession.status === "error",
+      );
+      yield* runtime.resumeThread({ providerThread: thread });
+      const offer = yield* Queue.take(offers);
+      assert.equal(offer.threadId, THREAD_ID);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect(
+    "does not replace an attached session while its early native work awaits ownership",
+    () =>
+      Effect.gen(function* () {
+        const source = yield* makeFakePi;
+        const { runtime: prior } = yield* openRuntime(source);
+        const thread = yield* prior.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        const fake = yield* makeFakePi;
+        fake.queueState({ sessionFile: thread.nativeThreadRef!.nativeId });
+        const adapter = yield* makeAdapter(fake);
+        const runtime = yield* adapter.openSession({
+          threadId: THREAD_ID,
+          providerSessionId: SESSION_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+          initialNativeThreadId: thread.nativeThreadRef!.nativeId!,
+        });
+        const observed = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(observed, event)),
+          Effect.forkScoped,
+        );
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({
+          type: "extension_ui_request",
+          method: "setStatus",
+          statusKey: "barrier",
+          statusText: "ready",
+        });
+        yield* Queue.take(observed);
+        const other = {
+          ...thread,
+          nativeThreadRef: { ...thread.nativeThreadRef!, nativeId: "/fake/other.jsonl" },
+        };
+        const result = yield* runtime.resumeThread({ providerThread: other }).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.isFalse(fake.allRequests().some((request) => request.type === "switch_session"));
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 }

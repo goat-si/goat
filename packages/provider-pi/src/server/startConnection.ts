@@ -1,3 +1,4 @@
+import * as Exit from "effect/Exit";
 import type { ProviderDriverKind } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
@@ -7,7 +8,7 @@ import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { PiAdapterV2Options } from "./adapter.ts";
 import type { PiRuntimeProfile } from "./profile.ts";
-import type { buildPiRpcLaunch } from "./mcpInjection.ts";
+import { buildPiRpcLaunch } from "./mcpInjection.ts";
 import { makePiRpcConnection, type PiRpcConnection } from "./rpc.ts";
 
 export const startPiConnection = Effect.fnUntraced(function* ({
@@ -69,4 +70,26 @@ export const startPiConnection = Effect.fnUntraced(function* ({
     );
   }
   return connection;
+});
+
+export const startScopedPiConnection = Effect.fnUntraced(function* (
+  input: Omit<Parameters<typeof startPiConnection>[0], "launch"> & {
+    launchInput: Parameters<typeof buildPiRpcLaunch>[0];
+    currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>;
+    sessionPath?: string;
+  },
+) {
+  const connectionScope = yield* Scope.fork(input.scope, "sequential");
+  const launch = buildPiRpcLaunch({
+    ...input.launchInput,
+    environment: yield* input.currentEnvironment,
+    sessionPath: input.sessionPath,
+  });
+  const connection = yield* startPiConnection({ ...input, launch, scope: connectionScope }).pipe(
+    Effect.provideService(Scope.Scope, connectionScope),
+    Effect.onExit((exit) =>
+      Exit.isFailure(exit) ? Scope.close(connectionScope, exit) : Effect.void,
+    ),
+  );
+  return { connection, scope: connectionScope };
 });
