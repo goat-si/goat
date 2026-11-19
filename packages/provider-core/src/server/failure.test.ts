@@ -155,6 +155,10 @@ it("tells the user to sign in only when an ACP agent answers auth_required", () 
     "The provider needs you to sign in. Sign in from its provider settings or with its own CLI or app, then retry the turn.",
   );
   assert.isUndefined(knownProviderFailureMessage(sessionOpenFailure(-32603)));
+  assert.equal(
+    makeProviderFailure({ cause: Cause.fail(sessionOpenFailure(-32603)) }).message,
+    "The provider session could not be opened. Check that the provider is installed and signed in, then retry the turn.",
+  );
 });
 
 it("keeps unrecognized reasons and provider text out of category messages", () => {
