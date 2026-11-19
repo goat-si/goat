@@ -1,3 +1,4 @@
+import { piThreadSnapshot } from "./threadSnapshot.ts";
 import { piApprovalRequestKind } from "./approvalRequestKind.ts";
 import { compactionTitle, type PiCompactionStatus } from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
@@ -3384,12 +3385,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
     }),
   });
 });
-
-function piThreadSnapshot(
-  providerThread: OrchestrationV2ProviderThread,
-): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
-  return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
-}
 
 export type PiAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
