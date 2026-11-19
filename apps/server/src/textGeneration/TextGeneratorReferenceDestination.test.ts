@@ -35,7 +35,7 @@ it.effect("uses an existing saved reference only at its saved model API address"
       Effect.provide(
         Layer.mergeAll(
           Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-            getInstance: () => Effect.die("unused"),
+            getInstance: () => Effect.sync(() => undefined),
           }),
           Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
             resolveLink: () => Effect.die("unused"),
