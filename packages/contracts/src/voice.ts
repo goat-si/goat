@@ -36,6 +36,38 @@ export const SpeechStreamFeed = Schema.Struct({
   ),
 });
 export type SpeechStreamFeed = typeof SpeechStreamFeed.Type;
+export const SpeechStreamId = Schema.Struct({
+  streamId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export const SpeechStreamStart = Schema.Struct({
+  locale: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+});
+export const SpeechStreamErrorCode = Schema.Literals([
+  "busy",
+  "unsupported",
+  "expired",
+  "invalid-audio",
+  "failed",
+  "cancelled",
+]);
+export class SpeechStreamRpcError extends Schema.TaggedError<SpeechStreamRpcError>()(
+  "SpeechStreamRpcError",
+  { code: SpeechStreamErrorCode },
+) {}
+export const SpeechStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("partial"),
+    revision: NonNegativeInt,
+    committed: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+    tentative: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("final"),
+    text: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+  }),
+  Schema.Struct({ type: Schema.Literal("error"), code: SpeechStreamErrorCode }),
+]);
+export type SpeechStreamEvent = typeof SpeechStreamEvent.Type;
 
 export const VoiceTranscriptionRouteKind = Schema.Literals(["opencodex", "chatgpt-session"]);
 export type VoiceTranscriptionRouteKind = typeof VoiceTranscriptionRouteKind.Type;

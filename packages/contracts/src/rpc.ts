@@ -125,6 +125,7 @@ import {
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { BROWSER_CLAIMS_WS_METHODS, BrowserClaimsRpcs } from "./browserClaimsRpc.ts";
 import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
+import { SpeechStreamRpcs } from "./speechStreamingRpc.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 import { DECISION_WS_METHODS, DecisionRpcs } from "./decisionRpc.ts";
 import {
@@ -2703,7 +2704,7 @@ export const WsChannelRpcGroup = ChannelRpcs.middleware(RpcScopeAuthorization);
 
 /** Notes RPCs, registered by the server in a handler layer of their own like the channel group. */
 export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
-
+export const WsSpeechStreamRpcGroup = SpeechStreamRpcs.middleware(RpcScopeAuthorization);
 export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
 export const WsBrowserClaimsRpcGroup = BrowserClaimsRpcs.middleware(RpcScopeAuthorization);
 export const WsGlobalSkillsRpcGroup = GlobalSkillsRpcs.middleware(RpcScopeAuthorization);
@@ -2714,7 +2715,6 @@ export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsBrowserClaimsRpcGroup)
   .merge(WsGlobalSkillsRpcGroup)
   .merge(WsRemoteLaunchesRpcGroup);
-
 export {
   WsMemoryProjectBindingGetRpc,
   WsMemoryProjectBindingUpdateRpc,
