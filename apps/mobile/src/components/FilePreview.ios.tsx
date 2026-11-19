@@ -19,16 +19,19 @@ const NativeControls = requireNativeModule<{
     identifier: string,
   ): Promise<void>;
   dismissFile(identifier: string): Promise<void>;
+  isFilePreviewFinished?(identifier: string): boolean;
 }>("GoatNativeControls");
 
 function NativeFilePreview(props: {
   readonly source: ResolvedFilePreviewSource;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
+  readonly onPresent?: (isFinished: () => boolean) => void;
 }) {
   const { uri, name, sourceIdentifier, gallery } = props.source;
   const identifier = useId();
   const onRequestClose = useEffectEvent(props.onRequestClose);
+  const onPresent = useEffectEvent((isFinished: () => boolean) => props.onPresent?.(isFinished));
   const onOpenError = useEffectEvent((error: unknown) => {
     if (props.onOpenError) props.onOpenError(error);
     else Dialog.alert("Could not open preview", "The file could not be loaded. Please try again.");
@@ -49,6 +52,7 @@ function NativeFilePreview(props: {
             identifier,
           )
         : NativeControls.presentFile(uri, name ?? "Preview", sourceIdentifier ?? "", identifier);
+    onPresent(() => NativeControls.isFilePreviewFinished?.(identifier) === true);
     void presentation
       .catch((error: unknown) => {
         if (!canceled) onOpenError(error);
@@ -69,6 +73,7 @@ export function FilePreview(props: {
   readonly source: ResolvedFilePreviewSource;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
+  readonly onPresent?: (isFinished: () => boolean) => void;
 }) {
   return <NativeFilePreview {...props} />;
 }

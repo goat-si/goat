@@ -109,6 +109,7 @@ export function FilePreview(props: {
   readonly source: ResolvedFilePreviewSource;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
+  readonly onPresent?: (isFinished: () => boolean) => void;
 }) {
   if (props.source.kind === "pdf") return <PdfDocumentPreview {...props} />;
   if (props.source.kind !== "image") return <DocumentPreview {...props} />;

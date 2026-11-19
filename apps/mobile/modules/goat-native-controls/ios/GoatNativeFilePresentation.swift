@@ -10,10 +10,16 @@ private final class FilePreviewItem: NSObject, QLPreviewItem {
 
 private final class FilePreviewController: QLPreviewController {
   var onAppear: (() -> Void)?
+  var onDismiss: (() -> Void)?
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     onAppear?()
+  }
+
+  override func viewDidDisappear(_ animated: Bool) {
+    super.viewDidDisappear(animated)
+    if isBeingDismissed { onDismiss?() }
   }
 }
 
@@ -22,6 +28,7 @@ final class GoatNativeFilePresentation: NSObject, QLPreviewControllerDataSource,
   QLPreviewControllerDelegate, UIAdaptivePresentationControllerDelegate {
   let identifier: String
   private var controller: UIViewController?
+  private let onFinish: () -> Void
   private let completion: (Error?) -> Void
   private weak var sources: GoatPresentationSources?
   private let sourceIdentifiers: [String]
@@ -31,10 +38,11 @@ final class GoatNativeFilePresentation: NSObject, QLPreviewControllerDataSource,
   private var finished = false
 
   init(identifier: String, sources: GoatPresentationSources, sourceIdentifiers: [String],
-       completion: @escaping (Error?) -> Void) {
+       onFinish: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
     self.identifier = identifier
     self.sources = sources
     self.sourceIdentifiers = sourceIdentifiers
+    self.onFinish = onFinish
     self.completion = completion
     super.init()
   }
@@ -73,6 +81,7 @@ final class GoatNativeFilePresentation: NSObject, QLPreviewControllerDataSource,
         preview.dataSource = self
         preview.currentPreviewItemIndex = selectedIndex
         preview.onAppear = { [weak self] in self?.resumePendingDismissal() }
+        preview.onDismiss = { [weak self] in self?.finish() }
         controller = preview
         presenter.present(preview, animated: !UIAccessibility.isReduceMotionEnabled) { [self] in
           resumePendingDismissal()
@@ -143,6 +152,8 @@ final class GoatNativeFilePresentation: NSObject, QLPreviewControllerDataSource,
     }
     items.removeAll()
     DispatchQueue.main.async { [completion] in completion(error) }
+    // A new presentation can queue as soon as JS observes this completion.
+    onFinish()
   }
 
   /// Copy original bytes so preview and sharing do not mutate a draft or workspace file.

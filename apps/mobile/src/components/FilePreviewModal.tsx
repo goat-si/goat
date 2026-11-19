@@ -128,6 +128,7 @@ function PreviewItemResolver(props: {
 }
 
 function ResolvedFilePreview(props: {
+  readonly onPresent: (isFinished: () => boolean) => void;
   readonly source: FilePreviewSource;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
@@ -190,6 +191,7 @@ function ResolvedFilePreview(props: {
           source={{ ...selected, gallery }}
           onRequestClose={props.onRequestClose}
           onOpenError={onOpenError}
+          onPresent={props.onPresent}
         />
       ) : null}
     </>
@@ -237,10 +239,39 @@ export function FilePreviewModal(props: {
     if (!isFocused && hasSource) onRequestClose();
   }, [isFocused, hasSource]);
 
+  const activeSource = isFocused ? props.source : null;
+  const [opening, setOpening] = useState<{
+    readonly source: FilePreviewSource | null;
+    readonly generation: number;
+    readonly isFinished: (() => boolean) | null;
+  }>({ source: activeSource, generation: 0, isFinished: null });
+  if (opening.source !== activeSource) {
+    const sameItem =
+      opening.source !== null &&
+      activeSource !== null &&
+      filePreviewKey(opening.source) === filePreviewKey(activeSource);
+    // UIKit can expose the thumbnail before its close callback reaches JS.
+    const keepOpening = sameItem && !opening.isFinished?.();
+    setOpening({
+      source: activeSource,
+      generation: opening.generation + (keepOpening ? 0 : 1),
+      isFinished: keepOpening ? opening.isFinished : null,
+    });
+  }
+  const { generation } = opening;
+  const onPresent = useCallback(
+    (isFinished: () => boolean) =>
+      setOpening((current) =>
+        current.generation === generation ? { ...current, isFinished } : current,
+      ),
+    [generation],
+  );
+
   if (!source || !isFocused) return null;
   return (
     <ResolvedFilePreview
-      key={filePreviewKey(source)}
+      key={generation}
+      onPresent={onPresent}
       source={source}
       onRequestClose={props.onRequestClose}
       {...(props.onOpenError ? { onOpenError: props.onOpenError } : {})}

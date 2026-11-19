@@ -10,6 +10,8 @@ public final class GoatNativeControlsModule: Module {
   private let presentationSources = GoatPresentationSources()
   private var videoPresentation: GoatNativeVideoPresentation?
   private var filePresentation: GoatNativeFilePresentation?
+  private let filePreviewActivity = NSLock()
+  private var finishedFilePreview: String?
 
   public func definition() -> ModuleDefinition {
     Events("videoPlaybackChange")
@@ -82,6 +84,10 @@ public final class GoatNativeControlsModule: Module {
       }
       file.present(urls: urls, titles: titles, selectedIndex: selectedIndex, from: presenter)
     }.runOnQueue(.main)
+
+    Function("isFilePreviewFinished") { (identifier: String) -> Bool in
+      self.filePreviewActivity.withLock { self.finishedFilePreview == identifier }
+    }
 
     OnDestroy {
       let presentation = self.videoPresentation
@@ -273,13 +279,20 @@ public final class GoatNativeControlsModule: Module {
     guard filePresentation == nil, videoPresentation == nil,
       appContext?.utilities?.currentViewController() != nil
     else { throw URLError(.cannotLoadFromNetwork) }
-    let file = GoatNativeFilePresentation(identifier: identifier, sources: presentationSources,
-                                          sourceIdentifiers: sourceIdentifiers) { [weak self] error in
-      self?.filePresentation = nil
-      if let error { promise.reject(error) } else { promise.resolve(nil) }
-    }
+    let file = GoatNativeFilePresentation(
+      identifier: identifier, sources: presentationSources, sourceIdentifiers: sourceIdentifiers,
+      onFinish: { [weak self] in self?.setFinishedFilePreview(identifier) },
+      completion: { [weak self] error in
+        if self?.filePresentation?.identifier == identifier { self?.filePresentation = nil }
+        if let error { promise.reject(error) } else { promise.resolve(nil) }
+      }
+    )
     filePresentation = file
     return file
+  }
+
+  private func setFinishedFilePreview(_ identifier: String) {
+    filePreviewActivity.withLock { finishedFilePreview = identifier }
   }
 
   private func presentFile(url: URL, title: String, sourceIdentifier: String,
