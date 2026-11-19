@@ -703,3 +703,34 @@ describe("what one diff slice spends", () => {
     }),
   );
 });
+
+it.effect("retains known labels when the ancillary Azure label read fails", () =>
+  Effect.gen(function* () {
+    const provider = yield* make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({
+          getPullRequest: () =>
+            Effect.succeed({ ...PULL_REQUEST, labels: [{ name: "known", color: null }] }),
+          listIterations: () => Effect.succeed([]),
+          listPolicyChecks: () => Effect.succeed([]),
+          listLabels: () =>
+            Effect.fail(
+              new AzureDevOpsPullRequestCli.AzureDevOpsPullRequestReadError({
+                command: "az",
+                cwd: "/w",
+                operation: "listLabels",
+                cause: "refused",
+              }),
+            ),
+        }),
+      ),
+    );
+    const detail = yield* provider.getChangeRequest({
+      cwd: "/w",
+      repository: "acme/web",
+      host: "dev.azure.com",
+      number: 7,
+    });
+    expect(detail.labels).toEqual([{ name: "known", color: null }]);
+  }),
+);
