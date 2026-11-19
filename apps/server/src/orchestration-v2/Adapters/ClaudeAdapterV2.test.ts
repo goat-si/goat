@@ -9250,6 +9250,36 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ),
           "idle progress",
         );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: "idle-shell",
+            tool_use_id: IDLE_BASH,
+            description: "git log -5",
+            is_backgrounded: true,
+            parent_task_id: TASK_ID,
+            task_type: "local_bash",
+            uuid: "00000000-0000-4000-8000-000000000960",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.pendingBackgroundTasks?.some(
+                  (task) => task.taskId === "idle-shell",
+                ) === true,
+            ),
+          "idle shell task",
+        );
+        const shell = harness.events
+          .findLast((event) => event.type === "provider_thread.updated")
+          ?.providerThread.pendingBackgroundTasks?.find((task) => task.taskId === "idle-shell");
+        assert.equal(shell?.command, "git log -5");
         const routing = subagentRouting(harness.events, [STRADDLING_BASH, IDLE_BASH]);
         assert.deepEqual(routing.assistantTexts(routing.childThreadId), ["Still auditing."]);
         const straddling = latestToolItem(STRADDLING_BASH);
