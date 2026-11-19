@@ -23,6 +23,8 @@ const fixture = vi.hoisted(() => ({
   pendingSurfaces: [] as Array<() => void>,
   resetSessions: () => {},
   resizeCommand: {},
+  writeCommand: {},
+  writes: [] as Array<unknown>,
   runResize: (_input: unknown): Promise<AsyncResult.AsyncResult<unknown, unknown>> =>
     Promise.resolve(AsyncResult.success(undefined)),
   reportedSize: null as { cols: number; rows: number } | null,
@@ -87,8 +89,11 @@ vi.mock("../state/session", () => ({
   usePreparedConnection: () => null,
 }));
 vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: (command: object) => async (args: unknown) =>
-    command === fixture.resizeCommand ? fixture.runResize(args) : AsyncResult.success(undefined),
+  useAtomCommand: (command: object) => async (args: unknown) => {
+    if (command === fixture.resizeCommand) return fixture.runResize(args);
+    if (command === fixture.writeCommand) fixture.writes.push(args);
+    return AsyncResult.success(undefined);
+  },
 }));
 // The commands are replaced above; importing their runtime would connect a client.
 vi.mock("../state/server", async () => {
@@ -104,7 +109,7 @@ vi.mock("../lib/previewShown", async () => {
   };
 });
 vi.mock("../state/terminal", () => ({
-  terminalEnvironment: { write: {}, resize: fixture.resizeCommand },
+  terminalEnvironment: { write: fixture.writeCommand, resize: fixture.resizeCommand },
 }));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: {} } }));
 vi.mock("../state/projects", async () => {
@@ -187,6 +192,7 @@ function setup() {
   fixture.pendingSurfaces = [];
   fixture.surfaceOptions = [];
   fixture.reportedSize = null;
+  fixture.writes = [];
   fixture.runResize = () => Promise.resolve(AsyncResult.success(undefined));
   fixture.metadata.clear();
   useRightPanelStore.setState(useRightPanelStore.getInitialState());
@@ -379,4 +385,39 @@ it("does not retry an old resize after the attachment generation changes", async
     failed.resolve(AsyncResult.failure(Cause.fail("resize failed")));
   });
   expect(resize).toHaveBeenCalledTimes(callsAfterReattach);
+});
+
+it("drops input before the terminal runs and accepts it after attachment", async () => {
+  const { original: threadRef } = setup();
+  const { attachedTerminalSessionAtom } = await import("../state/terminalSessions");
+  const session = attachedTerminalSessionAtom(threadRef.environmentId, {
+    threadId: threadRef.threadId,
+    terminalId: "term-1",
+    cwd: "/repo",
+  });
+  await using _screen = await render(<Drawer threadRef={threadRef} onCloseTerminal={() => {}} />);
+  await act(async () => {
+    fixture.pendingSurfaces.shift()?.();
+  });
+  await act(async () => {
+    fixture.surfaceOptions.at(-1)?.onData("too early");
+  });
+  expect(fixture.writes).toEqual([]);
+  await act(async () => {
+    const current = appAtomRegistry.get(session);
+    appAtomRegistry.set(session as Atom.Writable<typeof current>, {
+      ...current,
+      status: "running",
+      version: 1,
+    });
+  });
+  await act(async () => {
+    fixture.surfaceOptions.at(-1)?.onData("ready");
+  });
+  expect(fixture.writes).toEqual([
+    {
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, terminalId: "term-1", data: "ready" },
+    },
+  ]);
 });
