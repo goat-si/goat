@@ -57,4 +57,13 @@ it("requires matching transport evidence before upgrading a generic failure", ()
     ).class,
     "permission_error",
   );
+  const refusal = {
+    nativeMessage: "403 Forbidden",
+    nativeCode: "other",
+    failure: { ...failure, class: "permission_error" as const },
+  };
+  assert.equal(
+    recoverCodexTransportFailure(failure, "other", "lost", refusal, evidence).class,
+    "provider_error",
+  );
 });

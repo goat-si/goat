@@ -118,6 +118,11 @@ export function recoverCodexTransportFailure(
       codexExhaustionHttpStatus(errorInfo) === null);
   if (!generic || failure.class !== "provider_error" || message === undefined) return failure;
   if (
+    notification?.failure.class === "permission_error" ||
+    notification?.failure.class === "usage_limit"
+  )
+    return failure;
+  if (
     notification &&
     notification.failure.class !== "transport_error" &&
     notification.nativeCode !== "other" &&
