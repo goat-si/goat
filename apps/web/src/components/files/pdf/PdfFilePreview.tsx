@@ -365,7 +365,6 @@ function PdfDocument(props: {
               style={{ top: page.top, left: (width - page.width) / 2 }}
             >
               <PdfPage
-                key={page.scale}
                 document={props.document}
                 number={page.index + 1}
                 scale={page.scale}
