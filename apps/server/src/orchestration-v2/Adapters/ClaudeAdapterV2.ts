@@ -1,4 +1,9 @@
 import {
+  isClaudeEmptyTaskNotificationSuccess,
+  claudeToolResultSettlesSubagent,
+  claudeSettledSubagentToolUseIds,
+} from "./ClaudeTaskResultFrames.ts";
+import {
   applyClaudeSessionTitle,
   claudeReportedSessionTitle,
   type ClaudeSessionTitleState,
@@ -64,7 +69,6 @@ import {
   isClaudeBackgroundTasksChangedMessage,
   isClaudeNonSubagentTask,
   isClaudeRootTurnFrame,
-  isClaudeSubagentAsyncLaunchAck,
   isClaudeToolResultError,
   isClaudeTurnStartMessage,
   NO_CLAUDE_NATIVE_TOOL_OUTPUT,
@@ -1752,42 +1756,6 @@ function isClaudeResultForOtherTurn(input: {
     input.promptEchoMode !== "unknown" &&
     input.message.origin !== undefined &&
     input.message.origin.kind !== "human"
-  );
-}
-
-// A session-task lifecycle result: it can precede a wake's real turn and ends no turn.
-function isClaudeEmptyTaskNotificationSuccess(message: SDKMessage): boolean {
-  return (
-    Wake.isClaudeTaskNotificationOriginResult(message) &&
-    message.subtype === "success" &&
-    !message.is_error &&
-    message.num_turns === 0 &&
-    message.result.length === 0 &&
-    terminalStatusFromResult(message) === "completed"
-  );
-}
-
-// Background Agent launches ACK immediately and workflow launches return run handles; only task_notification settles those.
-function claudeToolResultSettlesSubagent(
-  toolResult: ClaudeToolResultContentBlock,
-  output: ClaudeNativeToolOutput,
-): boolean {
-  return (
-    isClaudeToolResultError(toolResult) ||
-    (parseClaudeWorkflowRunHandles(claudeNativeToolOutputValue(output)) === undefined &&
-      !isClaudeSubagentAsyncLaunchAck(output))
-  );
-}
-
-function claudeSettledSubagentToolUseIds(messages: ReadonlyArray<SDKMessage>): ReadonlySet<string> {
-  return new Set(
-    messages.flatMap((entry) =>
-      entry.type === "user" && entry.parent_tool_use_id == null
-        ? claudeToolResultEntriesFromMessage(entry).flatMap(({ toolResult, output }) =>
-            claudeToolResultSettlesSubagent(toolResult, output) ? [toolResult.tool_use_id] : [],
-          )
-        : [],
-    ),
   );
 }
 
