@@ -32,6 +32,26 @@ function asDirectoryHandle(item: unknown): DirectoryHandle | null {
   return item as DirectoryHandle;
 }
 
+export function subscribeOncePerTask(
+  model: { subscribe(listener: () => void): () => void },
+  listener: () => void,
+): () => void {
+  let queued = false;
+  let subscribed = true;
+  const unsubscribe = model.subscribe(() => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      if (subscribed) listener();
+    });
+  });
+  return () => {
+    subscribed = false;
+    unsubscribe();
+  };
+}
+
 export function areAllDirectoriesExpanded(
   model: FileTreeExpansionModel,
   directoryPaths: readonly string[],

@@ -1,14 +1,18 @@
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "~/components/solar";
 import type { GitStatusEntry } from "@pierre/trees";
-import { FileTree, useFileTree, useFileTreeSelector } from "@pierre/trees/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { FileTree, useFileTree } from "@pierre/trees/react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
-import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
+import {
+  areAllDirectoriesExpanded,
+  setAllDirectoriesExpanded,
+  subscribeOncePerTask,
+} from "../files/fileTreeExpansion";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -110,8 +114,9 @@ function DiffFileTreeContent({
     sort: ordering.sort,
     unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
   });
-  const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
-    areAllDirectoriesExpanded(currentModel, directoryPaths),
+  const allDirectoriesExpanded = useSyncExternalStore(
+    (listener) => subscribeOncePerTask(model, listener),
+    () => areAllDirectoriesExpanded(model, directoryPaths),
   );
 
   useEffect(() => {
