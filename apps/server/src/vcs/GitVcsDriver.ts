@@ -1,4 +1,8 @@
-import { makeResolveGitCommonDir, makeResolveCheckpointCommit } from "./checkpointGitCommonDir.ts";
+import {
+  makeResolveGitCommonDir,
+  makeResolveCheckpointCommit,
+  makeResolveHeadCommit,
+} from "./checkpointGitCommonDir.ts";
 import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
@@ -825,21 +829,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       maxOutputBytes: 64 * 1024,
     }).pipe(Effect.asVoid);
 
-  const resolveHeadCommit = (cwd: string) =>
-    execute({
-      operation: "GitVcsDriver.checkpoints.resolveHeadCommit",
-      cwd,
-      args: ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-      allowNonZeroExit: true,
-    }).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        const commit = result.stdout.trim();
-        return commit.length > 0 ? commit : null;
-      }),
-    );
+  const resolveHeadCommit = makeResolveHeadCommit(execute);
 
   const hasHeadCommit = (cwd: string, env?: NodeJS.ProcessEnv) =>
     execute({

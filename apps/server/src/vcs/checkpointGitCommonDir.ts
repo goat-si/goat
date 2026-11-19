@@ -33,3 +33,21 @@ export function makeResolveCheckpointCommit(execute: VcsDriver.VcsDriver["Servic
       allowNonZeroExit: true,
     }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
 }
+
+export function makeResolveHeadCommit(execute: VcsDriver.VcsDriver["Service"]["execute"]) {
+  return (cwd: string) =>
+    execute({
+      operation: "GitVcsDriver.checkpoints.resolveHeadCommit",
+      cwd,
+      args: ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+      allowNonZeroExit: true,
+    }).pipe(
+      Effect.map((result) => {
+        if (result.exitCode !== 0) {
+          return null;
+        }
+        const commit = result.stdout.trim();
+        return commit.length > 0 ? commit : null;
+      }),
+    );
+}
