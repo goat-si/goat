@@ -50,18 +50,19 @@ export const isLinkedWorktree = Effect.fn("WorktreeRemoval.isLinkedWorktree")(fu
  * On Windows, mirror Git's removal checks, then delete with Node's `rm`, which
  * unlinks junctions without following them. Git then removes the worktree metadata.
  */
-export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorktree")(function* <
-  A,
-  E,
-  R,
->(input: {
+interface WorktreeRemovalInput<A, E, R> {
   readonly operation: string;
   readonly cwd: string;
   readonly worktreePath: string;
   readonly force: boolean;
   readonly execute: GitVcsDriver.GitVcsDriver["Service"]["execute"];
   readonly run: (args: ReadonlyArray<string>) => Effect.Effect<A, E, R>;
-}) {
+}
+
+const removeLinkedWorktreeScoped = Effect.fn("WorktreeRemoval.removeScoped")(function* <A, E, R>(
+  input: WorktreeRemovalInput<A, E, R>,
+  restoration: { error: GitCommandError | undefined },
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const worktreePath = input.worktreePath;
@@ -99,12 +100,18 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
     );
     if (!belongs) return yield* refuse(`'${worktreePath}' is not a working tree`);
     const backupDir = yield* fileSystem
-      .makeTempDirectoryScoped({
+      .makeTempDirectory({
         directory: path.dirname(expectedAdminParent),
         prefix: "goat-annex-",
       })
       .pipe(Effect.mapError((cause) => refuse(`failed to preserve '${gitFile}'`, cause)));
     const backup = path.join(backupDir, "git-link");
+    let preserveBackup = false;
+    yield* Effect.addFinalizer(() =>
+      preserveBackup
+        ? Effect.void
+        : fileSystem.remove(backupDir, { recursive: true, force: true }).pipe(Effect.ignore),
+    );
     yield* Effect.uninterruptible(
       fileSystem.rename(gitFile, backup).pipe(
         Effect.mapError((cause) => refuse(`failed to preserve '${gitFile}'`, cause)),
@@ -118,7 +125,15 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
                       .pipe(Effect.andThen(fileSystem.rename(backup, gitFile)))
                   : Effect.void,
               ),
-              Effect.orDie,
+              Effect.catch((cause) =>
+                Effect.sync(() => {
+                  preserveBackup = true;
+                  restoration.error = refuse(
+                    `failed to restore '${gitFile}'; original link retained at '${backup}'`,
+                    cause,
+                  );
+                }),
+              ),
             ),
           ),
         ),
@@ -241,4 +256,15 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
   );
   // The folder is gone, so Git only drops the worktree's metadata.
   return yield* input.run(["worktree", "remove", "--force", "--force", "--", worktreePath]);
-}, Effect.scoped);
+});
+
+export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorktree")(function* <
+  A,
+  E,
+  R,
+>(input: WorktreeRemovalInput<A, E, R>) {
+  const restoration: { error: GitCommandError | undefined } = { error: undefined };
+  const result = yield* Effect.exit(Effect.scoped(removeLinkedWorktreeScoped(input, restoration)));
+  if (restoration.error !== undefined) return yield* restoration.error;
+  return yield* result;
+});
