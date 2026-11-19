@@ -107,6 +107,8 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
 
 export { mergeProviderSnapshot };
 
+const PROVIDER_SNAPSHOT_WATCH_CONCURRENCY = 2;
+
 export const layer = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
@@ -626,7 +628,7 @@ export const layer = Layer.effect(
                       rescanQueue.offer(instance, cwd),
                     ),
               ],
-              { concurrency: 2, discard: true },
+              { concurrency: PROVIDER_SNAPSHOT_WATCH_CONCURRENCY, discard: true },
             ),
           );
         }
