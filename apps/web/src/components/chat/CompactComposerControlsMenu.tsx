@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react";
 import { ProviderInteractionMode, RuntimeMode } from "@goat/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon } from "~/components/solar";
@@ -28,6 +29,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
+  const m = useMessages();
+  const gt = useGT();
   const composerFloatingLayerProps = useComposerMenuProps();
   const size = props.size ?? "sm";
   const [open, setOpen] = useComposerMenuState(props.hidden);
@@ -71,7 +74,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
+        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">{gt("Access")}</div>
         <MenuRadioGroup
           value={props.runtimeMode}
           onValueChange={(value) => {
@@ -81,7 +84,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         >
           {props.runtimeModeOptions.map((option) => (
             <MenuRadioItem key={option.mode} value={option.mode}>
-              {option.label}
+              {m(option.label)}
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
