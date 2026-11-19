@@ -148,6 +148,19 @@ export function autoApproveMcpElicitation(
   return { action: "cancel" };
 }
 
+export function autoApproveRawMcpElicitation(
+  payload: McpElicitationResponseInput,
+  rawParams: unknown,
+): EffectCodexSchema.McpServerElicitationRequestResponse {
+  const requestedSchema =
+    typeof rawParams === "object" &&
+    rawParams !== null &&
+    Object.hasOwn(rawParams, "requestedSchema")
+      ? Reflect.get(rawParams, "requestedSchema")
+      : undefined;
+  return autoApproveMcpElicitation({ mode: payload.mode, requestedSchema });
+}
+
 function isMcpElicitationPersistenceField(
   key: string,
   field: typeof McpElicitationFormField.Type,

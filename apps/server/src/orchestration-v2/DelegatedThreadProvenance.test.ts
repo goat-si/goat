@@ -1,7 +1,7 @@
 import { NodeId, ThreadId } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { isAppOwnedDelegatedThread } from "./DelegatedThreadProvenance.ts";
 
 it.effect("only recognizes a child backed by the matching app-owned delegated task", () =>
@@ -33,6 +33,31 @@ it.effect("only recognizes a child backed by the matching app-owned delegated ta
     assert.isFalse(yield* isAppOwnedDelegatedThread(store("subagent", childId, "native"), childId));
     assert.isTrue(
       yield* isAppOwnedDelegatedThread(store("subagent", childId, "app_owned"), childId),
+    );
+  }),
+);
+
+it.effect("treats a missing thread record as having no delegated provenance", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("missing");
+    const store = {
+      getThreadRecords: () =>
+        Effect.fail(new ProjectionStore.ProjectionStoreThreadNotFoundError({ threadId })),
+    } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
+    assert.isFalse(yield* isAppOwnedDelegatedThread(store, threadId));
+  }),
+);
+
+it.effect("propagates storage failures while resolving delegated provenance", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("failed");
+    const failure = new ProjectionStore.ProjectionStoreReadError({ threadId });
+    const store = {
+      getThreadRecords: () => Effect.fail(failure),
+    } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
+    assert.strictEqual(
+      yield* isAppOwnedDelegatedThread(store, threadId).pipe(Effect.flip),
+      failure,
     );
   }),
 );

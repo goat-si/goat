@@ -21,4 +21,8 @@ export const isAppOwnedDelegatedThread = Effect.fn("DelegatedThreadProvenance.is
         task.id === taskId && task.origin === "app_owned" && task.childThreadId === threadId,
     );
   },
+  (effect) =>
+    effect.pipe(
+      Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(false) }),
+    ),
 );

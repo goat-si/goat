@@ -31,6 +31,22 @@ it.effect.each([
     approval: false,
   },
   {
+    name: "raw enumNames",
+    mode: "full-access",
+    form: "enumNames",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "raw unknown annotation",
+    mode: "full-access",
+    form: "unknown",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
     name: "upstream Safari access",
     mode: "full-access",
     form: "safari",
@@ -269,6 +285,27 @@ it.effect.each([
                                   properties: { email: { type: "string" } },
                                   required: ["email"],
                                 };
+      const wireSchema =
+        scenario.form === "enumNames"
+          ? {
+              type: "object",
+              properties: {
+                approval: {
+                  type: "string",
+                  enum: ["once", "always"],
+                  enumNames: ["Always allow", "Allow once"],
+                },
+              },
+              required: ["approval"],
+            }
+          : scenario.form === "unknown"
+            ? {
+                type: "object",
+                properties: { approval: { type: "string", enum: ["once", "always"] } },
+                required: ["approval"],
+                unknown_annotation: "changed",
+              }
+            : schema;
       const harness = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
           scenario: scenario.name,
@@ -285,7 +322,7 @@ it.effect.each([
                   serverName: "browser",
                   mode: "form",
                   message: "Allow access?",
-                  requestedSchema: schema,
+                  requestedSchema: wireSchema,
                 },
               },
             },

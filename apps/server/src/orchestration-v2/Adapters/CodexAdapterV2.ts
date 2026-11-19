@@ -178,7 +178,7 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
-  autoApproveMcpElicitation,
+  autoApproveRawMcpElicitation,
   describeMcpElicitation,
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
@@ -5131,7 +5131,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload, rawParams) =>
           Effect.gen(function* () {
             const context =
               payload.turnId === undefined || payload.turnId === null
@@ -5148,7 +5148,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (context.input.runtimePolicy.runtimeMode === "full-access") {
-              return autoApproveMcpElicitation(payload);
+              return autoApproveRawMcpElicitation(payload, rawParams);
             }
 
             if (toMcpElicitationResponse(payload, "accept").action !== "accept")

@@ -73,8 +73,8 @@ export const withCodexRequestDeadlines = Effect.fn("CodexRequestDeadline.wrap")(
         ),
     ),
     handleServerRequest: Effect.fn("CodexRequestDeadline.handleServerRequest")((method, handler) =>
-      rawClient.handleServerRequest(method, (payload) =>
-        requestGuard.heard.pipe(Effect.andThen(handler(payload))),
+      rawClient.handleServerRequest(method, (payload, rawParams) =>
+        requestGuard.heard.pipe(Effect.andThen(handler(payload, rawParams))),
       ),
     ),
     handleUnknownServerNotification: Effect.fn(
