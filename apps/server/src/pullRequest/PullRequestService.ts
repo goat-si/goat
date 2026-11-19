@@ -116,6 +116,8 @@ import {
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
   type ListCursor,
+  MAX_CURSOR_BOUNDARY_IDENTITIES as MAX_TIES,
+  acrossListCursor,
   listCursorAt,
   listCursorKey,
   nextListCursor,
@@ -382,7 +384,7 @@ const LIST_CURSOR_PATTERN =
 
 function parseListCursor(raw: string): ListCursor | null {
   const match = LIST_CURSOR_PATTERN.exec(raw);
-  if (match === null) return null;
+  if (match === null || (match[3]?.split(",").length ?? 0) > MAX_TIES) return null;
   const seenAt = match[3];
   return {
     updatedBefore: match[1]!,
@@ -1172,9 +1174,7 @@ export const make = Effect.gen(function* () {
         limit,
         query: input.query,
         filters: input.filters,
-        ...(cursor === undefined
-          ? {}
-          : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+        ...(cursor === undefined ? {} : { cursor: acrossListCursor(cursor, chunk, cursorOf) }),
       }).pipe(
         observeRead,
         Effect.flatMap(({ value: page, observedAt }) => {

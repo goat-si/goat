@@ -1,26 +1,22 @@
 import * as Effect from "effect/Effect";
-import type { GitHubPullRequestApiError } from "./GitHubPullRequestApi.ts";
 import type { GitHubPullRequestListPage } from "./gitHubPullRequestListStates.ts";
 
 /**
  * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
  * for only the rows still missing, so the last one does not overshoot.
  */
-export const collectGitHubPages = Effect.fn("GitHubPullRequestApi.collect")(function* (
+export const collectGitHubPages = Effect.fn("GitHubPullRequestApi.collect")(function* <Item, E>(
   rows: number,
-  page: (
-    after: string | null,
-    rows: number,
-  ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError>,
+  page: (after: string | null, rows: number) => Effect.Effect<GitHubPullRequestListPage<Item>, E>,
 ) {
-  const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage>) =>
+  const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage<Item>>) =>
     pages.reduce((total, read) => total + read.rawCount, 0);
-  const pages: GitHubPullRequestListPage[] = [];
+  const pages: GitHubPullRequestListPage<Item>[] = [];
   const seen = new Set<string>();
   let after: string | null = null;
   let truncated = false;
   while (true) {
-    const read: GitHubPullRequestListPage = yield* page(after, rows - countRows(pages));
+    const read: GitHubPullRequestListPage<Item> = yield* page(after, rows - countRows(pages));
     pages.push(read);
     const next = read.endCursor;
     if (next === null) break;
