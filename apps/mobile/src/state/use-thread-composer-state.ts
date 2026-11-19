@@ -261,8 +261,12 @@ export function useThreadComposerState() {
       sequence: selectedThreadSequence,
       projectedMessages: selectedThreadMessages,
     });
-    if (pendingAcknowledgments.length === 0) return feed;
-    return appendPendingThreadMessages(feed, feed, pendingAcknowledgments).map((entry) =>
+    const accepted =
+      pendingCreation.length > 0 && pendingCreationMessage !== null
+        ? [...pendingAcknowledgments, pendingCreationMessage]
+        : pendingAcknowledgments;
+    if (accepted.length === 0) return feed;
+    return appendPendingThreadMessages(feed, feed, accepted).map((entry) =>
       entry.pendingMessage ? { ...entry, acknowledged: true } : entry,
     );
   })();

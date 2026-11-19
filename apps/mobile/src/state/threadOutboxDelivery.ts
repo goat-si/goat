@@ -1,3 +1,5 @@
+import { queuedAttachmentsStillUploading } from "../lib/composerAttachmentUploadQueue";
+import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import {
   beginDispatchingQueuedMessage,
   completeQueuedMessageDelivery,
@@ -89,6 +91,7 @@ export function createThreadOutboxDelivery(): {
 } {
   let disposed = false;
   const retries = new Map<MessageId, ThreadOutboxRetry>();
+  let readyEnvironmentIds = new Set<string>();
   // Existing-thread turns the server accepted but whose outbox removal has
   // not landed; the next pass retries only the removal, never the send.
   const acknowledgedExistingThreadMessageIds = new Set<MessageId>();
@@ -580,6 +583,20 @@ export function createThreadOutboxDelivery(): {
       connectedEnvironments,
       operableEnvironments,
     } = appAtomRegistry.get(deliveryInputsAtom);
+    const ready = new Set(
+      connectedEnvironments
+        .filter(
+          (environment) =>
+            environment.connectionState === "connected" &&
+            serverConfigs.has(environment.environmentId),
+        )
+        .map((environment) => environment.environmentId),
+    );
+    for (const message of Object.values(queuedMessagesByThreadKey).flat()) {
+      if (ready.has(message.environmentId) && !readyEnvironmentIds.has(message.environmentId))
+        clearRetry(message.messageId);
+    }
+    readyEnvironmentIds = ready;
     if (dispatchingQueuedMessageId !== null) {
       return;
     }
@@ -641,6 +658,15 @@ export function createThreadOutboxDelivery(): {
       if (retryNotBefore(messageId) > Date.now()) {
         continue;
       }
+
+      if (
+        queuedAttachmentsStillUploading({
+          environmentId: nextQueuedMessage.environmentId,
+          attachments: nextQueuedMessage.attachments,
+          states: appAtomRegistry.get(composerAttachmentUploadsAtom),
+        })
+      )
+        continue;
 
       let thread = findThread(threads, nextQueuedMessage);
       if (thread && scopedThreadKey(thread.environmentId, thread.id) !== threadKey) {

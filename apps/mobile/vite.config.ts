@@ -156,6 +156,7 @@ const reactTests = [
   "src/features/threads/use-composer-command-menu.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/features/threads/MessageAttachmentImage.handoff.test.tsx",
+  "src/features/threads/ThreadMarkdownVideo.handoff.test.tsx",
   "src/features/threads/useSideChatCommand.test.tsx",
   "src/lib/visible-animations.test.tsx",
 

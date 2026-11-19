@@ -1,3 +1,4 @@
+import { UserMessageVideo } from "./UserMessageVideo";
 import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
 import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
 import {
@@ -1349,6 +1350,16 @@ function renderFeedEntry(
                         style={{ width: 180, height: 140, borderRadius: 14 }}
                       />
                     </Pressable>
+                  ) : videoMimeType(attachment) !== null ? (
+                    <UserMessageVideo
+                      key={attachment.id}
+                      environmentId={props.environmentId}
+                      messageId={message.id}
+                      index={index}
+                      local={attachment}
+                      uploaded={null}
+                      onPlaybackStart={props.onPlaybackStart}
+                    />
                   ) : (
                     <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
                   ),
@@ -1375,6 +1386,16 @@ function renderFeedEntry(
                               : "aspect-[1.3] w-full rounded-[14px] bg-user-bubble-foreground/15"
                           }
                           onPressPreview={props.onPressPreview}
+                        />
+                      ) : isFileAttachment(attachment) && videoMimeType(attachment) !== null ? (
+                        <UserMessageVideo
+                          key={attachment.id}
+                          environmentId={props.environmentId}
+                          messageId={message.id}
+                          index={attachments.indexOf(attachment)}
+                          local={null}
+                          uploaded={attachment}
+                          onPlaybackStart={props.onPlaybackStart}
                         />
                       ) : isFileAttachment(attachment) ? (
                         <MessageAttachmentFile

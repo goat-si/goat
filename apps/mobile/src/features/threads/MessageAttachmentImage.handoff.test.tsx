@@ -49,3 +49,16 @@ it("retains local image pixels while the sent attachment URL is unavailable", ()
   expect(container.querySelector("img")?.getAttribute("src")).toBe("file:///draft.png");
   act(() => root.unmount());
 });
+
+it("retains image identity from draft through pending to sent without crossing environments", async () => {
+  const { rememberDraftImage, rememberSentImage, sentImageHandoff } =
+    await import("../../lib/sentImageHandoff");
+  const image = { uri: "file:///draft-2.png", aspectRatio: 2 };
+  rememberDraftImage("environment-a", "draft-image", image);
+  const pending = sentImageHandoff("environment-a", "message-1", 0, "draft-image");
+  expect(pending).toEqual(image);
+  if (!pending) throw new Error("pending image missing");
+  rememberSentImage("environment-a", "message-1", 0, pending);
+  expect(sentImageHandoff("environment-a", "message-1", 0)).toEqual(image);
+  expect(sentImageHandoff("environment-b", "message-1", 0, "draft-image")).toBeUndefined();
+});
