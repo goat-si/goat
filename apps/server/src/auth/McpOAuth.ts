@@ -136,6 +136,7 @@ export const redirectMatches = (registered: string, presented: string): boolean 
 
 const sameResource = (urls: McpOAuthUrls, presented: string | undefined): boolean => {
   if (presented === undefined) return true;
+  if (presented.includes("#")) return false;
   try {
     const url = new URL(presented);
     return url.hash === "" && `${url.origin}${url.pathname.replace(/\/+$/u, "")}` === urls.resource;

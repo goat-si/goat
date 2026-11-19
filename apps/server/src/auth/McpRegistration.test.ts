@@ -61,3 +61,41 @@ it.effect("returns an OAuth JSON error for malformed registration metadata", () 
     (web) => Effect.promise(() => web.dispose()),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("rejects MCP resources containing even an empty fragment", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
+    (web) =>
+      Effect.promise(async () => {
+        const redirect = "http://localhost/callback";
+        const registration = await web.handler(
+          new Request("http://localhost/oauth/mcp/register", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ redirect_uris: [redirect] }),
+          }),
+        );
+        const { client_id } = (await registration.json()) as { client_id: string };
+        for (const resource of ["http://localhost/mcp#", "http://localhost/mcp#section"]) {
+          const query = new URLSearchParams({
+            response_type: "code",
+            client_id,
+            redirect_uri: redirect,
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256",
+            resource,
+          });
+          const response = await web.handler(
+            new Request(`http://localhost/oauth/mcp/authorize?${query}`),
+          );
+          expect(response.status).toBe(302);
+          expect(
+            new URL(response.headers.get("location")!, "http://localhost").searchParams.get(
+              "error",
+            ),
+          ).toBe("invalid_target");
+        }
+      }),
+    (web) => Effect.promise(() => web.dispose()),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
