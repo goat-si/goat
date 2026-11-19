@@ -11,120 +11,168 @@ import {
   PenViewerPolicy,
   type PenMembersInput,
 } from "../platform/capabilities.ts";
+import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import { PenConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import { PenConnectionTarget, penConnectionId } from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
 import { makePenNativeDiscovery } from "./penNativeDiscovery.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 
-it.effect(
-  "removing the environment that holds a member's route closes the member's gateway link",
-  () =>
-    Effect.gen(function* () {
-      const env = EnvironmentId.make("env");
-      const pin = {
-        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
-        nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
-        noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
-      };
-      const id = penConnectionId(pin.meshId, pin.nodeId);
-      const target = new PenConnectionTarget({
-        environmentId: env,
-        label: "Node",
-        connectionId: id,
-      });
-      const profile = new PenConnectionProfile({
-        ...pin,
-        environmentId: env,
-        label: "Node",
-        connectionId: id,
-      });
-      const saved = new Map([[env, { enabled: true, target, profile: Option.some(profile) }]]);
-      const entries =
-        yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(saved);
-      const ready = {
-        kind: "ready" as const,
-        seq: 1,
-        meshId: pin.meshId,
-        selfNodeId: "self",
-        members: [
-          {
-            nodeId: pin.nodeId,
-            name: "Node",
-            online: true,
-            noisePub: pin.noisePub,
-            route: { kind: "refused" as const, reason: "not-pen-route" as const },
-          },
-        ],
-      };
-      const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
-        Option.some(ready),
-      );
-      const closed: string[] = [];
-      const unused = () => Effect.die("unexpected registry call");
-      const unusedStream = () => Stream.die("unexpected registry stream");
-      const registry = EnvironmentRegistry.of({
-        entries,
-        networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
-        start: Effect.void,
-        register: unused,
-        registerPlatform: unused,
-        assertKnownAddress: unused,
-        reconcilePlatform: unused,
-        remove: unused,
-        removeRoute: unused,
-        reorderRoutes: unused,
-        removeRelayEnvironments: unused,
-        retryNow: unused,
-        reconnect: unused,
-        setEnabled: unused,
-        setCompatibility: unused,
-        state: unused,
-        stateChanges: unusedStream,
-        run: unused,
-        runStream: unusedStream,
-        followStream: unusedStream,
-      });
-      yield* Effect.gen(function* () {
-        const discovery = yield* makePenNativeDiscovery();
-        yield* discovery.release(saved);
-        yield* discovery.pass(ready);
-        expect(closed).toEqual([]);
-        yield* discovery.release(new Map());
-        expect(closed).toEqual([pin.nodeId]);
-      }).pipe(
-        Effect.provideService(EnvironmentRegistry, registry),
-        Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
-        Effect.provideService(PenViewerPolicy, { enabled: true }),
-        Effect.provideService(
-          PenRouteGateway,
-          Option.some({
-            open: () =>
-              Effect.succeed({
-                kind: "open" as const,
-                httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
-                socketUrl: "ws://127.0.0.1/ws",
-              }),
-            close: (closing) => Effect.sync(() => void closed.push(closing.nodeId)),
-          }),
-        ),
-        Effect.provideService(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            Effect.succeed(
-              HttpClientResponse.fromWeb(
-                request,
-                Response.json({
-                  environmentId: "env",
-                  label: "Node",
-                  platform: { os: "darwin", arch: "arm64" },
-                  serverVersion: "1.0.0",
-                  capabilities: { repositoryIdentity: true },
-                }),
-              ),
+const env = EnvironmentId.make("env");
+const pin = {
+  meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+  nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+  noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+};
+const id = penConnectionId(pin.meshId, pin.nodeId);
+const saved = new Map<EnvironmentId, ConnectionCatalogEntry>([
+  [
+    env,
+    {
+      enabled: true,
+      target: new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id }),
+      profile: Option.some(
+        new PenConnectionProfile({ ...pin, environmentId: env, label: "Node", connectionId: id }),
+      ),
+    },
+  ],
+]);
+const ready = {
+  kind: "ready" as const,
+  seq: 1,
+  meshId: pin.meshId,
+  selfNodeId: "self",
+  members: [
+    {
+      nodeId: pin.nodeId,
+      name: "Node",
+      online: true,
+      noisePub: pin.noisePub,
+      route: { kind: "refused" as const, reason: "not-pen-route" as const },
+    },
+  ],
+};
+
+const discover = <E>(
+  body: (
+    discovery: Effect.Success<ReturnType<typeof makePenNativeDiscovery>>,
+  ) => Effect.Effect<void, E, HttpClient.HttpClient>,
+  options: {
+    readonly initial: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
+    readonly descriptor: "ok" | "unreachable";
+    readonly register: "ok" | "fails";
+  },
+) =>
+  Effect.gen(function* () {
+    const closed: string[] = [];
+    const entries = yield* SubscriptionRef.make(options.initial);
+    const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.some(ready));
+    const unused = () => Effect.die("unexpected registry call");
+    const unusedStream = () => Stream.die("unexpected registry stream");
+    const registry = EnvironmentRegistry.of({
+      entries,
+      networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
+      start: Effect.void,
+      register: () =>
+        options.register === "ok"
+          ? Effect.succeed(false)
+          : Effect.fail(
+              new ConnectionPersistenceError({ operation: "register-connection", message: "full" }),
+            ),
+      registerPlatform: unused,
+      assertKnownAddress: unused,
+      reconcilePlatform: unused,
+      remove: unused,
+      removeRoute: unused,
+      reorderRoutes: unused,
+      removeRelayEnvironments: unused,
+      retryNow: unused,
+      reconnect: unused,
+      setEnabled: unused,
+      setCompatibility: unused,
+      state: unused,
+      stateChanges: unusedStream,
+      run: unused,
+      runStream: unusedStream,
+      followStream: unusedStream,
+    });
+    yield* Effect.gen(function* () {
+      yield* body(yield* makePenNativeDiscovery());
+    }).pipe(
+      Effect.provideService(EnvironmentRegistry, registry),
+      Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
+      Effect.provideService(PenViewerPolicy, { enabled: true }),
+      Effect.provideService(
+        PenRouteGateway,
+        Option.some({
+          open: () =>
+            Effect.succeed({
+              kind: "open" as const,
+              httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
+              socketUrl: "ws://127.0.0.1/ws",
+            }),
+          close: (closing) => Effect.sync(() => void closed.push(closing.nodeId)),
+        }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              options.descriptor === "ok"
+                ? Response.json({
+                    environmentId: "other",
+                    label: "Node",
+                    platform: { os: "darwin", arch: "arm64" },
+                    serverVersion: "1.0.0",
+                    capabilities: { repositoryIdentity: true },
+                  })
+                : new Response("bad gateway", { status: 502 }),
             ),
           ),
         ),
+      ),
+    );
+    return closed;
+  });
+
+it.effect(
+  "removing the environment that holds a member's route closes its link, whoever opened it",
+  () =>
+    Effect.gen(function* () {
+      const closed = yield* discover(
+        (discovery) =>
+          Effect.gen(function* () {
+            yield* discovery.release(saved);
+            yield* discovery.release(new Map());
+          }),
+        { initial: saved, descriptor: "ok", register: "ok" },
       );
+      expect(closed).toEqual([pin.nodeId]);
     }),
+);
+
+it.effect.each(["unreachable", "refused"] as const)(
+  "a link discovery opened is given back when the member is %s and no saved route holds it",
+  (outcome) =>
+    Effect.gen(function* () {
+      const closed = yield* discover((discovery) => discovery.pass(ready), {
+        initial: new Map(),
+        descriptor: outcome === "unreachable" ? "unreachable" : "ok",
+        register: outcome === "refused" ? "fails" : "ok",
+      });
+      expect(closed).toEqual([pin.nodeId]);
+    }),
+);
+
+it.effect("a link a saved route holds stays open when discovery cannot reach the member", () =>
+  Effect.gen(function* () {
+    const closed = yield* discover((discovery) => discovery.pass(ready), {
+      initial: saved,
+      descriptor: "unreachable",
+      register: "ok",
+    });
+    expect(closed).toEqual([]);
+  }),
 );

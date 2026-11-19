@@ -133,6 +133,9 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     readonly beforeRegistrationRegister?: (
       registration: ConnectionRegistration,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
+    readonly beforeRoutesSet?: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
     readonly beforeRegistrationRemove?: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
@@ -223,7 +226,11 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
         }
       }),
     setRoutes: (environmentId, routes) =>
-      Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
+      (options?.beforeRoutesSet?.(environmentId) ?? Effect.void).pipe(
+        Effect.andThen(
+          Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
+        ),
+      ),
     remove: (environmentId, keep = []) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRemove?.(environmentId) ?? Effect.void;

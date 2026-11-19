@@ -446,12 +446,19 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const persistedRoutes = (entry: ConnectionCatalogEntry) => {
+  /** Saves the entry's routes with each hidden one back in its slot; slots move once saved. */
+  const saveRoutes = <E>(
+    entry: ConnectionCatalogEntry,
+    write: (routes: ReadonlyArray<PersistedConnectionTarget>) => Effect.Effect<void, E>,
+  ) => {
     const environmentId = entry.target.environmentId;
     const routes = withHiddenRoutes(connectionRoutes(entry), hiddenRoutes.get(environmentId) ?? []);
     const { hidden } = splitHiddenRoutes(routes);
-    if (hidden.length > 0) hiddenRoutes.set(environmentId, hidden);
-    return routes.map((route) => route.target as PersistedConnectionTarget);
+    return write(routes.map((route) => route.target as PersistedConnectionTarget)).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => hidden.length > 0 && hiddenRoutes.set(environmentId, hidden)),
+      ),
+    );
   };
 
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
@@ -498,7 +505,7 @@ export const make = Effect.gen(function* () {
           }
           entry = next.entry;
         }
-        yield* registrations.register(registration, persistedRoutes(entry));
+        yield* saveRoutes(entry, (routes) => registrations.register(registration, routes));
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );
@@ -517,7 +524,7 @@ export const make = Effect.gen(function* () {
     if (next.addressesChanged) {
       yield* forgetRoutingTrust(environmentId, "set-connection-routes");
     }
-    yield* registrations.setRoutes(environmentId, persistedRoutes(next.entry));
+    yield* saveRoutes(next.entry, (routes) => registrations.setRoutes(environmentId, routes));
     yield* installEntryLocked(next.entry);
   });
 
@@ -926,7 +933,7 @@ export const make = Effect.gen(function* () {
           }
           yield* profiles.put(profile);
         }
-        yield* registrations.setRoutes(input.environmentId, persistedRoutes(next));
+        yield* saveRoutes(next, (routes) => registrations.setRoutes(input.environmentId, routes));
         const lease = (yield* SubscriptionRef.get(serviceScopes)).get(input.environmentId);
         if (lease !== undefined) {
           yield* SubscriptionRef.update(serviceScopes, (current) =>

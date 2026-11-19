@@ -116,6 +116,8 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           openedPins.set(pinKey(pin), pin);
           const opened = yield* activeGateway.open(pin).pipe(Effect.uninterruptible);
           if (opened.kind !== "open") return;
+          // However this ends, a link no saved route holds afterwards is given back.
+          yield* Effect.addFinalizer(() => releaseUnheld(pin));
           const descriptor = yield* fetchRemoteEnvironmentDescriptor({
             httpBaseUrl: opened.httpBaseUrl,
           }).pipe(
@@ -159,6 +161,7 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           );
           verified.add(pinKey(pin));
         }).pipe(
+          Effect.scoped,
           Effect.catch((error) =>
             Effect.logDebug("Pen native route discovery failed", {
               error: redactPenRouteUrl(String(error)),
@@ -168,26 +171,35 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
       { concurrency: 4, discard: true },
     );
   });
-  // A link no saved route holds any more (its environment or route was removed) is closed.
-  let held = new Set<string>();
-  const release = Effect.fn("PenNativeDiscovery.release")(function* (
-    entries: ReadonlyMap<unknown, ConnectionCatalogEntry>,
-  ) {
-    const now = new Set(storedPenRoutes(entries).map(({ pin }) => pinKey(pin)));
-    for (const key of held) {
-      const pin = openedPins.get(key);
-      if (now.has(key) || pin === undefined) continue;
-      openedPins.delete(key);
-      verified.delete(key);
-      if (Option.isSome(gateway))
-        yield* gateway.value.close(pin).pipe(
+  const closeLink = (pin: DesktopPenPin) => {
+    openedPins.delete(pinKey(pin));
+    verified.delete(pinKey(pin));
+    return Option.isNone(gateway)
+      ? Effect.void
+      : gateway.value.close(pin).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Could not close Pen native route", {
               error: redactPenRouteUrl(String(error)),
             }),
           ),
         );
-    }
+  };
+  const releaseUnheld = (pin: DesktopPenPin) =>
+    SubscriptionRef.get(registry.entries).pipe(
+      Effect.flatMap((entries) =>
+        storedPenRoutes(entries).some((route) => pinKey(route.pin) === pinKey(pin))
+          ? Effect.void
+          : closeLink(pin),
+      ),
+    );
+  // A link no saved route holds any more (its environment or route was removed) is closed,
+  // whether discovery or a connection opened it.
+  let held = new Map<string, DesktopPenPin>();
+  const release = Effect.fn("PenNativeDiscovery.release")(function* (
+    entries: ReadonlyMap<unknown, ConnectionCatalogEntry>,
+  ) {
+    const now = new Map(storedPenRoutes(entries).map(({ pin }) => [pinKey(pin), pin]));
+    for (const [key, pin] of held) if (!now.has(key)) yield* closeLink(pin);
     held = now;
   });
   return { pass, release };

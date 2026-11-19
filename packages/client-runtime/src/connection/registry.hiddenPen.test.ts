@@ -4,7 +4,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { BearerConnectionRegistration, PenConnectionProfile } from "./catalog.ts";
+import {
+  BearerConnectionProfile,
+  BearerConnectionRegistration,
+  PenConnectionProfile,
+} from "./catalog.ts";
 import { BearerConnectionTarget, PenConnectionTarget } from "./model.ts";
 import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
@@ -156,4 +160,50 @@ it.effect(
         );
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
+);
+
+it.effect("a failed save leaves the hidden Pen route where the saved routes have it", () =>
+  Effect.gen(function* () {
+    const second = new BearerConnectionTarget({
+      environmentId,
+      label: "Second",
+      connectionId: "bearer-second",
+    });
+    const secondProfile = new BearerConnectionProfile({
+      ...BEARER_PROFILE,
+      connectionId: second.connectionId,
+      httpBaseUrl: "https://second.example.test",
+      wsBaseUrl: "wss://second.example.test",
+    });
+    let failures = 1;
+    const harness = yield* makeHarness(
+      [BEARER_TARGET, second, pen],
+      [BEARER_PROFILE, secondProfile, penProfile],
+      [],
+      {
+        beforeRoutesSet: () =>
+          failures-- > 0
+            ? Effect.fail(
+                new ConnectionPersistenceError({
+                  operation: "set-connection-routes",
+                  message: "disk full",
+                }),
+              )
+            : Effect.void,
+      },
+    );
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* Effect.exit(registry.removeRoute(environmentId, connectionRouteId(second)));
+      yield* registry.reorderRoutes(environmentId, [
+        connectionRouteId(second),
+        connectionRouteId(BEARER_TARGET),
+      ]);
+      expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+        second,
+        BEARER_TARGET,
+        pen,
+      ]);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
 );
