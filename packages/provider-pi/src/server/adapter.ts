@@ -1,7 +1,11 @@
 import { piThreadSnapshot } from "./threadSnapshot.ts";
 import { piApprovalRequestKind } from "./approvalRequestKind.ts";
 import { commandOutputDelta } from "./commandOutputDelta.ts";
-import { compactionTitle, type PiCompactionStatus } from "./compactionTitle.ts";
+import {
+  compactionTitle,
+  type PiCompactionStatus,
+  type PiCompactionState,
+} from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
 import * as NodeUtil from "node:util";
 import { readPiEntries, piSessionListing, walkPiBranch } from "./entries.ts";
@@ -110,10 +114,6 @@ interface PiStreamItemState {
   text: string;
   completed: boolean;
   flushScheduled: boolean;
-  readonly startedAt: DateTime.Utc;
-}
-interface PiCompactionState {
-  readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
 }
 interface PiProviderRetryState {

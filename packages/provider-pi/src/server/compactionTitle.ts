@@ -1,3 +1,5 @@
+import type * as DateTime from "effect/DateTime";
+
 export type PiCompactionStatus = "running" | "completed" | "failed" | "cancelled";
 export function compactionTitle(status: PiCompactionStatus): string {
   switch (status) {
@@ -10,4 +12,9 @@ export function compactionTitle(status: PiCompactionStatus): string {
     case "cancelled":
       return "Context compaction stopped";
   }
+}
+
+export interface PiCompactionState {
+  readonly nativeItemId: string;
+  readonly startedAt: DateTime.Utc;
 }
