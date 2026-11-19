@@ -1,3 +1,4 @@
+import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
   CLAUDE_ATTACHMENT_MAX_BYTES,
   makeClaudeAttachmentBudget,
@@ -1774,6 +1775,7 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
   readonly promptUuid: string | null;
+  appContextOffered?: ReadonlyMap<string, string> | undefined;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
   nativeWakeStarted: boolean;
@@ -2568,6 +2570,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const missingNativeThreads = new Set<string>();
         const pdfBudgets = new Map<string, ReturnType<typeof makeClaudeAttachmentBudget>>();
+        const appContextDelivery = makeClaudeAppContextDelivery();
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
         const taskListsByNativeThread = yield* Ref.make(
@@ -5370,6 +5373,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             retryFailure !== undefined && requested.status === "interrupted"
               ? { ...requested, status: "failed" as const, failure: retryFailure }
               : requested;
+          if (input.status === "completed" && input.context.appContextOffered !== undefined)
+            appContextDelivery.commit(
+              input.context.nativeThreadId,
+              input.context.appContextOffered,
+            );
           yield* providerRetryTimers.cancel(input.context.providerTurnId);
           yield* unansweredTimers.cancel(input.context.providerTurnId);
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
@@ -7071,6 +7079,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (message.type === "conversation_reset") {
+            appContextDelivery.clear(context.nativeThreadId);
+            context.appContextOffered = undefined;
             if (context.streamUsage !== null) context.streamUsage.usage = null;
             lastContextUsage.delete(context);
             yield* emitContextUsage(context, 0);
@@ -7140,6 +7150,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               budget.compacting = null;
               yield* persistAttachmentBudget(context.nativeThreadId);
             }
+            appContextDelivery.clear(context.nativeThreadId);
+            context.appContextOffered = undefined;
             if (context.streamUsage !== null) context.streamUsage.usage = null;
             lastContextUsage.delete(context);
             const postTokens = message.compact_metadata.post_tokens;
@@ -9353,6 +9365,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfBudgets.get(nativeThreadId)!,
               persistAttachmentBudget(nativeThreadId),
             );
+            const appContext =
+              promptUuid === null || turnInput.resume || nativeControl
+                ? undefined
+                : yield* appContextDelivery.prepare(
+                    nativeThreadId,
+                    turnInput.message.text,
+                    turnInput.appContext ?? [],
+                    pdfReservation,
+                  );
             const promptText = applyClaudePromptEffortPrefix(
               turnInput.message.text,
               compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
@@ -9381,6 +9402,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       ...(skills === undefined ? {} : { skills }),
                       uuid: promptUuid,
                     }).pipe(
+                      Effect.map((message) => appContext?.apply(message) ?? message),
                       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                       Effect.provideService(Path.Path, path),
                     );
@@ -9552,6 +9574,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               });
             });
+            let offerCommitted = false;
+            const commitOffer = () => {
+              if (offerCommitted) return;
+              offerCommitted = true;
+              pdfReservation.commit();
+              if (appContext !== undefined) context.appContextOffered = appContext.snapshot;
+            };
             const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* startUserTurnForWakeReports(nativeThreadId).pipe(
@@ -9559,12 +9588,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Effect.uninterruptibleMask((restore) =>
                     restore(
                       querySession.query.offer(message, () => {
-                        pdfReservation.commit();
+                        commitOffer();
                       }),
                     ).pipe(
                       Effect.tap(() =>
                         Effect.sync(() => {
-                          pdfReservation.commit();
+                          commitOffer();
                         }),
                       ),
                     ),
@@ -10502,6 +10531,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
               const nativeThreadId = yield* getNativeThreadId(rollbackInput.providerThread);
               yield* closeLiveQueryForNativeThread(nativeThreadId);
+              appContextDelivery.clear(nativeThreadId);
               const now = yield* DateTime.now;
               const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(rollbackInput);
 
