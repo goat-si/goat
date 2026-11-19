@@ -103,11 +103,15 @@ import {
   sanitizeProgressText,
 } from "./commitMessage.ts";
 import {
+  parseRepositoryNameWithOwnerFromRemoteUrl,
   matchesBranchHeadContext,
   parseRepositoryOwnerLogin,
   resolveHeadRepositoryNameWithOwner,
 } from "./pullRequestHeadIdentity.ts";
-export { matchesBranchHeadContext } from "./pullRequestHeadIdentity.ts";
+export {
+  matchesBranchHeadContext,
+  parseRepositoryNameWithOwnerFromRemoteUrl,
+} from "./pullRequestHeadIdentity.ts";
 import { makeRefreshNewPullRequestWorktree } from "./pullRequestWorktreeRefresh.ts";
 
 export interface GitActionProgressReporter {
@@ -266,21 +270,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
-}
-
-export function parseRepositoryNameWithOwnerFromRemoteUrl(
-  url: string | null,
-  provider?: Pick<
-    SourceControlProvider.SourceControlProvider["Service"],
-    "repositoryNameFromRemoteUrl"
-  >,
-): string | null {
-  const trimmed = url?.trim() ?? "";
-  if (trimmed.length === 0) return null;
-  return (
-    provider?.repositoryNameFromRemoteUrl?.(trimmed) ??
-    SourceControlProvider.repositoryPathFromRemoteUrl(trimmed)
-  );
 }
 
 function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
