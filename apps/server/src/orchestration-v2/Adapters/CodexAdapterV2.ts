@@ -212,6 +212,7 @@ import {
   codexHttpStatus,
   codexFailureClassification,
   codexRetryFailureClass,
+  recoverCodexTransportFailure,
   settledCodexFailure,
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
@@ -395,6 +396,7 @@ export interface ActiveCodexTurnContext {
   latestProviderFailure?: {
     readonly nativeMessage: string;
     readonly nativeCode: string | null;
+    readonly errorInfo?: CodexErrorInfo | null;
     readonly failure: OrchestrationV2ProviderFailure;
   };
   readonly nativeStartReady?: Deferred.Deferred<void>;
@@ -426,6 +428,8 @@ export interface ActiveCodexTurnContext {
 interface ActiveCodexProviderRetry {
   readonly nativeMessage: string;
   readonly nativeCode: string | null;
+  readonly nativeDetails?: string;
+  readonly errorInfo?: CodexErrorInfo | null;
   readonly httpStatus: number | null;
   readonly retry: OrchestrationV2ProviderRetry;
   readonly failure: OrchestrationV2ProviderFailure;
@@ -4182,6 +4186,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               context.latestProviderFailure = {
                 nativeMessage: payload.error.message,
                 nativeCode: notificationCode,
+                errorInfo: payload.error.codexErrorInfo ?? null,
                 failure: withCodexManagedFailure(
                   makeProviderFailure({
                     message: payload.error.additionalDetails?.trim() || payload.error.message,
@@ -4231,6 +4236,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const state: ActiveCodexProviderRetry = {
               nativeMessage: payload.error.message,
               nativeCode: code,
+              nativeDetails: additionalDetails || payload.error.message,
+              errorInfo: payload.error.codexErrorInfo ?? null,
               httpStatus: codexHttpStatus(payload.error.codexErrorInfo),
               retry,
               failure,
@@ -5392,7 +5399,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // completion repeats it. An explicit exhaustion status on the
               // completion still decides the class; a missing one is not evidence.
               const exhaustionStatus = codexExhaustionHttpStatus(input.failureErrorInfo);
-              const failure =
+              const baseFailure =
                 previousFailure !== undefined &&
                 (input.failureMessage === undefined ||
                   input.failureMessage === previousFailure.nativeMessage) &&
@@ -5408,6 +5415,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       }),
                       input.failureMessage,
                     );
+              const failure = recoverCodexTransportFailure(
+                baseFailure,
+                input.failureErrorInfo,
+                input.failureMessage,
+                input.context.latestProviderFailure,
+                input.providerRetry,
+              );
               return {
                 type: "turn.terminal",
                 driver: CODEX_PROVIDER,
