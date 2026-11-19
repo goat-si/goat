@@ -1,3 +1,4 @@
+import { blend } from "./terminalColorBlend";
 import {
   type GhosttyKeyboardLayoutMap,
   ghosttyConsumedMods,
@@ -148,15 +149,6 @@ export interface GhosttyMouseInput {
 
 const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const encoder = new TextEncoder();
-
-function blend(foreground: GhosttyColor, background: GhosttyColor): GhosttyColor {
-  const channel = (front: number, back: number) => Math.floor((front * 155 + back * 100) / 255);
-  return {
-    r: channel(foreground.r, background.r),
-    g: channel(foreground.g, background.g),
-    b: channel(foreground.b, background.b),
-  };
-}
 
 function sameColor(left: GhosttyColor, right: GhosttyColor): boolean {
   return left.r === right.r && left.g === right.g && left.b === right.b;
