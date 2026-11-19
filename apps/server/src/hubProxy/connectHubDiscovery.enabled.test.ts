@@ -261,6 +261,7 @@ it.effect.each(["managed", "learned direct"] as const)(
               Effect.sync(() => {
                 if ("profile" in registration)
                   savedProfiles.set(registration.profile.connectionId, registration.profile);
+                return true;
               }),
           }),
           Layer.mock(Persistence.EnvironmentCacheStore)({}),
