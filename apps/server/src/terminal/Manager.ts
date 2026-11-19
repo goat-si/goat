@@ -136,6 +136,7 @@ import { enqueueProcessEvent } from "./processEventQueue.ts";
 import { normalizeChildCommandName } from "./childCommandName.ts";
 import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
 import { toSessionKey } from "./terminalSessionKey.ts";
+import { truncateTerminalWireLabel } from "./terminalWireLabel.ts";
 
 export {
   TerminalCwdError,
@@ -170,7 +171,6 @@ const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-const MAX_TERMINAL_LABEL_LENGTH = 128;
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
 
@@ -411,11 +411,6 @@ type DrainProcessEventAction =
 interface TerminalManagerState {
   sessions: Map<string, TerminalSessionState>;
   killFibers: Map<PtyAdapter.PtyProcess, Fiber.Fiber<void, never>>;
-}
-
-function truncateTerminalWireLabel(value: string): string {
-  if (value.length <= MAX_TERMINAL_LABEL_LENGTH) return value;
-  return value.slice(0, MAX_TERMINAL_LABEL_LENGTH);
 }
 
 function terminalWireLabel(session: TerminalSessionState): string {
