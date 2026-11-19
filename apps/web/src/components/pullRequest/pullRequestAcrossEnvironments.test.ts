@@ -43,3 +43,22 @@ it("deduplicates a pull request across environments without merging different ho
     ["env-2", "git.example.test"],
   ]);
 });
+
+it("uses the newer copy when the second environment answers with a later update", () => {
+  const first = row("env-1");
+  const later = { ...row("env-2"), updatedAt: "2026-07-03T00:00:00Z" };
+  const answer = (entry: EnvironmentPullRequestEntry) =>
+    ({
+      viewers: {},
+      providers: [],
+      entries: [entry],
+      errors: [],
+      truncated: false,
+      nextCursors: {},
+    }) as PullRequestListResult;
+  const merged = mergePullRequestLists([
+    ["env-1" as EnvironmentId, answer(first)],
+    ["env-2" as EnvironmentId, answer(later)],
+  ]);
+  expect(merged?.entries).toEqual([later]);
+});

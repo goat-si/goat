@@ -110,7 +110,7 @@ export function usePullRequestList(
       const continuations = targets.flatMap((target) => {
         const pagesAtom = pagesFamily(JSON.stringify(target));
         const head = Option.getOrNull(
-          AsyncResult.value(registry.get(composerPullRequests.list(target))),
+          AsyncResult.value(registry.get(pullRequestHostAnswer(composerPullRequests.list(target)))),
         );
         const recorded = registry.get(pagesAtom);
         const pages = head ? pullRequestListHead(recorded, head) : recorded;
@@ -127,7 +127,7 @@ export function usePullRequestList(
         continuations.map(async ({ target, pagesAtom, pages, input }) => {
           const response = await executeAtomQuery(
             registry,
-            composerPullRequests.list({ ...target, input }),
+            pullRequestHostAnswer(composerPullRequests.list({ ...target, input })),
             {
               signal: controller.signal,
               refresh: retry,
@@ -180,11 +180,15 @@ export function usePullRequestList(
           input: {},
         });
         if (controller.signal.aborted) return;
-        const response = await executeAtomQuery(registry, composerPullRequests.list(target), {
-          refresh: true,
-          signal: controller.signal,
-          reportFailure: false,
-        });
+        const response = await executeAtomQuery(
+          registry,
+          pullRequestHostAnswer(composerPullRequests.list(target)),
+          {
+            refresh: true,
+            signal: controller.signal,
+            reportFailure: false,
+          },
+        );
         if (controller.signal.aborted || activeScope.current !== scopeKey) return;
         if (response._tag === "Failure") throw squashAtomCommandFailure(response);
         registry.set(
@@ -313,7 +317,7 @@ export function usePullRequestList(
       if (!target) return;
       const pagesAtom = pagesFamily(JSON.stringify(target));
       const head = Option.getOrNull(
-        AsyncResult.value(registry.get(composerPullRequests.list(target))),
+        AsyncResult.value(registry.get(pullRequestHostAnswer(composerPullRequests.list(target)))),
       );
       const patched = patchPullRequestListEntry(
         registry.get(pagesAtom),
@@ -323,7 +327,7 @@ export function usePullRequestList(
         Date.now(),
       );
       if (patched) registry.set(pagesAtom, patched);
-      registry.refresh(composerPullRequests.list(target));
+      registry.refresh(pullRequestHostAnswer(composerPullRequests.list(target)));
     },
     [registry, targets],
   );
