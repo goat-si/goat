@@ -1,4 +1,5 @@
-import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as Schema from "effect/Schema";
+import type { SDKAPIRetryMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { OrchestrationV2ProviderFailure, OrchestrationV2ProviderTurn } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as DateTime from "effect/DateTime";
@@ -182,5 +183,49 @@ export function providerFailureFromResult(
     class: failureClass,
     retryable: apiErrorStatus === 429 || apiErrorStatus === 529 ? true : null,
     resetAt: resetAt ?? null,
+  });
+}
+
+// The CLI throttles unchanged rate_limit_event frames, but repeats this
+// undeclared payload on each blocked assistant response.
+export const isClaudeBlockedAssistantRateLimit = Schema.is(
+  Schema.Struct({
+    api_error_params: Schema.Struct({
+      rate_limit_info: Schema.Struct({
+        status: Schema.Literal("rejected"),
+        rateLimitType: Schema.optionalKey(Schema.Unknown),
+        resetsAt: Schema.optionalKey(Schema.Unknown),
+        overageStatus: Schema.optionalKey(Schema.String),
+        isUsingOverage: Schema.optionalKey(Schema.Boolean),
+        overageInUse: Schema.optionalKey(Schema.Boolean),
+      }),
+    }),
+  }),
+);
+
+export function claudeUsageLimitResetAt(resetsAt: unknown): string | null {
+  const resetMs = typeof resetsAt === "number" ? resetsAt * 1000 : NaN;
+  return Number.isFinite(resetMs) && resetMs > 0 && resetMs < 8.64e15
+    ? DateTime.formatIso(DateTime.makeUnsafe(resetMs))
+    : null;
+}
+
+export function providerFailureFromApiRetry(
+  message: SDKAPIRetryMessage,
+): OrchestrationV2ProviderFailure {
+  const errorName = message.error.replaceAll("_", " ");
+  return makeProviderFailure({
+    message: `Claude API ${errorName}.`,
+    code:
+      message.error_status === null
+        ? message.error
+        : `api_error_${Math.trunc(message.error_status)}`,
+    class:
+      message.error_status === 429
+        ? "usage_limit"
+        : message.error_status === null
+          ? "transport_error"
+          : "provider_error",
+    retryable: true,
   });
 }

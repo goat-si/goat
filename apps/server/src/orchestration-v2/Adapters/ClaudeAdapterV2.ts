@@ -14,7 +14,13 @@ import * as FiberMap from "effect/FiberMap";
 import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
 import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
 import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
-import { providerFailureFromResult, terminalStatusFromResult } from "./ClaudeResultFailure.ts";
+import {
+  providerFailureFromResult,
+  terminalStatusFromResult,
+  isClaudeBlockedAssistantRateLimit,
+  claudeUsageLimitResetAt,
+  providerFailureFromApiRetry,
+} from "./ClaudeResultFailure.ts";
 import { claudeLocalSettingsDirectory } from "../../provider/Drivers/ClaudeHome.ts";
 import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
 import {
@@ -176,7 +182,6 @@ import {
   type PermissionResult,
   type Settings as ClaudeSdkSettings,
   type SDKAssistantMessage,
-  type SDKAPIRetryMessage,
   type SDKMessage,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -1779,48 +1784,6 @@ function claudeSettledSubagentToolUseIds(messages: ReadonlyArray<SDKMessage>): R
         : [],
     ),
   );
-}
-
-// The CLI throttles unchanged rate_limit_event frames, but repeats this
-// undeclared payload on each blocked assistant response.
-const isClaudeBlockedAssistantRateLimit = Schema.is(
-  Schema.Struct({
-    api_error_params: Schema.Struct({
-      rate_limit_info: Schema.Struct({
-        status: Schema.Literal("rejected"),
-        rateLimitType: Schema.optionalKey(Schema.Unknown),
-        resetsAt: Schema.optionalKey(Schema.Unknown),
-        overageStatus: Schema.optionalKey(Schema.String),
-        isUsingOverage: Schema.optionalKey(Schema.Boolean),
-        overageInUse: Schema.optionalKey(Schema.Boolean),
-      }),
-    }),
-  }),
-);
-
-function claudeUsageLimitResetAt(resetsAt: unknown): string | null {
-  const resetMs = typeof resetsAt === "number" ? resetsAt * 1000 : NaN;
-  return Number.isFinite(resetMs) && resetMs > 0 && resetMs < 8.64e15
-    ? DateTime.formatIso(DateTime.makeUnsafe(resetMs))
-    : null;
-}
-
-function providerFailureFromApiRetry(message: SDKAPIRetryMessage): OrchestrationV2ProviderFailure {
-  const errorName = message.error.replaceAll("_", " ");
-  return makeProviderFailure({
-    message: `Claude API ${errorName}.`,
-    code:
-      message.error_status === null
-        ? message.error
-        : `api_error_${Math.trunc(message.error_status)}`,
-    class:
-      message.error_status === 429
-        ? "usage_limit"
-        : message.error_status === null
-          ? "transport_error"
-          : "provider_error",
-    retryable: true,
-  });
 }
 
 const CLAUDE_USAGE_LIMIT_WINDOWS = {
