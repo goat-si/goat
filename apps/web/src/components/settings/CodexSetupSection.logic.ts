@@ -1,5 +1,11 @@
 import type { ChatGptHandoffState, ProviderAuthState, ProviderInstallState } from "@goat/contracts";
 
+export function codexSignInError(canPaste: boolean): string {
+  return canPaste
+    ? "Could not finish sign-in on this computer. Try again or paste the redirect URL below."
+    : "Could not finish sign-in on this computer. Try again.";
+}
+
 export function readCodexSetupMode(config: unknown): "managed" | "existing" {
   return config !== null &&
     typeof config === "object" &&

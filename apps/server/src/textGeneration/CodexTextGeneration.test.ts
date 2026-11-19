@@ -493,6 +493,41 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
+  it.effect("keeps user hooks off over launch args that turn them on", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Hookless title" }),
+        launchArgs: "--config features.hooks=true --enable hooks",
+        requireArg: "--config features.codex_hooks=false --config features.hooks=false",
+        forbidArg: "--enable",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Describe this change",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Hookless title");
+        }),
+    ),
+  );
+
+  it.effect("identifies codex exec with GOAT's existing originator", () =>
+    withFakeCodexEnv(
+      { output: JSON.stringify({ title: "Live title" }), requireOriginator: "T3 Code" },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Name this thread",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Live title");
+        }),
+    ),
+  );
+
   it.effect("passes exec-safe launch args into codex exec", () =>
     withFakeCodexEnv(
       {

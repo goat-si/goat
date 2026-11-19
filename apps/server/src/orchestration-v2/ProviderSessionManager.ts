@@ -76,6 +76,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { isAppOwnedDelegatedThread } from "./DelegatedThreadProvenance.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
 import { makeRetryStallWatch } from "./ProviderRetryStallWatch.ts";
 import * as Retirement from "./ProviderSessionRetirement.ts";
@@ -1991,7 +1992,23 @@ export const layerWithOptions = (
                 providerInstanceId: runtime.instanceId,
               }),
             ).pipe(
-              Effect.andThen(runtime.ensureThread(input)),
+              Effect.andThen(
+                runtime.driver !== "codex"
+                  ? runtime.ensureThread(input)
+                  : isAppOwnedDelegatedThread(projectionStore, input.threadId).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new ProviderAdapter.ProviderAdapterEnsureThreadError({
+                            driver: runtime.driver,
+                            threadId: input.threadId,
+                            cause,
+                          }),
+                      ),
+                      Effect.flatMap((isAppOwnedDelegated) =>
+                        runtime.ensureThread({ ...input, isAppOwnedDelegated }),
+                      ),
+                    ),
+              ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,

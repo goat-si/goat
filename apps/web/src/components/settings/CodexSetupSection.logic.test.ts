@@ -2,10 +2,16 @@ import type { ProviderAuthState, ProviderInstallState } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  codexSignInError,
   settleAuthorizationPage,
   settleHandoffAuthorizationPage,
   settleProviderInstall,
 } from "./CodexSetupSection.logic";
+
+it("only offers redirect paste guidance when a callback form is available", () => {
+  expect(codexSignInError(false)).toBe("Could not finish sign-in on this computer. Try again.");
+  expect(codexSignInError(true)).toContain("paste the redirect URL below");
+});
 
 const install = (overrides: Partial<ProviderInstallState>) =>
   ({

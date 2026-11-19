@@ -1,6 +1,11 @@
 import type { OrchestrationV2ProviderFailure } from "@goat/contracts";
+import type * as DateTime from "effect/DateTime";
 import { classifyCodexManagedError } from "./CodexManagedErrors.ts";
-import { codexUsageLimitResetAt, type CodexRateLimitSnapshot } from "./codexUsageLimits.ts";
+import {
+  codexMessageResetAt,
+  codexUsageLimitResetAt,
+  type CodexRateLimitSnapshot,
+} from "./codexUsageLimits.ts";
 
 /**
  * ChatGPT sharing reports its own reason inside Codex's generic turn error, so
@@ -25,9 +30,11 @@ export function withCodexManagedFailure(
 export function failureResetAt(
   failure: OrchestrationV2ProviderFailure,
   snapshot: CodexRateLimitSnapshot | undefined,
+  text?: { readonly failedAt: DateTime.Utc; readonly zone: DateTime.TimeZone },
 ) {
   // Sharing caps have no reset timestamp in the ordinary Codex allowance snapshot.
   return classifyCodexManagedError(failure.code)?.usageLimit
     ? null
-    : codexUsageLimitResetAt(snapshot);
+    : (codexUsageLimitResetAt(snapshot) ??
+        (text ? codexMessageResetAt(failure.message, text.failedAt, text.zone) : null));
 }

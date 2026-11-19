@@ -43,6 +43,7 @@ export interface FakeCodexInput {
   refreshAuth?: "in-place" | "replace";
   mcpServers?: ReadonlyArray<{ name: string; enabled: boolean }> | number;
   requireMcpServersOff?: ReadonlyArray<string>;
+  requireOriginator?: string;
   /** Copies the `--output-schema` file here so a test can check what the CLI received. */
   schemaCopyPath?: string;
 }
@@ -61,6 +62,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     refreshAuth: input.refreshAuth ?? null,
     mcpServers: input.mcpServers ?? [],
     requireMcpServersOff: input.requireMcpServersOff ?? [],
+    requireOriginator: input.requireOriginator ?? null,
     schemaCopyPath: input.schemaCopyPath ?? null,
     stderr: input.stderr ?? null,
     output: input.output,
@@ -152,6 +154,9 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "}",
         "for (const name of check.requireMcpServersOff) {",
         '  if (!offServers.has(name)) fail("MCP server left on: " + name, 13);',
+        "}",
+        "if (check.requireOriginator !== null && process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE !== check.requireOriginator) {",
+        '  fail("unexpected originator: " + process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, 14);',
         "}",
         // Codex CLI 0.163.0 forwards the schema to the API, which rejects a non-object root.
         "if (schemaPath !== null) {",

@@ -5,6 +5,29 @@ import type {
 } from "@goat/contracts";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
+function codexFileChangeApprovalPrompt(input: {
+  readonly reason?: string | null;
+  readonly grantRoot?: string | null;
+  readonly fileChanges?: Readonly<
+    Record<string, CodexSchema.V2ItemStartedNotification__PatchChangeKind>
+  >;
+}): string | undefined {
+  const reason = input.reason?.trim();
+  if (reason) return reason;
+  const entries = Object.entries(input.fileChanges ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (entries.length > 0) {
+    const described = entries.slice(0, 20).map(([path, change]) => {
+      const movePath = change.type === "update" ? change.move_path : undefined;
+      return movePath ? `${change.type} ${path} -> ${movePath}` : `${change.type} ${path}`;
+    });
+    const remaining = entries.length - described.length;
+    return remaining > 0 ? `${described.join("\n")}\n+${remaining} more` : described.join("\n");
+  }
+  return input.grantRoot?.trim() || undefined;
+}
+
 function approvalDecisionToLegacyReviewDecision(
   decision: ProviderApprovalDecision,
 ): CodexSchema.ExecCommandApprovalResponse__ReviewDecision {
@@ -84,6 +107,7 @@ function toCodexUserInputAnswers(
 
 export {
   approvalDecisionToLegacyReviewDecision,
+  codexFileChangeApprovalPrompt,
   permissionsResponseFromDecision,
   providerRequestKindFromPermissions,
   toCodexUserInputAnswers,
