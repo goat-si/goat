@@ -1,4 +1,5 @@
 import * as PiConstants from "./adapterConstants.ts";
+import { recheckPiSelection } from "./selectionDrift.ts";
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
 import { adoptLivePiSession, isLivePiSession } from "./sessionIdentity.ts";
 import { piViewedImagePath } from "./viewedImagePath.ts";
@@ -2525,6 +2526,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        const live = yield* recheckPiSelection(
+          request,
+          modelSelection.model,
+          appliedModel,
+          thinking,
+          appliedThinking,
+        );
+        if (live !== undefined) appliedThinking = live.thinking;
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           if (appliedModel !== null && baselineModel !== null) {
             const restoredModel = yield* request({ type: "set_model", ...baselineModel });
@@ -2547,7 +2556,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* request({ type: "set_thinking_level", level: baselineThinking });
             appliedThinking = baselineThinking;
           }
-        } else if (modelSelection.model !== appliedModel) {
+        } else if (live?.modelDrifted || modelSelection.model !== appliedModel) {
           // Extensions and models.json edits can add providers after the first discovery.
           if (findReportedPiModel(modelSelection.model, discoveredModels) === undefined) {
             yield* discoverModels();

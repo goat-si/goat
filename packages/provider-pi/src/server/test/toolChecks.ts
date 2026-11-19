@@ -584,4 +584,32 @@ export function registerPiToolChecks({
         assert.equal(idle.providerThread.nativeThreadRef?.nativeId, "/fake/extension-child.jsonl");
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("reapplies the selected model and thinking after native changes", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const selection = {
+        ...modelSelection("anthropic/model-a"),
+        options: [{ id: "thinking", value: "high" }],
+      };
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: selection,
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, thread, "anthropic/model-a", [], "first", selection);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      fake.queueState({ model: { provider: "openai", id: "model-b" }, thinkingLevel: "low" });
+      yield* startTurn(runtime, thread, "anthropic/model-a", [], "next", selection, 2);
+      yield* fake.takeRequest("prompt");
+      assert.equal(fake.allRequests().filter((request) => request.type === "set_model").length, 2);
+      assert.equal(
+        fake.allRequests().filter((request) => request.type === "set_thinking_level").length,
+        2,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }
