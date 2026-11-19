@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { penExactAliasDecision, penExactAliasRoute, penKnownHostsFile } from "./penRoute.ts";
+import {
+  penExactAliasDecision,
+  penExactAliasRoute,
+  penGlobalFiles,
+  penKnownHostsFile,
+} from "./penRoute.ts";
 
 const node = "a".repeat(26);
 const alias = `pen-${node}`;
@@ -51,13 +56,22 @@ describe("exact Pen route", () => {
     f.settings.delete("controlpath");
     expect(penExactAliasRoute(f.settings)).toMatchObject({ nodeId: node });
   });
+  it("accepts a literal percent sign, which pen writes doubled", () => {
+    const f = facts();
+    f.settings.set("proxycommand", `'/home/100%%/pen' pipe --node ${node} --noise ${noise} 22`);
+    expect(penExactAliasRoute(f.settings)).toMatchObject({ nodeId: node });
+  });
   it.each([
     ["proxycommand", "'/bin/pen' pipe %n 22"],
     ["proxycommand", `"C:\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
     ["proxycommand", `'/bin/pen' pipe --node ${node} --noise bad;id 22`],
+    // ssh expands a % token before it runs the command: only a doubled %% is a literal one.
+    ["proxycommand", `'/home/%u/pen' pipe --node ${node} --noise ${noise} 22`],
+    ["proxycommand", `env PEN_HOME='/p/%d' '/bin/pen' pipe --node ${node} --noise ${noise} 22`],
     ["controlmaster", "true"],
     ["controlpath", "/tmp/socket"],
     ["proxyjump", "jump"],
+    ["nohostauthenticationforproxycommand", "yes"],
     ["knownhostscommand", "command"],
     ["userknownhostsfile", `${file} /tmp/other`],
   ])("refuses unsafe %s = %s", (key, value) => {
@@ -80,5 +94,103 @@ describe("exact Pen route", () => {
     const s = settings();
     s.set("proxycommand", "'/bin/pen' pipe %n 22");
     expect(penKnownHostsFile(s)).toBe(file);
+  });
+});
+
+describe("Windows exact Pen route", () => {
+  const winFacts = () => {
+    const f = facts();
+    f.settings.set(
+      "proxycommand",
+      `"C:\\Program Files\\pen.exe" pipe --node ${node} --noise ${noise} 22`,
+    );
+    f.settings.set("userknownhostsfile", "C:/Users/jun/.ssh/pen/known_hosts");
+    return {
+      ...f,
+      penKnownHosts: "C:\\Users\\jun\\.ssh\\pen\\known_hosts",
+      platform: "win32" as const,
+    };
+  };
+  it("accepts Windows commands and compares path separators", () => {
+    const f = winFacts();
+    expect(penExactAliasDecision(f)).toMatchObject({ nodeId: node, noisePub: noise });
+    f.settings.set(
+      "proxycommand",
+      `"C:\\pen.exe" pipe --home "C:\\pen\\\\" --node ${node} --noise ${noise} 22`,
+    );
+    expect(penExactAliasDecision(f)).toMatchObject({ nodeId: node });
+    f.settings.set(
+      "proxycommand",
+      `"C:\\100%%\\pen.exe" pipe --home "C:\\100%%\\.pen" --node ${node} --noise ${noise} 22`,
+    );
+    expect(penExactAliasDecision(f)).toMatchObject({ nodeId: node });
+    expect(penExactAliasDecision({ ...f, platform: "darwin" })).toBe("not-pen-route");
+  });
+  it.each([
+    ["relative program", `"pen.exe" pipe --node ${node} --noise ${noise} 22`],
+    ["% token in program", `"C:\\Users\\%u\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
+    [
+      "% token in home",
+      `"C:\\pen.exe" pipe --home "C:\\%d\\pen" --node ${node} --noise ${noise} 22`,
+    ],
+    ["another program", `"C:\\tools\\other.exe" pipe --node ${node} --noise ${noise} 22`],
+    ["quote in program", `"C:\\a\\"b\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
+    ["relative home", `"C:\\pen.exe" pipe --home "pen" --node ${node} --noise ${noise} 22`],
+    ["extra argument", `"C:\\pen.exe" pipe --extra --node ${node} --noise ${noise} 22`],
+    ["trailing text", `"C:\\pen.exe" pipe --node ${node} --noise ${noise} 22 extra`],
+    ["unterminated", `"C:\\pen.exe pipe --node ${node} --noise ${noise} 22`],
+    ["posix", `'/bin/pen' pipe --node ${node} --noise ${noise} 22`],
+  ])("refuses %s", (_name, command) => {
+    const f = winFacts();
+    f.settings.set("proxycommand", command);
+    expect(penExactAliasDecision(f)).toBe("not-pen-route");
+  });
+  it.each([
+    ["proxyjump", "jump"],
+    ["controlmaster", "auto"],
+    ["controlpath", "C:/socket"],
+    ["nohostauthenticationforproxycommand", "yes"],
+  ])("refuses %s", (key, value) => {
+    const f = winFacts();
+    f.settings.set(key, value);
+    expect(penExactAliasDecision(f)).toBe("not-pen-route");
+  });
+  it("refuses a mismatched node or ambiguous known hosts", () => {
+    const f = winFacts();
+    f.settings.set(
+      "proxycommand",
+      `"C:\\pen.exe" pipe --node ${"b".repeat(26)} --noise ${noise} 22`,
+    );
+    expect(penExactAliasDecision(f)).toBe("node-mismatch");
+    f.settings.set("proxycommand", `"C:\\pen.exe" pipe --node ${node} --noise ${noise} 22`);
+    f.settings.set("userknownhostsfile", "C:/Users/with space/.ssh/pen/known_hosts");
+    expect(penExactAliasDecision(f)).toBe("known-hosts-not-pen");
+    f.settings.set("userknownhostsfile", "C:/other/known_hosts");
+    expect(penExactAliasDecision(f)).toBe("known-hosts-not-pen");
+  });
+});
+
+describe("Windows global known hosts", () => {
+  it("accepts only the unambiguous default list or none", () => {
+    const files = ["C:\\ProgramData\\ssh/ssh_known_hosts", "C:\\ProgramData\\ssh/ssh_known_hosts2"];
+    const options = { platform: "win32" as const, programData: "C:\\ProgramData" };
+    const printed = "__PROGRAMDATA__\\ssh/ssh_known_hosts __PROGRAMDATA__\\ssh/ssh_known_hosts2";
+    expect(penGlobalFiles(new Map(), options)).toEqual([]);
+    expect(penGlobalFiles(new Map([["globalknownhostsfile", printed]]), options)).toEqual(files);
+    expect(
+      penGlobalFiles(new Map([["globalknownhostsfile", files.join(" ")]]), options),
+    ).toBeUndefined();
+    expect(
+      penGlobalFiles(new Map([["globalknownhostsfile", "C:/custom"]]), options),
+    ).toBeUndefined();
+    expect(
+      penGlobalFiles(new Map([["globalknownhostsfile", printed]]), {
+        ...options,
+        programData: "C:\\Program Data",
+      }),
+    ).toBeUndefined();
+    expect(
+      penGlobalFiles(new Map([["globalknownhostsfile", printed]]), { platform: "win32" }),
+    ).toBeUndefined();
   });
 });

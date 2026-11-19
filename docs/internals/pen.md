@@ -268,13 +268,20 @@ alias. The Pen-native path stays closed (next section).
 - **Ownership is the optional `pen` binding, never the alias or `kind`.** A hub row a person added
   for the same alias is never touched, and an older client must still decode the node list, so the
   binding rides as an optional key on `addedBy` (kind stays `import`) and on the route.
-- **A Windows desktop does not follow Pen yet, for two reasons.** Pen's control socket is AF_UNIX
-  on every platform and Node on Windows opens only named pipes, so the snapshot watch
-  (`packages/pen-protocol/src/snapshot.ts`) never connects there. And the exact-route check
-  (`packages/ssh/src/penRoute.ts`) accepts only the POSIX ProxyCommand, while pen writes a
-  CreateProcess-quoted one on Windows. The first needs a transport from pen itself, such as a
-  command that streams snapshots; the second needs what Win32-OpenSSH's `ssh -G` prints, measured
-  on the Windows CI job, not guessed.
+- **A Windows desktop reads the member list from a pen child, not the socket.** Pen's control
+  socket is AF_UNIX on every platform and Node on Windows opens only named pipes, so the desktop
+  there spawns `pen ls --watch --snapshot --until-stdin-closes` and feeds its stdout to the same
+  reader (`apps/desktop/src/pen/penSnapshotChild.ts`). A command was chosen over a named-pipe
+  listener in the daemon (a second control surface with its own access rule) and over a stdio
+  bridge to the socket (it would carry `service.register` too). The stdin flag exists because a
+  Windows child outlives its parent and would hold one of the 8 watcher slots. A GOAT server on
+  Windows (`PenHubNodes`) still uses the socket and so lists nothing.
+- **The Windows exact-route check is narrower than what pen can write.** It accepts only an
+  absolute `pen.exe` and `--home`, and one known_hosts path without whitespace: `ssh -G` prints
+  file lists space-joined and unquoted, so a path with a space cannot be told from two files, and
+  Pen's own block cannot settle it because an earlier block may have set them. What
+  Win32-OpenSSH prints is taken from the hosted Windows job, where
+  `packages/ssh/src/penAliasWindows.test.ts` runs the real `ssh -G`, not from its source.
 - **The desktop dials a Pen-only machine only while the registry's gate lets it.** An environment
   whose every route is a managed Pen route connects only while its id is in the registry's live
   set (`packages/client-runtime/src/connection/penLiveSet.ts`): the member is online in the latest

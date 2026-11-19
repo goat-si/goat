@@ -62,6 +62,7 @@ const LANES = ["all", "server", "memory-growth", "windows", "quick"];
  */
 const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
+  "apps/desktop/src/pen/penBinaryWindows",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
   "apps/server/src/runtimeRelaunch",
@@ -76,6 +77,7 @@ const WINDOWS_SUITES = [
   "packages/shared/src/goatHome",
   "packages/shared/src/devHome",
   "packages/shared/src/testing/",
+  "packages/ssh/src/penAliasWindows",
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
   "scripts/build-desktop-artifact.selfcheck",
@@ -83,8 +85,11 @@ const WINDOWS_SUITES = [
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
   "apps/desktop/native/computer-use-helper-windows/",
+  "apps/desktop/src/pen/penPipe",
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
+  "packages/ssh/src/penAlias.",
+  "packages/ssh/src/penRoute",
   "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";

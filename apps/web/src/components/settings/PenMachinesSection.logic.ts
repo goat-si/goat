@@ -20,6 +20,8 @@ function penRefusalText(reason: PenRouteRefusal): string {
       return "It has published no ssh host key. Run `pen ls` on it to see why.";
     case "key-mismatch":
       return "Its Pen key changed. Waiting for Pen to update its ssh host.";
+    case "ssh-not-win32":
+      return "The ssh found first on PATH is not Windows' own OpenSSH, so GOAT does not use Pen's ssh host with it.";
     case "unreadable":
       return "GOAT could not read Pen's ssh settings for it.";
   }
