@@ -7,43 +7,60 @@ import {
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import type { ChangesLineTotals } from "./GitActionsControl.logic";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { ChangeBreakdownGrid } from "./pullRequest/ChangeBreakdownGrid";
 
 export function ChangesAction({
   changesTotals,
   onOpenChanges,
 }: {
   changesTotals: ChangesLineTotals;
-  onOpenChanges?: () => void;
+  onOpenChanges?: (() => void) | undefined;
 }) {
   return (
-    <ThreadDetailsControl
-      type="button"
-      variant="ghost"
-      size="sm"
-      part="row"
-      disabled={!onOpenChanges}
-      onClick={onOpenChanges}
-    >
-      <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
-      <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
-        Changes {changesTotals.baseRef === null ? "(Uncommitted)" : `(vs ${changesTotals.baseRef})`}
-      </span>
-      <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
-        <span
-          className={
-            changesTotals.insertions ? "text-diff-addition-foreground" : "text-muted-foreground"
-          }
-        >
-          +{formatDiffCount(changesTotals.insertions)}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <ThreadDetailsControl
+            type="button"
+            variant="ghost"
+            size="sm"
+            part="row"
+            disabled={!onOpenChanges}
+            onClick={onOpenChanges}
+          />
+        }
+      >
+        <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+        <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+          Changes{" "}
+          {changesTotals.baseRef === null ? "(Uncommitted)" : `(vs ${changesTotals.baseRef})`}
         </span>
-        <span
-          className={
-            changesTotals.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
-          }
-        >
-          -{formatDiffCount(changesTotals.deletions)}
+        <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+          <span
+            className={
+              changesTotals.insertions ? "text-diff-addition-foreground" : "text-muted-foreground"
+            }
+          >
+            +{formatDiffCount(changesTotals.insertions)}
+          </span>
+          <span
+            className={
+              changesTotals.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
+            }
+          >
+            -{formatDiffCount(changesTotals.deletions)}
+          </span>
         </span>
-      </span>
-    </ThreadDetailsControl>
+      </TooltipTrigger>
+      {changesTotals.breakdown && (changesTotals.insertions > 0 || changesTotals.deletions > 0) ? (
+        <TooltipPopup key={JSON.stringify(changesTotals.breakdown)} side="bottom">
+          <ChangeBreakdownGrid
+            breakdown={changesTotals.breakdown}
+            total={{ additions: changesTotals.insertions, deletions: changesTotals.deletions }}
+          />
+        </TooltipPopup>
+      ) : null}
+    </Tooltip>
   );
 }
