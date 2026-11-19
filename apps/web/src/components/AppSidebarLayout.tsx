@@ -359,7 +359,14 @@ export function SidebarControl({
         // the toggle stays available everywhere else.
         return;
       }
-      const command = resolveShortcutCommand(event, keybindings, { context: { usagePageOpen } });
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          previewFocus: isPreviewFocused(),
+          ...readRoutePanelsOpen(router),
+          usagePageOpen,
+        },
+      });
       if (command !== "sidebar.toggle" && command !== "sidebar.toggleActivity") return;
 
       event.preventDefault();
@@ -377,7 +384,7 @@ export function SidebarControl({
       window.removeEventListener("keydown", onKeyDown, true);
       unsubscribe?.();
     };
-  }, [keybindings, toggleActivity, toggleSidebar, usagePageOpen]);
+  }, [keybindings, router, toggleActivity, toggleSidebar, usagePageOpen]);
 
   // The control lives as long as the shell, so it carries the shell's commands. Created
   // once so re-renders never re-register them.
