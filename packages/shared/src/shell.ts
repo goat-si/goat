@@ -112,7 +112,7 @@ function resolveSpawnExecutableWithNode(
   }
 
   for (const pathEntry of (readEnvPath(env) ?? "").split(pathDelimiterForPlatform(platform))) {
-    const normalizedPathEntry = stripWrappingQuotes(pathEntry.trim());
+    const normalizedPathEntry = normalizePathEntry(pathEntry, platform);
     if (normalizedPathEntry.length === 0) continue;
     for (const candidate of candidates) {
       const candidatePath = path.join(normalizedPathEntry, candidate);
@@ -171,12 +171,11 @@ export function readPathFromLaunchctl(
   execFile: ExecFileSyncLike = NodeChildProcess.execFileSync,
 ): string | undefined {
   try {
-    return trimNonEmpty(
-      execFile("/bin/launchctl", ["getenv", "PATH"], {
-        encoding: "utf8",
-        timeout: 2000,
-      }),
-    );
+    const value = execFile("/bin/launchctl", ["getenv", "PATH"], {
+      encoding: "utf8",
+      timeout: 2000,
+    }).replace(/\r?\n$/, "");
+    return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
   }
@@ -416,8 +415,8 @@ export const readEnvironmentFromWindowsShell = Effect.fn("shell.readEnvironmentF
   },
 );
 
-function stripWrappingQuotes(value: string): string {
-  return value.replace(/^"+|"+$/g, "");
+function normalizePathEntry(value: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? value.trim().replace(/^"+|"+$/g, "") : value;
 }
 
 function pathDelimiterForPlatform(platform: NodeJS.Platform): string {
@@ -425,7 +424,7 @@ function pathDelimiterForPlatform(platform: NodeJS.Platform): string {
 }
 
 function normalizePathEntryForComparison(entry: string, platform: NodeJS.Platform): string {
-  const normalized = stripWrappingQuotes(entry.trim());
+  const normalized = normalizePathEntry(entry, platform);
   return platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
@@ -446,7 +445,7 @@ export function mergePathValues(
     if (!rawValue) continue;
 
     for (const entry of rawValue.split(delimiter)) {
-      const sanitized = sanitizePathEntry(entry.trim(), platform);
+      const sanitized = sanitizePathEntry(platform === "win32" ? entry.trim() : entry, platform);
       if (sanitized.length === 0) continue;
 
       const normalized = normalizePathEntryForComparison(sanitized, platform);
@@ -634,7 +633,7 @@ const findOnPath = Effect.fnUntraced(function* (
   const pathEntries: string[] = [];
   const seenPathEntries = new Set<string>();
   for (const entry of pathValue.split(pathDelimiterForPlatform(platform))) {
-    const pathEntry = stripWrappingQuotes(entry.trim());
+    const pathEntry = normalizePathEntry(entry, platform);
     if (pathEntry.length === 0 || seenPathEntries.has(pathEntry)) continue;
 
     seenPathEntries.add(pathEntry);
