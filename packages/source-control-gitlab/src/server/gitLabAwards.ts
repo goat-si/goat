@@ -8,6 +8,9 @@ import { query } from "./gitLabQuery.ts";
 import { decodeOwnAwardIdJson, gitLabAwardName } from "./gitLabMergeRequestJson.ts";
 import type { makeGitLabViewer } from "./gitLabViewer.ts";
 
+const MAX_AWARD_PAGES = 100;
+const AWARDS_PER_PAGE = 100;
+
 export function makeGitLabAwards(
   api: (input: {
     readonly cwd: string;
@@ -51,25 +54,39 @@ export function makeGitLabAwards(
       // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
       // award of that name is looked up first.
       const viewer = yield* viewerUsername(input);
-      const listed = yield* api({ cwd: input.cwd, host: input.host, path: subject });
-      const own = decodeOwnAwardIdJson(listed.stdout.trim(), {
-        content: input.content,
-        viewer,
-      });
-      if (!Result.isSuccess(own)) {
-        return yield* new GitLabMergeRequestReadError({
-          command: "glab",
+      for (let page = 1; page <= MAX_AWARD_PAGES; page++) {
+        const listed = yield* api({
           cwd: input.cwd,
-          operation: "setReaction",
-          cause: own.failure,
+          host: input.host,
+          path: `${subject}?${query([
+            ["per_page", String(AWARDS_PER_PAGE)],
+            ["page", String(page)],
+          ])}`,
         });
+        const own = decodeOwnAwardIdJson(listed.stdout.trim(), { content: input.content, viewer });
+        if (!Result.isSuccess(own))
+          return yield* new GitLabMergeRequestReadError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "setReaction",
+            cause: own.failure,
+          });
+        if (own.success.id !== null) {
+          yield* api({
+            cwd: input.cwd,
+            host: input.host,
+            path: `${subject}/${own.success.id}`,
+            method: "DELETE",
+          });
+          return;
+        }
+        if (own.success.empty) return;
       }
-      if (own.success === null) return;
-      yield* api({
+      return yield* new GitLabMergeRequestReadError({
+        command: "glab",
         cwd: input.cwd,
-        host: input.host,
-        path: `${subject}/${own.success}`,
-        method: "DELETE",
+        operation: "setReaction",
+        cause: "Award pages exceeded the read limit",
       });
     }),
   };
