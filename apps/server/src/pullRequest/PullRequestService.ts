@@ -1,3 +1,4 @@
+import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
 import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
 import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
@@ -95,7 +96,6 @@ import {
   readProjectShells,
   resolveProjectRepositories,
 } from "./projectRepositoryMembership.ts";
-
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
@@ -747,7 +747,7 @@ export const make = Effect.gen(function* () {
                     };
                   }
                 }
-                return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+                return yield* missingProjectError(host, referenceKey, registry);
               });
             }
             return Effect.succeed(
