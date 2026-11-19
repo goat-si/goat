@@ -1,3 +1,4 @@
+import { normalizeComputedColor, readThemeColor } from "./terminal/terminalThemeColors";
 import { terminalFontOptions } from "./terminal/terminalFontOptions";
 import { withLiveVisibility, runtimeEnvSignature } from "./terminal/terminalViewportUtils";
 import { useTerminalLinkValidation } from "./terminal/useTerminalLinkValidation";
@@ -232,24 +233,6 @@ const TERMINAL_PALETTES = {
     "#e5e5e5",
   ].map(hexToGhosttyColor),
 };
-
-// Read visibility when WASM finishes loading, not when setup starts.
-function normalizeComputedColor(value: string | null | undefined, fallback: string): string {
-  const normalizedValue = value?.trim().toLowerCase();
-  if (
-    !normalizedValue ||
-    normalizedValue === "transparent" ||
-    normalizedValue === "rgba(0, 0, 0, 0)" ||
-    normalizedValue === "rgba(0 0 0 / 0)"
-  ) {
-    return fallback;
-  }
-  return value ?? fallback;
-}
-
-function readThemeColor(styles: CSSStyleDeclaration, variable: string, fallback: string): string {
-  return normalizeComputedColor(styles.getPropertyValue(variable), fallback);
-}
 
 export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
   const drawerSurface =
