@@ -76,6 +76,18 @@ describe("workspace area focus", () => {
     expect(document.activeElement).toBe(panel.button);
   });
 
+  it("moves back from a nested side composer to the main composer", () => {
+    using fixture = setup();
+    const composer = fixture.area("composer", 2);
+    const panel = fixture.area("panel", 4);
+    const sideComposer = fixture.area("composer", 2, panel.element);
+    composer.button.focus();
+    fixture.controller.move(1);
+    expect(document.activeElement).toBe(sideComposer.button);
+    fixture.controller.move(-1);
+    expect(document.activeElement).toBe(composer.button);
+  });
+
   it("skips hidden, inert, and maximized-away areas", () => {
     using fixture = setup();
     const sidebar = fixture.area("sidebar", 0);
