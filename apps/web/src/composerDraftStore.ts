@@ -601,7 +601,11 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   /** Clears text and attachments, preserving terminal/element contexts, preview annotations, and review comments. */
   clearComposerPromptAndImages: (threadRef: ComposerThreadTarget) => void;
   /** Keeps attachments over destination limits, other environments' uploads, terminal/element contexts, annotations, and review comments in source. */
-  moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
+  moveComposerPromptAndImages: (
+    from: ComposerThreadTarget,
+    to: ComposerThreadTarget,
+    keepUnreachableFiles?: boolean,
+  ) => void;
 }
 
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
@@ -3880,7 +3884,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        moveComposerPromptAndImages: (from, to) => {
+        moveComposerPromptAndImages: (from, to, keepUnreachableFiles = false) => {
           const fromKey = resolveComposerDraftKey(get(), from) ?? "";
           const toKey = resolveComposerDraftKey(get(), to) ?? "";
           if (fromKey.length === 0 || toKey.length === 0 || fromKey === toKey) {
@@ -3902,7 +3906,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const destinationFileKeys = new Set(destination.files.map(composerFileDedupKey));
             const transferableFiles = source.files.filter(
               (file) =>
-                (file.file !== null || file.uploadEnvironmentId === destinationEnvironmentId) &&
+                (keepUnreachableFiles ||
+                  file.file !== null ||
+                  file.uploadEnvironmentId === destinationEnvironmentId) &&
                 !destinationFileIds.has(file.id) &&
                 !destinationFileKeys.has(composerFileDedupKey(file)),
             );
@@ -3923,7 +3929,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               .map((file) => {
                 // Re-upload local bytes across environments; the destination cannot reach source upload ids.
                 if (
-                  file.file === null ||
                   file.uploadEnvironmentId === undefined ||
                   file.uploadEnvironmentId === destinationEnvironmentId
                 ) {
