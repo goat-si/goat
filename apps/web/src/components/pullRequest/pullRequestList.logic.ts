@@ -459,21 +459,26 @@ export function retainVisiblePullRequestStatsBatches(
 }
 
 /** Recency pagination can introduce older priority rows; grouping pages would reorder read rows. */
+const pullRequestAcrossEnvironmentsKey = (entry: PullRequestListEntry) =>
+  JSON.stringify([entry.host.toLowerCase(), entry.url]);
+
 export function partitionPullRequestsWithPriority<Entry extends PullRequestListEntry>(
   entries: ReadonlyArray<Entry>,
   authored: ReadonlyArray<Entry>,
   reviewRequested: ReadonlyArray<Entry>,
 ): ReadonlyArray<PullRequestGroup<Entry>> {
-  const authoredByKey = new Map(authored.map((entry) => [pullRequestEntryKey(entry), entry]));
+  const authoredByKey = new Map(
+    authored.map((entry) => [pullRequestAcrossEnvironmentsKey(entry), entry]),
+  );
   const reviewByKey = new Map(
     reviewRequested.flatMap((entry) => {
-      const key = pullRequestEntryKey(entry);
+      const key = pullRequestAcrossEnvironmentsKey(entry);
       return authoredByKey.has(key) ? [] : [[key, entry] as const];
     }),
   );
   const others: Entry[] = [];
   for (const entry of entries) {
-    const key = pullRequestEntryKey(entry);
+    const key = pullRequestAcrossEnvironmentsKey(entry);
     if (authoredByKey.has(key)) {
       authoredByKey.set(key, entry);
     } else if (reviewByKey.has(key)) {
@@ -588,9 +593,12 @@ export function mergePullRequestLists(
       );
     }
     for (const entry of answer.entries) {
-      const key = JSON.stringify([environmentId, entry.url]);
+      const key = pullRequestAcrossEnvironmentsKey(entry);
       const held = entries.get(key);
-      if (held === undefined || entry.updatedAt > held.updatedAt) {
+      if (
+        held === undefined ||
+        (held.environmentId === environmentId && entry.updatedAt > held.updatedAt)
+      ) {
         entries.set(key, { ...entry, environmentId });
       }
     }
