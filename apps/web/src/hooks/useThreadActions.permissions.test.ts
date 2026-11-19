@@ -355,6 +355,23 @@ describe("thread action permissions", () => {
     });
     expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
   });
+  it("limits named worktree holders and reports the remaining count", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    const ids = Array.from({ length: 8 }, (_, index) => ThreadId.make(`holder-${index}`));
+    state.worktreeThreadIds = [target.threadId, ...ids];
+    state.holderTitles = Object.fromEntries(ids.map((id, index) => [id, `Holder ${index}`]));
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    const message = state.confirm.mock.calls[0]![0];
+    expect(message).toContain("Holder 0");
+    expect(message).toContain("Holder 4");
+    expect(message).not.toContain("Holder 5");
+    expect(message).toContain("and 3 more");
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
   it.each([false, undefined])(
     "keeps the worktree and tells the user when the server guard is %s",
     async (guarded) => {
