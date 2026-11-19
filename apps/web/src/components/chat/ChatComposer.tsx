@@ -193,6 +193,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { copySnapshot } from "./copySnapshot";
 import { buildDraftContextClipboardFragment } from "./composerDraftContextClipboard";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
+import { droppedThreadContextRecord } from "./threadContextDrop.logic";
 import { readThreadShell } from "~/state/entities";
 import type { ThreadPullRequestLink } from "@goat/contracts";
 import {
@@ -2081,8 +2082,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const submitCitationAndSendStable = useStableCallback(submitCitationAndSend);
-  // A question took the editor while a citation comment was
-  // unsaved. Keep the comment in the prompt that comes back afterward.
+  // A question taking the editor must leave an unsaved citation comment in the returning prompt.
   const saveCitationDraftToPrompt = (replacedValue: string, savedValue: string) => {
     if (replacedValue !== prompt) return;
     if (promptRef.current === replacedValue) promptRef.current = savedValue;
@@ -2772,8 +2772,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
-      const shell = readThreadShell(ref);
-      return shell ? [threadContextRecord(ref, shell.title)] : [];
+      const record = droppedThreadContextRecord(ref, readThreadShell(ref));
+      return record ? [record] : [];
     });
     const routed = records.length > 0 ? routeThreadContexts(records) : [];
     if (routed.length === 0) return;
