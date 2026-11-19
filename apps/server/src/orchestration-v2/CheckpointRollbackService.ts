@@ -100,9 +100,10 @@ export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionE
   const restartRequired = restartRequiredIn(error.cause);
   if (restartRequired !== undefined) return restartRequired.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
-  return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
-    ? GIT_INDEX_LOCKED_DETAIL
-    : ROLLBACK_FAILED_MESSAGE;
+  if (isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL)
+    return GIT_INDEX_LOCKED_DETAIL;
+  if (error.reason === "shared-workspace") return SHARED_WORKSPACE_RESTORE_MESSAGE;
+  return ROLLBACK_FAILED_MESSAGE;
 }
 
 export interface CheckpointRollbackServiceV2Shape {
