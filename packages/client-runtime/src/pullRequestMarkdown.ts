@@ -275,8 +275,8 @@ function splitBodyAt(body: string, baseOffset: number): ReadonlyArray<PullReques
     // A span that runs past this line is left an opener, so its lines stay out of media.
     const isInlineCode =
       openFence === null &&
-      fenceMatch?.[1]![0] === "`" &&
-      (fenceMatch[2]!.match(/`+/gu) ?? []).some((run) => run.length === fenceMatch[1]!.length);
+      fenceMatch?.[1]?.startsWith("`") === true &&
+      (fenceMatch[2]?.match(/`+/gu) ?? []).some((run) => run.length === fenceMatch[1]?.length);
     if (fenceMatch !== null && !isInlineCode) {
       const fence = fenceMatch[1]!;
       // A fence closes only on the same marker, at least as long as the one that opened it,
