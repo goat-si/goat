@@ -5,10 +5,11 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { describe, expect, it } from "vite-plus/test";
 
 import { selectActiveRightPanelSurface, useRightPanelStore } from "../rightPanelStore";
+import { useSideChatStore } from "../components/sideChat/sideChatStore";
 
 import {
   assistantCitationFromLocation,
@@ -74,6 +75,19 @@ describe("assistant citation navigation", () => {
 });
 
 describe("assistant citation navigation to a side chat", () => {
+  it("selects the cited side chat when a different side chat was previously selected", async () => {
+    resetRightPanels();
+    const parent = scopeThreadRef(citation.environmentId, parentThreadId);
+    useSideChatStore
+      .getState()
+      .selectSideChat(scopedThreadKey(parent), ThreadId.make("side-chat-two"));
+    const router = createCitationRouter("/environment-one/thread-parent");
+    await router.navigate(assistantCitationNavigation(sideChatCitation, sideChatShell));
+    await revealAtRoute(router);
+    expect(useSideChatStore.getState().selectedSideChats[scopedThreadKey(parent)]).toBe(
+      sideChatCitation.threadId,
+    );
+  });
   it("opens a side chat citation as a tab of its parent thread", async () => {
     resetRightPanels();
     const router = createCitationRouter("/environment-one/thread-parent");

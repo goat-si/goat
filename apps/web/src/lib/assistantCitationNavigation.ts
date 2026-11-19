@@ -9,7 +9,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 import { useEffect } from "react";
 
-import { useRightPanelStore } from "../rightPanelStore";
+import { resolveSideChatOpen } from "../components/sideChat/sideChat.logic";
 import { useQuietThreadShell } from "../state/entities";
 import { randomUUID } from "./utils";
 
@@ -98,9 +98,9 @@ export function revealSideChatCitation(
   ) {
     return;
   }
-  useRightPanelStore
-    .getState()
-    .open(scopeThreadRef(citation.environmentId, parentThreadId), "side-chat");
+  resolveSideChatOpen(scopeThreadRef(citation.environmentId, sideChatThreadId), {
+    sideChatOf: parentThreadId,
+  });
   if (routeThreadRef.threadId === parentThreadId) return;
   return router.navigate({
     to: "/$environmentId/$threadId",
