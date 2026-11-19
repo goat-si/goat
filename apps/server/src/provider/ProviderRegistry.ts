@@ -1,3 +1,4 @@
+import { correlateSnapshotWithSource } from "./ProviderSnapshotCorrelation.ts";
 import { ProviderRegistry } from "./ProviderRegistryService.ts";
 export { ProviderRegistry } from "./ProviderRegistryService.ts";
 export type { ProviderMaintenanceActionKind } from "./ProviderRegistryService.ts";
@@ -89,27 +90,6 @@ const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
-
-const correlateSnapshotWithSource = (
-  source: ProviderSnapshotSource,
-  snapshot: ServerProvider,
-): Effect.Effect<ServerProvider> => {
-  if (snapshot.instanceId !== source.instanceId) {
-    return Effect.die(
-      new Error(
-        `Provider snapshot instance mismatch: source '${source.instanceId}' emitted '${snapshot.instanceId}'.`,
-      ),
-    );
-  }
-  if (snapshot.driver !== source.driverKind) {
-    return Effect.die(
-      new Error(
-        `Provider snapshot driver mismatch for instance '${source.instanceId}': source '${source.driverKind}' emitted '${snapshot.driver}'.`,
-      ),
-    );
-  }
-  return Effect.succeed(snapshot);
-};
 
 const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
   return provider.instanceId;
