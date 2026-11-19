@@ -10,10 +10,10 @@ type WakeFrameKind = "result" | "thought" | "other";
 
 function frameKind(
   notification: AcpSchema.SessionNotification,
-  resultBearing: boolean,
+  offerEvidence: boolean,
 ): WakeFrameKind {
-  if (resultBearing) return "result";
   const { sessionUpdate } = notification.update;
+  if (offerEvidence || sessionUpdate === "agent_message") return "result";
   return sessionUpdate === "agent_thought_chunk" || sessionUpdate === "agent_thought"
     ? "thought"
     : "other";
@@ -33,11 +33,11 @@ export function makeAcpWakeBuffer() {
   return {
     length: Effect.sync(() => frames.length),
     clear: Effect.sync(clear),
-    append: (notification: AcpSchema.SessionNotification, resultBearing: boolean) =>
+    append: (notification: AcpSchema.SessionNotification, offerEvidence: boolean) =>
       Effect.sync(() => {
         const characters = encodeWakeFrame(notification).length;
         if (characters > MAX_WAKE_CHARACTERS) return false;
-        const kind = frameKind(notification, resultBearing);
+        const kind = frameKind(notification, offerEvidence);
         while (
           frames.length >= MAX_WAKE_FRAMES ||
           totalCharacters + characters > MAX_WAKE_CHARACTERS

@@ -3700,16 +3700,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             (update.sessionUpdate === "agent_message_chunk" ||
               update.sessionUpdate === "agent_thought_chunk");
           // Grok re-prompts for each post-settle monitor event; retaining them would replay the whole burst.
-          const resultBearing = acpPostSettleContinuationOfferEvidence(notification, flavor);
+          const offerEvidence = acpPostSettleContinuationOfferEvidence(notification, flavor);
           let buffered = false;
           if (
             !alreadyHandledToolUpdate &&
             !isInTurnHandledAgentChatter &&
             acpPostSettleWakeShouldBuffer(notification, backgroundWorkRunning)
           ) {
-            buffered = yield* wakeBuffer.append(notification, resultBearing);
+            buffered = yield* wakeBuffer.append(notification, offerEvidence);
           }
-          if (!resultBearing) {
+          if (!offerEvidence) {
             return {
               buffered,
               offerContinuation: false,

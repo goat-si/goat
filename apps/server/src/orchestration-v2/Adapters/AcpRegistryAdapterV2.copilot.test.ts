@@ -253,6 +253,38 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect(
+    "retains a complete assistant message when later results fill the delayed wake drain",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* openWakeReplay([
+          wakeEvent("assistant.turn_start"),
+          wakeUpdate({
+            sessionUpdate: "agent_message",
+            messageId: "full-wake-answer",
+            content: [{ type: "text", text: "Complete native wake answer." }],
+          }),
+          wakeMarker("complete answer buffered"),
+          ...Array.from({ length: 128 }, (_, index) =>
+            wakeText("agent_message_chunk", `<later-wake-result-${index}>`),
+          ),
+          wakeEvent("assistant.idle"),
+          wakeMarker("result pressure before admission"),
+        ]);
+        yield* session.runtime.startTurn(session.turnInput(1));
+        yield* session.throughMarker("complete answer buffered");
+        yield* session.throughMarker("result pressure before admission");
+        assert.lengthOf(session.offers, 1);
+        yield* session.runtime.startTurn(session.turnInput(2, { continuation: true }));
+        const continuation = yield* session.until((event) => event.type === "turn.terminal");
+        const messages = continuation.flatMap((event) =>
+          event.type === "message.updated" ? [event.message.text] : [],
+        );
+        assert.include(messages.join(" "), "Complete native wake answer.");
+        assert.include(messages.join(" "), "<later-wake-result-0>");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("never steers Copilot by cancelling its prompt", () =>
     Effect.gen(function* () {
       const steering = Effect.fn("steering")(function* (config: Record<string, unknown>) {
