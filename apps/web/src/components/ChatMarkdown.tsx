@@ -1,3 +1,4 @@
+import { selectInlineCode } from "./chat/selectInlineCode";
 import { resolveWorkspaceFilePath } from "@goat/shared/path";
 import { GITHUB_ALERT_PRESENTATIONS } from "./chat/markdownAlertPresentations";
 import { orderedListGutterStyle } from "./chat/orderedListGutterStyle";
@@ -55,7 +56,6 @@ import React, {
   Suspense,
   type ComponentProps,
   type ClipboardEvent as ReactClipboardEvent,
-  type MouseEvent as ReactMouseEvent,
   use,
   memo,
   useEffect,
@@ -801,11 +801,6 @@ function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
       />
     );
   };
-}
-
-// Native word selection stops at hyphens and dots, so a double-click takes the whole span.
-function selectInlineCode(event: ReactMouseEvent<HTMLElement>) {
-  window.getSelection()?.selectAllChildren(event.currentTarget);
 }
 
 const CHAT_MARKDOWN_COMPONENTS = {
