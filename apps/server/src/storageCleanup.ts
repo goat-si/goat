@@ -1,9 +1,10 @@
+import { makeBranchChanged } from "./storageCleanupBranchChanged.ts";
 import { cleanCheckpointRefs } from "./storageCleanupCheckpoints.ts";
 import { worktreeOwner } from "./storageCleanupOwners.ts";
 import { makeWorktreeMeasurement } from "./storageCleanupMeasurement.ts";
 import { keyAt, makeCanonicalWorktreePaths, worktreePathOf } from "./storageCleanupCanonical.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
-import { cleanupFailureReason, isMissingGitRepository } from "./storageCleanupGitErrors.ts";
+import { cleanupFailureReason } from "./storageCleanupGitErrors.ts";
 import {
   GitCommandError,
   OrchestrationV2AppThreadJson,
@@ -392,54 +393,7 @@ const make = Effect.gen(function* () {
     }
   });
 
-  // Use two small Git reads: statusDetailsLocal also diffs and counts for every worktree.
-  const branchChanged = Effect.fn("StorageCleanup.branchChanged")(function* (
-    cwd: string,
-    branch: string | null,
-  ) {
-    const failure = (detail: string) =>
-      new GitCommandError({
-        operation: "StorageCleanup.branchChanged",
-        command: "git",
-        cwd,
-        detail,
-      });
-    const read = Effect.fnUntraced(function* (args: string[], allowedExitCode?: number) {
-      const result = yield* git
-        .execute({
-          operation: "StorageCleanup.branchChanged",
-          cwd,
-          args,
-          env: { LC_ALL: "C" },
-          allowNonZeroExit: true,
-        })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.flatMap(fs.exists(cwd), (exists) =>
-              exists ? Effect.fail(error) : Effect.succeed(null),
-            ),
-          ),
-        );
-      if (result === null) return null;
-      if (result.exitCode === 0 || result.exitCode === allowedExitCode) return result;
-      if (isMissingGitRepository(result.stderr)) return null;
-      return yield* failure(
-        result.stderr.trim().split(/\r?\n/)[0]?.slice(0, 1000) || "command failed",
-      );
-    });
-    const index = yield* read(["rev-parse", "--git-path", "index"]);
-    if (index === null) return true;
-    if (yield* fs.exists(`${path.resolve(cwd, index.stdout.trim())}.lock`))
-      return yield* failure(
-        "Git index is locked. Status will resume when the index lock is removed.",
-      );
-    // Detached HEAD exits 1; full refs avoid shortening when a tag shares the branch name.
-    const head = yield* read(["symbolic-ref", "--quiet", "HEAD"], 1);
-    if (head === null) return true;
-    const ref = head.exitCode === 0 ? head.stdout.trim() : "";
-    const name = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length).trim() : null;
-    return name !== branch;
-  });
+  const branchChanged = makeBranchChanged(git, fs, path);
 
   const localChangesReason = Effect.fn("StorageCleanup.localChangesReason")(function* (
     cwd: string,
