@@ -113,7 +113,6 @@ import { ThreadHeader } from "./ThreadHeader";
 import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
 import { openSettings } from "../settings/settings-navigation";
 import {
-  InspectorContentScope,
   ThreadInspectorHeader,
   ThreadInspectorPreview,
   type ThreadInspectorPresentation,
@@ -1106,19 +1105,4 @@ function ThreadRouteContent(
   );
 }
 
-export function FullscreenThreadRouteScreen(
-  props: StaticScreenProps<{
-    readonly environmentId: string;
-    readonly threadId: string;
-  }>,
-) {
-  const navigation = useNavigation();
-  return (
-    <InspectorContentScope>
-      <ThreadRouteScreen
-        route={props.route}
-        inspectorPresentation={{ onClose: () => navigation.goBack() }}
-      />
-    </InspectorContentScope>
-  );
-}
+export { FullscreenThreadRouteScreen } from "./FullscreenThreadRouteScreen";
