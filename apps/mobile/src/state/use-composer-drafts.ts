@@ -347,6 +347,7 @@ export interface ComposerDraftContent {
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly sourceShareId?: string;
+  readonly preserveContextRecords?: boolean;
 }
 
 export interface ComposerDraftWorkspaceSelection {
@@ -1593,7 +1594,12 @@ export function mergeComposerDraftContentState(
     PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   );
   const text = mergeComposerDraftText(existing.text, content.text);
-  const context = mergeReferencedComposerContext(text, existing.context, content.context);
+  const context = mergeReferencedComposerContext(
+    text,
+    existing.context,
+    content.context,
+    content.preserveContextRecords,
+  );
   const importedShareIds = content.sourceShareId
     ? [...(existing.importedShareIds ?? []), content.sourceShareId]
     : existing.importedShareIds;

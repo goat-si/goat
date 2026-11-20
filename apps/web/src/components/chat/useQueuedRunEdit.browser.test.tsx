@@ -792,3 +792,40 @@ describe("useQueuedRunEdit", () => {
     ).toBe("newer");
   });
 });
+
+it("recovers a reply-only edit when the queued run starts", async () => {
+  const { TurnItemId } = await import("@goat/contracts");
+  const { responseContextRecord } = await import("../../lib/composerContextRecords");
+  const { hook } = setup();
+  await using _screen = await render(view(THREAD_A, "queued", hook));
+  await act(() =>
+    requireHook(hook).beginEdit({
+      runId: RUN,
+      messageId: MessageId.make("message-1"),
+      text: "original",
+      attachments: [],
+    }),
+  );
+  const reply = responseContextRecord({
+    citation: {
+      version: 1,
+      environmentId: ENV,
+      threadId: THREAD_A.threadId,
+      messageId: MessageId.make("answer"),
+      text: "Done",
+      start: 0,
+      end: 4,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("answer-item"),
+    subagents: [],
+  });
+  await act(() =>
+    useComposerDraftStore.getState().setReplyTo(requireHook(hook).draftTarget, reply),
+  );
+  await act(() => setRuns(THREAD_A, "running"));
+  await vi.waitFor(() =>
+    expect(useComposerDraftStore.getState().getComposerDraft(THREAD_A)?.replyTo).toEqual(reply),
+  );
+});

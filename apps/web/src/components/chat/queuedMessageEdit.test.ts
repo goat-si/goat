@@ -8,7 +8,11 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  queuedEditContextSnapshot,
+} from "./queuedMessageEdit";
 
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));
@@ -258,4 +262,51 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Separate draft");
     expect(store.getComposerDraft(editTarget)).toBeNull();
   });
+});
+
+describe("queued edit context changes", () => {
+  it.each(["reply-only", "unchanged", "text-and-reply"] as const)(
+    "handles %s when the run starts",
+    async (scenario) => {
+      useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(editTarget, "Original message");
+      const reply = responseContextRecord({
+        citation: {
+          version: 1,
+          environmentId,
+          threadId: ThreadId.make("thread:edit"),
+          messageId: MessageId.make("answer"),
+          text: "Done",
+          start: 0,
+          end: 4,
+          prefix: "",
+          suffix: "",
+        },
+        itemId: TurnItemId.make("item"),
+        subagents: [],
+      });
+      if (scenario === "unchanged") store.setReplyTo(editTarget, reply);
+      const initial = store.getComposerDraft(editTarget);
+      if (scenario !== "unchanged") store.setReplyTo(editTarget, reply);
+      if (scenario === "text-and-reply") store.setPrompt(editTarget, "Edited message");
+      const outcome = await recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        originalContext: queuedEditContextSnapshot(initial),
+      });
+      if (scenario === "unchanged") {
+        expect(outcome).toBe("clean");
+        expect(store.getComposerDraft(threadTarget)).toBeNull();
+      } else {
+        expect(outcome).toBe("kept");
+        expect(store.getComposerDraft(threadTarget)?.replyTo).toEqual(reply);
+        expect(store.getComposerDraft(threadTarget)?.prompt).toBe(
+          scenario === "reply-only" ? "Original message" : "Edited message",
+        );
+      }
+      expect(store.getComposerDraft(editTarget)).toBeNull();
+    },
+  );
 });

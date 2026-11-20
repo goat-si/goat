@@ -12,15 +12,32 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerThreadTarget,
+  type ComposerThreadDraftState,
 } from "../../composerDraftStore";
 
 const isImageAttachment = Schema.is(ChatImageAttachment);
 const isFileAttachment = Schema.is(ChatFileAttachment);
 
+export function queuedEditContextSnapshot(draft: ComposerThreadDraftState | null): string {
+  return JSON.stringify(
+    draft
+      ? [
+          draft.replyTo,
+          draft.terminalContexts,
+          draft.reviewComments,
+          draft.previewAnnotations,
+          draft.threadContexts,
+          draft.previewTabs,
+        ]
+      : [null, [], [], [], [], []],
+  );
+}
+
 export async function recoverQueuedMessageEdit(input: {
   readonly editTarget: ComposerThreadTarget;
   readonly threadTarget: ComposerThreadTarget;
   readonly originalText: string;
+  readonly originalContext?: string;
   readonly removedExistingAttachment?: boolean;
   readonly existingAttachments?: ReadonlyArray<ChatAttachment>;
   readonly loadAttachment?: (attachment: ChatAttachment) => Promise<File>;
@@ -31,7 +48,11 @@ export async function recoverQueuedMessageEdit(input: {
     editChanged:
       input.removedExistingAttachment === true ||
       (draft !== null &&
-        (draft.prompt !== input.originalText || draft.images.length > 0 || draft.files.length > 0)),
+        (draft.prompt !== input.originalText ||
+          draft.images.length > 0 ||
+          draft.files.length > 0 ||
+          (input.originalContext !== undefined &&
+            queuedEditContextSnapshot(draft) !== input.originalContext))),
     threadDraftEmpty: !composerDraftHasUserContent(store.getComposerDraft(input.threadTarget)),
   });
   if (recovery === "kept") {

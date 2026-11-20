@@ -67,7 +67,11 @@ import { readPreparedConnection } from "../../state/session";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  queuedEditContextSnapshot,
+} from "./queuedMessageEdit";
 import { discardQueuedEditDraft, releaseUnownedQueuedEditAttachments } from "./queuedEditResources";
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
@@ -291,6 +295,7 @@ export function useQueuedRunEdit(input: {
       records.filter((record): record is ThreadContextRecord => record.kind === "thread"),
     );
     if (reply) store.setReplyTo(target, reply);
+    const originalContext = queuedEditContextSnapshot(store.getComposerDraft(target));
     const threadRef = { environmentId, threadId: activeThreadId };
     queuedRunEdits.begin(
       editKey,
@@ -321,6 +326,7 @@ export function useQueuedRunEdit(input: {
             editTarget: queuedRunEditDraftId(routeThreadRef, edit.runId),
             threadTarget: threadDraftTarget,
             originalText: edit.originalText,
+            originalContext,
             removedExistingAttachment: edit.removedExistingAttachment === true,
             existingAttachments: edit.existingAttachments,
             loadAttachment: async (attachment) => {
