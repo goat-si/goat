@@ -30,13 +30,13 @@ export function createPendingTurnAppender() {
     )
       return feed;
     const label = last.acknowledged ? "Starting…" : "Sending…";
-    if (activity?.createdAt !== last.createdAt || activity.label !== label) {
+    if (activity?.createdAt !== last.createdAt || activity.providerStartingLabel !== label) {
       activity = {
         type: "thinking",
         id: LIVE_ACTIVITY_ROW_ID,
         createdAt: last.createdAt,
         runId: null,
-        label,
+        providerStartingLabel: label,
       };
     }
     if (options.zen) return [...feed, activity];

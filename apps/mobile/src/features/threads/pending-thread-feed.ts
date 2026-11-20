@@ -4,6 +4,7 @@ import {
   type ThreadGuestShare,
 } from "@goat/contracts";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
+import type { PendingFoldFeedEntry } from "./pending-turn-feed";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { threadHasCaughtUpTo } from "@goat/client-runtime/state/threads";
 import type {
@@ -51,11 +52,11 @@ export function selectPendingAcknowledgedMessages(
 }
 
 /** A row of the thread feed's list. */
-export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry;
+export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry | PendingFoldFeedEntry;
 
 /** Waiting guest messages go after the transcript, oldest first. */
 export function appendGuestPendingMessages(
-  presentedFeed: ReadonlyArray<PendingThreadFeedEntry>,
+  presentedFeed: ReadonlyArray<PendingThreadFeedEntry | PendingFoldFeedEntry>,
   share: ThreadGuestShare | null,
 ): ReadonlyArray<ThreadFeedRow> {
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];

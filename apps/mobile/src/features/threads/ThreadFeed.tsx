@@ -1,4 +1,6 @@
 import { useMarkdownStyles, type MarkdownStyleSets } from "./threadMarkdownStyles";
+import { createPendingTurnAppender } from "./pending-turn-feed";
+import { RunFoldWorking } from "./RunFoldWorking";
 import { UserMessageVideo } from "./UserMessageVideo";
 import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
 import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
@@ -870,18 +872,34 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "pending-fold") {
+    return (
+      <View
+        className="mb-1 border-b border-border-subtle px-2"
+        style={{ height: TURN_FOLD_HEIGHT }}
+      />
+    );
+  }
+
   if (entry.type === "run-fold") {
     return (
       <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
-        <RunFoldButton
-          key={entry.id}
-          entry={entry}
-          environmentId={props.environmentId}
-          threadId={props.threadId}
-          onToggle={props.onToggleTurnFold}
-          rowSizing={props.workRowSizing}
-          iconColor={iconSubtleColor}
-        />
+        {entry.workingSince ? (
+          <RunFoldWorking
+            startedAt={entry.workingSince}
+            minHeight={Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight)}
+          />
+        ) : (
+          <RunFoldButton
+            key={entry.id}
+            entry={entry}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            onToggle={props.onToggleTurnFold}
+            rowSizing={props.workRowSizing}
+            iconColor={iconSubtleColor}
+          />
+        )}
         {entry.checkpointSummary ? (
           <TurnDiffStat
             checkpoint={entry.checkpointSummary}
@@ -2442,8 +2460,11 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const { jumpToMessageId } = props;
   const jumpReady = !!jumpToMessageId && loadedListKey === `${feedThreadKey}:filled`;
+  const [appendPendingTurn] = useState(createPendingTurnAppender);
   const presentedFeed = appendGuestPendingMessages(
-    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups),
+    appendPendingTurn(useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups), {
+      zen: props.toolCallVisibility === "zen",
+    }),
     guestShare,
   );
   const jumpRunId =
@@ -2841,6 +2862,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   // corrects each row's height as it mounts — the feed visibly jumps.
   const getFixedItemSize = (entry: ThreadFeedRow) => {
     if (entry.type === "guest-pending") return undefined;
+    if (entry.type === "pending-fold") return resolveThreadFeedFixedItemSize("run-fold");
     if (entry.type === "html-render") {
       return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
     }
@@ -3067,6 +3089,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
             keyExtractor={(entry) => entry.id}
             getItemType={(entry) => {
+              if (entry.type === "pending-fold") return "run-fold";
               if (entry.type !== "message") return entry.type;
               if (isCompactionCommandFeedEntry(entry)) return "message:compaction";
               if (
