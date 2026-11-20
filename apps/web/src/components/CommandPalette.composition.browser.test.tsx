@@ -297,7 +297,7 @@ it("shows settings in the UI language and matches both localized names and Engli
     );
     await act(() => openCommandPalette());
     const input = page.getByRole("combobox");
-    for (const query of ["Colores de diferencias", "Diff colors", "colorblind"]) {
+    for (const query of ["Colores de diferencias", "Diff colors", "diff col", "colorblind"]) {
       await input.fill(query);
       await expect.element(page.getByText("Colores de diferencias", { exact: true })).toBeVisible();
       await expect.element(page.getByText("Ajustes", { exact: true })).toBeVisible();
