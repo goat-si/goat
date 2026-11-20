@@ -1,3 +1,4 @@
+import { useMarkdownStyles, type MarkdownStyleSets } from "./threadMarkdownStyles";
 import { UserMessageVideo } from "./UserMessageVideo";
 import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
 import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
@@ -145,14 +146,12 @@ import { readMobileMediaConnection, routeMobileMediaUrl } from "../../lib/enviro
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { inlineFilePreviewKind, isPdfFile } from "../../lib/filePreview";
 import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
-import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
-import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
@@ -194,7 +193,6 @@ import {
   type LayoutVariant,
   THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
-import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
@@ -598,107 +596,6 @@ function ThreadMediaVisibility(props: { readonly children: ReactNode }) {
     useCallback((token) => setVisible(token.sizeVisible > 0), []),
   );
   return <ThreadMediaVisibleContext value={visible}>{props.children}</ThreadMediaVisibleContext>;
-}
-
-interface MarkdownStyleSets {
-  readonly user: MarkdownStyleSet;
-  readonly assistant: MarkdownStyleSet;
-}
-
-function useMarkdownStyles(): MarkdownStyleSets {
-  const { appearance } = useAppearancePreferences();
-  const nativeMarkdownTypography = useMemo(
-    () => resolveNativeMarkdownTypography(appearance.baseFontSize),
-    [appearance.baseFontSize],
-  );
-  const theme = useUniwindTheme();
-  const markdownBodyColor = theme["--color-md-body"];
-  const markdownStrongColor = theme["--color-md-strong"];
-  const markdownLinkColor = theme["--color-md-link"];
-  const markdownBlockquoteBorder = theme["--color-md-blockquote-border"];
-  const markdownCodeBg = theme["--color-md-code-bg"];
-  const markdownCodeText = theme["--color-md-code-text"];
-  const markdownInlineCodeText = theme["--color-foreground-secondary"];
-  const markdownHrColor = theme["--color-md-hr"];
-  // Native chip drawing parses opaque hex only, and this role is translucent.
-  const contextChipBorderColor = flattenThemeColor(
-    theme["--color-border"],
-    theme["--color-user-bubble"],
-  );
-  const markdownUserBodyColor = theme["--color-user-bubble-foreground"];
-  const markdownUserCodeBg = theme["--color-md-user-code-bg"];
-  const markdownUserCodeText = theme["--color-md-user-code-text"];
-  const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
-  const markdownUserFenceBg = theme["--color-md-user-fence-bg"];
-  const regularFontFamily = FONT_FAMILIES.regular;
-  const boldFontFamily = FONT_FAMILIES.bold;
-
-  return useMemo(() => {
-    return {
-      user: {
-        nativeTextStyle: {
-          color: markdownUserBodyColor,
-          strongColor: markdownUserBodyColor,
-          mutedColor: markdownUserBodyColor,
-          linkColor: markdownUserBodyColor,
-          inlineCodeColor: markdownUserInlineCodeText,
-          codeColor: markdownUserCodeText,
-          codeBackgroundColor: markdownUserCodeBg,
-          codeBlockBackgroundColor: markdownUserFenceBg,
-          fileTextColor: markdownUserBodyColor,
-          quoteMarkerColor: markdownUserBodyColor,
-          dividerColor: markdownUserBodyColor,
-          contextChipBorderColor,
-          fontSize: nativeMarkdownTypography.fontSize,
-          lineHeight: nativeMarkdownTypography.lineHeight,
-          headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-          fontFamily: regularFontFamily,
-          headingFontFamily: boldFontFamily,
-          boldFontFamily,
-        },
-      },
-      assistant: {
-        nativeTextStyle: {
-          color: markdownBodyColor,
-          strongColor: markdownStrongColor,
-          mutedColor: markdownBodyColor,
-          linkColor: markdownLinkColor,
-          inlineCodeColor: markdownInlineCodeText,
-          codeColor: markdownCodeText,
-          codeBackgroundColor: markdownCodeBg,
-          codeBlockBackgroundColor: markdownCodeBg,
-          fileTextColor: markdownCodeText,
-          quoteMarkerColor: markdownBlockquoteBorder,
-          dividerColor: markdownHrColor,
-          contextChipBorderColor,
-          fontSize: nativeMarkdownTypography.fontSize,
-          lineHeight: nativeMarkdownTypography.lineHeight,
-          headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-          fontFamily: regularFontFamily,
-          headingFontFamily: boldFontFamily,
-          boldFontFamily,
-        },
-      },
-    };
-  }, [
-    boldFontFamily,
-    contextChipBorderColor,
-    markdownBlockquoteBorder,
-    markdownBodyColor,
-    markdownCodeBg,
-    markdownCodeText,
-    markdownHrColor,
-    markdownInlineCodeText,
-    markdownLinkColor,
-    markdownStrongColor,
-    markdownUserBodyColor,
-    markdownUserCodeBg,
-    markdownUserCodeText,
-    markdownUserFenceBg,
-    markdownUserInlineCodeText,
-    nativeMarkdownTypography,
-    regularFontFamily,
-  ]);
 }
 
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
@@ -2416,7 +2313,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       />
     ) : null;
   };
-  const markdownStyles = useMarkdownStyles();
+  const markdownStyles = useMarkdownStyles(theme);
   const renderReasoning = (text: string) => (
     <AssistantMarkdownContent
       markdown={text}
