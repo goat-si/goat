@@ -582,7 +582,6 @@ const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(LinuxHelperReport.layer),
 );
 const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
-// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
 const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
   Layer.provide(layerCuaDriver),
   Layer.provide(LinuxHelperReport.layer),
@@ -1065,6 +1064,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
+  Layer.provide(ServerHttp.layerUnloggedSignedRequests),
 );
 
 const layerMakeServer = Layer.unwrap(

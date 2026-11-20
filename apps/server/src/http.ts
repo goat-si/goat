@@ -540,24 +540,23 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
-
-// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
-export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) => {
+const requestPath = (request: HttpServerRequest.HttpServerRequest) => {
   const queryIndex = request.url.indexOf("?");
-  const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
-  // Webhook, asset and upload URLs carry bearer tokens in the path, so they never reach a trace.
-  // Computer use proxies POST a person's input many times a second; tracing it rotates the log.
-  return (
-    UNTRACED_REQUEST_PATHS.has(path) ||
-    path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
-    path.startsWith(`${ASSET_ROUTE_PREFIX}/`) ||
-    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`) ||
-    (request.method === "POST" && path === COMPUTER_USE_LEASE_ROUTE)
-  );
+  return queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
 };
-
+const isSignedUrlRequest = (request: HttpServerRequest.HttpServerRequest) => {
+  const path = requestPath(request);
+  return path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) || path.startsWith(`${ASSET_ROUTE_PREFIX}/`) || path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`);
+};
+export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) =>
+  requestPath(request) === OTLP_TRACES_PROXY_PATH || isSignedUrlRequest(request) ||
+  (request.method === "POST" && requestPath(request) === COMPUTER_USE_LEASE_ROUTE);
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(untracedRequest);
+export const layerUnloggedSignedRequests = HttpRouter.middleware(
+  (httpEffect) => Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+    isSignedUrlRequest(request) ? HttpMiddleware.withLoggerDisabled(httpEffect) : httpEffect),
+  { global: true },
+);
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 
