@@ -214,6 +214,9 @@ export interface AcpAdapterV2Flavor {
   }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
   readonly ownedModelOptionIds?: ReadonlyArray<string>;
   readonly lockSessionModeToPolicy?: true;
+  readonly runtimeModeForSessionMode?: (
+    modeId: string,
+  ) => import("@goat/contracts").RuntimeMode | undefined;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;

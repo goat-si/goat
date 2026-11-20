@@ -49,7 +49,7 @@ import {
   type AntigravityAuthConfig,
 } from "../antigravityAuthSupport.ts";
 import {
-  antigravityCliSessionMode,
+  antigravitySessionMode,
   antigravityModelOptions,
   antigravityThinkingConfig,
   makeAntigravityAcpRuntime,
@@ -343,7 +343,14 @@ export const AntigravityDriver: ProviderDriver<
             ),
           ),
         ...(executable.harnessPath === null
-          ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
+          ? {
+              setMode: (modeId: string) =>
+                runtime.getModeState.pipe(
+                  Effect.flatMap((modeState) =>
+                    runtime.setMode(antigravitySessionMode(modeId, modeState)),
+                  ),
+                ),
+            }
           : {}),
         start: () =>
           startCompatible().pipe(

@@ -22,9 +22,13 @@ the parent conversation with the subagent's name, so you can respond without swi
 ## Provider differences
 
 Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.
-**Auto** uses automatic review on Codex, Claude, Cursor, Grok, and fx; providers without an equivalent,
-including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
-to you for approval. On fx, prompts it still sends also come to you.
+**Auto** uses automatic review on Codex, Claude, Cursor, Grok, Antigravity, and fx; providers without
+an equivalent, including OpenCode, fall back to asking. On Grok and Antigravity, actions their review
+does not approve come to you for approval. On fx, prompts it still sends also come to you.
+
+Antigravity offers **Auto** only when your Antigravity sign-in provides its Auto mode; some accounts,
+including some personal Google accounts, do not. Without it, an Antigravity thread already set to
+**Auto** runs in **Supervised**.
 
 Some providers, including Codex and Antigravity, change mode inside a running turn. Others
 cannot, so on them GOAT refuses a mode change while a turn runs. On the web and desktop, a message
