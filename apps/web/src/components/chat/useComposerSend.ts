@@ -548,7 +548,6 @@ export function useComposerSend(input: ComposerSendInput) {
         });
       return; // SSH must never fall through to normal startThreadTurn.
     }
-
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached(directAnnotation !== undefined);
       return;
@@ -931,10 +930,8 @@ export function useComposerSend(input: ComposerSendInput) {
     if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
       return;
     }
-
     const readLiveAttachmentCapabilities = () =>
       liveAttachmentCapabilities(environmentId, composerFilesSnapshot);
-
     const multipleTargets: MultipleModelTarget[] = [];
     for (const resolved of resolveMultipleModelTargets({
       selections: multipleModelSelections ?? [],
@@ -950,7 +947,6 @@ export function useComposerSend(input: ComposerSendInput) {
       if (composerRef.current?.validateProviderInput(resolved.text) === false) return;
       multipleTargets.push(resolved);
     }
-
     sendInFlightRef.current = true;
     const sendGeneration = ++composerSendGenerationRef.current;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
@@ -976,10 +972,16 @@ export function useComposerSend(input: ComposerSendInput) {
           draftTarget: composerDraftTarget,
         });
       }
-      await awaitAttachmentUploads(
-        composerAttachmentsSnapshot.map((attachment) => attachment.id),
-        environmentId,
-      );
+      try {
+        await awaitAttachmentUploads(
+          composerAttachmentsSnapshot.map((attachment) => attachment.id),
+          environmentId,
+        );
+      } catch (error) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, error instanceof Error ? error.message : "Upload failed");
+        return;
+      }
       const attachmentCapabilitiesAfterUpload = readLiveAttachmentCapabilities();
       if (attachmentCapabilitiesAfterUpload.fileBlockReason !== null) {
         sendInFlightRef.current = false;
@@ -992,7 +994,6 @@ export function useComposerSend(input: ComposerSendInput) {
         return;
       }
     }
-
     if (
       multipleModelSelections === null &&
       shouldDockDraftHeroForSubmission({ isDraftHeroState, activeThreadKey, submissionIntent }) &&
@@ -1010,7 +1011,6 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       if (docking) await docking;
     }
-
     const attachmentCapabilitiesBeforeDispatch = readLiveAttachmentCapabilities();
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||

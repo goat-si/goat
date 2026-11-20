@@ -239,4 +239,28 @@ describe("attachmentUploadQueue", () => {
       environmentId: firstEnvironment,
     });
   });
+
+  it("settles an already waiting send with the typed admission error", async () => {
+    const first = makeImage("capacity-first-waiter");
+    const second = makeImage("capacity-second-waiter");
+    startAttachmentUpload({ environmentId: firstEnvironment, image: first });
+    let waiting: Promise<void> | undefined;
+    const unsubscribe = useAttachmentUploadStore.subscribe((state) => {
+      if (state.uploadsByImageId[second.id]?.status === "uploading" && waiting === undefined) {
+        waiting = awaitAttachmentUploads([second.id]);
+      }
+    });
+    try {
+      startAttachmentUpload({ environmentId: firstEnvironment, image: second });
+      expect(waiting).toBeDefined();
+      await expect(waiting).rejects.toMatchObject({
+        _tag: "WebUploadError",
+        message: "Upload holder limit reached.",
+      });
+      expect(readAttachmentUpload(second.id)?.status).toBe("failed");
+    } finally {
+      unsubscribe();
+      releaseAttachmentUpload(first.id);
+    }
+  });
 });

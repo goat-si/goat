@@ -55,8 +55,8 @@ interface UploadJob {
   readonly previous?: ReadyAttachmentUpload;
   /** Draft-owned; delete only through releasePersistedAttachmentUpload, never queue cancel/retry. */
   readonly persistedAttachmentId?: string;
-  readonly settled: Promise<void>;
-  resolveSettled: () => void;
+  readonly settled: Promise<WebUploadError | undefined>;
+  resolveSettled: (error?: WebUploadError) => void;
   attachmentId: string | null;
   cancelled: boolean;
   abort: (() => void) | null;
@@ -475,9 +475,9 @@ export function startAttachmentUpload(input: {
     cancelAttachmentUpload(input.image.id);
   }
   const previous = existing?.status === "ready" ? existing : existing?.previous;
-  let resolveSettled: () => void = () => {};
-  const settled = new Promise<void>((resolve) => {
-    resolveSettled = resolve;
+  let resolveSettled: (error?: WebUploadError) => void = () => {};
+  const settled = new Promise<WebUploadError | undefined>((resolve) => {
+    resolveSettled = (error) => resolve(error);
   });
   const job: UploadJob = {
     image: input.image,
@@ -537,7 +537,7 @@ export function startAttachmentUpload(input: {
       message: cause instanceof Error ? cause.message : "Upload failed",
     });
     job.stopWatchingConnection();
-    job.resolveSettled();
+    job.resolveSettled(error);
     if (heldUploadsByImageId.get(input.image.id) === job) {
       heldUploadsByImageId.delete(input.image.id);
       setUploadState(input.image.id, {
@@ -658,7 +658,8 @@ export async function awaitAttachmentUploads(
       if (!job || (environmentId !== undefined && job.environmentId !== environmentId)) return;
       job.waiters++;
       try {
-        await job.settled;
+        const error = await job.settled;
+        if (error) throw error;
       } finally {
         job.waiters--;
         if (job.draftReleased && job.waiters === 0) {
