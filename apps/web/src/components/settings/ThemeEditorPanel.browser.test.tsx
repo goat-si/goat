@@ -2,7 +2,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
-import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { SettingsPageShell } from "./SettingsPageShell";
 import { ThemeEditorPanel } from "./ThemeEditorPanel";
 
 function dragHeader(panel: HTMLElement, toX: number, toY: number) {
@@ -75,35 +83,46 @@ async function renderPanel() {
   };
 }
 
-// The editor floats beside the Settings dialog, whose Esc handler sits on the document.
 async function renderBesideSettings() {
-  const onSettingsOpenChange = vi.fn();
   const onEditorOpenChange = vi.fn();
-  const screen = await render(
-    <>
-      <Dialog onOpenChange={onSettingsOpenChange} open>
-        <DialogPopup>
-          <DialogTitle>Settings</DialogTitle>
-        </DialogPopup>
-      </Dialog>
-      <ThemeEditorPanel
-        open
-        onOpenChange={onEditorOpenChange}
-        onSaved={() => true}
-        editingTheme={null}
-        initialAppearance="light"
-        restoreTheme={() => {}}
-      />
-    </>,
-  );
+  const stack = new AsyncDisposableStack();
+  const root = createRootRoute({ component: Outlet });
+  const settings = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/appearance",
+    component: () => (
+      <SettingsPageShell pathname="/settings/appearance">
+        <button type="button">Settings page</button>
+        <ThemeEditorPanel
+          open
+          onOpenChange={onEditorOpenChange}
+          onSaved={() => true}
+          editingTheme={null}
+          initialAppearance="light"
+          restoreTheme={() => {}}
+        />
+      </SettingsPageShell>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settings, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/appearance"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  stack.use(await render(<RouterProvider router={router} />, { router: false }));
   return {
-    onSettingsOpenChange,
+    router,
     onEditorOpenChange,
-    [Symbol.asyncDispose]: () => screen[Symbol.asyncDispose](),
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
   };
 }
 
-// The modal Settings dialog marks the editor inert, hiding it from role queries and pointer input.
 async function editorElement(selector: string) {
   const query = () => document.querySelector<HTMLElement>(`[data-theme-editor-panel] ${selector}`);
   await expect.poll(query).toBeTruthy();
@@ -187,11 +206,21 @@ describe("ThemeEditorPanel", () => {
 
   it("closes on Escape without closing Settings", async () => {
     await using view = await renderBesideSettings();
+    const windowKeys = vi.fn();
+    window.addEventListener("keydown", windowKeys);
+    using _windowKeys = {
+      [Symbol.dispose]: () => window.removeEventListener("keydown", windowKeys),
+    };
     (await editorElement("input")).focus();
     await userEvent.keyboard("{Escape}");
 
     expect(view.onEditorOpenChange).toHaveBeenCalledWith(false);
-    expect(view.onSettingsOpenChange).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
+    expect(windowKeys).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Settings page" }));
+    await userEvent.keyboard("{Escape}");
+    expect(windowKeys).toHaveBeenCalled();
+    await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
   });
 
   it("leaves inspection on Escape without closing the editor or Settings", async () => {
@@ -202,6 +231,6 @@ describe("ThemeEditorPanel", () => {
 
     await editorElement('[aria-label="Inspect app colors"]');
     expect(view.onEditorOpenChange).not.toHaveBeenCalled();
-    expect(view.onSettingsOpenChange).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
   });
 });
