@@ -56,7 +56,7 @@ it("selects the saved model for titles and source control", async () => {
   });
 });
 
-it("preserves a stored key when editing the endpoint", async () => {
+it("preserves a stored key when editing the model", async () => {
   const save = vi.fn(async (_patch: ServerSettingsPatch) => true);
   await using screen = await render(
     <TextGeneratorSettings
@@ -77,15 +77,13 @@ it("preserves a stored key when editing the endpoint", async () => {
   );
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("API key").element()).toHaveValue("");
-  await userEvent.clear(screen.getByRole("textbox", { name: "API base URL" }));
-  await userEvent.type(
-    screen.getByRole("textbox", { name: "API base URL" }),
-    "https://new.example/v1",
-  );
+  await userEvent.clear(screen.getByRole("textbox", { name: "Model ID" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Model ID" }), "new-model");
   await userEvent.click(screen.getByRole("button", { name: "Save text generator" }));
   await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(Object.values(save.mock.calls[0]![0].textGenerators ?? {})[0]).toMatchObject({
-    baseUrl: "https://new.example/v1",
+    baseUrl: "https://old.example/v1",
+    model: "new-model",
     apiKey: "••••••",
   });
 });

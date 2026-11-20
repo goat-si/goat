@@ -27,6 +27,11 @@ const HIDDEN = new Set([
   "delInstrText",
   "tracked-changes",
   "pPr",
+  "positionH",
+  "positionV",
+  "sizeRelH",
+  "sizeRelV",
+  "fldData",
 ]);
 
 class Truncation extends Error {}
@@ -40,12 +45,43 @@ interface XmlNode {
   hasTextChoice?: boolean;
 }
 
-function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
+// ODF 1.3 Part 3 §6.1.2: paragraph character data turns TAB, CR and LF into spaces, collapses
+// space runs and trims the ends; only <text:s>, <text:tab> and <text:line-break> keep literal ones.
+function collapseOdfWhitespace(paragraph: XmlNode) {
+  let afterSpace = true;
+  let tail: { node: XmlNode; index: number; value: string } | undefined;
+  const visit = (node: XmlNode) => {
+    for (const [index, child] of node.children.entries()) {
+      if (typeof child !== "string") {
+        if (HIDDEN.has(child.name)) continue;
+        if (child.spaceCount === undefined && !["tab", "line-break", "p", "h"].includes(child.name))
+          visit(child);
+        else {
+          afterSpace = false;
+          tail = undefined;
+        }
+        continue;
+      }
+      let value = child.replaceAll(/[ \t\r\n]+/g, " ");
+      if (afterSpace && value.startsWith(" ")) value = value.slice(1);
+      if (value) {
+        afterSpace = value.endsWith(" ");
+        tail = { node, index, value };
+      }
+      node.children[index] = value;
+    }
+  };
+  visit(paragraph);
+  if (tail && afterSpace) tail.node.children[tail.index] = tail.value.slice(0, -1);
+}
+
+function xml(source: string, extension: string): XmlNode {
+  const odf = [".odt", ".ods", ".odp"].includes(extension);
   const root: XmlNode = { name: "root", attrs: {}, children: [] };
   const stack = [root];
   let nodes = 0;
   const parser = new SaxesParser();
-  if (htmlEntities) Object.assign(parser.ENTITIES, characterEntities);
+  if (extension === ".epub") Object.assign(parser.ENTITIES, characterEntities);
   parser.on("opentag", (tag) => {
     if (++nodes > 200_000 || stack.length > 128) throw new Truncation("XML structure limit");
     const node: XmlNode = {
@@ -58,7 +94,7 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
       ),
       children: [],
     };
-    if (odfSpaces && node.name === "s") node.spaceCount = repeatCount(node.attrs.c);
+    if (odf && node.name === "s") node.spaceCount = repeatCount(node.attrs.c);
     stack.at(-1)!.children.push(node);
     stack.push(node);
   });
@@ -66,6 +102,14 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
     const node = stack.pop();
     const parent = stack.at(-1);
     if (node === undefined || parent === undefined) throw new Error("Invalid XML nesting");
+    if (odf && (node.name === "p" || node.name === "h")) collapseOdfWhitespace(node);
+    if (
+      (extension === ".docx" && node.name === "del") ||
+      (odf && node.name === "annotation" && parent.name !== "semantics")
+    ) {
+      parent.children.pop();
+      return;
+    }
     // Markup-compatibility fallbacks repeat their mc:Choice content, e.g. Word text boxes.
     // Keep one when no Choice carries text, such as a chart with a VML caption.
     if (node.name === "Fallback" && parent.hasTextChoice) {
@@ -73,9 +117,19 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
       return;
     }
     if (
-      !node.hasText ||
+      extension === ".docx" &&
+      node.name === "Fallback" &&
+      (node.hasText || hasInlineTab(node, false))
+    ) {
+      parent.children = parent.children.filter(
+        (child) =>
+          typeof child === "string" || child.name !== "Choice" || !hasInlineTab(child, true),
+      );
+    }
+    if (
+      (!node.hasText && node.name !== "noBreakHyphen") ||
       HIDDEN.has(node.name) ||
-      ["tab", "cell", "br", "line-break", "cr"].includes(node.name) ||
+      ["tab", "ptab", "cell", "br", "line-break", "cr"].includes(node.name) ||
       node.spaceCount !== undefined
     )
       return;
@@ -94,8 +148,18 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
   return root;
 }
 
-const children = (node: XmlNode) =>
-  node.children.filter((child): child is XmlNode => typeof child !== "string");
+const children = (node: XmlNode | undefined) =>
+  node?.children.filter((child): child is XmlNode => typeof child !== "string") ?? [];
+function hasInlineTab(node: XmlNode, positionalOnly: boolean): boolean {
+  return (
+    !HIDDEN.has(node.name) &&
+    (node.name === "ptab" ||
+      (!positionalOnly && node.name === "tab") ||
+      node.children.some(
+        (child) => typeof child !== "string" && hasInlineTab(child, positionalOnly),
+      ))
+  );
+}
 function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNode, void> {
   for (const child of children(node)) {
     if (typeof name === "string" ? child.name === name : name.includes(child.name)) yield child;
@@ -104,8 +168,9 @@ function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNod
 }
 function* text(node: XmlNode): Generator<string, void> {
   if (HIDDEN.has(node.name)) return;
-  if (["tab", "cell"].includes(node.name)) yield "\t";
+  if (["tab", "ptab", "cell"].includes(node.name)) yield "\t";
   else if (["br", "line-break", "cr"].includes(node.name)) yield "\n";
+  else if (node.name === "noBreakHyphen") yield "\u2011";
   else if (node.spaceCount !== undefined) {
     yield " ".repeat(Math.min(MAX_OUTPUT, node.spaceCount));
     if (node.spaceCount > MAX_OUTPUT) throw new Truncation("Space repeat limit");
@@ -114,6 +179,23 @@ function* text(node: XmlNode): Generator<string, void> {
       if (typeof child === "string") yield child;
       else yield* text(child);
     }
+}
+// SpreadsheetML `t` and `v` values are ST_Xstring: `_xHHHH_` is one UTF-16 code unit, and an
+// escaped lead underscore (`_x005F_xHHHH_`) keeps the literal `_xHHHH_`. Decoded in one pass.
+function* xstringText(node: XmlNode): Generator<string, void> {
+  if (HIDDEN.has(node.name)) return;
+  if (node.name !== "t" && node.name !== "v") {
+    for (const child of children(node)) yield* xstringText(child);
+    return;
+  }
+  yield node.children
+    .filter((child) => typeof child === "string")
+    .join("")
+    .replaceAll(/_x005[Ff]_x[\dA-Fa-f]{4}_|_x[\dA-Fa-f]{4}_/g, (match) =>
+      match.length > 7
+        ? match.slice(6)
+        : String.fromCharCode(Number.parseInt(match.slice(2, -1), 16)),
+    );
 }
 function* paragraphs(node: XmlNode): Generator<TextPart, void> {
   if (HIDDEN.has(node.name)) return;
@@ -171,7 +253,7 @@ function odfValue(cell: XmlNode): string {
   }
 }
 function hasCellText(cell: XmlNode): boolean {
-  if (odfValue(cell).trim()) return true;
+  if (odfValue(cell).trim() || cell.name === "noBreakHyphen") return true;
   // Space markers can have enormous repeat counts; emptiness never requires expanding them.
   if (HIDDEN.has(cell.name) || cell.spaceCount !== undefined) return false;
   return cell.children.some((child) =>
@@ -349,6 +431,10 @@ function* rtf(source: string): Generator<string, void> {
     ["ldblquote", "“"],
     ["rdblquote", "”"],
     ["bullet", "•"],
+    ["zwj", "\u200d"],
+    ["zwnj", "\u200c"],
+    ["ltrmark", "\u200e"],
+    ["rtlmark", "\u200f"],
     ["~", "\u00a0"],
     ["_", "\u2011"],
     ["-", ""],
@@ -393,7 +479,13 @@ function* rtf(source: string): Generator<string, void> {
             "object",
             "fldinst",
             "header",
+            "headerf",
+            "headerl",
+            "headerr",
             "footer",
+            "footerf",
+            "footerl",
+            "footerr",
           ].includes(control)
         )
           state.skip = true;
@@ -444,7 +536,7 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
       try {
         const data = files.get(name);
         if (!data) throw new Error("Missing document part");
-        return xml(data, [".odt", ".ods", ".odp"].includes(extension), extension === ".epub");
+        return xml(data, extension);
       } catch (error) {
         if (error instanceof Truncation) throw error;
         skip(name);
@@ -539,10 +631,12 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
             const raw = value?.children.find((child) => typeof child === "string") ?? "";
             if (cell.attrs.t === "s") {
               const shared = strings[Number(raw)];
-              if (shared) yield* inCell(text(shared));
-            } else if (cell.attrs.t === "inlineStr") yield* inCell(text(cell));
+              if (shared) yield* inCell(xstringText(shared));
+            } else if (cell.attrs.t === "inlineStr") yield* inCell(xstringText(cell));
+            else if (cell.attrs.t === "b" && (raw.trim() === "0" || raw.trim() === "1"))
+              yield* inCell([raw.trim() === "1" ? "true" : "false"]);
             else {
-              if (value && hasCellText(value)) yield* inCell(text(value));
+              if (value && hasCellText(value)) yield* inCell(xstringText(value));
               else for (const formula of all(cell, "f")) yield* inCell(text(formula));
               const formatId = formats[Number(cell.attrs.s ?? 0)]?.attrs.numFmtId;
               const format = formatId ? customFormats.get(formatId) : undefined;
@@ -561,8 +655,10 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
       }
     } else if (extension === ".pptx") {
       const rels = relations("ppt/_rels/presentation.xml.rels");
+      const [presentation] = children(read("ppt/presentation.xml"));
+      const slideList = children(presentation).find((node) => node.name === "sldIdLst");
       let index = 0;
-      for (const slide of all(read("ppt/presentation.xml"), "sldId")) {
+      for (const slide of children(slideList).filter((node) => node.name === "sldId")) {
         yield `\n\n## Slide ${++index}\n`;
         const target = rels.get(slide.attrs["r:id"] ?? slide.attrs.id);
         if (!target) {
@@ -678,5 +774,5 @@ export async function extractDocumentText(path: string, extension: string): Prom
   }
   result = result.replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n").trim();
   if (!result && !truncated) throw new Error("No text extracted");
-  return result + (truncated ? TRUNCATED : "");
+  return truncated ? result.replace(/[\uD800-\uDBFF]$/, "").trimEnd() + TRUNCATED : result;
 }

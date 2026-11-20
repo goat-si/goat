@@ -20,6 +20,7 @@ import {
 import { randomUuidV4 } from "@goat/shared/randomUuid";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import { parsePullRequestUrl } from "../shared/definition.ts";
 
@@ -226,9 +227,7 @@ export const make = Effect.gen(function* () {
     if (named) return named;
     const readRemote = host.git
       .resolvePrimaryRemoteName(input.cwd)
-      .pipe(
-        Effect.flatMap((remote) => host.git.readConfigValue(input.cwd, `remote.${remote}.url`)),
-      );
+      .pipe(Effect.flatMap((remote) => readFirstFetchUrl(host.git, input.cwd, remote)));
     const remoteUrl =
       input.context?.remoteUrl ??
       (input.repository === undefined

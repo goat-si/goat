@@ -3,6 +3,21 @@ import { userEvent } from "vite-plus/test/browser";
 import { createWorkspaceFocusController } from "../lib/workspaceFocus";
 import { shouldRefocusComposerOnWindowFocus } from "./ChatView.logic";
 
+it("preserves selected timeline text when the window regains focus", async () => {
+  const timeline = document.createElement("div");
+  timeline.tabIndex = -1;
+  const reply = document.createElement("p");
+  reply.textContent = "Steel bridges are easy to recycle.";
+  timeline.append(reply);
+  document.body.append(timeline);
+  using _timeline = { [Symbol.dispose]: () => timeline.remove() };
+  await userEvent.tripleClick(reply);
+  expect(document.getSelection()?.toString()).toContain("Steel bridges");
+  expect(shouldRefocusComposerOnWindowFocus(document.activeElement, document.getSelection())).toBe(
+    false,
+  );
+});
+
 it("keeps keyboard focus on a sidebar row on window return, but not a clicked row", async () => {
   const list = document.createElement("ul");
   const row = (name: string) => {

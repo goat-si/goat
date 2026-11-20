@@ -487,6 +487,7 @@ function ProviderSettingsFieldRow({
               size="sm"
               className="min-w-0 flex-1"
               configured={secretConfigured}
+              placeholder="Enter or re-enter secret"
               value=""
               onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
             />

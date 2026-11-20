@@ -25,6 +25,13 @@ export const UPDATES_SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "keep-awake-while-agents-work",
+    title: "Keep awake while agents work",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["stay awake sleep idle power caffeinate active runs"],
+  },
+  {
     id: "background-activity",
     title: msg("Background activity"),
     to: "/settings/general",

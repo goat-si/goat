@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProjectId,
   ThreadId,
@@ -14,6 +15,9 @@ import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
 import { useRightPanelStore } from "../rightPanelStore";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -30,6 +34,7 @@ const state = vi.hoisted(() => ({
     id: ThreadId;
     projectId: ProjectId;
     title: string;
+    sideChatOf?: ThreadId | null;
     worktreePath: string | null;
     session: { status: "ready" | "stopped" } | null;
     latestTurn: null;
@@ -41,6 +46,9 @@ const state = vi.hoisted(() => ({
   afterRequest: undefined as ((action: string) => void) | undefined,
   sessionLookupFails: false,
   worktreeManaged: true as boolean | undefined,
+  worktreeRemovalGuarded: true as boolean | undefined,
+  holderTitles: {} as Record<string, string>,
+  worktreeThreadIds: [] as ThreadId[],
 }));
 
 vi.mock("react", () => ({
@@ -76,12 +84,20 @@ vi.mock("../state/use-atom-command", () => ({
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
   useAtomQueryRunner: (query: unknown) =>
-    query === "session" ? loadSession : loadWorktreeThreadIds,
+    query === "session"
+      ? loadSession
+      : query === orchestrationEnvironment.threadTitleLookup
+        ? loadHolderTitles
+        : loadWorktreeThreadIds,
 }));
+const loadHolderTitles = async () => AsyncResult.success({ lookupTitles: state.holderTitles });
 const loadWorktreeThreadIds = async () =>
   AsyncResult.success({
-    threadIds: [target.threadId],
+    threadIds: state.worktreeThreadIds.length > 0 ? state.worktreeThreadIds : [target.threadId],
     ...(state.worktreeManaged === undefined ? {} : { managed: state.worktreeManaged }),
+    ...(state.worktreeRemovalGuarded === undefined
+      ? {}
+      : { removalGuarded: state.worktreeRemovalGuarded }),
   });
 const loadSession = async (environmentId: string) =>
   state.sessionLookupFails
@@ -91,6 +107,9 @@ const loadSession = async (environmentId: string) =>
         scopes: [...(state.scopes.get(environmentId) ?? [])],
         auth: { serverUpdateScope: "environment:maintain" },
       });
+vi.mock("../components/sidebar/usePaletteVisibility", () => ({
+  usePaletteHiddenParentKeys: () => new Set<string>(),
+}));
 vi.mock("../state/threads", () => ({
   threadEnvironment: Object.fromEntries(
     [
@@ -264,12 +283,150 @@ beforeEach(() => {
   state.afterRequest = undefined;
   state.sessionLookupFails = false;
   state.worktreeManaged = true;
+  state.worktreeRemovalGuarded = true;
+  state.holderTitles = {};
+  state.worktreeThreadIds = [];
   useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   useDiffPanelStore.setState(useDiffPanelStore.getInitialState(), true);
   usePreviewMiniPlayerStore.setState(usePreviewMiniPlayerStore.getInitialState(), true);
 });
 
 describe("thread action permissions", () => {
+  it("keeps the worktree when an old server becomes guarded after confirmation", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    state.worktreeRemovalGuarded = undefined;
+    state.confirm.mockImplementation(async () => {
+      state.worktreeRemovalGuarded = true;
+      return true;
+    });
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
+  it("discloses automatic cleanup for an older server and does not request removal", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    state.worktreeRemovalGuarded = undefined;
+    const get = appAtomRegistry.get.bind(appAtomRegistry);
+    using _get = vi.spyOn(appAtomRegistry, "get").mockImplementation(((atom: unknown) =>
+      atom === environmentServerConfigsAtom
+        ? new Map([
+            [
+              secondary,
+              {
+                settings: {
+                  ...DEFAULT_SERVER_SETTINGS,
+                  storageCleanup: {
+                    ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+                    worktreeOnDelete: true,
+                  },
+                },
+              },
+            ],
+          ])
+        : get(atom as never)) as never);
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "The server's automatic cleanup setting may still remove the worktree.",
+      ),
+      { variant: "destructive" },
+    );
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
+  it("names an archived worktree holder absent from the client shell", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    const archived = ThreadId.make("archived-holder");
+    state.worktreeThreadIds = [target.threadId, archived];
+    state.holderTitles = { [archived]: "Archived analysis" };
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).toHaveBeenCalledWith(expect.stringContaining("Archived analysis"), {
+      variant: "destructive",
+    });
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
+  it("limits named worktree holders and reports the remaining count", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    const ids = Array.from({ length: 8 }, (_, index) => ThreadId.make(`holder-${index}`));
+    state.worktreeThreadIds = [target.threadId, ...ids];
+    state.holderTitles = Object.fromEntries(ids.map((id, index) => [id, `Holder ${index}`]));
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    const message = state.confirm.mock.calls[0]![0];
+    expect(message).toContain("Holder 0");
+    expect(message).toContain("Holder 4");
+    expect(message).not.toContain("Holder 5");
+    expect(message).toContain("and 3 more");
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
+  it.each([false, undefined])(
+    "keeps the worktree and tells the user when the server guard is %s",
+    async (guarded) => {
+      state.scopes
+        .get(secondary)!
+        .add(AuthOrchestrationOperateScope)
+        .add(AuthSourceControlWriteScope);
+      state.threads[0]!.worktreePath = "/worktrees/thread";
+      state.worktreeRemovalGuarded = guarded;
+      expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+      expect(state.confirm).toHaveBeenCalledWith(
+        expect.stringContaining("The worktree will be kept."),
+        { variant: "destructive" },
+      );
+      expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+    },
+  );
+  it("offers worktree cleanup when the deleted thread is its last holder", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    state.worktreeThreadIds = [target.threadId];
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Delete the worktree too?"),
+      { variant: "destructive" },
+    );
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(true);
+  });
+  it("names a side chat that keeps the worktree when its parent is deleted", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    const sideId = ThreadId.make("side-chat");
+    state.threads.push({
+      environmentId: secondary,
+      id: sideId,
+      projectId: ProjectId.make("project"),
+      title: "Side question",
+      sideChatOf: target.threadId,
+      worktreePath: "/worktrees/thread",
+      session: null,
+      latestTurn: null,
+    });
+    state.worktreeThreadIds = [target.threadId, sideId];
+    expect((await useThreadActions().confirmAndDeleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).toHaveBeenCalledWith(expect.stringContaining("Side question"), {
+      variant: "destructive",
+    });
+    expect(state.requests.some((request) => request.action === "removeWorktree")).toBe(false);
+  });
   it.each(operations)("$name requires the target environment's grant", async ({ run }) => {
     const result = await run(useThreadActions(), target);
     expect(result._tag).toBe("Failure");

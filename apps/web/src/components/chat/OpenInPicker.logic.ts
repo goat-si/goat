@@ -1,19 +1,34 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 
-import type { RemoteOpenMode } from "../../remoteOpen";
+import { type RemoteOpenState, useRemoteOpenState } from "../../remoteOpen";
+import { primaryServerAvailableEditorsAtom, serverEnvironment } from "../../state/server";
 
-export function shouldShowOpenInPicker(input: {
-  readonly activeProjectName: string | undefined;
-  readonly activeThreadEnvironmentId: EnvironmentId;
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly remoteOpenMode: RemoteOpenMode;
-}): boolean {
-  if (!input.activeProjectName) return false;
-  if (
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
-  ) {
-    return true;
-  }
-  return input.remoteOpenMode !== "local-exec";
+function hasOpenInTarget(isPrimary: boolean, remote: RemoteOpenState): boolean {
+  return isPrimary || remote.mode !== "local-exec" || remote.desktopService === true;
+}
+
+export function useFileOpenInTarget(
+  environmentId: EnvironmentId,
+  primaryEnvironmentId: EnvironmentId | null,
+): boolean {
+  return hasOpenInTarget(environmentId === primaryEnvironmentId, useRemoteOpenState(environmentId));
+}
+
+export function useThreadOpenInPicker(
+  environmentId: EnvironmentId,
+  primaryEnvironmentId: EnvironmentId | null,
+  projectName: string | undefined,
+) {
+  const remote = useRemoteOpenState(environmentId);
+  const primaryEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  return {
+    showOpenInPicker:
+      Boolean(projectName) && hasOpenInTarget(environmentId === primaryEnvironmentId, remote),
+    availableEditors:
+      remote.mode === "local-exec" && remote.desktopService
+        ? (config?.availableEditors ?? primaryEditors)
+        : primaryEditors,
+  };
 }

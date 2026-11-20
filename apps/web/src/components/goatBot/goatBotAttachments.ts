@@ -127,14 +127,19 @@ export async function uploadGoatBotAttachments(
 ): Promise<ReadonlyArray<ChatAttachment>> {
   if (attachments.length === 0) return [];
   for (const attachment of attachments) {
+    const owner = attachmentOwners.get(attachment.id);
+    if (owner) owner.environmentId = environmentId;
     // A failed upload stays failed until retried, so retrying the message retries it.
-    if (readAttachmentUpload(attachment.id)?.status === "failed") {
+    if (readAttachmentUpload(attachment.id, environmentId)?.status === "failed") {
       retryAttachmentUpload({ environmentId, image: attachment });
     } else {
       startAttachmentUpload({ environmentId, image: attachment });
     }
   }
-  await awaitAttachmentUploads(attachments.map((attachment) => attachment.id));
+  await awaitAttachmentUploads(
+    attachments.map((attachment) => attachment.id),
+    environmentId,
+  );
   const uploaded = getUploadedAttachments({ environmentId, images: attachments });
   if (uploaded === null) throw new Error("An attachment didn't finish uploading.");
   return uploaded;
@@ -142,14 +147,25 @@ export async function uploadGoatBotAttachments(
 
 const attachmentOwners = new Map<
   string,
-  { readonly attachment: GoatBotDraftAttachment; count: number }
+  {
+    readonly attachment: GoatBotDraftAttachment;
+    count: number;
+    environmentId: EnvironmentId | undefined;
+  }
 >();
 const previewOwners = new Map<string, number>();
-const pendingRelease = new Map<string, GoatBotDraftAttachment>();
+const pendingRelease = new Map<
+  string,
+  { attachment: GoatBotDraftAttachment; environmentId: EnvironmentId | undefined }
+>();
 
-function uploadKeys(attachment: GoatBotDraftAttachment): ReadonlySet<string> {
+function uploadKeys(
+  attachment: GoatBotDraftAttachment,
+  environmentId?: EnvironmentId,
+): ReadonlySet<string> {
   const keys = new Set<string>();
-  const upload = readAttachmentUpload(attachment.id);
+  const upload =
+    environmentId === undefined ? undefined : readAttachmentUpload(attachment.id, environmentId);
   if (upload?.status === "ready" || (upload?.status === "failed" && upload.attachmentId)) {
     keys.add(JSON.stringify([upload.environmentId, upload.attachmentId]));
   }
@@ -167,12 +183,18 @@ function uploadKeys(attachment: GoatBotDraftAttachment): ReadonlySet<string> {
 
 function releaseUnownedUploads() {
   const ownedKeys = new Set(
-    [...attachmentOwners.values()].flatMap((owner) => [...uploadKeys(owner.attachment)]),
+    [...attachmentOwners.values()].flatMap((owner) => [
+      ...uploadKeys(owner.attachment, owner.environmentId),
+    ]),
   );
-  for (const [id, attachment] of pendingRelease) {
-    if ([...uploadKeys(attachment)].some((key) => ownedKeys.has(key))) continue;
+  for (const [id, pending] of pendingRelease) {
+    if (
+      [...uploadKeys(pending.attachment, pending.environmentId)].some((key) => ownedKeys.has(key))
+    )
+      continue;
     pendingRelease.delete(id);
-    releaseDraftAttachments([attachment]);
+    if (pending.environmentId !== undefined)
+      releaseDraftAttachments([pending.attachment], pending.environmentId);
   }
 }
 
@@ -180,7 +202,15 @@ export function retainGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraft
   for (const attachment of attachments) {
     const owner = attachmentOwners.get(attachment.id);
     if (owner) owner.count += 1;
-    else attachmentOwners.set(attachment.id, { attachment, count: 1 });
+    else
+      attachmentOwners.set(attachment.id, {
+        attachment,
+        count: 1,
+        environmentId:
+          attachment.type === "file"
+            ? (attachment.uploadEnvironmentId ?? readAttachmentUpload(attachment.id)?.environmentId)
+            : readAttachmentUpload(attachment.id)?.environmentId,
+      });
     pendingRelease.delete(attachment.id);
     if (attachment.type === "image")
       previewOwners.set(attachment.previewUrl, (previewOwners.get(attachment.previewUrl) ?? 0) + 1);
@@ -200,13 +230,20 @@ export function releaseUnownedGoatBotAttachments(
       revoked.add(attachment.previewUrl);
       URL.revokeObjectURL(attachment.previewUrl);
     }
-    if (!attachmentOwners.has(attachment.id)) pendingRelease.set(attachment.id, attachment);
+    if (!attachmentOwners.has(attachment.id))
+      pendingRelease.set(attachment.id, {
+        attachment,
+        environmentId: attachment.type === "file" ? attachment.uploadEnvironmentId : undefined,
+      });
   }
   releaseUnownedUploads();
 }
 
 /** Drops uploads and previews after their last draft or message owner releases them. */
-export function releaseGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraftAttachment>) {
+export function releaseGoatBotAttachments(
+  attachments: ReadonlyArray<GoatBotDraftAttachment>,
+  environmentId?: EnvironmentId,
+) {
   for (const attachment of attachments) {
     const owner = attachmentOwners.get(attachment.id);
     if (owner === undefined) continue;
@@ -220,7 +257,10 @@ export function releaseGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraf
     }
     if (owner.count === 0) {
       attachmentOwners.delete(attachment.id);
-      pendingRelease.set(attachment.id, owner.attachment);
+      pendingRelease.set(attachment.id, {
+        attachment: owner.attachment,
+        environmentId: environmentId ?? owner.environmentId,
+      });
     }
   }
   releaseUnownedUploads();

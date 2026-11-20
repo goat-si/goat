@@ -1,3 +1,4 @@
+import { normalizeModelSlug } from "@goat/shared/model";
 import { rankComposerModelMentions } from "@goat/client-runtime/composer-model-mentions";
 import type { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
@@ -61,4 +62,14 @@ export function matchComposerModelItems(input: {
     label: getDisplayModelName(option),
     description: option.subProvider ?? entry.displayName,
   }));
+}
+
+export function selectedModelOrCustomFallback(
+  currentOptions: ReadonlyArray<{ readonly slug: string }>,
+  selectedModelForPicker: string,
+  selectedProvider: Parameters<typeof normalizeModelSlug>[1],
+) {
+  return currentOptions.some((option) => option.slug === selectedModelForPicker)
+    ? selectedModelForPicker
+    : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
 }

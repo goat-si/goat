@@ -1,4 +1,4 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
 import "../../index.css";
@@ -8,6 +8,31 @@ import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
 
 const setWordWrap = (wordWrap: boolean) =>
   act(() => persistClientSettingsPatch({ wordWrap }, async () => {}));
+
+it.each([
+  ["sudo pacman -S patchelf\n", "sudo pacman -S patchelf"],
+  ["first\n\n", "first\n"],
+  ["plain", "plain"],
+])("copies code without only the final parser newline", async (code, expected) => {
+  await ensureClientSettingsHydrated();
+  await using screen = await render(
+    <MarkdownCodeBlock
+      code={code}
+      language="bash"
+      fenceTitle={null}
+      theme="light"
+      isStreaming={false}
+    >
+      <pre>
+        <code>{code}</code>
+      </pre>
+    </MarkdownCodeBlock>,
+    { router: false },
+  );
+  using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  await screen.getByRole("button", { name: "Copy code" }).click();
+  await vi.waitFor(() => expect(write).toHaveBeenCalledWith(expected));
+});
 
 it("follows a changed word wrap default while mounted", async () => {
   await ensureClientSettingsHydrated();

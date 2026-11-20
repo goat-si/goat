@@ -1,3 +1,4 @@
+import { commandItemOutput } from "@goat/shared/commandOutput";
 import type { AssetResource, OrchestrationV2TurnItem } from "@goat/contracts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
@@ -121,14 +122,30 @@ function parseJson(text: string): unknown {
   }
 }
 
+// Match strings whole so digits inside them are not mistaken for JSON numbers.
+const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+
+function hasLossyJsonNumber(json: string): boolean {
+  for (const [token] of json.matchAll(JSON_STRING_OR_NUMBER)) {
+    if (token.startsWith('"')) continue;
+    const value = Number(token);
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function prettyJsonText(text: string): string {
   const trimmed = text.trim();
   if (!/^[[{]/.test(trimmed)) return text;
   const whole = parseJson(trimmed);
-  if (whole !== undefined) return JSON.stringify(whole, null, 2);
+  if (whole !== undefined)
+    return hasLossyJsonNumber(trimmed) ? text : JSON.stringify(whole, null, 2);
   const lines = trimmed.split("\n").filter((line) => line.trim());
   const documents = lines.map((line) => parseJson(line.trim()));
-  if (documents.some((document) => document === undefined)) return text;
+  if (documents.some((document) => document === undefined) || hasLossyJsonNumber(trimmed))
+    return text;
   return documents.map((document) => JSON.stringify(document, null, 2)).join("\n\n");
 }
 
@@ -219,22 +236,6 @@ export function turnItemNeedsDetailFetch(item: OrchestrationV2TurnItem): boolean
   }
 }
 
-function commandOutputText(output: string): string {
-  if (!output.trimStart().startsWith('{"stdout"')) return output;
-  const parsed = parseJson(output.trim());
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.stdout !== "string" ||
-    typeof parsed.stderr !== "string" ||
-    typeof parsed.interrupted !== "boolean"
-  ) {
-    return output;
-  }
-  return [parsed.stdout, parsed.stderr]
-    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-    .join("\n");
-}
-
 // App calls store the provider result beside the app reference; its images get no preview.
 function dynamicToolOutputText(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }>,
@@ -263,8 +264,10 @@ export function turnItemOutputText(
   options: { readonly omitLinks?: boolean } = {},
 ): string | null {
   switch (item.type) {
-    case "command_execution":
-      return item.output?.trim() ? commandOutputText(item.output) || null : null;
+    case "command_execution": {
+      const output = commandItemOutput(item);
+      return output?.trim() ? output : null;
+    }
     case "dynamic_tool":
       return item.outputOmitted === true
         ? null

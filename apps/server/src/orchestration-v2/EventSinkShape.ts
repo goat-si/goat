@@ -2,6 +2,9 @@ import {
   CommandId,
   type EventId,
   type OrchestrationV2CloudTask,
+  type OrchestrationV2ExecutionNode,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Subagent,
   type ProviderInstanceId,
   type ProviderSessionId,
   type OrchestrationV2Run,
@@ -20,6 +23,8 @@ import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
 import type * as EventSinkBatch from "./EventSinkBatch.ts";
+import type { AttemptDeliveryUpdate } from "./AttemptInputDelivery.ts";
+import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
 import type { CommitGuardRefused } from "./goat/CommitGuard.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
 import type * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -96,6 +101,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly metadata: Pick<OrchestrationV2CloudTask, "url" | "title" | "progress">;
   }) => Effect.Effect<void, EventSinkV2Error>;
   readonly writeIfRunCurrent: (input: {
+    readonly expectedTurnItems?: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
@@ -103,6 +109,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly unlessInterruptRequested?: { readonly requestId: string; readonly resultId: string };
+    readonly attemptDelivery?: AttemptDeliveryUpdate;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<
@@ -150,6 +157,35 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     },
     EventSinkV2Error
   >;
+  readonly writeIfSubagentUnchanged: (input: {
+    readonly expected: OrchestrationV2Subagent;
+    readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
+    readonly items?: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
+  /** Atomically checks the released owner and every background record being changed. */
+  readonly writeIfReleasedSubagentUnchanged: (input: {
+    readonly expected: OrchestrationV2Subagent;
+    readonly members: ReadonlyArray<OrchestrationV2Subagent>;
+    readonly providerThreadId: ProviderThreadId;
+    readonly providerSessionId: ProviderSessionId;
+    readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode>;
+    readonly turns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+    readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
   readonly commitCommand: (input: {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
@@ -157,6 +193,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly initialMessageReceipt?: AtomicLaunchReceipt;
     /** Queue runtime work without changing projections; requires at least one effect. */
     readonly allowEffectOnly?: boolean;
     readonly cancelUnsettledEffects?: Omit<
@@ -205,7 +242,12 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   readonly stream: (input?: {
     readonly threadId?: ThreadId;
     readonly afterSequence?: number;
+    /** Finite journal replay without a live subscription. */
+    readonly throughSequence?: number;
+    /** Tails the durable journal with a coalesced high-water notification. */
+    readonly journal?: boolean;
     readonly eventType?: OrchestrationV2DomainEvent["type"];
+    readonly eventTypes?: ReadonlyArray<OrchestrationV2DomainEvent["type"]>;
     /** Bound RPC subscribers; internal workers must not drop their subscription under load. */
     readonly bounded?: boolean;
     /** Worker-only: runs after subscription and high-water acquisition, before replay. */

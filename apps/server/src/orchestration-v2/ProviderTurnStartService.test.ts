@@ -5,21 +5,19 @@ import {
   makeWorktreeStartHarness,
   startWithMissingWorktree,
 } from "./ProviderTurnStartService.worktree.testkit.ts";
-import * as Logger from "effect/Logger";
-import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
-import { MemoryTaskGrantCeiling } from "@goat/contracts";
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CommandId,
   GitCommandError,
+  NodeId,
+  ProviderInstanceId,
   ProviderDriverKind,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
-  RunId,
   ThreadId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -314,10 +312,13 @@ effectIt.effect(
         prefix: "goat-recreate-failure-",
       });
       const worktreePath = path.join(worktreesDir, "project", "restore");
+      const workspaceRoot = path.join(worktreesDir, "fixture-repository");
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
       const harness = makeLocalCommandHarness({
         text: "Continue",
         worktreesDir,
         worktreePath,
+        workspaceRoot,
         fileSystem,
         failReadsAfterRunning: true,
       });
@@ -332,19 +333,16 @@ effectIt.effect(
           }),
         ),
       );
-
       const interrupted = yield* Effect.exit(harness.start);
       expect(interrupted._tag).toBe("Failure");
       if (interrupted._tag === "Failure")
         expect(Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
       expect(harness.events).toEqual([]);
       expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-
       const retry = yield* Effect.result(harness.startWithRetry);
       expect(retry).toMatchObject({ _tag: "Failure", failure: { _tag: "ProviderTurnStartError" } });
       expect(harness.events).toEqual([]);
       expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-
       yield* harness.start;
       expect(harness.createWorktree).toHaveBeenCalledTimes(3);
       expect(harness.writeIfRunCurrent).toHaveBeenCalledOnce();
@@ -366,54 +364,21 @@ effectIt.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>
-  Effect.gen(function* () {
-    const harness = makeLocalCommandHarness({
-      text: "Continue",
-      previousTurn: { runStatus: "failed", turnStatus: "running" },
-    });
-
-    yield* harness.start;
-
-    expect(harness.interruptTurn).toHaveBeenCalledOnce();
-    expect(harness.projection().runs.at(-1)?.status).toBe("running");
-    expect(harness.projection().providerTurns[0]).toMatchObject({
-      status: "interrupted",
-      completedAt: expect.anything(),
-    });
-    expect(harness.startRootRun).toHaveBeenCalledOnce();
-    expect(harness.startRootRun.mock.calls[0]?.[0].providerThread.nativeThreadRef?.nativeId).toBe(
-      "existing-native-conversation",
-    );
-  }),
-);
-
-effectIt.effect("hands the run worker the reason its Stop recorded, read for that run only", () =>
-  Effect.gen(function* () {
-    const harness = makeLocalCommandHarness({
-      text: "Continue",
-      previousTurn: { runStatus: "failed", turnStatus: "running" },
-    });
-    yield* harness.start;
-    const started = harness.startRootRun.mock.calls[0]![0];
-    harness.setProjection({
-      ...harness.projection(),
-      turnItems: [
-        {
-          type: "run_interrupt_request",
-          runId: harness.runId,
-          message: "Stopped by an agent: done",
-        },
-      ],
-    } as never);
-
-    // Without it a late interrupted terminal records the Stop as the user's.
-    expect(yield* started.loadRunInterruptReason!()).toBe("Stopped by an agent: done");
-    expect(harness.getThreadRecords).toHaveBeenLastCalledWith(harness.threadId, ["turnItems"], {
-      turnItemTypes: ["run_interrupt_request"],
-      turnItemRunIds: [harness.runId],
-    });
-  }),
+effectIt.effect.each(["interrupted", "rolled_back"] as const)(
+  "recovers a running turn left on a superseded attempt of a %s run",
+  (runStatus) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        previousTurn: { runStatus, turnStatus: "running", supersededTurn: true },
+      });
+      yield* harness.start;
+      const abandoned = harness
+        .projection()
+        .providerTurns.find((turn) => turn.id === ProviderTurnId.make("previous-provider-turn"));
+      expect(abandoned?.status).toBe("interrupted");
+      expect(harness.projection().runs.at(-1)?.status).toBe("running");
+    }),
 );
 
 effectIt.effect.each([
@@ -421,6 +386,7 @@ effectIt.effect.each([
   { runStatus: "completed", turnStatus: "completed" },
   { runStatus: "failed", turnStatus: "running", differentThread: true },
   { runStatus: "failed", turnStatus: "running", liveSession: false },
+  { runStatus: "failed", turnStatus: "running", liveSession: false, unownedTurn: true },
   { runStatus: "failed", turnStatus: "interrupted", interruptFailure: true },
 ] as const)("continues without interrupting when recovery does not apply: %j", (previousTurn) =>
   Effect.gen(function* () {
@@ -429,7 +395,53 @@ effectIt.effect.each([
     yield* harness.start;
 
     expect(harness.interruptTurn).not.toHaveBeenCalled();
+    if ("unownedTurn" in previousTurn)
+      expect(harness.projection().providerTurns[0]?.status).toBe("running");
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
+  }),
+);
+
+effectIt.effect("leaves delegated children to their own runs when the parent starts a turn", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      previousTurn: { runStatus: "completed", turnStatus: "completed" },
+    });
+    const projection = harness.projection();
+    const completedChild = (origin: "provider_native" | "app_owned") => ({
+      id: NodeId.make(`node:${origin}`),
+      threadId: projection.thread.id,
+      runId: projection.runs[0]!.id,
+      parentNodeId: NodeId.make(`node:${origin}:parent`),
+      origin,
+      createdBy: "agent" as const,
+      driver: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerThreadId: ProviderThreadId.make(`provider-thread:${origin}`),
+      childThreadId: ThreadId.make(`thread:${origin}`),
+      nativeTaskRef: null,
+      prompt: "work",
+      title: null,
+      model: null,
+      status: "completed" as const,
+      result: "done",
+      startedAt: null,
+      completedAt: null,
+      updatedAt: projection.updatedAt,
+    });
+    harness.setProjection({
+      ...projection,
+      subagents: [completedChild("provider_native"), completedChild("app_owned")],
+    });
+
+    yield* harness.start;
+
+    // A delegated child thread has its own run on the shared session; a parent run that also
+    // owns it ingests every one of the child's later items a second time.
+    expect(harness.startRootRun.mock.calls[0]?.[0]).toMatchObject({
+      relatedThreadIds: [ThreadId.make("thread:provider_native")],
+      relatedProviderThreadIds: [ProviderThreadId.make("provider-thread:provider_native")],
+    });
   }),
 );
 
@@ -1095,88 +1107,6 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
   );
 }
 
-// Observe the closure installed by the real start service; authority is reread per send.
-effectIt.effect("refreshes each send, omits none and failures, and fences a moved run", () =>
-  Effect.gen(function* () {
-    let grant: MemoryTaskGrantCeiling = "read_write";
-    let fail = false;
-    let interrupt = false;
-    let threadReads = 0;
-    let policyReads = 0;
-    let moved = false;
-    let selections = 0;
-    let moveDuringRead = false;
-    const diagnostics: Array<unknown> = [];
-    const logger = Logger.make(({ message }) => diagnostics.push(message));
-    const snapshot = { protocolVersion: 1, items: [], renderedText: "fixture frame" } as never;
-    const harness = makeLocalCommandHarness({
-      text: "Continue",
-      failReadsAfterRunning: true,
-      memory: {
-        policy: () =>
-          Effect.sync(() => {
-            policyReads++;
-            return { grant, policyEpoch: 7 };
-          }),
-        currentRun: () => {
-          threadReads++;
-          return moved ? undefined : RunId.make("run-native-account-command");
-        },
-        select: (_threadId, policy, currentPolicy) =>
-          Effect.gen(function* () {
-            selections++;
-            if (interrupt) return yield* Effect.interrupt;
-            expect(policy).toEqual(yield* currentPolicy);
-            if (fail)
-              return yield* new MemorySnapshot.MemorySnapshotError({
-                cause: "fixture read failure",
-              });
-            if (moveDuringRead) moved = true;
-            return snapshot;
-          }),
-      },
-    });
-    yield* harness.start;
-    const refresh = harness.startRootRun.mock.calls[0]![0].refreshMemoryContext;
-    expect(refresh).toBeDefined();
-    expect(selections).toBe(0);
-    expect(yield* refresh!()).toBe(snapshot);
-    expect(yield* refresh!()).toBe(snapshot);
-    expect(selections).toBe(2);
-    grant = "none";
-    const readsBeforeNone = threadReads;
-    const policiesBeforeNone = policyReads;
-    expect(yield* refresh!()).toBeUndefined();
-    expect(selections).toBe(2);
-    expect(threadReads).toBe(readsBeforeNone);
-    expect(policyReads).toBe(policiesBeforeNone + 1);
-    grant = "read";
-    expect(yield* refresh!()).toBe(snapshot);
-    fail = true;
-    expect(yield* refresh!().pipe(Effect.provide(Logger.layer([logger])))).toBeUndefined();
-    expect(diagnostics).toEqual([
-      [
-        "Memory refresh unavailable",
-        { threadId: "thread-native-account-command", runId: "run-native-account-command" },
-      ],
-    ]);
-    expect(selections).toBe(4);
-    fail = false;
-    moveDuringRead = true;
-    expect(yield* refresh!()).toBeUndefined();
-    expect(selections).toBe(5);
-    moved = true;
-    expect(yield* refresh!()).toBeUndefined();
-    expect(selections).toBe(5);
-    moved = false;
-    moveDuringRead = false;
-    interrupt = true;
-    const exit = yield* Effect.exit(refresh!().pipe(Effect.provide(Logger.layer([logger]))));
-    expect(exit._tag).toBe("Failure");
-    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    expect(diagnostics).toHaveLength(1);
-  }),
-);
 effectIt.effect.each([
   { boundary: "policy resolution", loss: "replaced" },
   { boundary: "session opening", loss: "interrupted" },

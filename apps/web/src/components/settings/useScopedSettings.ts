@@ -15,12 +15,14 @@ import {
 } from "@goat/contracts";
 
 import { persistClientSettingsPatch, useMergedSettings } from "../../hooks/useSettings";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { serverEnvironment } from "../../state/server";
+import { readEnvironment } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import {
-  persistScopedSettingsPatch,
+  createScopedSettingsWriter,
   planProjectOverridesClear,
   planScopedSettingsClear,
   planScopedSettingsPatch,
@@ -29,6 +31,57 @@ import {
   type ProjectOverrideEntry,
   type ScopedSettingsPatch,
 } from "./scopedSettings";
+import { pendingScopedWritesAtom, settlePendingScopedWrite } from "./scopedSettingsOptimistic";
+
+const writeScopedSettingsRaw = createScopedSettingsWriter(
+  (environmentId) => readEnvironment(environmentId)?.serverConfig?.settings ?? null,
+);
+
+export function writeScopedSettings(
+  environments: Parameters<typeof writeScopedSettingsRaw>[0],
+  plan: Parameters<typeof writeScopedSettingsRaw>[1],
+  persistServer: Parameters<typeof writeScopedSettingsRaw>[2],
+  persistClient: Parameters<typeof writeScopedSettingsRaw>[3],
+) {
+  const save = {};
+  const initial = plan(environments);
+  if (initial.serverWrites.length > 0) {
+    appAtomRegistry.update(pendingScopedWritesAtom, (writes) => [
+      ...writes,
+      ...initial.serverWrites.map(({ environmentId }) => ({
+        save,
+        environmentId,
+        environments,
+        plan,
+      })),
+    ]);
+  }
+  const settle = (
+    environmentId: (typeof initial.serverWrites)[number]["environmentId"],
+    saved?: ServerSettings,
+  ) =>
+    appAtomRegistry.update(pendingScopedWritesAtom, (writes) =>
+      settlePendingScopedWrite(writes, save, environmentId, saved),
+    );
+  return writeScopedSettingsRaw(
+    environments,
+    plan,
+    async (request) => {
+      try {
+        const result = await persistServer(request);
+        settle(request.environmentId, result._tag === "Success" ? result.value : undefined);
+        return result;
+      } catch (error) {
+        settle(request.environmentId);
+        throw error;
+      }
+    },
+    persistClient,
+  ).then((result) => {
+    for (const failure of result.failedEnvironments) settle(failure.environmentId);
+    return result;
+  });
+}
 
 export function useScopedSettings<T = UnifiedSettings>(
   selector?: (settings: UnifiedSettings) => T,
@@ -49,7 +102,14 @@ export function useScopedSettingSource(keys: readonly (keyof ServerSettings)[]) 
 
 function useRunScopedPlan() {
   const persistServer = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
-  return (plan: ReturnType<typeof planScopedSettingsPatch>, onFailed?: () => void) => {
+  return (
+    environments: Parameters<typeof planScopedSettingsPatch>[1],
+    makePlan: (
+      environments: Parameters<typeof planScopedSettingsPatch>[1],
+    ) => ReturnType<typeof planScopedSettingsPatch>,
+    onFailed?: () => void,
+  ) => {
+    const plan = makePlan(environments);
     if (plan.unavailableReason) {
       toastManager.add({
         type: "warning",
@@ -59,8 +119,9 @@ function useRunScopedPlan() {
       onFailed?.();
       return;
     }
-    void persistScopedSettingsPatch(
-      plan,
+    void writeScopedSettings(
+      environments,
+      makePlan,
       async (request) => {
         const missing = requiredScopesForServerSettingsPatch(request.input.patch).find(
           (scope) => !readEnvironmentScope(request.environmentId, scope),
@@ -103,7 +164,11 @@ export function useUpdateScopedSettings() {
   const run = useRunScopedPlan();
   /** `onFailed` runs when any target rejects or drops the patch, so a draft can fall back. */
   return (patch: ScopedSettingsPatch, options?: { readonly onFailed?: () => void }) =>
-    run(planScopedSettingsPatch(scope, environments, patch, { deviceOnly }), options?.onFailed);
+    run(
+      environments,
+      (current) => planScopedSettingsPatch(scope, current, patch, { deviceOnly }),
+      options?.onFailed,
+    );
 }
 
 export function useClearScopedSettings() {
@@ -111,7 +176,7 @@ export function useClearScopedSettings() {
   const run = useRunScopedPlan();
   return (keys: readonly ProjectScopedServerSettingKey[]) => {
     if (context === null) return;
-    run(planScopedSettingsClear(context.scope, context.environments, keys));
+    run(context.environments, (current) => planScopedSettingsClear(context.scope, current, keys));
   };
 }
 
@@ -123,7 +188,7 @@ export function useClearProjectOverrides() {
     keys: readonly ProjectScopedServerSettingKey[],
   ) => {
     if (context === null) return;
-    run(planProjectOverridesClear(context.environments, entries, keys));
+    run(context.environments, (current) => planProjectOverridesClear(current, entries, keys));
   };
 }
 

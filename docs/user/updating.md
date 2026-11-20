@@ -85,8 +85,9 @@ command or monitor the agent said it was waiting on is woken and told that this 
 stopped. Other background shells and monitors, such as a dev server and its
 watchdog, do not wake it; the thread learns about them with your next message.
 A thread is not resumed while it waits for your approval, answer, or secret, or
-while it is archived, snoozed, or settled. After three automatic resumes in a row,
-the thread waits for your next message.
+while it is archived, snoozed, or settled. After three consecutive crash recoveries
+of an unfinished turn, the thread waits for your next message. A completed turn or
+a planned restart resets that limit.
 
 Updates from the previous orchestration system preserve conversation transcripts but cannot carry
 every kind of runtime history forward. Read [Threads from older GOAT versions](./thread-migration.md)
@@ -157,12 +158,11 @@ builds do not update automatically.
 
 The offered action depends on how the server runs:
 
-| Action                     | What to do                                                                                                                                                                                      |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Update server**          | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host. |
-| **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
-| **Copy update command**    | Run the command on the named host to update the detected global npm install, then restart the server with your usual options.                                                                   |
-| **Copy relaunch command**  | Stop the command-line server on its host and relaunch with the copied command, keeping your usual subcommand and options. This does not update an installed `goat` command.                     |
+| Action                       | What to do                                                                                                                                                                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Update server**            | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host.                                                               |
+| **Update the desktop app**   | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                                                                                           |
+| **Copy update instructions** | For a server started from an installed `goat` command, run the copied command on the named host, then restart the server with your usual options. For other installs, install that version from the GOAT releases page as the copied text says, then restart. |
 
 On the host, run:
 
@@ -175,6 +175,10 @@ asks before restarting the background service; if you decline, run
 `goat service restart` when you are ready. For a server you started by hand,
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
+
+If you decline the restart for a background service installed by an older
+release, the service can stay down after a crash or reboot until you run
+`goat service restart`.
 
 If `goat` is not installed on the host, [install GOAT](./install.md) from its
 release archive first. Then run `goat update <client-version>` and restart
@@ -192,6 +196,55 @@ update can roll back to the previous version. If the update still fails:
 Only one server can use a GOAT home directory at a time. If startup reports that
 another server owns it, stop that server before retrying, or use a separate home
 directory and pair with the running server.
+
+### Recover an interrupted database restore
+
+If the service log says **Database recovery required**, it gives the paths to
+the live database, the pre-update snapshot directory, and the recovery
+acknowledgement file. The launcher stops when it cannot safely resume an
+interrupted update or verify the database before starting either release.
+The live files may be incomplete or contain newer writes. If the
+snapshot is missing, use another verified backup taken before the update. A copy
+of the live database is not a substitute: it may already be upgraded, and the
+previous release cannot read an upgraded database. If you have no pre-update
+backup, stop after step 2, keep those copies, and ask for help before restarting.
+
+1. Stop every server using that home, including any desktop instance, foreground
+   server, or background service that uses it. On Linux, run
+   `systemctl --user stop goat.service`. On macOS, run
+   `launchctl bootout "gui/$(id -u)/si.goat.service"`. Use the installed unit
+   or agent name if it differs. Keep every server stopped until the restart in
+   the final step.
+2. Make separate copies of any remaining snapshot files and the live SQLite files
+   (the database and any `-wal`, `-shm`, or `-journal` files) before changing anything.
+   Save any files in the sibling snapshot directory ending in `.staging` too.
+3. If the service log identifies a damaged ownership file, use the procedure
+   for that file with every owner still stopped.
+   - For a damaged ownership log (`server-owner.lock`), create an empty
+     directory beside the path reported in the service log. Move the log
+     and any of its `-journal`, `-wal`, and `-shm` sidecars into that
+     directory to preserve the originals. The launcher creates a new
+     ownership log on restart.
+   - For confirmed corruption of the legacy ownership lock
+     (`server-owner.sqlite`), create a separate empty directory beside the
+     path reported in the service log. Move the legacy lock and any of its
+     `-journal`, `-wal`, and `-shm` sidecars into that directory to preserve
+     the originals. The launcher creates a new legacy lock on restart.
+4. Put a complete, verified SQLite file set that the previous GOAT release can
+   open at the live path. To restore the pre-update snapshot, copy `database`
+   and any `database-wal` and `database-shm` files to the corresponding live
+   names. Remove stale live sidecars that are absent from the snapshot. If the
+   live database is a symlink, copy to its target and place the sidecars beside
+   the target.
+5. Run `sync` after the live files are in place. Write a single line containing
+   `keep-live` to the acknowledgement file printed in the service log. Run
+   `sync` again, then run `goat service restart` for that home. The launcher
+   checks the live file set before starting the previous version and retains
+   any remaining snapshot files.
+
+Snapshots can also remain after a successful update. Once you have verified
+the active database and made a separate backup, you can remove snapshots from
+completed updates that you no longer need.
 
 ## Update providers
 

@@ -13,6 +13,7 @@ import {
   type ResourceTelemetryHistory,
   type ServerProcessResourceHistoryResult,
   type ReviewDiffPreviewResult,
+  type ReviewDiffPreviewError,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -27,6 +28,7 @@ import * as Review from "../review/ReviewService.ts";
 import * as Usage from "../usage/UsageService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import { VcsCheckpointStorageError } from "../vcs/checkpointStorageError.ts";
 import * as Reads from "./ScopedReadMcp.ts";
 import * as ReadSchemas from "./scopedReadSchemas.ts";
 
@@ -580,5 +582,35 @@ it.effect("stops usage rows at the total byte budget before the count limit", ()
     expect(result.buckets.length).toBeLessThan(256);
     expect(result.truncated).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(encodeUsage(result)))).toBeLessThanOrEqual(262144);
+  }),
+);
+
+it.effect("reports a checkpoint storage failure in both review tools", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    const failure = new VcsCheckpointStorageError({
+      operation: "checkpoint.capture",
+      cwd: "/repo",
+      stage: "publish",
+      cause: "disk",
+    });
+    const error = failure as unknown as ReviewDiffPreviewError;
+    const layer = Layer.merge(
+      f.layer,
+      Layer.mock(Review.ReviewService)({
+        getDiffPreview: () => Effect.fail(error),
+        getDiffFileContents: () => Effect.fail(error),
+      }),
+    );
+    const preview = yield* Reads.diffPreview(client(), previewInput).pipe(
+      Effect.provide(layer),
+      Effect.flip,
+    );
+    const file = yield* Reads.diffFile(client(), fileInput).pipe(
+      Effect.provide(layer),
+      Effect.flip,
+    );
+    expect(preview.message).toBe("Could not publish checkpoint objects.");
+    expect(file.message).toBe("Could not publish checkpoint objects.");
   }),
 );

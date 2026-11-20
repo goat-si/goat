@@ -7,8 +7,12 @@ import {
   canOpenSideChat,
   findSideChatThread,
   parseSideChatCommand,
+  resolveSideChatOpen,
   sideChatParentStatus,
 } from "./sideChat.logic";
+import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
+import { useSideChatStore } from "./sideChatStore";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
 
 describe("parseSideChatCommand", () => {
   it("reads the question after /side", () => {
@@ -39,6 +43,26 @@ describe("findSideChatThread", () => {
     sideChatOf: parentId,
     createdAt,
     ...extra,
+  });
+
+  it("opens the explicitly selected live side chat even if another is newer", () => {
+    const older = side("older-selected", "2026-10-13T01:00:00.000Z");
+    const newer = side("newer-selected", "2026-10-13T02:00:00.000Z");
+    expect(findSideChatThread([parent, older, newer], parentRef, older.id)?.id).toBe(older.id);
+  });
+
+  it("routes a side chat to its owner and selects the requested side chat", () => {
+    useRightPanelStore.setState(useRightPanelStore.getInitialState());
+    const target = side("requested", "2026-10-13T01:00:00.000Z");
+    const ref = scopeThreadRef(target.environmentId, target.id);
+    expect(resolveSideChatOpen(ref, target)).toEqual(parentRef);
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, parentRef)?.kind,
+    ).toBe("side-chat");
+    expect(useSideChatStore.getState().selectedSideChats[scopedThreadKey(parentRef)]).toBe(
+      target.id,
+    );
+    expect(resolveSideChatOpen(parentRef, parent)).toBe(parentRef);
   });
 
   it("picks the newest live side chat of the parent", () => {

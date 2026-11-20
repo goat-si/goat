@@ -441,6 +441,7 @@ it.effect(
       const remote = RemoteEnvironmentAuthorization.of({
         authorizeBearer: () => Effect.die("unexpected bearer"),
         authorizeDpop: () => Effect.die("unexpected socket"),
+        rememberCheckedDescriptor: () => Effect.void,
         authorizeDpopHttp: (input) =>
           Effect.sync(() => {
             calls.push(input);

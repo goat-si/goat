@@ -1,3 +1,4 @@
+import * as Semaphore from "effect/Semaphore";
 // @effect-diagnostics nodeBuiltinImport:off -- unit names and RAM size come from the host.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -11,12 +12,14 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProviderProcesses from "./providerProcesses.ts";
 import { makeDarwinAgentScope } from "./agentMemoryGuard.ts";
 
 const AGENT_SLICE = "app-goat-agents.slice";
@@ -100,6 +103,8 @@ const STOPPING_POLL_ATTEMPTS = 20;
 const CLEAR_FAILED_INTERVAL = "1 second";
 const CLEAR_FAILED_ATTEMPTS = 120;
 const MAX_TRACKED_THREADS = 500;
+// A hung user manager must not keep the server from starting.
+const STARTUP_PROBE_DEADLINE = "10 seconds";
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
@@ -111,6 +116,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const hostEnvironment = yield* HostProcess.Environment;
   const { stateDir } = yield* ServerConfig.ServerConfig;
+  const { hasOtherLiveOwner } = yield* ProviderProcesses.ProviderProcesses;
   const ownedSlice = ownedAgentSlice(stateDir);
   const layerScope = yield* Effect.scope;
 
@@ -135,6 +141,7 @@ export const make = Effect.gen(function* () {
   const stopLeftoverAgents = Effect.fn("agentScope.stopLeftoverAgents")(function* (
     systemctl: string,
   ) {
+    if (hasOtherLiveOwner) return;
     const shown = yield* run(systemctl, [
       "--user",
       "show",
@@ -195,16 +202,33 @@ export const make = Effect.gen(function* () {
           slice,
           ...properties,
         ]);
-        if (result._tag === "None" || result.value.code !== 0) {
-          yield* Effect.logWarning("Could not set resource limits on an agents slice", {
-            slice,
-            properties,
-            stderr: result._tag === "Some" ? result.value.stderr.trim() : undefined,
-          });
-        }
+        if (result._tag === "Some" && result.value.code === 0) return true;
+        yield* Effect.logWarning("Could not set resource limits on an agents slice", {
+          slice,
+          properties,
+          stderr: result._tag === "Some" ? result.value.stderr.trim() : undefined,
+        });
+        return false;
       });
-      const limits = agentSliceMemoryLimits(NodeOS.totalmem());
-      yield* setProperties(AGENT_SLICE, [`MemoryHigh=${limits.high}`, `MemoryMax=${limits.max}`]);
+      let appliedTotal: number | undefined;
+      const limitsLock = yield* Semaphore.make(1);
+      const applyMemoryLimits = limitsLock.withPermits(1)(
+        Effect.gen(function* () {
+          const total = NodeOS.totalmem();
+          const limits = agentSliceMemoryLimits(total);
+          if (
+            appliedTotal !== total &&
+            (yield* setProperties(AGENT_SLICE, [
+              `MemoryHigh=${limits.high}`,
+              `MemoryMax=${limits.max}`,
+            ]))
+          ) {
+            appliedTotal = total;
+          }
+          return limits;
+        }),
+      );
+      const limits = yield* applyMemoryLimits;
       for (const { slice, tasksMax } of AGENTS_PARENT_LIMITS)
         yield* setProperties(slice, ["CPUWeight=10", "IOWeight=10", `TasksMax=${tasksMax}%`]);
       yield* Effect.logInfo("Agent scopes are on", {
@@ -217,9 +241,19 @@ export const make = Effect.gen(function* () {
         systemctl,
         runtimeDir,
         supportsOomPolicy,
+        applyMemoryLimits,
       };
     }),
   );
+
+  // Layer acquisition is the startup barrier: recovery must not terminalize or continue old runs
+  // while a previous server's providers can still execute.
+  const startupProbe = yield* systemd.pipe(Effect.forkIn(layerScope));
+  const probed = yield* Fiber.await(startupProbe).pipe(
+    Effect.timeoutOption(STARTUP_PROBE_DEADLINE),
+  );
+  if (probed._tag === "None")
+    yield* Effect.logWarning("Agent scopes are still starting; the server starts without them");
 
   // `shared` scopes serve other threads too: tracked only for OOM diagnosis on old systemd.
   const scopeByThread = new Map<string, { unit: string; oomKilled: boolean; shared: boolean }>();
@@ -403,6 +437,7 @@ export const make = Effect.gen(function* () {
       if (resolved === null) return { command, args };
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved, args });
+      yield* scope.applyMemoryLimits;
       const unit = `goat-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
       // A continuing shared scope cannot attribute a tool's OOM to one thread.
       // Clear the launch thread's previous scope instead.
@@ -434,4 +469,7 @@ export const make = Effect.gen(function* () {
   } satisfies AgentScopeShape;
 });
 
-export const layer = Layer.effect(AgentScope, make).pipe(Layer.provide(ProcessRunner.layer));
+export const layer = Layer.effect(AgentScope, make).pipe(
+  Layer.provide(ProcessRunner.layer),
+  Layer.provideMerge(ProviderProcesses.layer),
+);

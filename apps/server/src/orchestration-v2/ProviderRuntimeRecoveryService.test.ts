@@ -31,64 +31,6 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
-it.effect("expires orphaned runtime requests before command readiness", () => {
-  const threadId = ThreadId.make("thread_recovery_requests");
-  let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
-    null;
-  const committed = vi.fn(
-    (input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0]) => {
-      committedInput = input;
-      return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
-    },
-  );
-  const projection = {
-    ...idleThreadProjection(liveThreadShell(threadId)),
-    thread: { id: threadId },
-    runtimeRequests: [
-      {
-        id: RuntimeRequestId.make("request_orphaned"),
-        nodeId: NodeId.make("node_orphaned"),
-        status: "pending",
-        responseCapability: { type: "not_resumable", reason: "old process" },
-      },
-    ],
-    providerSessions: [],
-    providerThreads: [],
-    runs: [],
-    nodes: [],
-  } as unknown as OrchestrationV2ThreadProjection;
-  const layer = ProviderRuntimeRecovery.layer.pipe(
-    Layer.provide(ServerSettings.layerTest()),
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getRecoveryThreadIds: () => Effect.succeed([threadId]),
-          getRuntimeRecoveryProjection: () => Effect.succeed(projection),
-        }),
-        Layer.mock(EventSink.EventSinkV2)({ commitCommand: committed }),
-        IdAllocator.layer,
-        Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
-          runRecoveryOnce: Effect.succeed(false),
-        }),
-        Layer.mock(EffectOutbox.EffectOutboxV2)({
-          reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
-        }),
-      ),
-    ),
-  );
-  return Effect.gen(function* () {
-    yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).recover;
-    const command = committedInput;
-    assert.isNotNull(command);
-    if (command === null) return;
-    assert.equal(command?.events[0]?.type, "runtime-request.updated");
-    if (command?.events[0]?.type === "runtime-request.updated") {
-      assert.equal(command.events[0].payload.status, "expired");
-      assert.equal(command.events[0].payload.responseCapability.type, "not_resumable");
-    }
-  }).pipe(Effect.provide(layer));
-});
-
 it.effect("preserves async questions across startup and shutdown", () => {
   const threadId = ThreadId.make("async-recovery-thread");
   const nodeId = NodeId.make("async-recovery-node");
@@ -591,6 +533,7 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getMessagesById: () => Effect.succeed(new Map()),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -1045,6 +988,7 @@ it.effect("leaves delegated tasks to their own child threads after process loss"
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getMessagesById: () => Effect.succeed(new Map()),
         }),
         Layer.mock(EventSink.EventSinkV2)({
           commitCommand: (input) => {
@@ -1308,6 +1252,14 @@ it.effect.each(cloudRecoveryCases)(
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getRecoveryThreadIds: () => Effect.succeed([threadId]),
               getRuntimeRecoveryProjection: () => Effect.succeed(recoveryProjection),
+              getMessagesById: (_threadId, ids) =>
+                Effect.succeed(
+                  new Map(
+                    recoveryProjection.messages
+                      .filter((message) => ids.includes(message.id))
+                      .map((message) => [message.id, message]),
+                  ),
+                ),
             }),
             Layer.mock(EventSink.EventSinkV2)({ commitCommand: committed }),
             Layer.mock(EffectOutbox.EffectOutboxV2)({

@@ -1,7 +1,13 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { CommandId, ProjectId, ThreadId, VcsProcessSpawnError } from "@goat/contracts";
+import {
+  CommandId,
+  ProjectId,
+  ThreadId,
+  VcsProcessSpawnError,
+  VcsProcessTimeoutError,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -285,6 +291,24 @@ it.effect("gives each Scratch thread its own folder, named from its message", ()
       );
       assert.equal(path.dirname(pasted), root);
       assert.isAtMost(path.basename(pasted).length, 80);
+    }),
+  ),
+);
+
+it.effect("keeps Vietnamese and German words readable in scratch folders", () =>
+  withScratch(() =>
+    Effect.gen(function* () {
+      const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const path = yield* Path.Path;
+      const { projectId } = yield* scratch.ensureScratchProject;
+      const folder = Option.getOrThrow(
+        yield* scratch.folderForThread({
+          projectId,
+          threadId: ThreadId.make("thread-diacritics"),
+          text: "Đường Straße",
+        }),
+      );
+      assert.match(path.basename(folder), /^\d{4}-\d{2}-\d{2}-duong-strasse-/);
     }),
   ),
 );
@@ -628,4 +652,42 @@ it.effect("removes the folder when the create is cancelled before the project ex
       },
     );
   }),
+);
+
+it.effect("offers the Scratch folder once a Git check that timed out is asked again", () =>
+  withScratch(
+    ({ baseDir }) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
+        assert.isTrue(Option.isNone(yield* scratch.scratchRoot));
+        assert.equal(yield* requireRoot, path.resolve(baseDir, "scratch"));
+      }),
+    {
+      vcsProcess: Layer.effect(
+        VcsProcess.VcsProcess,
+        Effect.map(VcsProcess.make, (real) => {
+          let timedOut = false;
+          return VcsProcess.VcsProcess.of({
+            run: (input) =>
+              Effect.suspend(() => {
+                if (timedOut) return real.run(input);
+                timedOut = true;
+                return Effect.fail(
+                  new VcsProcessTimeoutError({
+                    operation: input.operation,
+                    command: input.command,
+                    cwd: input.cwd,
+                    timeoutMs: 5_000,
+                  }),
+                );
+              }),
+          });
+        }),
+      ).pipe(
+        Layer.provide(ProcessRunner.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    },
+  ),
 );

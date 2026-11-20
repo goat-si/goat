@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -76,7 +77,7 @@ const registryOverSnapshot = (snapshot: Ref.Ref<ServerProvider>) => {
       applyUsageLimits: () => Effect.void,
     },
     orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-    textGeneration: {} as ProviderInstance["textGeneration"],
+    textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
   } satisfies ProviderInstance;
   const layerInstanceRegistry = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
     getInstance: (id) => Effect.succeed(id === instance.instanceId ? instance : undefined),

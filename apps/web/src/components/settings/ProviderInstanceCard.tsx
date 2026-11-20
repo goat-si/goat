@@ -1,3 +1,5 @@
+import { readProviderCustomModels, writeProviderCustomModels } from "./ProviderAcpCustomModels";
+import { useCustomModelSaves } from "./useCustomModelSaves";
 import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
@@ -38,15 +40,10 @@ import {
   type ServerSettings,
 } from "@goat/contracts";
 
-import {
-  type CustomModelDefinition,
-  readCustomModelEntries,
-  toCustomModelSetting,
-} from "@goat/shared/model";
+import { type CustomModelDefinition } from "@goat/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useClientSettings } from "../../hooks/useSettings";
-import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -128,18 +125,6 @@ function readConfigString(config: unknown, key: string): string | null {
   if (config === null || typeof config !== "object") return null;
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-/** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
-function nextConfigBlobWithValue(
-  config: unknown,
-  key: string,
-  value: unknown,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
-  base[key] = value;
-  return base;
 }
 
 export function deriveProviderModelsForDisplay(input: {
@@ -276,7 +261,7 @@ function ProviderEnvironmentFieldRow(props: {
               className="min-w-0 flex-1"
               value={value}
               onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
+              placeholder="Enter or re-enter secret"
               configured={props.variable?.valueRedacted === true}
               spellCheck={false}
             />
@@ -439,7 +424,7 @@ export function ProviderEnvironmentSection(props: {
                   className="min-w-0 flex-1"
                   value={variable.valueRedacted ? "" : variable.value}
                   onCommit={(value) => updateVariable(variable.id, { value })}
-                  placeholder="value"
+                  placeholder={variable.name ? "Enter or re-enter secret" : "value"}
                   configured={variable.valueRedacted === true}
                   spellCheck={false}
                   aria-label={`Environment variable value ${index + 1}`}
@@ -607,7 +592,7 @@ interface ProviderInstanceCardProps {
   readonly onSelect?: (() => void) | undefined;
   readonly readOnly?: boolean | undefined;
   readonly canWriteSettings?: boolean;
-  readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
+  readonly onUpdate: (nextInstance: ProviderInstanceConfig) => Promise<boolean> | void;
   readonly onDelete?: (() => void) | undefined;
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
@@ -639,7 +624,6 @@ interface ProviderInstanceCardProps {
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
-const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
 /** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
  * project, not instance.enabled. */
@@ -772,14 +756,35 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const storedCustomModels =
-    instance.config !== null && typeof instance.config === "object"
-      ? (instance.config as Record<string, unknown>).customModels
-      : undefined;
-  const customModels =
-    instance.driver === "antigravity"
-      ? NO_CUSTOM_MODELS
-      : readCustomModelEntries(storedCustomModels);
+  const storedCustomModels = readProviderCustomModels(
+    instance.driver,
+    instance.config,
+    liveProvider?.supportsStructuredCustomModels === true,
+  );
+  const [customModels, updateCustomModels] = useCustomModelSaves(
+    storedCustomModels,
+    (next) => {
+      const nextConfig = writeProviderCustomModels(
+        instance.driver,
+        instance.config,
+        next,
+        liveProvider?.supportsStructuredCustomModels === true,
+      );
+      const { config: _omit, ...rest } = instance;
+      return onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    },
+    (next) =>
+      readProviderCustomModels(
+        instance.driver,
+        writeProviderCustomModels(
+          instance.driver,
+          instance.config,
+          next,
+          liveProvider?.supportsStructuredCustomModels === true,
+        ),
+        liveProvider?.supportsStructuredCustomModels === true,
+      ),
+  );
   const modelsForDisplay = deriveProviderModelsForDisplay({
     liveModels: liveProvider?.models,
     customModels,
@@ -820,16 +825,6 @@ export function ProviderInstanceCard({
         : (rest as ProviderInstanceConfig),
     );
   };
-
-  const updateCustomModels = useStableCallback((next: ReadonlyArray<CustomModelDefinition>) => {
-    const nextConfig = nextConfigBlobWithValue(
-      instance.config,
-      "customModels",
-      next.map(toCustomModelSetting),
-    );
-    const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
-  });
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);

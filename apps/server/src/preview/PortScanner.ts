@@ -21,6 +21,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { FetchHttpClient, HttpClient } from "effect/http";
 
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 export class PortDiscovery extends Context.Service<
@@ -776,10 +777,14 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     ),
   );
 
+  const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const pollIfRetained = Ref.get(stateRef).pipe(
     Effect.flatMap((state) => (state.retainCount > 0 ? pollTick() : Effect.void)),
   );
-  yield* Effect.forkScoped(pollIfRetained.pipe(Effect.repeat(Schedule.spaced(POLL_INTERVAL))));
+  const scheduledPoll = backgroundPolicy.shouldRunOpportunisticWork.pipe(
+    Effect.flatMap((foreground) => (foreground ? pollIfRetained : Effect.void)),
+  );
+  yield* Effect.forkScoped(scheduledPoll.pipe(Effect.repeat(Schedule.spaced(POLL_INTERVAL))));
 
   const acquireRetention = Effect.fn("PortDiscovery.retain")(function* () {
     const wasIdle = yield* Ref.modify(stateRef, (state) => [
@@ -871,3 +876,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
 }).pipe(Effect.withSpan("PortDiscovery.make"));
 
 export const layer = Layer.effect(PortDiscovery, make);
+
+export const layerForServer = <E, R>(
+  background: Layer.Layer<BackgroundPolicy.BackgroundPolicy, E, R>,
+) => layer.pipe(Layer.provide(Layer.merge(ProcessRunner.layer, background)));

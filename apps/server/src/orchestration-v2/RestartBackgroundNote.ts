@@ -1,12 +1,13 @@
+import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import type {
   NodeId,
   OrchestrationV2ConversationMessage,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderTurn,
+  OrchestrationV2ThreadProjection,
   OrchestrationV2RestartCancelledBackgroundWork,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
-  OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { subagentHoldsCompletion } from "@goat/provider-core/server/subagentProjection";
@@ -224,15 +225,25 @@ export function delegatedTaskRuns(
   return projection.runs.filter((run) => owned.has(run.id));
 }
 
-/** A follow-up task's runs still owe a subagent they started its result. */
-export function delegatedTaskAwaitsSubagents(
+export function delegatedTaskAwaitsWork(
   runs: ReadonlyArray<OrchestrationV2Run>,
-  subagents: ReadonlyArray<
-    Pick<OrchestrationV2Subagent, "runId" | "status" | "completionDelivery">
-  >,
+  child: Pick<OrchestrationV2ThreadProjection, "subagents" | "providerThreads">,
+  resultRun: OrchestrationV2Run | undefined,
 ): boolean {
-  const runIds = new Set<string | null>(runs.map((run) => run.id));
-  return subagents.some((task) => runIds.has(task.runId) && subagentHoldsCompletion(task));
+  const runIds = new Set(runs.map((run) => run.id));
+  return (
+    child.subagents.some(
+      (task) => task.runId !== null && runIds.has(task.runId) && subagentHoldsCompletion(task),
+    ) ||
+    (resultRun?.status !== "cancelled" &&
+      child.providerThreads.some((thread) =>
+        backgroundWorkHoldsCompletion(
+          (thread.pendingBackgroundTasks ?? []).filter(
+            (task) => task.runId !== undefined && runIds.has(task.runId),
+          ),
+        ),
+      ))
+  );
 }
 
 /** A follow-up task's latest run, passing over queued work it no longer waits on, as the original task does. */
@@ -253,12 +264,14 @@ export function delegatedTaskResultRun(
 /** The provider never accepted this continuation's prompt, so starting it again repeats nothing. */
 export function continuationFailedBeforePrompt(
   run: Pick<OrchestrationV2Run, "status" | "activeAttemptId" | "restartContinuationOfRunId">,
-  providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>,
+  attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "inputDelivery">>,
 ): boolean {
   return (
     run.status === "failed" &&
     run.restartContinuationOfRunId !== undefined &&
-    !providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)
+    attempts.some(
+      (attempt) => attempt.id === run.activeAttemptId && attempt.inputDelivery === "unsent",
+    )
   );
 }
 
@@ -269,11 +282,11 @@ export function continuationStartRetryDelayMs(
   run: OrchestrationV2Run,
   projection: {
     readonly runs: ReadonlyArray<OrchestrationV2Run>;
-    readonly providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>;
+    readonly attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "inputDelivery">>;
     readonly turnItems: Parameters<typeof latestRootProviderFailure>[1];
   },
 ): number | undefined {
-  if (!continuationFailedBeforePrompt(run, projection.providerTurns)) return;
+  if (!continuationFailedBeforePrompt(run, projection.attempts)) return;
   // These fail the same way however often they start.
   const failureClass = latestRootProviderFailure(run, projection.turnItems)?.class;
   if (
@@ -285,7 +298,7 @@ export function continuationStartRetryDelayMs(
   let failedStarts = 0;
   for (
     let current: OrchestrationV2Run | undefined = run;
-    current !== undefined && continuationFailedBeforePrompt(current, projection.providerTurns);
+    current !== undefined && continuationFailedBeforePrompt(current, projection.attempts);
     current = projection.runs.find(
       (candidate) => candidate.id === current?.restartContinuationOfRunId,
     )

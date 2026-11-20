@@ -199,6 +199,9 @@ On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to put the workspace back
 to its checkpoint from before that message. That also undoes edits you made yourself.
+Files you hid from Git with `git update-index --skip-worktree` or `--assume-unchanged` are
+restored too. Afterward, such a file shows as modified again if its restored content differs
+from your last commit.
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
@@ -277,6 +280,13 @@ may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 
+With a supported speech model, the composer and review comments show a live
+transcript while you record. To transcribe only after recording stops, choose
+**Transcribe after I stop recording** in the microphone's options; this choice
+belongs to the device. If live transcription is interrupted, GOAT transcribes
+the full recording when you stop. Desktop Browser annotation comments and iPhone
+dictation continue to transcribe after recording stops.
+
 Model management requires the explicit `voice:manage` permission; ordinary pairing
 does not grant it. On the environment's machine, create a pairing with:
 
@@ -316,10 +326,13 @@ the text. Drag a row by its handle to reorder it, use the handle's arrow keys, p
 to a steer, or remove it.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press **Resume** in an empty composer to continue. Resume also continues a stopped run or one
-that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue,
-unless it steers a turn that is already running. You can edit, reorder, or remove held messages
-without starting them.
+Press **Resume** in an empty composer to continue. When the provider supports native Resume,
+it continues the stopped or limited run without adding a message. GOAT can resend a request
+the provider never accepted. If GOAT cannot confirm delivery, Resume reports that
+uncertainty so you can decide what to send next. If Resume asks for a new message,
+send one to continue.
+Sending a new message also resumes the queue, unless it steers a turn that is already running.
+You can edit, reorder, or remove held messages without starting them.
 
 The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message's

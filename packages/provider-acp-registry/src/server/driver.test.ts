@@ -367,6 +367,69 @@ describe("acpRegistrySnapshotReadiness", () => {
     });
   });
 
+  it("keeps absent, unsupported and advertised reasoning metadata distinct by model", () => {
+    const effort = {
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select" as const,
+      currentValue: "high",
+      options: [{ value: "high", name: "High" }],
+    };
+    const modelState = {
+      currentModelId: "current",
+      availableModels: [
+        { modelId: "current", name: "Current" },
+        {
+          modelId: "advertised",
+          name: "Advertised",
+          _meta: {
+            reasoningEfforts: [{ value: "low", label: "Low" }],
+            reasoningEffort: "low",
+          },
+        },
+        { modelId: "unsupported", name: "Unsupported", _meta: { supportsReasoningEffort: false } },
+        { modelId: "legacy", name: "Legacy" },
+      ],
+    };
+    const discovery = normalizeAcpRegistryLiveConfiguration([effort], undefined, modelState);
+    expect(discovery.models.map((model) => model.reasoningEffort)).toEqual([
+      undefined,
+      expect.objectContaining({ id: "effort", options: [{ id: "low", label: "Low" }] }),
+      null,
+      undefined,
+    ]);
+    const withoutLiveEffort = normalizeAcpRegistryLiveConfiguration([], undefined, modelState);
+    expect(
+      withoutLiveEffort.models.find((model) => model.id === "unsupported")?.reasoningEffort,
+    ).toBeNull();
+  });
+
+  it("omits reasoning metadata when every advertised level is unusable", () => {
+    const effort = {
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select" as const,
+      currentValue: "high",
+      options: [{ value: "high", name: "High" }],
+    };
+    const discovery = normalizeAcpRegistryLiveConfiguration([effort], undefined, {
+      currentModelId: "current",
+      availableModels: [
+        { modelId: "current", name: "Current" },
+        {
+          modelId: "other",
+          name: "Other",
+          _meta: { reasoningEfforts: [{ value: 123 }, { value: " invalid id " }] },
+        },
+      ],
+    });
+    const other = discovery.models.find((model) => model.id === "other");
+    expect(other).toBeDefined();
+    expect(other).not.toHaveProperty("reasoningEffort");
+  });
+
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
     const snapshot = buildCheckedAcpRegistrySnapshot({
       ...identity,
@@ -649,6 +712,27 @@ const driverLayer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
 );
 
 it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) => {
+  it.effect("creates without inspecting the agent, which may fetch the registry", () =>
+    Effect.gen(function* () {
+      const instance = yield* AcpRegistryDriver.create({
+        instanceId: identity.instanceId,
+        displayName: identity.displayName,
+        enabled: true,
+        environment: [],
+        config: decodeSettings({ agentId: "test-agent" }),
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalogWithInspection({ status: "unconfigured" }),
+          inspect: () => Effect.die("inspected during creation"),
+        }),
+      );
+      expect(yield* instance.snapshot.getSnapshot).toMatchObject({
+        installed: false,
+        message: "Checking ACP Registry agent readiness...",
+      });
+    }),
+  );
+
   it.effect("drops cached and session-reported models when its caches are invalidated", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -657,7 +741,7 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       const agentPath = path.join(directory, "agent.mjs");
       const modelsPath = path.join(directory, "models.json");
       yield* fileSystem.writeFileString(agentPath, fakeAgentSource);
-      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model"]));
+      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model", "other-model"]));
       const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
 
       const instance = yield* AcpRegistryDriver.create({
@@ -690,7 +774,7 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
           Stream.runHead,
         );
 
-      const probed = yield* waitForModels(["old-model"]).pipe(
+      const probed = yield* waitForModels(["old-model", "other-model"]).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       yield* instance.snapshot.refresh;
@@ -699,7 +783,10 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
         identity.instanceId,
         normalizeAcpRegistryLiveConfiguration([], undefined, {
           currentModelId: "old-model",
-          availableModels: [{ modelId: "old-model", name: "old-model" }],
+          availableModels: [
+            { modelId: "old-model", name: "old-model" },
+            { modelId: "session-model", name: "session-model" },
+          ],
         }),
       );
       yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model", "new-model"]));
@@ -800,6 +887,61 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       yield* instance.snapshot.refresh;
       expect(effortBySlug(yield* instance.snapshot.getSnapshot)).toBe(
         "model-a:effort,model-b:effort",
+      );
+    }),
+  );
+});
+
+it.layer(driverLayer, { excludeTestServices: true })("local ACP version", (it) => {
+  it.effect("keeps the probed version when readiness refreshes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-version-" });
+      const agentPath = path.join(directory, "agent.mjs");
+      const modelsPath = path.join(directory, "models.json");
+      const source = fakeAgentSource.replace(
+        "agentCapabilities: {}, authMethods: []",
+        'agentCapabilities: {}, authMethods: [], agentInfo: { name: "fake", version: "1.5.9" }',
+      );
+      yield* fileSystem.writeFileString(agentPath, source);
+      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["model-a", "model-b"]));
+      const instance = yield* AcpRegistryDriver.create({
+        instanceId: identity.instanceId,
+        displayName: identity.displayName,
+        enabled: true,
+        environment: [],
+        config: decodeSettings({ source: "local", commandPath: "agent" }),
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalogWithInspection({
+            status: "ready",
+            agentId: "agent",
+            version: null,
+            distribution: "local",
+          }),
+          resolve: () =>
+            Effect.succeed({
+              distribution: "local" as const,
+              spawn: { command: process.execPath, args: [agentPath, modelsPath] },
+            }),
+        }),
+      );
+      const probed = yield* instance.snapshot.streamChanges.pipe(
+        Stream.filter((snapshot) => snapshot.version === "1.5.9"),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* instance.snapshot.refresh;
+      yield* Fiber.join(probed);
+      const next = yield* instance.snapshot.streamChanges.pipe(
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* instance.invalidateCaches ?? Effect.void;
+      yield* instance.snapshot.refresh;
+      expect(Option.map(yield* Fiber.join(next), (snapshot) => snapshot.version)).toEqual(
+        Option.some("1.5.9"),
       );
     }),
   );

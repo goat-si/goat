@@ -510,6 +510,43 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
+  it.effect("names the launcher symlink that started a downloaded runtime", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      // The install script's launcher names ~/.goat, which here links to a home elsewhere.
+      const executable = path.join(root, "data/goat/runtime/goat/versions/1.0.0/goat");
+      const launcher = path.join(root, "bin/goat");
+      const copy = path.join(root, "bin/goat-copy");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.writeFileString(executable, "", { mode: 0o755 });
+      yield* fs.writeFileString(copy, "", { mode: 0o755 });
+      yield* fs.symlink(path.join(root, "data/goat"), path.join(root, ".goat"));
+      yield* fs.symlink(path.join(root, ".goat/runtime/goat/versions/1.0.0/goat"), launcher);
+      // Earlier PATH entries hold a directory and a non-executable file named goat.
+      yield* fs.makeDirectory(path.join(root, "shadow-dir/goat"), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "shadow-file"));
+      yield* fs.writeFileString(path.join(root, "shadow-file/goat"), "");
+      const resolve = (invokedAs: string) =>
+        resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.InvokedAs, invokedAs),
+          Effect.provideService(HostProcess.WorkingDirectory, root),
+          Effect.provideService(HostProcess.Environment, { PATH: "shadow-dir:shadow-file:bin" }),
+          Effect.provideService(HostProcess.Platform, "linux"),
+        );
+      const baseDir = path.join(root, ".goat");
+
+      expect(yield* resolve("goat")).toEqual({ kind: "goat-launcher", launcher, baseDir });
+      expect(yield* resolve(launcher)).toEqual({ kind: "goat-launcher", launcher, baseDir });
+      expect(yield* resolve(executable)).toBeNull();
+      expect(yield* resolve(copy)).toBeNull();
+    }),
+  );
+
   it.effect("leaves local, standalone, missing and unreadable installs unknown", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

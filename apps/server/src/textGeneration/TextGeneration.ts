@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
-import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
+import type { TextGenerationOperations } from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
@@ -12,7 +12,9 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { apiTextGeneration } from "./TextGeneratorApi.ts";
-import { resolveTextGenerationCapableSelection } from "./textGenerationCapability.ts";
+import { makeTextGenerationCapableSelection } from "./textGenerationCapability.ts";
+
+export { TextGenerationProject } from "./textGenerationCapability.ts";
 
 export type {
   BranchNameGenerationInput,
@@ -35,7 +37,7 @@ export type {
   MemoryGenerationExecution,
 } from "@goat/provider-core/server/textGeneration";
 
-export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
+export class TextGeneration extends Context.Service<TextGeneration, TextGenerationOperations>()(
   "goat/textGeneration/TextGeneration",
 ) {}
 
@@ -61,10 +63,7 @@ const resolveInstance = (
         : Effect.fail(
             new TextGenerationError({
               operation,
-              detail:
-                operation === "resolveMemoryConflict" || operation === "generateMemorySummary"
-                  ? "route_unavailable"
-                  : `No provider instance registered for id '${instanceId}'.`,
+              detail: "route_unavailable",
             }),
           ),
     ),
@@ -76,15 +75,26 @@ export const make = Effect.gen(function* () {
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const installationGate = yield* ProviderInstallationGate.current;
-  const capable = <I extends { readonly modelSelection: ModelSelection }>(input: I) =>
+  const resolveCapableSelection = yield* makeTextGenerationCapableSelection(registry);
+  const capable = <I extends { readonly modelSelection: ModelSelection }>(
+    operation: TextGenerationOp,
+    input: I,
+  ) =>
     settingsService.getSettings.pipe(
-      Effect.flatMap((settings) =>
-        resolveTextGenerationCapableSelection(registry, settings, input.modelSelection),
+      Effect.mapError(
+        () =>
+          new TextGenerationError({
+            operation,
+            detail: "Could not read text generation settings.",
+          }),
       ),
-      // resolveText reports an unreadable settings file.
-      Effect.orElseSucceed(() => input.modelSelection),
-      Effect.map((modelSelection) =>
-        modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+      Effect.flatMap((settings) => resolveCapableSelection(settings, input.modelSelection)),
+      Effect.flatMap((modelSelection) =>
+        modelSelection === null
+          ? Effect.fail(new TextGenerationError({ operation, detail: "route_unavailable" }))
+          : Effect.succeed(
+              modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+            ),
       ),
     );
   const resolveText = Effect.fn("TextGeneration.resolveText")(
@@ -138,29 +148,11 @@ export const make = Effect.gen(function* () {
   const ungated = {
     resolveMemoryConflict: (input) =>
       resolveAgent("resolveMemoryConflict", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          textGeneration.resolveMemoryConflict === undefined
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "resolveMemoryConflict",
-                  detail: "unsupported_operation",
-                }),
-              )
-            : textGeneration.resolveMemoryConflict(input),
-        ),
+        Effect.flatMap((textGeneration) => textGeneration.resolveMemoryConflict(input)),
       ),
     generateMemorySummary: (input) =>
       resolveAgent("generateMemorySummary", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          textGeneration.generateMemorySummary === undefined
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "generateMemorySummary",
-                  detail: "unsupported_operation",
-                }),
-              )
-            : textGeneration.generateMemorySummary(input),
-        ),
+        Effect.flatMap((textGeneration) => textGeneration.generateMemorySummary(input)),
       ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
       return resolveText("generateCommitMessage", input.modelSelection.instanceId).pipe(
@@ -233,15 +225,19 @@ export const make = Effect.gen(function* () {
     resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
     generateMemorySummary: gated(ungated.generateMemorySummary),
     generateCommitMessage: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateCommitMessage))),
+      capable("generateCommitMessage", input).pipe(
+        Effect.flatMap(gated(ungated.generateCommitMessage)),
+      ),
     generatePrContent: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generatePrContent))),
+      capable("generatePrContent", input).pipe(Effect.flatMap(gated(ungated.generatePrContent))),
     generateBranchName: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
+      capable("generateBranchName", input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
     generateChannelReception: gated(ungated.generateChannelReception),
     generateReviewGuide: gated(ungated.generateReviewGuide),
     generateThreadTitle: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateThreadTitle))),
+      capable("generateThreadTitle", input).pipe(
+        Effect.flatMap(gated(ungated.generateThreadTitle)),
+      ),
   });
 });
 

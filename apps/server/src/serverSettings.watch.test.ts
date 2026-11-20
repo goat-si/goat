@@ -32,6 +32,23 @@ const layerServerSettings = () =>
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
   "settings watcher recovery",
   (it) => {
+    it.effect("a fresh settings snapshot protects history after malformed disk edits", () =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.updateSettings({ usageHistoryRetentionDays: 7 });
+        const broken = '{"usageHistoryRetentionDays":0}';
+        yield* fs.writeFileString(settingsPath, broken);
+        const retention = yield* service.withSettingsSnapshot(
+          (settings) => Effect.succeed(settings.usageHistoryRetentionDays),
+          { refreshFromDisk: true },
+        );
+        assert.equal(retention, "unlimited");
+        assert.equal(yield* fs.readFileString(settingsPath), broken);
+      }).pipe(Effect.provide(layerServerSettings())),
+    );
+
     it.effect.each([
       ["primary", "error"],
       ["symlink target", "error"],
@@ -330,7 +347,7 @@ it.effect("computer use policy is published at rename before cleanup", () =>
       ...fs,
       remove: (path, options) =>
         Effect.gen(function* () {
-          if (hold && path.includes("settings.json.")) {
+          if (hold && path.includes("goat-write-")) {
             hold = false;
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);

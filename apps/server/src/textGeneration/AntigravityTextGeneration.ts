@@ -1,5 +1,6 @@
 import { ProviderDriverKind } from "@goat/contracts";
 import {
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -372,11 +373,16 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       runAntigravityJson(request).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        options.memoryRunnerContext,
-        ProviderDriverKind.make("antigravity"),
-        runAntigravityJson,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("antigravity", options.memoryRunnerContext, {
+          available: available.pipe(Effect.orElseSucceed(() => false)),
+        }),
+        run: withMemoryExecution(
+          options.memoryRunnerContext,
+          ProviderDriverKind.make("antigravity"),
+          runAntigravityJson,
+        ),
+      },
     },
   );
 });

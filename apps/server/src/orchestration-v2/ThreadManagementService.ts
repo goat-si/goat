@@ -1,3 +1,6 @@
+import { existingThreadIdsForCommand } from "./existingThreadIdsForCommand.ts";
+export { existingThreadIdsForCommand } from "./existingThreadIdsForCommand.ts";
+import { stampThreadCreate } from "./threadCreateMessage.ts";
 import * as Semaphore from "effect/Semaphore";
 import { deliveryForDispatch, readRestartReceipt } from "./restartedDelivery.ts";
 import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
@@ -63,7 +66,7 @@ import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as WorktreeSendCheck from "./goat/WorktreeSendCheck.ts";
-import { runsInCloud, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
+import { checkForceStopTarget, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -132,11 +135,8 @@ export function withCreationProvenance(
       return provenance.createdBy === "user"
         ? { ...command, respondedBy: { type: "user" } }
         : command;
-    case "thread.create": {
-      if (provenance.createdBy !== "user") return { ...command, ...provenance };
-      const { launchedBy: _launcher, ...userCommand } = command;
-      return { ...userCommand, memoryGrantCeiling: "none", ...provenance };
-    }
+    case "thread.create":
+      return stampThreadCreate(command, provenance);
     case "message.dispatch":
     case "delegated_task.request":
       return provenance.createdBy === "user"
@@ -147,45 +147,6 @@ export function withCreationProvenance(
       return { ...command, ...provenance };
     default:
       return command;
-  }
-}
-
-export function existingThreadIdsForCommand(
-  command: OrchestrationV2ServerCommand,
-): ReadonlyArray<ThreadId> {
-  switch (command.type) {
-    case "thread.create":
-      return [];
-    // Read-state commands only rewrite the thread payload's visited/unread
-    // watermark and open stats; they never touch messages, so they do not need the imported
-    // v1 transcript hydrated first. Visits fire on every thread-activity bump
-    // while a thread is open, so keeping them off the import path matters.
-    case "thread.visit":
-    case "thread.mark-unread":
-      return [];
-    case "thread.fork":
-      return [command.sourceThreadId];
-    case "thread.merge_back":
-      return command.sourceThreadId === command.targetThreadId
-        ? [command.sourceThreadId]
-        : [command.sourceThreadId, command.targetThreadId];
-    case "delegated_task.request":
-    case "delegated_task.remote.register":
-    case "delegated_task.remote.progress":
-    case "delegated_task.remote.result":
-    case "delegated_task.wake-policy":
-    case "delegated_task.review-ledger.append":
-    case "delegated_task.completion-delivery.acknowledge":
-    case "delegated_task.completion-delivery.dispose":
-      return [command.parentThreadId];
-    case "thread.created.record":
-      return command.parentThreadId === command.targetThreadId
-        ? [command.parentThreadId]
-        : [command.parentThreadId, command.targetThreadId];
-    case "thread.notice.record":
-      return [command.threadId];
-    default:
-      return [command.threadId];
   }
 }
 
@@ -1821,18 +1782,7 @@ const make = Effect.gen(function* () {
                   current === undefined || run.ordinal > current.ordinal ? run : current,
                 undefined,
               );
-          if (input.runId !== undefined && input.runId !== target?.id) {
-            return yield* new OrchestrationV2ForceStopThreadError({
-              threadId: input.threadId,
-              reason: "superseded",
-            });
-          }
-          if (runsInCloud(records, input.threadId)) {
-            return yield* new OrchestrationV2ForceStopThreadError({
-              threadId: input.threadId,
-              reason: "cloud",
-            });
-          }
+          yield* checkForceStopTarget(sessions, input, records, target);
           if (recheck !== undefined) yield* recheck(target);
           // Shared scopes are never tracked per thread, so this only kills the thread's own agent.
           const killed = yield* agentScope.kill(input.threadId);

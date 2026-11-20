@@ -1,4 +1,9 @@
-import { TrimmedString, makeProviderSettingsSchema } from "@goat/contracts";
+import {
+  CustomModelEntry,
+  CustomModelSetting,
+  TrimmedString,
+  makeProviderSettingsSchema,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -58,13 +63,28 @@ export const AcpRegistrySettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("auto")),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    customModels: Schema.Array(Schema.String).pipe(
+    customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModelDetails: Schema.optionalKey(Schema.Array(CustomModelEntry)).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
     order: ["source", "agentId", "commandPath", "authMethodId"],
   },
+).check(
+  Schema.makeFilter((settings) => {
+    const ids = new Set(
+      settings.customModels.map((entry) => (typeof entry === "string" ? entry : entry.slug)),
+    );
+    const seen = new Set<string>();
+    return (settings.customModelDetails ?? []).every((entry) => {
+      if (!ids.has(entry.slug) || seen.has(entry.slug)) return false;
+      seen.add(entry.slug);
+      return true;
+    });
+  }),
 );
 export type AcpRegistrySettings = typeof AcpRegistrySettings.Type;

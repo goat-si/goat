@@ -2,6 +2,7 @@ import { REASONING_EFFORT_OPTION_IDS } from "@goat/client-runtime/state/thread-e
 import {
   formatSubagentDisplayTitle,
   resolveSubagentMetadata,
+  subagentCardDetail,
   subagentDetailPreview,
 } from "@goat/client-runtime/state/subagent-display";
 import {
@@ -11,8 +12,6 @@ import {
 } from "@goat/client-runtime/state/subagentRuntime";
 import type { OrchestrationV2Subagent, ServerProvider } from "@goat/contracts";
 import { resolveSelectableModel } from "@goat/shared/model";
-
-import { subagentCardDetail } from "./subagent-card-presentation";
 
 const PROMPT_TITLE_LIMIT = 80;
 

@@ -428,6 +428,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+    yield* git.invalidateRefs(prepared.destinationPath);
     return {
       cwd: prepared.destinationPath,
       remoteUrl,

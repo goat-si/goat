@@ -6,18 +6,23 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OtlpEndpointCheckInput,
   resolveEnvironmentMachineKind,
+  ServerConfigProviderStatusChangesPayload,
   ServerObservability,
   ServerSelfUpdateInput,
   ServerProvider,
   ServerProviders,
   ServerProviderModel,
+  ServerProviderStatusChange,
   ServerProviderWorkspaceSnapshot,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
+import { ForwardCompatibleArray } from "./baseSchemas.ts";
 
 const decodeServerSelfUpdateInput = Schema.decodeSync(ServerSelfUpdateInput);
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
+const encodeServerProviders = Schema.encodeSync(ServerProviders);
+const encodeStatusChanges = Schema.encodeSync(ServerConfigProviderStatusChangesPayload);
 
 const baseProviderSnapshot = {
   instanceId: "codex",
@@ -32,6 +37,38 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
+  it("older full and delta provider codecs keep rows with generation readiness fields", () => {
+    const {
+      awaitingFirstCheck: _checking,
+      memoryGeneration: _memory,
+      ...legacyFields
+    } = ServerProvider.fields;
+    const legacyFull = ForwardCompatibleArray(Schema.Struct(legacyFields));
+    const {
+      awaitingFirstCheck: _deltaChecking,
+      memoryGeneration: _deltaMemory,
+      ...legacyDeltaFields
+    } = ServerProviderStatusChange.fields;
+    const legacyDelta = ForwardCompatibleArray(Schema.Struct(legacyDeltaFields));
+    const oldProvider = decodeServerProvider(baseProviderSnapshot);
+    const provider = decodeServerProvider({
+      ...baseProviderSnapshot,
+      awaitingFirstCheck: true,
+      memoryGeneration: { summary: false, conflict: false },
+    });
+    expect(Schema.decodeSync(legacyFull)(encodeServerProviders([provider]))).toEqual([oldProvider]);
+    const payload = {
+      instanceIds: [provider.instanceId],
+      changedInstanceIds: [provider.instanceId],
+      providers: [provider],
+    };
+    const delta = encodeStatusChanges(payload);
+    expect(Schema.decodeSync(legacyDelta)(delta.providers)).toEqual([oldProvider]);
+    expect(decodeServerProviders(Schema.encodeSync(legacyFull)([oldProvider]))).toEqual([
+      oldProvider,
+    ]);
+  });
+
   it("preserves installed-version presence through the provider wire codec", () => {
     const encode = Schema.encodeSync(ServerProvider);
     for (const installation of [{}, { installedVersion: null }, { installedVersion: "1.2.3" }]) {
@@ -263,4 +300,16 @@ describe("ServerSelfUpdateInput", () => {
       expect(decodeServerSelfUpdateInput(input)).toEqual(input);
     },
   );
+});
+
+it("keeps ACP structured model capability optional for older peers", () => {
+  const { supportsStructuredCustomModels: _ignored, ...oldFields } = ServerProvider.fields;
+  const oldDecode = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  const current = decodeServerProvider({
+    ...baseProviderSnapshot,
+    supportsStructuredCustomModels: true,
+  });
+  expect(current.supportsStructuredCustomModels).toBe(true);
+  expect(oldDecode(current).driver).toBe(current.driver);
+  expect(decodeServerProvider(baseProviderSnapshot).supportsStructuredCustomModels).toBeUndefined();
 });

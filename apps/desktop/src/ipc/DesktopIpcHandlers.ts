@@ -11,6 +11,8 @@ import {
   verifyCuaDriver,
 } from "./methods/cua.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
+import { startFileDrag } from "./methods/fileDrag.ts";
+import { toLocalBackendPath } from "./methods/folderPaths.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { installDesktopTray } from "../tray/DesktopTray.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
@@ -23,6 +25,7 @@ import {
 import {
   getHeadlessServerAttachEnabled,
   getLocalEnvironmentEnabled,
+  getHostEnvironmentId,
   setHeadlessServerAttachEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
@@ -66,6 +69,7 @@ import {
   openSystemSettings,
   checkSystemPermission,
   requestMicrophoneAccess,
+  restartAudioService,
   pasteAsText,
   probeRemoteEditors,
   revealWindow,
@@ -123,6 +127,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handleSync(getLocalEnvironmentEnabled);
+  yield* ipc.handle(getHostEnvironmentId);
   yield* ipc.handle(setLocalEnvironmentEnabled);
   yield* ipc.handleSync(getHeadlessServerAttachEnabled);
   yield* ipc.handle(setHeadlessServerAttachEnabled);
@@ -174,6 +179,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setWslOnly);
 
   yield* ipc.handle(pickFolder);
+  yield* ipc.handle(toLocalBackendPath);
+  yield* ipc.handle(startFileDrag);
   yield* ipc.handle(pickProjectFavicon);
   yield* ipc.handle(pickThemeFiles);
   yield* ipc.handle(setTheme);
@@ -184,6 +191,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(openSystemSettings);
   yield* ipc.handle(checkSystemPermission);
   yield* ipc.handle(requestMicrophoneAccess);
+  yield* ipc.handle(restartAudioService);
   yield* ipc.handle(restartCuaDriver);
   yield* ipc.handle(verifyCuaDriver);
   yield* ipc.handle(checkCuaGrants);

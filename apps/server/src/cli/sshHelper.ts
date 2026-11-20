@@ -8,9 +8,18 @@ import * as NodeNet from "node:net";
 import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { Argument, Command } from "effect/cli";
+import { Argument, Command, Flag } from "effect/cli";
+import { sshProbeDeadline } from "./sshProbeDeadline.ts";
 import { waitReadyReportFlags, waitReadyReportFrame } from "./sshRuntimeFactsCommands.ts";
 import { sshRuntimeHelperCommands } from "./sshRuntimeHelperCommands.ts";
+import * as NodePath from "node:path";
+import {
+  livePreLockServerOwner,
+  tryAcquireLegacyServerOwnerLock,
+} from "../serviceLauncherOwner.ts";
+import { serverOwnerLockHeld } from "../serverOwnerLockFile.ts";
+import { serviceServingLockHeld } from "../serviceServingLock.ts";
+import { serviceUpdateHandoffActive } from "../serviceUpdateHandoff.ts";
 
 export * from "./sshRuntimeHelperCommands.ts";
 
@@ -152,7 +161,59 @@ const runtimePort = Command.make("runtime-port", {
   ),
 );
 
+const homeOwned = Command.make("home-owned", {
+  baseDir: Argument.String("base-dir"),
+  deadlineMs: Flag.Int("deadline-ms").pipe(Flag.optional),
+}).pipe(
+  Command.withHandler(({ baseDir, deadlineMs }) =>
+    Effect.promise(async () => {
+      const cancelDeadline = sshProbeDeadline(Option.getOrUndefined(deadlineMs));
+      try {
+        if (await serviceUpdateHandoffActive(baseDir)) {
+          process.stdout.write("updating\n");
+          process.exitCode = 0;
+          return;
+        }
+        const serving = serviceServingLockHeld(baseDir);
+        const stateDir = NodePath.join(baseDir, "userdata");
+        let owned = serving;
+        if (!owned && NodeFS.existsSync(stateDir)) {
+          owned = serverOwnerLockHeld(stateDir);
+          if (!owned && NodeFS.existsSync(NodePath.join(stateDir, "server-owner.sqlite"))) {
+            const release = tryAcquireLegacyServerOwnerLock(stateDir);
+            owned = release === undefined;
+            release?.();
+          }
+          if (!owned) owned = await livePreLockServerOwner(stateDir);
+        }
+        process.exitCode = owned ? 0 : 1;
+      } catch (error) {
+        process.stdout.write("inspection-error\n");
+        process.stderr.write(`Cannot inspect GOAT home ownership: ${String(error)}\n`);
+        process.exitCode = 2;
+      } finally {
+        cancelDeadline();
+      }
+    }),
+  ),
+);
+
+const launcherCapabilities = Command.make("launcher-capabilities").pipe(
+  Command.withHandler(() =>
+    Effect.sync(() => {
+      process.stdout.write("script-launcher\n");
+    }),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
-  Command.withSubcommands([pickPort, waitReady, runtimePort, ...sshRuntimeHelperCommands]),
+  Command.withSubcommands([
+    pickPort,
+    waitReady,
+    runtimePort,
+    homeOwned,
+    launcherCapabilities,
+    ...sshRuntimeHelperCommands,
+  ]),
 );

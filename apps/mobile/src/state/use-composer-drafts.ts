@@ -1,3 +1,13 @@
+import { mergeReferencedComposerContext } from "./mergeReferencedComposerContext";
+import {
+  caretAfterInsertion,
+  mapCapturedRange,
+  registerComposerDraftInsertion,
+  completeComposerDraftInsertion,
+  type ComposerDraftInsertion,
+} from "./composerDraftInsertion";
+import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
+import { deduplicateComposerAttachments } from "./composerAttachmentDedup";
 import { useAtomValue } from "@effect/atom-react";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./modelPickPending";
 import { sameDrafts } from "./draftEquality";
@@ -45,7 +55,7 @@ import {
 } from "@goat/shared/composerContextReferences";
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
-import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import * as ShareIds from "../lib/composer-image-schema";
 import {
   composerAttachmentFileReferenceKey,
   isComposerAttachmentFileRetained,
@@ -61,6 +71,7 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   readComposerDraftSelection,
   rememberComposerDraftSelection,
+  composerDraftSelectionAtom,
 } from "./composerDraftSelection";
 import {
   abortComposerDraftOperations,
@@ -85,6 +96,7 @@ export {
   rememberComposerDraftSelection,
   useComposerDraftSelection,
 } from "./composerDraftSelection";
+export type { ComposerDraftInsertion } from "./composerDraftInsertion";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
@@ -102,22 +114,16 @@ export function setComposerContextImporting(draftKey: string, importing: boolean
   appAtomRegistry.set(composerContextImportsAtom, next);
 }
 
-export interface ComposerDraftInsertion {
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
-}
-
 export function captureComposerDraftInsertion(
   draftKey: string,
   selection?: { start: number; end: number },
 ): ComposerDraftInsertion {
   const { text } = getComposerDraftSnapshot(draftKey);
-  return {
+  return registerComposerDraftInsertion(composerDraftSelectionAtom(draftKey), {
     text,
     ...(selection ??
       readComposerDraftSelection(draftKey, text) ?? { start: text.length, end: text.length }),
-  };
+  });
 }
 
 function contextInsertionRange(
@@ -125,11 +131,8 @@ function contextInsertionRange(
   draft: ComposerDraft,
   target?: ComposerDraftInsertion,
 ) {
-  // Append after text edits during writes; caret-only moves preserve the captured insertion range.
   const selection = target
-    ? target.text === draft.text
-      ? target
-      : null
+    ? mapCapturedRange(target, draft.text)
     : readComposerDraftSelection(draftKey, draft.text);
   const start = Math.max(0, Math.min(selection?.start ?? draft.text.length, draft.text.length));
   return { start, end: Math.max(start, Math.min(selection?.end ?? start, draft.text.length)) };
@@ -301,10 +304,12 @@ function draftWithInsertedContext(
   for (const record of content.context.records) records.set(record.contextId, record);
   const context = referencedComposerContext(text, { version: 1, records: [...records.values()] });
   if ((context?.records.length ?? 0) > COMPOSER_CONTEXT_MAX_RECORDS) return null;
-  rememberComposerDraftSelection(draftKey, text, {
-    start: start + insertion.length,
-    end: start + insertion.length,
-  });
+  completeComposerDraftInsertion(target, text, start + insertion.length, insertion);
+  rememberComposerDraftSelection(
+    draftKey,
+    text,
+    caretAfterInsertion(draftKey, draft.text, { start, end }, insertion.length),
+  );
   return withReferencedContextFiles(draft, text, context);
 }
 
@@ -345,6 +350,7 @@ export interface ComposerDraftContent {
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly sourceShareId?: string;
+  readonly preserveContextRecords?: boolean;
 }
 
 export interface ComposerDraftWorkspaceSelection {
@@ -385,7 +391,7 @@ const PersistedComposerContextSchema = Schema.Struct({
 const ComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   context: Schema.optional(PersistedComposerContextSchema),
-  attachments: Schema.Array(DraftComposerAttachmentSchema),
+  attachments: Schema.Array(ShareIds.DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
@@ -616,7 +622,7 @@ export function decodePersistedComposerState(value: unknown): {
   readonly modelOptionMemory: ModelOptionMemoryState;
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
-  const parsed = decodePersistedComposerDraftsDocument(value);
+  const parsed = decodePersistedComposerDraftsDocument(ShareIds.normalizeDocument(value));
   const now = new Date().toISOString();
   return {
     drafts: Object.fromEntries(
@@ -1081,16 +1087,6 @@ export async function archiveCloudComposerDrafts(
   await flushComposerDrafts();
 }
 
-function sameDraftAttachmentIds(
-  left: ReadonlyArray<DraftComposerAttachment>,
-  right: ReadonlyArray<DraftComposerAttachment>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((attachment, index) => attachment.id === right[index]?.id)
-  );
-}
-
 /** An in-flight delivery can finish after sign-out took its snapshot. */
 export async function removeDeliveredCloudQueuedMessage(
   message: QueuedThreadMessage,
@@ -1259,11 +1255,9 @@ export function insertComposerDraftText(
   const draft = getComposerDraftSnapshot(draftKey);
   const { start, end } = contextInsertionRange(draftKey, draft, target);
   const text = draft.text.slice(0, start) + value + draft.text.slice(end);
+  const caret = caretAfterInsertion(draftKey, draft.text, { start, end }, value.length);
   setComposerDraftText(draftKey, text);
-  rememberComposerDraftSelection(draftKey, text, {
-    start: start + value.length,
-    end: start + value.length,
-  });
+  rememberComposerDraftSelection(draftKey, text, caret);
 }
 
 export function appendComposerDraftText(draftKey: string, value: string): void {
@@ -1282,7 +1276,7 @@ export function appendComposerDraftText(draftKey: string, value: string): void {
 /** Restore with allowOverflow to preserve every attachment after failed sends. */
 export function appendComposerDraftAttachments(
   draftKey: string,
-  attachments: ReadonlyArray<DraftComposerAttachment>,
+  incoming: ReadonlyArray<DraftComposerAttachment>,
   options?: {
     readonly allowOverflow?: boolean;
     readonly appendReference?: boolean;
@@ -1290,16 +1284,22 @@ export function appendComposerDraftAttachments(
     readonly maxAttachments?: number;
   },
 ): number {
-  if (attachments.length === 0) {
+  if (incoming.length === 0) {
     return 0;
   }
   let rejected: ReadonlyArray<DraftComposerAttachment> = [];
   let removed: ReadonlyArray<DraftComposerAttachment> = [];
+  let duplicates: ReadonlyArray<DraftComposerAttachment> = [];
   updateComposerDrafts((current) => {
     const existing = normalizeDraft(current[draftKey]);
     const retained = options?.appendReference
       ? draftWithoutInsertionSelection(draftKey, existing, options.insertion)
       : existing;
+    const result = options?.allowOverflow
+      ? { attachments: incoming, duplicates: [] }
+      : deduplicateComposerAttachments(retained.attachments, incoming);
+    const { attachments } = result;
+    duplicates = result.duplicates;
     const remaining = options?.allowOverflow
       ? attachments.length
       : Math.max(
@@ -1343,7 +1343,7 @@ export function appendComposerDraftAttachments(
       [draftKey]: draft,
     };
   });
-  scheduleUnusedComposerAttachmentCleanup([...rejected, ...removed]);
+  scheduleUnusedComposerAttachmentCleanup([...rejected, ...removed, ...duplicates]);
   return rejected.length;
 }
 
@@ -1575,17 +1575,6 @@ function stripAttachmentUploadReference(
   return rest;
 }
 
-function mergeReferencedComposerContext(
-  text: string,
-  first?: OrchestrationMessageContext,
-  second?: OrchestrationMessageContext,
-) {
-  const records = new Map((first?.records ?? []).map((record) => [record.contextId, record]));
-  for (const record of second?.records ?? []) records.set(record.contextId, record);
-  if (records.size === 0) return undefined;
-  return referencedComposerContext(text, { version: 1, records: [...records.values()] });
-}
-
 export function mergeComposerDraftContentState(
   current: Record<string, ComposerDraft>,
   draftKey: string,
@@ -1595,12 +1584,12 @@ export function mergeComposerDraftContentState(
   if (content.sourceShareId && existing.importedShareIds?.includes(content.sourceShareId)) {
     return current;
   }
-  const attachmentIds = new Set(existing.attachments.map((attachment) => attachment.id));
+  const attachmentIds = new Set(existing.attachments.map(ShareIds.attachmentId));
   const incomingAttachments = content.attachments.filter((attachment) => {
-    if (attachmentIds.has(attachment.id)) {
+    if (attachmentIds.has(ShareIds.attachmentId(attachment))) {
       return false;
     }
-    attachmentIds.add(attachment.id);
+    attachmentIds.add(ShareIds.attachmentId(attachment));
     return true;
   });
   const attachments = [...existing.attachments, ...incomingAttachments].slice(
@@ -1608,7 +1597,12 @@ export function mergeComposerDraftContentState(
     PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   );
   const text = mergeComposerDraftText(existing.text, content.text);
-  const context = mergeReferencedComposerContext(text, existing.context, content.context);
+  const context = mergeReferencedComposerContext(
+    text,
+    existing.context,
+    content.context,
+    content.preserveContextRecords,
+  );
   const importedShareIds = content.sourceShareId
     ? [...(existing.importedShareIds ?? []), content.sourceShareId]
     : existing.importedShareIds;

@@ -28,8 +28,8 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { makeKeyedCursorReactor } from "./keyedCursorReactor.ts";
 import { forkParked } from "../serverActivation.ts";
 import { exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as EventSink from "./EventSink.ts";
@@ -146,7 +146,7 @@ const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const sink = yield* EventSink.EventSinkV2;
-  const serial = yield* KeyedLock.make<string>();
+  const serial = yield* KeyedLock.make<ThreadId>();
   const subscribed = yield* Deferred.make<void>();
   let started = false;
 
@@ -162,7 +162,9 @@ const make = Effect.gen(function* () {
         return undefined;
       const parent = yield* projections.getThreadShell(parentId);
       if (parent === null) return undefined;
-      const records = yield* projections.getThreadRecords(parentId, ["subagents"]);
+      const records = yield* projections.getThreadRecords(parentId, ["subagents"], {
+        subagentChildThreadId: thread.id,
+      });
       return localQuestionLauncher(thread, records.subagents);
     });
 
@@ -277,16 +279,24 @@ const make = Effect.gen(function* () {
       });
     });
 
-  const reconcileOnce = (threadId: ThreadId, requestId: RuntimeRequestId) =>
+  const lookupAskingThread = (threadId: ThreadId) =>
+    projections
+      .getThread(threadId)
+      .pipe(Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.void }));
+  const coordinatorFor = Effect.fn("QuestionEscalation.coordinatorFor")(function* (
+    threadId: ThreadId,
+  ) {
+    const asking = yield* lookupAskingThread(threadId);
+    if (asking === undefined) return;
+    const coordinator = yield* launcherOf(asking);
+    return coordinator === threadId ? undefined : coordinator;
+  });
+  const reconcileOnce = (threadId: ThreadId, requestId: RuntimeRequestId, coordinator: ThreadId) =>
     Effect.gen(function* () {
-      const asking = yield* projections.getThread(threadId).pipe(
-        Effect.catchTags({
-          ProjectionStoreThreadNotFoundError: () => Effect.void,
-        }),
-      );
+      const asking = yield* lookupAskingThread(threadId);
       if (asking === undefined) return;
       const launcherId = yield* launcherOf(asking);
-      if (launcherId === undefined || launcherId === asking.id) return;
+      if (launcherId !== coordinator) return;
       const request = yield* projections.getRuntimeRequest(asking.id, requestId);
       if (request === undefined || request.kind !== "user_input") return;
       const launcherShell = yield* projections.getThreadShell(launcherId);
@@ -330,12 +340,16 @@ const make = Effect.gen(function* () {
       if (latest !== undefined && latest.status !== "pending")
         yield* resolve(asking, launcher, latest, humanRequired);
     });
+  const reconcileFor = (threadId: ThreadId, requestId: RuntimeRequestId, coordinator: ThreadId) =>
+    serial
+      .withLock(coordinator, reconcileOnce(threadId, requestId, coordinator))
+      .pipe(Effect.catchCause(logFailure("reconcile", { threadId, requestId })));
   const reconcile = (threadId: ThreadId, requestId: RuntimeRequestId) =>
-    serial.withLock(
-      pairKey({ threadId, requestId }),
-      reconcileOnce(threadId, requestId).pipe(
-        Effect.catchCause(logFailure("reconcile", { threadId, requestId })),
+    coordinatorFor(threadId).pipe(
+      Effect.flatMap((coordinator) =>
+        coordinator === undefined ? Effect.void : reconcileFor(threadId, requestId, coordinator),
       ),
+      Effect.catchCause(logFailure("route", { threadId, requestId })),
     );
   const handleStoredEvent = (stored: OrchestrationV2StoredEvent) => {
     const key = questionKey(stored);
@@ -350,37 +364,61 @@ const make = Effect.gen(function* () {
   }).pipe(Effect.catchCause(logFailure("sweep", {})));
   const listenAndRecover = Effect.scoped(
     Effect.gen(function* () {
-      const workerScope = yield* Effect.scope;
-      const workers = yield* Semaphore.make(16);
-      // Retain only IDs and one worker per pair, including updates arriving during dispatch.
+      type QuestionEventType = "runtime-request.updated" | "turn-item.updated";
+      const workers = yield* makeKeyedCursorReactor({
+        name: "QuestionEscalation.replayDeferredUpdates",
+        replay: (coordinator: ThreadId, eventType: QuestionEventType, range) =>
+          sink.stream({ ...range, eventType }).pipe(
+            Stream.map(questionKey),
+            Stream.filter((key) => key !== undefined),
+            Stream.runForEach((pair) =>
+              coordinatorFor(pair.threadId).pipe(
+                Effect.flatMap((owner) =>
+                  owner === coordinator
+                    ? reconcileFor(pair.threadId, pair.requestId, coordinator)
+                    : Effect.void,
+                ),
+              ),
+            ),
+          ),
+      });
       const pending = new Map<string, { dirty: boolean }>();
-      const enqueue = (pair: QuestionKey) =>
-        Effect.suspend(() => {
+      const enqueue = Effect.fn("QuestionEscalation.enqueue")(
+        function* (
+          pair: QuestionKey,
+          cursor: { eventType: QuestionEventType; sequence: number } | undefined,
+        ) {
           const key = pairKey(pair);
           const existing = pending.get(key);
           if (existing !== undefined) {
             existing.dirty = true;
-            return Effect.void;
+            return;
+          }
+          const coordinator = yield* coordinatorFor(pair.threadId);
+          if (coordinator === undefined) return;
+          const current = pending.get(key);
+          if (current !== undefined) {
+            current.dirty = true;
+            return;
           }
           const job = { dirty: false };
           pending.set(key, job);
-          return Effect.gen(function* () {
+          const reconcilePair = Effect.gen(function* () {
             do {
               job.dirty = false;
-              yield* reconcile(pair.threadId, pair.requestId);
+              yield* reconcileFor(pair.threadId, pair.requestId, coordinator);
             } while (job.dirty);
+          }).pipe(Effect.ensuring(Effect.sync(() => pending.delete(key))));
+          if (cursor === undefined) {
+            yield* workers.run(coordinator, reconcilePair);
+          } else if (
+            !(yield* workers.enqueue(coordinator, cursor.eventType, cursor.sequence, reconcilePair))
+          ) {
             pending.delete(key);
-          }).pipe(
-            workers.withPermits(1),
-            Effect.ensuring(
-              Effect.sync(() => {
-                if (pending.get(key) === job) pending.delete(key);
-              }),
-            ),
-            Effect.forkIn(workerScope),
-            Effect.asVoid,
-          );
-        });
+          }
+        },
+        (effect, pair, _cursor) => effect.pipe(Effect.catchCause(logFailure("route", pair))),
+      );
       const subscribeAndRecover = Effect.scoped(
         Effect.gen(function* () {
           const cursor = yield* sink.latestSequence();
@@ -390,25 +428,44 @@ const make = Effect.gen(function* () {
             sink
               .stream({
                 afterSequence: cursor,
+                journal: true,
                 eventType: "runtime-request.updated",
                 onSubscribed: Deferred.succeed(requestsReady, undefined).pipe(Effect.asVoid),
               })
               .pipe(
-                Stream.map(questionKey),
-                Stream.filter((key) => key !== undefined),
+                Stream.map((stored) => ({
+                  pair: questionKey(stored),
+                  cursor: {
+                    eventType: "runtime-request.updated" as const,
+                    sequence: stored.sequence,
+                  },
+                })),
+                Stream.filter(({ pair }) => pair !== undefined),
               ),
             sink
               .stream({
                 afterSequence: cursor,
+                journal: true,
                 eventType: "turn-item.updated",
                 onSubscribed: Deferred.succeed(itemsReady, undefined).pipe(Effect.asVoid),
               })
               .pipe(
-                Stream.map(questionKey),
-                Stream.filter((key) => key !== undefined),
+                Stream.map((stored) => ({
+                  pair: questionKey(stored),
+                  cursor: {
+                    eventType: "turn-item.updated" as const,
+                    sequence: stored.sequence,
+                  },
+                })),
+                Stream.filter(({ pair }) => pair !== undefined),
               ),
           );
-          const listening = yield* events.pipe(Stream.runForEach(enqueue), Effect.forkScoped);
+          const listening = yield* events.pipe(
+            Stream.runForEach(({ pair, cursor }) =>
+              pair === undefined ? Effect.void : enqueue(pair, cursor),
+            ),
+            Effect.forkScoped,
+          );
           yield* Effect.raceFirst(
             Effect.all([Deferred.await(requestsReady), Deferred.await(itemsReady)]).pipe(
               Effect.asVoid,
@@ -417,7 +474,10 @@ const make = Effect.gen(function* () {
           );
           yield* Deferred.succeed(subscribed, undefined);
           const candidates = yield* projections.getQuestionEscalationCandidates({ limit: 500 });
-          yield* Effect.forEach(candidates, enqueue, { discard: true, concurrency: 16 });
+          yield* Effect.forEach(candidates, (pair) => enqueue(pair, undefined), {
+            discard: true,
+            concurrency: 16,
+          });
           yield* Fiber.join(listening);
         }),
       );

@@ -25,7 +25,11 @@ export const READ_TICK: ReadTick = {
 /** `sh [-l] -s [-- args]`: the script arrives on stdin. Uploads (`sh -c`) stream data instead. */
 export function isRemoteShellScript(args: ReadonlyArray<string> | undefined) {
   if (args === undefined || args[0] !== "sh") return false;
-  const options = args.slice(1, args.includes("--") ? args.indexOf("--") : undefined);
+  const shellArgs = args[1] === "-ec" && args[4] === "sh" ? args.slice(4) : args;
+  const options = shellArgs.slice(
+    1,
+    shellArgs.includes("--") ? shellArgs.indexOf("--") : undefined,
+  );
   return options.includes("-s") && options.every((option) => option === "-s" || option === "-l");
 }
 

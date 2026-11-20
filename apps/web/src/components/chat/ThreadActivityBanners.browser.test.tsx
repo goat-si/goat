@@ -5,7 +5,7 @@ import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 import { ComposerBannerStack } from "./ComposerBannerStack";
-import { startHoldBannerItem } from "./ThreadActivityBanners";
+import { runStopBannerItem, startHoldBannerItem } from "./ThreadActivityBanners";
 
 it("asks before stopping a held turn and explains the paused goal", async () => {
   const onStop = vi.fn();
@@ -37,4 +37,29 @@ it("asks before stopping a held turn and explains the paused goal", async () => 
   confirm.element().focus();
   await userEvent.keyboard("{Enter}");
   expect(onStop).toHaveBeenCalledOnce();
+});
+
+it("shows an unanswered OpenCode Stop without Force stop for a borrowed server", async () => {
+  const item = runStopBannerItem({
+    threadId: ThreadId.make("thread"),
+    stop: {
+      state: "unresponsive",
+      runId: RunId.make("run"),
+      requestedAt: "2026-11-09T00:00:00.000Z",
+      background: false,
+      cloud: false,
+      forceStopSupported: false,
+    },
+    canForceStop: true,
+    forceStopping: false,
+    onForceStop: vi.fn(),
+  });
+  await using screen = await render(<ComposerBannerStack items={[item]} />);
+  await expect.element(screen.getByText("Agent not responding to Stop")).toBeVisible();
+  await expect
+    .element(screen.getByText("The OpenCode server has not confirmed the stop yet."))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Force stop", exact: true }))
+    .not.toBeInTheDocument();
 });

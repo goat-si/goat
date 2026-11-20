@@ -46,7 +46,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
-import { probeSession, successfulProcess, unusedManager } from "./DesktopSshEnvironment.fixture.ts";
+import { probeLease, successfulProcess, unusedManager } from "./DesktopSshEnvironment.fixture.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 import { makeEnsureFlightFixture } from "../../../../packages/ssh/src/tunnel.ensure-flight.fixture.ts";
 import { uploadTarget } from "../../../../packages/ssh/src/tunnel.fixture.ts";
@@ -556,11 +556,7 @@ describe("sshEnvironment", () => {
                           target,
                         };
                         yield* report({ stage: "synchronizing", prepared });
-                        return {
-                          prepared,
-                          openProbeSocket: Effect.never,
-                          session: probeSession(Deferred.await(probeAnswered)),
-                        };
+                        return probeLease(prepared, Deferred.await(probeAnswered));
                       }).pipe(
                         Effect.ensuring(
                           Effect.sync(() => {
@@ -955,11 +951,7 @@ describe("sshEnvironment", () => {
               );
               yield* Fiber.join(request).pipe(Effect.orDie);
               yield* progress({ stage: "synchronizing", prepared });
-              return {
-                prepared,
-                openProbeSocket: Effect.never,
-                session: probeSession(Deferred.await(probeAnswered)),
-              };
+              return probeLease(prepared, Deferred.await(probeAnswered));
             }),
         }),
       );

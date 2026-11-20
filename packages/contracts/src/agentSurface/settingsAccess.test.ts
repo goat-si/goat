@@ -31,14 +31,26 @@ function holdsSecret(root: unknown): boolean {
 describe("settings access", () => {
   it("classifies every server setting exactly once", () => {
     expect([...keys].sort()).toEqual(
-      [...Object.keys(ServerSettingsPatch.fields), "memoryOwnerSourceReadPolicy"].sort(),
+      [
+        ...Object.keys(ServerSettingsPatch.fields),
+        "memoryOwnerSourceReadPolicy",
+        "defaultTheme",
+        "defaultThemeSetAt",
+        "defaultAppearance",
+        "defaultAppearanceSetAt",
+      ].sort(),
     );
   });
 
   it("never lets agents change or read a setting that holds a credential", () => {
     const secretKeys = keys.filter(
       (key) =>
-        key !== "memoryOwnerSourceReadPolicy" && holdsSecret(ServerSettingsPatch.fields[key].ast),
+        key !== "memoryOwnerSourceReadPolicy" &&
+        key !== "defaultTheme" &&
+        key !== "defaultThemeSetAt" &&
+        key !== "defaultAppearance" &&
+        key !== "defaultAppearanceSetAt" &&
+        holdsSecret(ServerSettingsPatch.fields[key].ast),
     );
     expect(secretKeys.length).toBeGreaterThan(0);
     for (const key of secretKeys) expect(SETTINGS_ACCESS[key].access, key).not.toBe("agent");

@@ -1,5 +1,5 @@
-import { BUNDLED_FONTS } from "@betteroffice/fonts";
-import { describe, expect, it } from "vite-plus/test";
+import { BUNDLED_FONTS, resolveLastResortFace } from "@betteroffice/fonts";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { sheetFace, wordFonts } from "./fonts";
 
 const notoSansJp = BUNDLED_FONTS.find((face) => face.file === "NotoSansJP-Regular.otf")!;
@@ -27,3 +27,22 @@ it.each([false, true])(
     });
   },
 );
+
+it("uses the bundled last-resort face when a CJK asset is missing", async () => {
+  const originalFetch = globalThis.fetch;
+  using fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((input, init) =>
+      String(input).includes("NotoSansKR-Regular.otf")
+        ? Promise.resolve(new Response(null, { status: 404 }))
+        : originalFetch(input, init),
+    );
+  const fallback = resolveLastResortFace("Noto Sans KR", false, false, "word");
+  const load = fonts.resolveScriptFallback?.("cjk-kr", false, false);
+  const bytes = await load?.();
+
+  expect(fetch.mock.calls.some(([input]) => String(input).includes("NotoSansKR-Regular.otf"))).toBe(
+    true,
+  );
+  expect(bytes?.byteLength).toBe(fallback.byteLength);
+});

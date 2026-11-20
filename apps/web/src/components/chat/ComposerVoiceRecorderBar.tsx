@@ -135,13 +135,13 @@ export function ComposerVoiceRecorderBar({ controller, disabled }: ComposerVoice
         </Tooltip>
       </div>
       {props.streamingPreviewText ? (
-        <p
+        <div
           aria-live="polite"
           aria-atomic="true"
-          className="line-clamp-2 min-w-0 text-sm text-muted-foreground"
+          className="flex max-h-10 min-w-0 flex-col-reverse overflow-y-auto text-sm text-muted-foreground"
         >
-          {props.streamingPreviewText}
-        </p>
+          <p>{props.streamingPreviewText}</p>
+        </div>
       ) : null}
     </div>
   );

@@ -273,6 +273,12 @@ const randomId =
       ),
     );
 
+const DELEGATED_TASK_THREAD_PREFIX = joinId("thread", "delegated-task", "");
+
+export const isDelegatedTaskThread = (threadId: ThreadId): boolean =>
+  threadId.startsWith(DELEGATED_TASK_THREAD_PREFIX) &&
+  threadId.length > DELEGATED_TASK_THREAD_PREFIX.length;
+
 export const derive: IdAllocatorV2Derive = {
   providerSession: (input) =>
     ProviderSessionId.make(

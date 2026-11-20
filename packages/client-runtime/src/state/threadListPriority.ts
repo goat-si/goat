@@ -62,6 +62,34 @@ export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadLi
   return "ready";
 }
 
+export function hasUnseenRunFailure(thread: {
+  readonly latestRun?: {
+    readonly status: string;
+    readonly completedAt?: string | null;
+    readonly startedAt?: string | null;
+    readonly requestedAt?: string | null;
+  } | null;
+  readonly lastVisitedAt?: string | null | undefined;
+}): boolean {
+  const run = thread.latestRun;
+  if (run?.status !== "failed") return false;
+  if (!thread.lastVisitedAt) return true;
+  const failedAt = Date.parse(run.completedAt ?? run.startedAt ?? run.requestedAt ?? "");
+  const visitedAt = Date.parse(thread.lastVisitedAt);
+  return Number.isNaN(failedAt) || Number.isNaN(visitedAt) || failedAt > visitedAt;
+}
+
+export function resolveThreadListRowStatus(
+  thread: ThreadListStatusInput & Parameters<typeof hasUnseenRunFailure>[0],
+): ThreadListStatus {
+  const status = resolveThreadListStatus(thread);
+  return status === "failed" &&
+    thread.latestRun?.status === "failed" &&
+    !hasUnseenRunFailure(thread)
+    ? "ready"
+    : status;
+}
+
 /** What the window title says the open thread is doing, in the words its announcer uses. */
 export function resolveWindowTitleThreadStatus(thread: ThreadListStatusInput): string | null {
   // A guest waiting doesn't hide that the agent is still working.
@@ -81,7 +109,10 @@ export function resolveWindowTitleThreadStatus(thread: ThreadListStatusInput): s
 }
 
 type UnseenCompletionInput = {
-  readonly latestRun?: { readonly completedAt: string | null } | null | undefined;
+  readonly latestRun?:
+    | { readonly completedAt: string | null; readonly status?: string }
+    | null
+    | undefined;
   readonly notificationCompletedAt?: string | null | undefined;
   readonly markedUnreadCompletionAt?: string | null | undefined;
   readonly lastVisitedAt?: string | null | undefined;
@@ -90,7 +121,9 @@ type UnseenCompletionInput = {
 export function hasUnseenCompletion(thread: UnseenCompletionInput): boolean {
   const automatic =
     thread.notificationCompletedAt === undefined
-      ? thread.latestRun?.completedAt
+      ? thread.latestRun?.status === "interrupted" || thread.latestRun?.status === "cancelled"
+        ? null
+        : thread.latestRun?.completedAt
       : thread.notificationCompletedAt;
   const times = [automatic, thread.markedUnreadCompletionAt]
     .map((at) => Date.parse(at ?? ""))

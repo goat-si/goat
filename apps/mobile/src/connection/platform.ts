@@ -1,9 +1,5 @@
 import { makeMobileCloudSession } from "./cloud-session";
-import {
-  ClientCapabilities,
-  PlatformConnectionSource,
-  Persistence,
-} from "@goat/client-runtime/platform";
+import { ClientCapabilities, PlatformConnectionSource } from "@goat/client-runtime/platform";
 import {
   ConnectionBlockedError,
   ConnectionTransientError,
@@ -26,11 +22,9 @@ import { authClientMetadata } from "../lib/authClientMetadata";
 import * as Runtime from "../lib/runtime";
 import * as MobileStorage from "../persistence/mobile-storage";
 import { appAtomRegistry } from "../state/atom-registry";
-import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
-import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
-import { clearThreadComposerErrorsForEnvironment } from "../state/thread-composer-error";
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
 import * as ConnectionStorage from "./storage";
+import { layerEnvironmentOwnedDataCleanup } from "./environment-owned-data-cleanup";
 
 function networkStatus(state: Network.NetworkState): "unknown" | "offline" | "online" {
   if (state.isConnected === false) {
@@ -228,37 +222,6 @@ const layerPlatformConnectionSource = Layer.succeed(
 
 const layerProvidedConnectionStorage = ConnectionStorage.layer.pipe(Layer.provide(Runtime.layer));
 const layerProvidedCapabilities = layerCapabilities.pipe(Layer.provide(Runtime.layer));
-
-const layerEnvironmentOwnedDataCleanup = Layer.succeed(
-  Persistence.EnvironmentOwnedDataCleanup,
-  Persistence.EnvironmentOwnedDataCleanup.of({
-    clear: (environmentId) =>
-      Effect.all(
-        [
-          Effect.promise(() => clearThreadOutboxEnvironment(environmentId)),
-          Effect.promise(() => clearComposerDraftsEnvironment(environmentId)),
-          Effect.promise(async () => {
-            const { disposeMobileGoatBotEnvironment } =
-              await import("../features/goat-bot/useMobileGoatBotSession");
-            await disposeMobileGoatBotEnvironment(environmentId);
-          }),
-          Effect.promise(async () => {
-            const { forgetNewBotEnvironment } = await import("@goat/client-runtime/goatBot");
-            forgetNewBotEnvironment(environmentId);
-          }),
-          Effect.sync(() => clearThreadComposerErrorsForEnvironment(environmentId)),
-        ],
-        { concurrency: "unbounded", discard: true },
-      ).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not clear mobile environment-owned data.", {
-            environmentId,
-            cause,
-          }),
-        ),
-      ),
-  }),
-);
 
 type ConnectionPlatformLayerSource =
   | typeof layerProvidedConnectionStorage

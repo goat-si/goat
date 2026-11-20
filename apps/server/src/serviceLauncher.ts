@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // The launcher must survive unloadable server versions; use Node built-ins without Effect.
-import { copyDatabaseFile, runCp } from "./serviceLauncherCopy.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -28,23 +27,47 @@ import {
   parseLegacyServiceState,
   SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
+  SERVICE_LAUNCHER_GUARANTEES,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STATE_FILE,
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
-import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
+import {
+  backupDatabase,
+  databaseBackupBlocker,
+  databasePhase,
+  databaseRecoveryRequired,
+  markUntrackedDatabaseOwner,
+  ownerLockDir,
+  pathExists,
+  selectDatabaseRollback,
+  type DatabaseSnapshot,
+  type BackupSpaceProbe,
+} from "./serviceLauncherDatabase.ts";
+import { stateDirOwner } from "./serviceLauncherOwner.ts";
+import { acquireServiceServingLock } from "./serviceServingLock.ts";
+import { removeServiceUpdateHandoff, SERVICE_PREPARED_TIMEOUT_MS } from "./serviceUpdateHandoff.ts";
+import { repointRegisteredPosixLaunchers } from "./cloud/posixLauncher.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
+import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
+import {
+  replaceFileDurably,
+  repointServiceUnit,
+  serviceUnitFromEnvironment,
+  type ServiceUnit,
+} from "./serviceUnitRepoint.ts";
+
+export { databaseBackupBlocker, type BackupSpaceProbe } from "./serviceLauncherDatabase.ts";
 
 const HANDOFF_DELAY_MS = 2_000;
-/**
- * Migrations count toward it and can scale with the database: tens of GB on a cold page cache
- * take minutes. A missed window rolls back the database, so the next attempt pays the same cost.
- */
-const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
+const STATE_DIR_OWNER_POLL_MS = 30_000;
+// A pending update waits this long for another server to give up the home (ruling C20).
+const STATE_DIR_OWNER_BOUND_MS = 10 * 60_000;
 // Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
 // in contracts/desktopBootstrap. The standalone launcher must stay independent
 // of its Effect runtime; subprocess tests use the authoritative contract values.
@@ -77,34 +100,6 @@ const runtimeSpawnArguments = (paths: ReturnType<typeof runtimePaths>) => ({
   args: ["serve"],
 });
 
-const DB_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
-const RESTORE_MARKER = ".restore-pending";
-const ROLLBACK_MARKER = ".rollback-pending";
-const OWNER_GENERATION_FILE = "owner-generation";
-
-// Owner tags in the server-owner.lock generation log. Only these two may own
-// the userdata between an update's backup and its restore.
-const launcherOwner = (updateId: string) => `service-launcher:${updateId}`;
-const trialOwner = (updateId: string) => `service-trial:${updateId}`;
-const probationOwner = (updateId: string) => `service-probation:${updateId}`;
-const ownerLockDir = (pending: PendingServiceUpdate) => NodePath.dirname(pending.dbPath);
-
-const databaseBackupDir = (baseDir: string, updateId: string) =>
-  NodePath.join(baseDir, "runtime", "db-backup", updateId);
-
-const databaseBackupFile = (backupDir: string, suffix: (typeof DB_FILE_SUFFIXES)[number]) =>
-  NodePath.join(backupDir, suffix === "" ? "database" : `database${suffix}`);
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await NodeFSP.access(target);
-    return true;
-  } catch (cause) {
-    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return false;
-    throw cause;
-  }
-}
-
 const MANAGED_SERVICE_ENV_NAMES = new Set([
   "PATH",
   "GOAT_HOME",
@@ -135,272 +130,6 @@ export async function readServiceEnvironment(
   return environment;
 }
 
-// Opened read-write: Windows refuses to flush a handle without write access.
-async function syncFile(filePath: string): Promise<void> {
-  const handle = await NodeFSP.open(filePath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-// Fsync makes renames durable; Windows returns EPERM and NTFS journals them itself.
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await NodeFSP.open(directory, "r");
-  try {
-    await handle.sync();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-  } finally {
-    await handle.close();
-  }
-}
-
-const GIB = 1024 ** 3;
-// Cloned backups still need headroom for trial writes and migrations to diverge.
-const CLONED_BACKUP_MIN_HEADROOM_BYTES = GIB;
-const CLONED_BACKUP_HEADROOM_FRACTION = 0.1;
-
-async function statDatabaseFiles(dbPath: string): Promise<ReadonlyArray<NodeFS.Stats>> {
-  const stats: Array<NodeFS.Stats> = [];
-  for (const suffix of DB_FILE_SUFFIXES) {
-    const stat = await NodeFSP.stat(`${dbPath}${suffix}`).catch((cause: unknown) => {
-      if (suffix !== "" && (cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw cause;
-    });
-    if (stat !== undefined) stats.push(stat);
-  }
-  return stats;
-}
-
-// cp -c silently copies across volumes; require one device matching the APFS system volume's filesystem type.
-async function backupCanClone(dbPath: string, backupRoot: string): Promise<boolean> {
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone launcher has no Effect runtime.
-  const platform = process.platform;
-  if (platform === "darwin") {
-    const [backupDirectory, backupFs, systemFs] = await Promise.all([
-      NodeFSP.stat(backupRoot),
-      NodeFSP.statfs(backupRoot),
-      NodeFSP.statfs("/"),
-    ]);
-    if (backupFs.type !== systemFs.type) return false;
-    return (await statDatabaseFiles(dbPath)).every(
-      (source) => source.dev === backupDirectory.dev && source.nlink === 1,
-    );
-  }
-  if (platform !== "linux") return false;
-  const probe = NodePath.join(backupRoot, `.clone-probe-${NodeCrypto.randomUUID()}`);
-  try {
-    for (const suffix of DB_FILE_SUFFIXES) {
-      const source = `${dbPath}${suffix}`;
-      if (suffix !== "" && !(await pathExists(source))) continue;
-      if (!(await runCp(["--reflink=always", source, `${probe}${suffix}`]))) return false;
-    }
-    return true;
-  } finally {
-    for (const suffix of DB_FILE_SUFFIXES) {
-      await NodeFSP.rm(`${probe}${suffix}`, { force: true }).catch(() => undefined);
-    }
-  }
-}
-
-export interface BackupSpaceProbe {
-  readonly readFreeBytes: (directory: string) => Promise<number>;
-  readonly canClone: (dbPath: string, backupRoot: string) => Promise<boolean>;
-}
-
-const filesystemBackupSpaceProbe: BackupSpaceProbe = {
-  readFreeBytes: async (directory) => {
-    const stats = await NodeFSP.statfs(directory);
-    return stats.bavail * stats.bsize;
-  },
-  canClone: backupCanClone,
-};
-
-/** Check before stopping the server so full disks refuse updates without an outage. */
-export async function databaseBackupBlocker(
-  baseDir: string,
-  dbPath: string,
-  probe: Partial<BackupSpaceProbe> = {},
-): Promise<string | undefined> {
-  const { readFreeBytes, canClone } = { ...filesystemBackupSpaceProbe, ...probe };
-  const backupRoot = NodePath.join(baseDir, "runtime", "db-backup");
-  await NodeFSP.mkdir(backupRoot, { recursive: true, mode: 0o700 });
-  const [files, free] = await Promise.all([statDatabaseFiles(dbPath), readFreeBytes(backupRoot)]);
-  const size = files.reduce((total, file) => total + file.size, 0);
-  const fullCopyBytes = size * 1.05;
-  if (free >= fullCopyBytes) return undefined;
-  const clonedBytes = Math.max(
-    CLONED_BACKUP_MIN_HEADROOM_BYTES,
-    size * CLONED_BACKUP_HEADROOM_FRACTION,
-  );
-  const needed = (await canClone(dbPath, backupRoot)) ? clonedBytes : fullCopyBytes;
-  if (free >= needed) return undefined;
-  const gb = (bytes: number) => (bytes / GIB).toFixed(1);
-  return `Not enough free disk space to back up the database before updating: ${gb(needed)} GB needed, ${gb(free)} GB free. Free up disk space and try again. The server was not stopped.`;
-}
-
-/**
- * Snapshots the database once per update before the first trial, while the
- * caller holds server-owner.lock at `generation`. A completed backup is never
- * overwritten because a restarted launcher may be looking at database writes
- * from an earlier attempt by the same trial.
- */
-async function backupDatabaseOnce(
-  baseDir: string,
-  pending: PendingServiceUpdate,
-  generation: number,
-  signal: AbortSignal,
-): Promise<void> {
-  signal.throwIfAborted();
-  const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (await pathExists(backupDir)) return;
-
-  const stagingDir = `${backupDir}.staging`;
-  await NodeFSP.rm(stagingDir, { recursive: true, force: true });
-  await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
-  try {
-    for (const suffix of DB_FILE_SUFFIXES) {
-      signal.throwIfAborted();
-      const source = `${pending.dbPath}${suffix}`;
-      if (suffix !== "" && !(await pathExists(source))) continue;
-      const destination = databaseBackupFile(stagingDir, suffix);
-      await copyDatabaseFile(source, destination, signal);
-      await syncFile(destination);
-    }
-    signal.throwIfAborted();
-    const generationPath = NodePath.join(stagingDir, OWNER_GENERATION_FILE);
-    await NodeFSP.writeFile(generationPath, `${generation}\n`, { mode: 0o600 });
-    await syncFile(generationPath);
-    await NodeFSP.rename(stagingDir, backupDir);
-    await syncDirectory(NodePath.dirname(backupDir));
-  } catch (cause) {
-    await NodeFSP.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-    throw cause;
-  }
-}
-
-/** A rollback was decided, or its restore started, and recovery must finish it. */
-async function databaseRestorePending(
-  baseDir: string,
-  pending: PendingServiceUpdate,
-): Promise<boolean> {
-  const backupDir = databaseBackupDir(baseDir, pending.id);
-  return (
-    (await pathExists(NodePath.join(backupDir, ROLLBACK_MARKER))) ||
-    (await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))
-  );
-}
-
-async function writeMarker(backupDir: string, marker: string): Promise<void> {
-  const markerPath = NodePath.join(backupDir, marker);
-  if (!(await pathExists(markerPath))) {
-    const handle = await NodeFSP.open(markerPath, "wx", 0o600);
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await syncDirectory(backupDir);
-  }
-}
-
-// Resolve symlink targets even if a crashed cp -c left the final target missing.
-async function restoreTarget(path: string): Promise<string> {
-  let current = path;
-  for (let hops = 0; hops < 40; hops++) {
-    try {
-      return await NodeFSP.realpath(current);
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-    }
-    const link = await NodeFSP.readlink(current).catch((cause: unknown) => {
-      const code = (cause as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "EINVAL") return undefined;
-      throw cause;
-    });
-    if (link === undefined) return current;
-    // Do not normalize .. before following directory symlinks; match filesystem resolution.
-    current = NodePath.isAbsolute(link)
-      ? link
-      : `${await NodeFSP.realpath(NodePath.dirname(current))}${NodePath.sep}${link}`;
-  }
-  throw new Error(`Too many symbolic links resolving ${path}.`);
-}
-
-/**
- * Restores the backup under server-owner.lock. `busy` means another process
- * holds the lock now, and the rollback stays pending until it can run.
- * `kept` means a server other than this update's launcher and trial owned
- * the data since the backup, so its writes win over the snapshot. Once the
- * copy has started the live files are partial, and later attempts finish it
- * regardless. Retryable after any process crash while the backup remains.
- */
-async function restoreDatabaseBackup(
-  baseDir: string,
-  pending: PendingServiceUpdate,
-): Promise<"restored" | "busy" | "kept"> {
-  const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (!(await pathExists(backupDir))) return "restored";
-  await writeMarker(backupDir, ROLLBACK_MARKER);
-
-  const lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
-  if (lock === undefined) return "busy";
-  try {
-    if (!(await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))) {
-      const recorded = await NodeFSP.readFile(
-        NodePath.join(backupDir, OWNER_GENERATION_FILE),
-        "utf8",
-      ).catch(() => "");
-      const generation = Number.parseInt(recorded, 10);
-      const ours = new Set([
-        launcherOwner(pending.id),
-        trialOwner(pending.id),
-        probationOwner(pending.id),
-      ]);
-      // A backup without a recorded generation cannot prove nobody else wrote.
-      if (
-        !Number.isSafeInteger(generation) ||
-        lock.ownersSince(generation).some((owner) => !ours.has(owner))
-      ) {
-        return "kept";
-      }
-      await writeMarker(backupDir, RESTORE_MARKER);
-    }
-    const directories = new Set([NodePath.dirname(pending.dbPath)]);
-    for (const suffix of DB_FILE_SUFFIXES) {
-      const livePath = `${pending.dbPath}${suffix}`;
-      const source = databaseBackupFile(backupDir, suffix);
-      if (await pathExists(source)) {
-        // Restore through the link: cloning replaces its destination.
-        const target = await restoreTarget(livePath);
-        await copyDatabaseFile(source, target);
-        await syncFile(target);
-        directories.add(NodePath.dirname(target));
-      } else {
-        await NodeFSP.rm(livePath, { force: true });
-      }
-    }
-    for (const directory of directories) await syncDirectory(directory);
-    // A completed copy goes back to the ownership check if the launcher
-    // crashes before recording the rollback, so a server that writes after
-    // this point is never overwritten by a second copy.
-    await NodeFSP.rm(NodePath.join(backupDir, RESTORE_MARKER), { force: true });
-    await syncDirectory(backupDir);
-    return "restored";
-  } finally {
-    lock.release();
-  }
-}
-
-async function discardDatabaseBackup(baseDir: string, updateId: string): Promise<void> {
-  const backupDir = databaseBackupDir(baseDir, updateId);
-  if (!(await pathExists(backupDir))) return;
-  await NodeFSP.rm(backupDir, { recursive: true, force: true });
-  await syncDirectory(NodePath.dirname(backupDir));
-}
-
 export async function readServiceState(filePath: string): Promise<ServiceState> {
   const contents = await NodeFSP.readFile(filePath, "utf8");
   const state = parseServiceState(contents) ?? parseLegacyServiceState(contents);
@@ -409,26 +138,14 @@ export async function readServiceState(filePath: string): Promise<ServiceState> 
 }
 
 export async function writeServiceState(filePath: string, state: ServiceState): Promise<void> {
-  const directory = NodePath.dirname(filePath);
-  await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-  const tempPath = NodePath.join(
-    directory,
-    `.${NodePath.basename(filePath)}.${process.pid}.${NodeCrypto.randomUUID()}`,
-  );
-  let handle: NodeFSP.FileHandle | undefined;
-  try {
-    handle = await NodeFSP.open(tempPath, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await NodeFSP.rename(tempPath, filePath);
-    await syncDirectory(directory);
-  } finally {
-    await handle?.close().catch(() => undefined);
-    await NodeFSP.rm(tempPath, { force: true }).catch(() => undefined);
-  }
+  await NodeFSP.mkdir(NodePath.dirname(filePath), { recursive: true, mode: 0o700 });
+  await replaceFileDurably(filePath, `${JSON.stringify(state, null, 2)}\n`);
 }
+
+const sameSelection = (left: ServiceState, right: ServiceState) =>
+  left.activeVersion === right.activeVersion &&
+  left.update?.id === right.update?.id &&
+  left.update?.status === right.update?.status;
 
 async function runtimeExists(baseDir: string, version: string): Promise<boolean> {
   const paths = runtimePaths(baseDir, version);
@@ -511,6 +228,12 @@ export class Launcher {
   readonly #probationMs: number;
   readonly #now: () => number;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
+  readonly #serviceUnit: ServiceUnit | undefined;
+  readonly #stateDirOwnerPollMs: number;
+  #stateDirFreeProbes = 0;
+  #ownerBusySince: number | undefined;
+  #snapshot: DatabaseSnapshot | undefined;
+  #releaseServing: (() => void) | undefined;
 
   constructor(
     baseDir: string,
@@ -520,6 +243,8 @@ export class Launcher {
       readonly probationMs?: number;
       readonly now?: () => number;
       readonly environment?: Readonly<NodeJS.ProcessEnv>;
+      readonly serviceUnit?: ServiceUnit;
+      readonly stateDirOwnerPollMs?: number;
     } = {},
   ) {
     this.#baseDir = baseDir;
@@ -527,6 +252,8 @@ export class Launcher {
     this.#probationMs = options.probationMs ?? PROBATION_MS;
     this.#now = options.now ?? Date.now;
     this.#environment = { ...(options.environment ?? process.env) };
+    this.#serviceUnit = options.serviceUnit;
+    this.#stateDirOwnerPollMs = options.stateDirOwnerPollMs ?? STATE_DIR_OWNER_POLL_MS;
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
     this.#state = state;
   }
@@ -536,10 +263,27 @@ export class Launcher {
     const onSigint = () => void this.stop("SIGINT");
     process.once("SIGTERM", onSigterm);
     process.once("SIGINT", onSigint);
+    let logTimer: NodeJS.Timeout | undefined;
     try {
-      this.#enqueue(() => this.#recover());
+      this.#enqueue(async () => {
+        const logPath = await serviceLogPath(this.#serviceUnit);
+        if (logPath !== undefined) {
+          await boundServiceLog(logPath);
+          logTimer = setInterval(
+            () => void boundServiceLog(logPath),
+            SERVICE_LOG_CHECK_INTERVAL_MS,
+          ).unref();
+        }
+        await this.#recover();
+      });
       await this.#completion.promise;
     } finally {
+      if (this.#state.update?.status === "pending") {
+        await this.#clearHandoff(this.#state.update.id);
+      }
+      this.#releaseServing?.();
+      this.#releaseServing = undefined;
+      clearInterval(logTimer);
       process.off("SIGTERM", onSigterm);
       process.off("SIGINT", onSigint);
     }
@@ -597,90 +341,115 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
+  async #clearHandoff(generation: string): Promise<void> {
+    try {
+      await removeServiceUpdateHandoff(this.#baseDir, generation);
+    } catch (error) {
+      process.stderr.write(
+        `[service-launcher] Could not remove the service update handoff marker: ${String(error)}\n`,
+      );
+    }
+  }
+
+  // Local installs replace the selection and clear its update record; an old launcher must not
+  // write its own selection back over theirs.
+  async #selectState(next: ServiceState): Promise<void> {
+    const release = await acquireServiceSelectionLock(this.#statePath);
+    try {
+      if (!sameSelection(await readServiceState(this.#statePath), this.#state)) {
+        throw new Error("Service selection changed. Restart the service before updating.");
+      }
+      await writeServiceState(this.#statePath, next);
+      this.#state = next;
+    } finally {
+      release();
+    }
+  }
+
+  #repointServiceUnit(version: string): Promise<void> {
+    return repointServiceUnit({
+      unit: this.#serviceUnit,
+      baseDir: this.#baseDir,
+      version,
+      // The installer writes state before the unit under this lease; reading state needs no lease.
+      selectionUnchanged: async () =>
+        sameSelection(await readServiceState(this.#statePath), this.#state),
+    });
+  }
+
   async #recover(): Promise<void> {
+    this.#releaseServing = acquireServiceServingLock(this.#baseDir);
     // Clear old stop markers to preserve future tunnels; clear restart-pending only for the awaited version to avoid CLI races.
     await NodeFSP.rm(stopMarkerPath(this.#baseDir), { force: true }).catch(() => undefined);
-    const restartPending = restartPendingPath(this.#baseDir);
-    const awaitedVersion = await NodeFSP.readFile(restartPending, "utf8").catch(() => undefined);
-    if (awaitedVersion?.trim() === this.#state.activeVersion) {
-      await NodeFSP.rm(restartPending, { force: true }).catch(() => undefined);
+    await this.#clearRestartPending();
+    const { update, probation } = this.#state;
+    if (update?.status === "committed" && probation !== undefined) {
+      await this.#returnToPrevious(
+        { ...update, status: "pending", dbPath: probation.dbPath },
+        "rolled-back",
+        probation.rollbackReason ?? "rollback-interrupted",
+      );
+      return;
     }
-    const update = this.#state.update;
-    if (update?.status !== "pending") {
-      const probation = this.#state.probation;
-      if (update?.status === "committed" && probation !== undefined) {
-        if (
-          probation.rollbackReason !== undefined ||
-          (await databaseRestorePending(this.#baseDir, {
-            ...update,
-            status: "pending",
-            dbPath: probation.dbPath,
-          }))
-        ) {
-          await this.#returnToPrevious(
-            { ...update, status: "pending", dbPath: probation.dbPath },
-            "rolled-back",
-            probation.rollbackReason ?? "rollback-interrupted",
-          );
-          return;
-        }
-        await this.#resumeProbation();
-        if (this.#state.probation !== undefined) {
-          // A target that cannot even start must roll back now. Failing to the service manager
-          // instead would repeat until the deadline passes and the snapshot is discarded.
-          try {
-            await this.#startChild(this.#state.activeVersion, "active", update);
-          } catch {
-            this.#clearTimer();
-            await this.#returnToPrevious(
-              { ...update, status: "pending", dbPath: probation.dbPath },
-              "rolled-back",
-              "probation-start-failed",
-            );
-          }
-          return;
-        }
-      } else if (update !== undefined) {
-        await discardDatabaseBackup(this.#baseDir, update.id).catch(() => undefined);
+    if (update?.status === "pending") {
+      if ((await databasePhase(this.#baseDir, update.id)) !== "fresh") {
+        await this.#returnToPrevious(update, "failed", "rollback-interrupted");
+      } else if (!(await runtimeExists(this.#baseDir, update.targetVersion))) {
+        await this.#returnToPrevious(update, "failed", "target-runtime-missing");
+      } else {
+        await this.#startTrial(update);
       }
+      return;
+    }
+    try {
       await this.#startChild(this.#state.activeVersion, "active", update);
-      return;
+    } finally {
+      if (update !== undefined) await this.#repointServiceUnit(this.#state.activeVersion);
     }
-    if (await databaseRestorePending(this.#baseDir, update)) {
-      await this.#returnToPrevious(update, "failed", "rollback-interrupted");
-      return;
+  }
+
+  async #clearRestartPending(): Promise<void> {
+    const restartPending = restartPendingPath(this.#baseDir);
+    try {
+      const release = await acquireServiceSelectionLock(this.#statePath);
+      try {
+        const awaited = (
+          await NodeFSP.readFile(restartPending, "utf8").catch(() => undefined)
+        )?.trim();
+        if (
+          sameSelection(await readServiceState(this.#statePath), this.#state) &&
+          awaited !== undefined &&
+          isExactServiceVersion(awaited) &&
+          compareExactServiceVersions(awaited, this.#state.activeVersion) <= 0
+        ) {
+          await NodeFSP.rm(restartPending, { force: true });
+        }
+      } finally {
+        release();
+      }
+    } catch (error) {
+      process.stderr.write(
+        `[service-launcher] Could not clear ${restartPending}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
     }
-    if (!(await runtimeExists(this.#baseDir, update.targetVersion))) {
-      await this.#returnToPrevious(update, "failed", "target-runtime-missing");
-      return;
-    }
-    await this.#startTrial(update);
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
-    // The previous child is dead here. Holding server-owner.lock keeps every
-    // other server out while the three SQLite files are copied.
-    let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
     try {
-      lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
-    } catch {
-      await this.#returnToPrevious(pending, "failed", "db-backup-failed");
-      return;
+      this.#snapshot = await backupDatabase(this.#baseDir, pending, this.#stopSignal.signal);
+    } catch (cause) {
+      if (this.#stopRequested) return;
+      throw databaseRecoveryRequired(
+        this.#baseDir,
+        pending,
+        `Could not complete the snapshot: ${String(cause)}`,
+      );
     }
-    if (lock === undefined) {
+    if (this.#stopRequested) return;
+    if (this.#snapshot === undefined) {
       await this.#returnToPrevious(pending, "failed", "db-owner-busy");
       return;
     }
-    try {
-      await backupDatabaseOnce(this.#baseDir, pending, lock.generation, this.#stopSignal.signal);
-    } catch {
-      lock.release();
-      if (this.#stopRequested) return;
-      await this.#returnToPrevious(pending, "failed", "db-backup-failed");
-      return;
-    }
-    lock.release();
-    if (this.#stopRequested) return;
     try {
       await this.#startChild(pending.targetVersion, "trial", pending);
     } catch {
@@ -697,6 +466,8 @@ export class Launcher {
     const paths = runtimePaths(this.#baseDir, version);
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
+      launcherProtocol: SERVICE_LAUNCHER_GUARANTEES,
+      ...(role === "trial" ? { trialOwnerRefusal: true as const } : {}),
       childVersion: version,
       ...(update === undefined ? {} : { update }),
       ...(role === "active" && update?.status === "committed" && this.#state.probation !== undefined
@@ -745,7 +516,7 @@ export class Launcher {
     if (role === "trial") {
       this.#timer = setTimeout(
         () => this.#enqueue(() => this.#handlePreparedTimeout(managed)),
-        PREPARED_TIMEOUT_MS,
+        SERVICE_PREPARED_TIMEOUT_MS,
       );
     }
   }
@@ -822,9 +593,12 @@ export class Launcher {
       dbPath: message.dbPath,
       status: "pending",
     };
-    const next: ServiceState = { ...this.#state, update: pending };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    try {
+      await this.#selectState({ ...this.#state, update: pending });
+    } catch (error) {
+      await reject(error instanceof Error ? error.message : String(error));
+      return;
+    }
     await sendMessage(child.process, { type: "update-accepted", updateId: pending.id });
     this.#timer = setTimeout(() => this.#enqueue(() => this.#beginTrial(child)), HANDOFF_DELAY_MS);
   }
@@ -876,8 +650,8 @@ export class Launcher {
       update: committed,
       probation: { dbPath: pending.dbPath, deadline: this.#now() + this.#probationMs },
     };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    await this.#selectState(next);
+    await this.#clearHandoff(committed.id);
     child.role = "active";
     await this.#resumeProbation();
     try {
@@ -890,10 +664,11 @@ export class Launcher {
         "[service-launcher] Commit acknowledgement failed; awaiting child exit.\n",
       );
     }
+    await this.#repointServiceUnit(committed.targetVersion);
   }
 
   async #resumeProbation(): Promise<void> {
-    if (this.#stopping || this.#stopRequested || this.#done) return;
+    if (this.#stopping || this.#stopRequested || this.#done || this.#child === null) return;
     const probation = this.#state.probation;
     // A deadline callback already queued before cancellation must not erase a rollback.
     if (probation === undefined || probation.rollbackReason !== undefined) return;
@@ -915,11 +690,8 @@ export class Launcher {
     if (probation === undefined || probation.rollbackReason !== undefined) return;
     // The exit transition may still be queued behind a durable write at the deadline.
     if (this.#child?.exitedAt !== undefined && this.#child.exitedAt < probation.deadline) return;
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
-    if (next.update !== undefined) {
-      await discardDatabaseBackup(this.#baseDir, next.update.id).catch(() => undefined);
-    }
+    await this.#selectState(next);
+    this.#snapshot = undefined;
   }
 
   async #handlePreparedTimeout(child: ManagedChild): Promise<void> {
@@ -939,6 +711,15 @@ export class Launcher {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
+      const pending = this.#state.update;
+      if (
+        pending !== undefined &&
+        (child.role === "trial" || this.#state.probation !== undefined)
+      ) {
+        // Exit 78 alone cannot tell us whether the owner was in the generation log.
+        this.#snapshot = undefined;
+        await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
+      }
       await this.#idleWhileRefused("state-dir-owned");
       return;
     }
@@ -989,32 +770,111 @@ export class Launcher {
     throw new Error(`Active child exited unexpectedly (${String(code ?? signal ?? "unknown")}).`);
   }
 
-  /**
-   * Exiting would make systemd or launchd start another refused server, so stay
-   * idle until stopped or restarted. A pending update fails without restoring
-   * its backup: another build may have written to the database since.
-   */
+  // Exiting would make systemd or launchd start another refused server, so stay idle. A home
+  // another server owns is probed until it frees; a database a newer build wrote fails a pending
+  // update at once, without restoring over that build's writes.
   async #idleWhileRefused(reason: "state-dir-owned" | "database-ahead"): Promise<void> {
+    this.#releaseServing?.();
+    this.#releaseServing = undefined;
     this.#clearTimer();
     const pending = this.#state.update;
-    if (pending?.status === "pending") {
+    if (pending?.status === "pending" && reason === "database-ahead") {
+      if ((await databasePhase(this.#baseDir, pending.id)) !== "fresh") {
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          pending,
+          "The running version refused the database.",
+        );
+      }
       const next: ServiceState = {
         ...this.#state,
         activeVersion: pending.fromVersion,
         update: terminalUpdate({ pending, status: "failed", reason }),
       };
-      await writeServiceState(this.#statePath, next);
-      this.#state = next;
-      await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
+      await this.#selectState(next);
+      await this.#repointServiceUnit(next.activeVersion);
+    }
+    if (pending?.status === "pending" && reason === "state-dir-owned") {
+      this.#ownerBusySince ??= this.#now();
     }
     await this.#resumeProbation();
-    // Signal listeners alone do not keep Node alive.
-    this.#timer = setInterval(() => {}, 2_147_483_647);
+    this.#stateDirFreeProbes = 0;
+    // The interval also keeps Node alive: signal listeners alone do not.
+    if (reason === "state-dir-owned") this.#scheduleStateDirProbe();
+    else this.#timer = setInterval(() => {}, 2_147_483_647);
     process.stderr.write(
       reason === "database-ahead"
         ? "[service-launcher] This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.\n"
         : "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
     );
+  }
+
+  #scheduleStateDirProbe(): void {
+    const timer = setTimeout(
+      () =>
+        this.#enqueue(async () => {
+          if (this.#timer !== timer) return;
+          await this.#reclaimStateDir();
+          if (this.#timer === timer) this.#scheduleStateDirProbe();
+        }),
+      this.#stateDirOwnerPollMs,
+    );
+    this.#timer = timer;
+  }
+
+  async #reclaimStateDir(): Promise<void> {
+    if (this.#stopRequested || this.#timer === undefined || this.#child !== null) return;
+    const update = this.#state.update;
+    const pending = update?.status === "pending" ? update : undefined;
+    const owner = await stateDirOwner(
+      pending === undefined ? NodePath.join(this.#baseDir, "userdata") : ownerLockDir(pending),
+    );
+    // A stop during the probe clears the timer.
+    if (this.#timer === undefined) return;
+    // A relaunching desktop app frees the home for a few seconds; leave it that gap.
+    this.#stateDirFreeProbes = owner === undefined ? this.#stateDirFreeProbes + 1 : 0;
+    if (owner !== undefined) {
+      const since = this.#ownerBusySince;
+      if (pending === undefined || since === undefined) return;
+      const trialStarted = (await databasePhase(this.#baseDir, pending.id)) !== "fresh";
+      if (trialStarted) this.#snapshot = undefined;
+      if (this.#now() - since < STATE_DIR_OWNER_BOUND_MS) return;
+      this.#ownerBusySince = undefined;
+      const gaveUp =
+        "[service-launcher] The GOAT home stayed owned by another server for 10 minutes; the update failed (db-owner-busy).\n";
+      if (trialStarted) {
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          pending,
+          "Another owner was observed after the snapshot.",
+        );
+      }
+      await this.#returnToPrevious(pending, "failed", "db-owner-busy");
+      process.stderr.write(gaveUp);
+      return;
+    }
+    if (this.#stateDirFreeProbes < 2) return;
+    this.#clearTimer();
+    this.#ownerBusySince = undefined;
+    this.#releaseServing = acquireServiceServingLock(this.#baseDir);
+    process.stderr.write("[service-launcher] The GOAT home is free again. Starting the server.\n");
+    if (pending === undefined) {
+      const probation = this.#state.probation;
+      if (update?.status === "committed" && probation !== undefined) {
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          { ...update, status: "pending", dbPath: probation.dbPath },
+          "Another owner was observed during probation.",
+        );
+      }
+      await this.#startChild(this.#state.activeVersion, "active", update);
+      return;
+    }
+    if ((await databasePhase(this.#baseDir, pending.id)) !== "fresh") {
+      await this.#returnToPrevious(pending, "failed", "state-dir-owned");
+      return;
+    }
+    await this.#startTrial(pending);
   }
 
   async #returnToPrevious(
@@ -1024,45 +884,42 @@ export class Launcher {
     child?: ManagedChild,
   ): Promise<void> {
     this.#clearTimer();
-    if (this.#state.probation !== undefined) {
-      // Recovery must finish this rollback even if the lock stays busy past the deadline.
-      const next = {
-        ...this.#state,
-        probation: { ...this.#state.probation, rollbackReason: reason },
-      };
-      await writeServiceState(this.#statePath, next);
-      this.#state = next;
-    }
     if (child !== undefined) {
       this.#child = null;
       await terminateChild(child.process);
     }
-    const restore = await restoreDatabaseBackup(this.#baseDir, pending);
-    if (restore === "busy") {
-      // Another server owns the userdata. Starting the previous version would
-      // skip the restore, so retry until the lock frees up.
-      this.#clearTimer();
-      this.#timer = setTimeout(
-        () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
-        RESTORE_RETRY_MS,
-      );
+    const outcome = terminalUpdate({ pending, status, reason });
+    const { probation, ...state } = this.#state;
+    const next: ServiceState = { ...state, activeVersion: pending.fromVersion, update: outcome };
+    const selection = await selectDatabaseRollback(
+      this.#baseDir,
+      pending,
+      this.#snapshot,
+      probation !== undefined,
+      () => this.#selectState(next),
+    );
+    if (selection !== "busy") await this.#clearHandoff(pending.id);
+    if (selection === "busy") {
+      if (!this.#stopRequested) {
+        this.#timer = setTimeout(
+          () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
+          Math.min(RESTORE_RETRY_MS, this.#stateDirOwnerPollMs),
+        );
+      }
       return;
     }
-    const outcome = terminalUpdate({
-      pending,
-      status,
-      reason: restore === "kept" ? `${reason};db-kept-for-other-server` : reason,
-    });
-    const { probation: _probation, ...state } = this.#state;
-    const next: ServiceState = {
-      ...state,
-      activeVersion: pending.fromVersion,
-      update: outcome,
-    };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
-    await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
-    await this.#startChild(next.activeVersion, "active", outcome);
+    this.#snapshot = undefined;
+    try {
+      // oxlint-disable-next-line goat/no-global-process-runtime -- The standalone launcher has no Effect runtime.
+      if (process.platform !== "win32")
+        await repointRegisteredPosixLaunchers(
+          this.#baseDir,
+          runtimePaths(this.#baseDir, next.activeVersion).entryPath,
+        );
+      await this.#startChild(next.activeVersion, "active", outcome);
+    } finally {
+      await this.#repointServiceUnit(next.activeVersion);
+    }
   }
 }
 
@@ -1082,5 +939,10 @@ export async function main(): Promise<void> {
   if (state === undefined) throw new Error("Service state is invalid or unsupported.");
   if (current === undefined && !(await runtimeExists(baseDir, state.activeVersion)))
     throw new Error(`Selected goat@${state.activeVersion} runtime is missing or incomplete.`);
-  await new Launcher(baseDir, state, { environment }).run();
+  const serviceUnit = await serviceUnitFromEnvironment();
+  await new Launcher(
+    baseDir,
+    state,
+    serviceUnit === undefined ? { environment } : { environment, serviceUnit },
+  ).run();
 }

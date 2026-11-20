@@ -25,8 +25,17 @@ import { ManagedRelay } from "@goat/client-runtime/relay";
 import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
 import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
+import { liveSpeechAvailable } from "../../speech/liveSpeechPreference";
+import { retryBusyTranscription } from "../../speech/retryBusyTranscription";
 import { toastManager } from "../ui/toast";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
+import { readThreadShell } from "../../state/entities";
+import { MAX_UNATTACHED_VOICE_TRANSCRIPTS, voiceSession } from "../../speech/voiceSession";
+import { captureBackgroundVoiceDraft } from "../../speech/backgroundVoiceDraft";
+import { startLiveSpeechSession } from "../../speech/liveSpeechSession";
+import { createLiveSpeechTransport } from "../../rpc/liveSpeechTransport";
+import { LiveSpeechFramePump, type LiveSpeechFrameSession } from "../../speech/liveSpeechFramePump";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   readEnvironmentProxiedByHub,
@@ -50,10 +59,11 @@ import { collectInlineContextIds } from "../../lib/composerContextReferences";
 import {
   formatVoiceRecordingDuration,
   isVoiceRecordingCancelledError,
-  useVoiceRecorder,
+  BrowserVoiceRecorder,
   VoiceMicrophoneError,
   type VoiceRecordingOptions,
   type VoiceRecordingPayload,
+  type VoiceRecordingCapture,
 } from "../../lib/voiceRecorder";
 
 export interface ComposerVoiceTarget {
@@ -67,15 +77,18 @@ export interface ComposerVoiceTarget {
   /** Where this composer's audio is transcribed; see resolveVoiceTranscriptionRoute. */
   readonly route: VoiceTranscriptionRoute;
   readonly localModelGrant?: EnvironmentSpeechGrant | null;
+  readonly liveEnabled?: boolean;
 }
 
 interface VoiceControllerState extends VoiceInputState {
   readonly streamingPreviewText: string;
+  readonly unattachedTranscript?: string;
 }
 
 export interface ComposerVoiceDependencies {
   readonly startRecording: (options: VoiceRecordingOptions) => Promise<void>;
   readonly stopRecording: () => Promise<VoiceRecordingPayload | null>;
+  readonly stopRecordingDeferred?: () => Promise<VoiceRecordingCapture | null>;
   readonly cancelRecording: () => Promise<void>;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: (text: string, selection: VoiceDraftSnapshot["selection"]) => void;
@@ -86,6 +99,12 @@ export interface ComposerVoiceDependencies {
     payload: VoiceRecordingPayload,
     signal: AbortSignal,
   ) => Promise<{ readonly text: string }>;
+  readonly startLive?: (
+    target: ComposerVoiceTarget,
+    onPreview: (text: string) => void,
+    onFailure: () => void,
+    signal: AbortSignal,
+  ) => Promise<LiveSpeechFrameSession | null>;
 }
 
 const IDLE: VoiceControllerState = {
@@ -105,12 +124,20 @@ export class ComposerVoiceController {
   private appliedSequence = 0;
   private queued: { sequence: number; payload: VoiceRecordingPayload } | null = null;
   private captured: VoiceDraftSnapshot | null = null;
+  private livePump: LiveSpeechFramePump | null = null;
+  private submitHandler: ComposerVoiceDependencies["onSubmit"];
   private readonly listeners = new Set<() => void>();
 
   constructor(
     private target: ComposerVoiceTarget,
     private readonly dependencies: ComposerVoiceDependencies,
-  ) {}
+  ) {
+    this.submitHandler = dependencies.onSubmit;
+  }
+
+  readonly setSubmitHandler = (handler: ComposerVoiceDependencies["onSubmit"]) => {
+    this.submitHandler = handler;
+  };
 
   readonly getSnapshot = () => this.state;
   readonly subscribe = (listener: () => void) => {
@@ -155,6 +182,8 @@ export class ComposerVoiceController {
     this.generation++;
     this.abort?.abort();
     this.abort = null;
+    this.livePump?.cancel();
+    this.livePump = null;
     this.captured = null;
     this.retirePreviews();
     this.publish(IDLE);
@@ -188,6 +217,22 @@ export class ComposerVoiceController {
     this.sequence = 0;
     this.appliedSequence = 0;
     this.publish({ ...IDLE, phase: "preparing" });
+    if (target.localModelGrant && target.liveEnabled !== false && this.dependencies.startLive) {
+      const startLive = this.dependencies.startLive;
+      this.livePump = new LiveSpeechFramePump(
+        (signal, onFailure) =>
+          startLive(
+            target,
+            (text) => {
+              if (generation === this.generation && this.state.phase === "recording")
+                this.publish({ ...this.state, streamingPreviewText: text });
+            },
+            onFailure,
+            signal,
+          ),
+        () => {},
+      );
+    }
     // Warming the server must never delay microphone access or make recording fail.
     void Promise.resolve()
       .then(() => {
@@ -196,10 +241,25 @@ export class ComposerVoiceController {
       .catch(() => undefined);
     try {
       await this.dependencies.startRecording({
-        onStreamingChunk: (payload) => {
-          if (!target.localModelGrant && generation === this.generation)
-            this.enqueuePreview(payload);
-        },
+        ...(this.livePump
+          ? {
+              shouldEncodePcm: () => this.livePump?.active === true,
+              onPcmError: () => this.livePump?.stopStreaming(),
+              onPcmSamples: (samples: Float32Array, sampleRate: number) => {
+                if (generation === this.generation) this.livePump?.pushSamples(samples, sampleRate);
+              },
+              onPcmFrame: (frame: Uint8Array) => {
+                if (generation === this.generation) this.livePump?.push(frame);
+              },
+            }
+          : {}),
+        ...(!target.localModelGrant
+          ? {
+              onStreamingChunk: (payload: VoiceRecordingPayload) => {
+                if (generation === this.generation) this.enqueuePreview(payload);
+              },
+            }
+          : {}),
         onLimitReached: () => {
           if (generation === this.generation) void this.confirm();
         },
@@ -214,8 +274,10 @@ export class ComposerVoiceController {
     }
   };
 
-  private fail(error: unknown) {
+  private fail(error: unknown, unattachedTranscript?: string) {
     this.abort?.abort();
+    this.livePump?.cancel();
+    this.livePump = null;
     this.retirePreviews();
     this.publish({
       ...IDLE,
@@ -223,6 +285,7 @@ export class ComposerVoiceController {
       error: error instanceof Error ? error.message : "Voice transcription failed.",
       errorAction:
         error instanceof VoiceMicrophoneError && error.opensSystemSettings ? "settings" : "retry",
+      ...(unattachedTranscript?.trim() ? { unattachedTranscript } : {}),
     });
   }
 
@@ -272,21 +335,47 @@ export class ComposerVoiceController {
   readonly send = () => this.finish(true);
 
   private async finish(send: boolean): Promise<boolean> {
-    if (send && !this.dependencies.onSubmit) return false;
+    if (send && !this.submitHandler) return false;
     if (this.state.phase !== "recording" || !this.captured || !this.abort) return false;
     const generation = this.generation;
     const target = this.target;
     const captured = this.captured;
     const signal = this.abort.signal;
     const isCurrent = () => generation === this.generation && !signal.aborted;
+    let unattachedTranscript: string | undefined;
     this.retirePreviews();
-    this.publish({ ...this.state, phase: "transcribing", streamingPreviewText: "" });
+    this.publish({
+      ...this.state,
+      phase: "transcribing",
+      streamingPreviewText: this.livePump ? this.state.streamingPreviewText : "",
+    });
     try {
-      const payload = await this.dependencies.stopRecording();
+      const deferredCapture =
+        this.livePump && this.dependencies.stopRecordingDeferred
+          ? await this.dependencies.stopRecordingDeferred()
+          : undefined;
+      const payload =
+        deferredCapture === undefined ? await this.dependencies.stopRecording() : undefined;
       if (!isCurrent()) return false;
-      if (!payload) throw new Error("No audio was captured. Check your microphone and try again.");
-      const result = await this.dependencies.transcribe(target, payload, signal);
+      if (deferredCapture === null || payload === null)
+        throw new Error("No audio was captured. Check your microphone and try again.");
+      const attemptedLive = this.livePump !== null;
+      const liveText = await this.livePump?.finish();
+      this.livePump = null;
       if (!isCurrent()) return false;
+      let result: { readonly text: string };
+      if (liveText != null) result = { text: liveText };
+      else {
+        const fullPayload = deferredCapture?.encode() ?? payload;
+        if (!fullPayload)
+          throw new Error("No audio was captured. Check your microphone and try again.");
+        const transcribe = () => this.dependencies.transcribe(target, fullPayload, signal);
+        result = attemptedLive
+          ? await retryBusyTranscription(transcribe, signal)
+          : await transcribe();
+      }
+      if (!isCurrent()) return false;
+      unattachedTranscript = result.text;
       const commit = resolveTranscriptCommit(
         captured,
         this.dependencies.readDraft(),
@@ -299,20 +388,22 @@ export class ComposerVoiceController {
             ? {
                 ...IDLE,
                 phase: "error",
-                error: "The draft changed while recording. Record again to insert voice text.",
+                error: "The draft changed while recording. The transcript was kept separately.",
                 errorAction: "retry",
+                unattachedTranscript: result.text,
               }
             : IDLE,
         );
         return false;
       }
       this.captured = null;
-      this.publish(IDLE);
       this.dependencies.commitDraft(commit.text, commit.selection);
-      if (send && commit.text.trim() && isCurrent()) this.dependencies.onSubmit?.(commit.text);
+      unattachedTranscript = undefined;
+      this.publish(IDLE);
+      if (send && commit.text.trim() && isCurrent()) this.submitHandler?.(commit.text);
       return true;
     } catch (error) {
-      if (isCurrent()) this.fail(error);
+      if (isCurrent()) this.fail(error, unattachedTranscript);
       return false;
     }
   }
@@ -327,15 +418,39 @@ export interface UseComposerVoiceControllerOptions extends ComposerVoiceTarget {
   readonly resolveContext?: (
     environmentId: EnvironmentId,
   ) => Promise<EnvironmentVoiceRequestContext | null>;
+  readonly captureBackgroundDraft?: () => {
+    readonly readDraft: ComposerVoiceDependencies["readDraft"];
+    readonly commitDraft: ComposerVoiceDependencies["commitDraft"];
+    readonly dispose: () => void;
+  };
 }
 
 export function useComposerVoiceController(options: UseComposerVoiceControllerOptions) {
-  const recorder = useVoiceRecorder();
+  const [recorder] = useState(() => new BrowserVoiceRecorder());
+  const registry = useSyncExternalStore(
+    voiceSession.subscribe,
+    voiceSession.getSnapshot,
+    voiceSession.getSnapshot,
+  );
+  const currentRecorder =
+    registry.active?.ownerKey === options.ownerKey
+      ? (registry.active.recorder ?? recorder)
+      : recorder;
+  const recorderState = useSyncExternalStore(
+    currentRecorder.subscribe,
+    currentRecorder.getSnapshot,
+    currentRecorder.getSnapshot,
+  );
+  const background = useRef<ReturnType<
+    NonNullable<UseComposerVoiceControllerOptions["captureBackgroundDraft"]>
+  > | null>(null);
+  const mounted = useRef(true);
   const draftVersionRef = useRef<{ snapshot: VoiceDraftSnapshot | null; revision: number }>({
     snapshot: null,
     revision: 0,
   });
   const readDraft = useStableCallback(() => {
+    if (background.current) return background.current.readDraft();
     const draftVersion = draftVersionRef.current;
     const snapshot = options.readDraft();
     if (
@@ -349,16 +464,24 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
   });
   const commitDraft = useStableCallback(
     (text: string, selection: VoiceDraftSnapshot["selection"]) => {
-      flushSync(() => options.commitDraft(text, selection));
+      const binding = background.current;
+      flushSync(() => {
+        if (binding) binding.commitDraft(text, selection);
+        else options.commitDraft(text, selection);
+      });
     },
   );
-  const onSubmit = useStableCallback((text: string) => options.onSubmit?.(text));
+  const onSubmit = useStableCallback((text: string) => {
+    if (mounted.current && (!registry.active || registry.active.ownerKey === options.ownerKey))
+      options.onSubmit?.(text);
+  });
   const resolveContext = useStableCallback(options.resolveContext ?? resolveComposerVoiceContext);
-  const [controller] = useState(
+  const [localController] = useState(
     () =>
       new ComposerVoiceController(options, {
         startRecording: recorder.startRecording,
         stopRecording: recorder.stopRecording,
+        stopRecordingDeferred: recorder.stopRecordingDeferred,
         cancelRecording: recorder.cancelRecording,
         readDraft,
         commitDraft,
@@ -370,6 +493,23 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
           const context = await resolveContext(request.environmentId);
           if (!context || signal.aborted) return;
           return prewarmEnvironmentVoice(context, request.routing, { signal });
+        },
+        startLive: async (target, onPreview, onFailure, signal) => {
+          const grant = target.localModelGrant;
+          const request = voiceTranscriptionRequest(target.route, target);
+          if (!grant || !request) return null;
+          const canSend = () =>
+            isEnvironmentSpeechGrantCurrent(grant) &&
+            readEnvironmentScope(request.environmentId, AuthOrchestrationOperateScope) &&
+            !readEnvironmentProxiedByHub(request.environmentId);
+          return startLiveSpeechSession({
+            transport: createLiveSpeechTransport(request.environmentId, canSend),
+            locale: target.locale,
+            canSend,
+            onPreview,
+            onFailure,
+            signal,
+          });
         },
         transcribe: async (target, payload, signal) => {
           const request = voiceTranscriptionRequest(target.route, target);
@@ -399,12 +539,49 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
         },
       }),
   );
+  const controller =
+    registry.active?.ownerKey === options.ownerKey
+      ? (registry.active.controller as ComposerVoiceController)
+      : localController;
+  const ownsController = !registry.active || registry.active.ownerKey === options.ownerKey;
+  const start = async () => {
+    const session = voiceSession.getSnapshot();
+    if (
+      session.active ||
+      session.unattached.length >= MAX_UNATTACHED_VOICE_TRANSCRIPTS ||
+      !options.enabled
+    )
+      return;
+    const binding = options.captureBackgroundDraft?.() ?? null;
+    background.current = binding;
+    await voiceSession.start({
+      ownerKey: options.ownerKey,
+      persistent: binding !== null,
+      environmentId:
+        options.route.kind === "unavailable" ? options.environmentId : options.route.environmentId,
+      controller: localController,
+      recorder,
+      dispose: () => {
+        binding?.dispose();
+        background.current = null;
+      },
+    });
+  };
   // oxlint-disable-next-line goat/react-effect-budget -- Retire microphone and network work before a navigation commit can receive stale results.
   useLayoutEffect(() => {
-    controller.setTarget(options);
-  }, [controller, options]);
+    if (!registry.active || registry.active.ownerKey === options.ownerKey) {
+      controller.setTarget(options);
+      controller.setSubmitHandler(options.onSubmit ? onSubmit : undefined);
+    }
+  }, [controller, options, registry.active, onSubmit]);
   // oxlint-disable-next-line goat/react-effect-budget -- The controller owns cancellable recording and HTTP requests for this mounted composer.
-  useLayoutEffect(() => () => controller.cancel(), [controller]);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      voiceSession.ownerUnmounted(localController);
+    };
+  }, [localController]);
   const subscribeDraft = options.subscribeDraft;
   // oxlint-disable-next-line goat/react-effect-budget -- Observe draft edits before asynchronous transcription completes, including edit then undo.
   useLayoutEffect(
@@ -414,32 +591,41 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
       }),
     [subscribeDraft, readDraft],
   );
-  const state = useSyncExternalStore(
+  const controllerState = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  const state = ownsController ? controllerState : IDLE;
   return {
     state,
     voiceControl: {
-      disabled: !options.enabled || voiceInputBlocksSubmission(state),
+      disabled:
+        !options.enabled ||
+        registry.active !== null ||
+        registry.unattached.length >= MAX_UNATTACHED_VOICE_TRANSCRIPTS ||
+        voiceInputBlocksSubmission(state),
       onClick: () => {
         options.onStart?.();
-        void controller.start();
+        void start();
       },
     },
     isVoiceActive: voiceInputBlocksSubmission(state),
-    canStart: options.enabled && !voiceInputBlocksSubmission(state),
-    blocksSubmission: controller.blocksSubmission,
+    canStart:
+      options.enabled &&
+      registry.active === null &&
+      registry.unattached.length < MAX_UNATTACHED_VOICE_TRANSCRIPTS &&
+      !voiceInputBlocksSubmission(state),
+    blocksSubmission: () => ownsController && controller.blocksSubmission(),
     isVoiceStarting: state.phase === "preparing",
     isVoiceRecording: state.phase === "recording",
     isVoiceTranscribing: state.phase === "transcribing",
-    isVoiceWaitingForAudio: state.phase === "recording" && !recorder.hasAudioSignal,
-    voiceWaveformLevels: recorder.waveformLevels,
-    voiceRecordingDurationLabel: formatVoiceRecordingDuration(recorder.durationMs),
+    isVoiceWaitingForAudio: state.phase === "recording" && !recorderState.hasAudioSignal,
+    voiceWaveformLevels: recorderState.waveformLevels,
+    voiceRecordingDurationLabel: formatVoiceRecordingDuration(recorderState.durationMs),
     streamingPreviewText: state.streamingPreviewText,
     transcriptionRoute: options.route,
-    start: controller.start,
+    start,
     confirm: controller.confirm,
     send: controller.send,
     cancel: controller.cancel,
@@ -481,6 +667,11 @@ export function useChatComposerVoiceController(
   const grant = useEnvironmentSpeechGrant();
   const selectedGrant = grant;
   const destinationId = selectedGrant?.environmentId ?? options.environmentId;
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(destinationId));
+  const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(destinationId));
+  const transcribeAfterStop = useClientSettings((settings) => settings.speechTranscribeAfterStop);
+  const streamingAvailable =
+    selectedGrant !== null && liveSpeechAvailable(serverConfig, serverSettings?.speech.modelId);
   const { environments } = useEnvironments();
   const permitted = useEnvironmentsWithScope(environments, AuthOrchestrationOperateScope);
   const destinations = environments.filter(
@@ -513,10 +704,32 @@ export function useChatComposerVoiceController(
     ownerKey,
     route,
     localModelGrant: selectedGrant,
+    liveEnabled: streamingAvailable && !transcribeAfterStop,
     enabled:
       options.enabled && (!selectedGrant || (hasScope && Option.isSome(connection) && !isProxied)),
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     subscribeDraft: useComposerDraftStore.subscribe,
+    ...(typeof options.draftTarget !== "string" && options.threadId !== null
+      ? {
+          captureBackgroundDraft: () => {
+            const target = options.draftTarget;
+            if (typeof target === "string") throw new Error("A thread draft is required.");
+            const current = useComposerDraftStore.getState().getComposerDraft(target);
+            const text = current?.prompt ?? "";
+            return captureBackgroundVoiceDraft({
+              ownerKey,
+              selection: options.editorRef.current?.readSelectionRange() ?? {
+                start: text.length,
+                end: text.length,
+              },
+              read: () => useComposerDraftStore.getState().getComposerDraft(target)?.prompt ?? null,
+              exists: () => readThreadShell(target) !== null,
+              write: (next) => useComposerDraftStore.getState().setPrompt(target, next),
+              subscribe: useComposerDraftStore.subscribe,
+            });
+          },
+        }
+      : {}),
     readDraft: () => {
       const text =
         useComposerDraftStore.getState().getComposerDraft(options.draftTarget)?.prompt ?? "";
@@ -545,6 +758,10 @@ export function useChatComposerVoiceController(
         selected: selectedGrant !== null,
         environmentId: destinationId,
         canManage: canManage && Option.isSome(connection) && !isProxied,
+        streamingAvailable,
+        transcribeAfterStop,
+        setTranscribeAfterStop: (value: boolean) =>
+          void updateClientSettings({ speechTranscribeAfterStop: value }),
         resolveContext: resolveComposerVoiceContext,
         destinations: destinations.map(({ environmentId, label }) => ({ environmentId, label })),
         enable: (id: EnvironmentId) => {

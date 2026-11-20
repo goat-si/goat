@@ -27,3 +27,22 @@ export interface ResolvedFilePreviewSource extends FilePreviewMetadata {
   readonly uri: string;
   readonly gallery?: readonly (FilePreviewMetadata & { readonly uri: string })[];
 }
+
+export type FilePreviewViewerSource =
+  | ResolvedFilePreviewSource
+  | {
+      readonly kind: "image";
+      readonly selectedIndex: number;
+      readonly images: readonly {
+        readonly name: string;
+        readonly sourceIdentifier: string;
+        readonly uri: string | null | undefined;
+      }[];
+    };
+
+export interface FilePreviewViewerProps {
+  readonly source: FilePreviewViewerSource;
+  readonly onRequestClose: () => void;
+  readonly onOpenError?: (error: unknown) => void;
+  readonly onPresent?: (isFinished: () => boolean) => void;
+}

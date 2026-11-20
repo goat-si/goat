@@ -1,3 +1,4 @@
+import { projectGroupingModeDescription } from "~/sidebarProjectGrouping";
 import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
@@ -150,6 +151,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -330,17 +332,6 @@ function projectExpansionPreferenceKeys(project: SidebarProjectSnapshot): string
   ];
 }
 
-function projectGroupingModeDescription(mode: SidebarProjectGroupingMode): string {
-  switch (mode) {
-    case "repository":
-      return "Projects from the same repository share one sidebar row.";
-    case "repository_path":
-      return "Projects group only when both the repository and repo-relative path match.";
-    case "separate":
-      return "Every project path gets its own sidebar row.";
-  }
-}
-
 function buildThreadJumpLabelMap(input: {
   keybindings: ResolvedKeybindingsConfig;
   platform: string;
@@ -377,7 +368,7 @@ interface SidebarThreadRowProps {
   childAttention: SidebarChildAttention | undefined;
   displayedThreadKeys: readonly string[];
   isActive: boolean;
-  openPullRequestsInRightPanel: boolean;
+  readOpensPullRequestsInRightPanel: () => boolean;
   jumpLabel: string | null;
   appSettingsConfirmThreadArchive: boolean;
   renamingThreadKey: string | null;
@@ -437,7 +428,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const {
     displayedThreadKeys,
     isActive,
-    openPullRequestsInRightPanel,
+    readOpensPullRequestsInRightPanel,
     jumpLabel,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
@@ -640,6 +631,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const handlePrClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
     const url = prStatus?.url ?? currentLinkedPr?.url;
     if (!url) return;
+    const openPullRequestsInRightPanel = readOpensPullRequestsInRightPanel();
     const openedInRightPanel = openPrLink(
       event,
       url,
@@ -975,7 +967,7 @@ interface SidebarProjectThreadListProps {
   /** The route's row key, with an open subagent standing for its owner row. */
   launchRouteKey: string | null;
   childAttentionByKey: ReadonlyMap<string, SidebarChildAttention>;
-  openPullRequestsInRightPanel: boolean;
+  readOpensPullRequestsInRightPanel: () => boolean;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   appSettingsConfirmThreadArchive: boolean;
   renamingThreadKey: string | null;
@@ -1033,7 +1025,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     activeRouteThreadKey,
     openSubagent,
     childAttentionByKey,
-    openPullRequestsInRightPanel,
+    readOpensPullRequestsInRightPanel,
     threadJumpLabelByKey,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
@@ -1093,7 +1085,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               }
               displayedThreadKeys={displayedThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
-              openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+              readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
               jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
               appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
               renamingThreadKey={renamingThreadKey}
@@ -1186,7 +1178,7 @@ interface SidebarProjectItemProps {
   project: SidebarProjectSnapshot;
   isThreadListExpanded: boolean;
   activeRouteThreadKey: string | null;
-  openPullRequestsInRightPanel: boolean;
+  readOpensPullRequestsInRightPanel: () => boolean;
   newThreadShortcutLabel: string | null;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
@@ -1214,7 +1206,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     project,
     isThreadListExpanded,
     activeRouteThreadKey,
-    openPullRequestsInRightPanel,
+    readOpensPullRequestsInRightPanel,
     newThreadShortcutLabel,
     handleNewThread,
     archiveThread,
@@ -2435,7 +2427,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         launchFold={launchFold}
         launchRouteKey={routeRowKey}
         childAttentionByKey={childAttentionByKey}
-        openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+        readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
         threadJumpLabelByKey={threadJumpLabelByKey}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         renamingThreadKey={renamingThreadKey}
@@ -2862,7 +2854,7 @@ interface SidebarProjectsContentProps {
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
   routeThreadKey: string | null;
-  openPullRequestsInRightPanel: boolean;
+  readOpensPullRequestsInRightPanel: () => boolean;
   newThreadShortcutLabel: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
@@ -2912,7 +2904,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     expandedThreadListsByProject,
     activeRouteProjectKey,
     routeThreadKey,
-    openPullRequestsInRightPanel,
+    readOpensPullRequestsInRightPanel,
     newThreadShortcutLabel,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
@@ -2979,7 +2971,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 projectKeyByScopedRef={projectKeyByScopedRef}
                 isThreadListExpanded
                 activeRouteThreadKey={routeThreadKey}
-                openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+                readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
                 newThreadShortcutLabel={newThreadShortcutLabel}
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
@@ -3057,7 +3049,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         activeRouteThreadKey={
                           activeRouteProjectKey === project.projectKey ? routeThreadKey : null
                         }
-                        openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+                        readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
                         newThreadShortcutLabel={newThreadShortcutLabel}
                         handleNewThread={handleNewThread}
                         archiveThread={archiveThread}
@@ -3098,7 +3090,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 activeRouteThreadKey={
                   activeRouteProjectKey === project.projectKey ? routeThreadKey : null
                 }
-                openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+                readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
                 newThreadShortcutLabel={newThreadShortcutLabel}
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
@@ -3497,6 +3489,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   );
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const readOpensPullRequestsInRightPanel = useStableCallback(() => routeThreadRef !== null);
   const openSubagentOwnerKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? null;
   const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
   const routeTerminalOpen = useTerminalUiStateStore((state) =>
@@ -3782,8 +3775,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
       void bridge
         .installUpdate()
         .then((result) => {
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
+          const actionError = getDesktopUpdateInstallError(result);
           if (!actionError) return;
           toastManager.add(
             stackedThreadToast({
@@ -3865,7 +3857,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}
         routeThreadKey={routeThreadKey}
-        openPullRequestsInRightPanel={routeThreadRef !== null}
+        readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
         newThreadShortcutLabel={newThreadShortcutLabel}
         threadJumpLabelByKey={visibleThreadJumpLabelByKey}
         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}

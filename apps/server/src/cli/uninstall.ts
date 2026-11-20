@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 
 import * as BootService from "../cloud/bootService.ts";
+import { findPosixLauncher } from "../cloud/posixLauncher.ts";
 import {
   launcherOwnsVersionsDir,
   pinnedRuntimeVersionsDir,
@@ -26,7 +27,8 @@ import {
 } from "../cloud/serviceProtocol.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
-import { findWindowsShim, resolveLauncherPath } from "./update.ts";
+import { findWindowsShim } from "./update.ts";
+import { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
 import { hostShellWord } from "./invocation.ts";
 
 export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
@@ -75,10 +77,13 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
       ? shimPath
       : undefined;
   }
-  const linkTarget = yield* fs.readLink(input.launchedAs).pipe(Effect.option);
-  if (Option.isNone(linkTarget)) return undefined;
-  const resolved = path.resolve(path.dirname(input.launchedAs), linkTarget.value);
-  return launcherOwnsVersionsDir(path, input.versionsDir, resolved) ? input.launchedAs : undefined;
+  const launchedAs = input.launchedAs;
+  const environment = yield* HostProcess.Environment;
+  const cwd = yield* HostProcess.WorkingDirectory;
+  const home = yield* HostProcess.HomeDirectory;
+  return yield* Effect.promise(() =>
+    findPosixLauncher({ launchedAs, versionsDir: input.versionsDir, environment, cwd, home }),
+  );
 });
 
 // cmd.exe needs verbatim quoting and a literal path, with delayed expansion disabled.

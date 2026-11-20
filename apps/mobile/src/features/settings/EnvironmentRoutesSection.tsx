@@ -1,3 +1,4 @@
+import { environmentPresentations } from "../../state/presentation";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -61,6 +62,8 @@ export function EnvironmentRoutesSection({
 }) {
   const entry = useAtomValue(environmentCatalog.catalogValueAtom).entries.get(environmentId);
   const prepared = useAtomValue(environmentSession.preparedConnectionValueAtom(environmentId));
+  const refusedRouteIds =
+    useAtomValue(environmentPresentations.presentationAtom(environmentId))?.refusedRouteIds ?? [];
   const sessionResult = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   const session = Option.getOrNull(AsyncResult.value(sessionResult));
   const [permissionsOpen, setPermissionsOpen] = useState(false);
@@ -198,6 +201,7 @@ export function EnvironmentRoutesSection({
               position={index + 1}
               count={routes.length}
               inUse={id === activeRouteId}
+              refused={refusedRouteIds.includes(id)}
               editing={editing}
               offset={index === dragFrom ? (drag?.translation ?? 0) : shift}
               lifted={index === dragFrom}
@@ -237,6 +241,7 @@ function RouteRow(props: {
   readonly position: number;
   readonly count: number;
   readonly inUse: boolean;
+  readonly refused: boolean;
   readonly editing: boolean;
   readonly offset: number;
   readonly lifted: boolean;
@@ -250,6 +255,10 @@ function RouteRow(props: {
   const { route, lifted, offset } = props;
   const label = connectionRouteLabel(route);
   const address = connectionRouteAddress(route);
+  const refusedHint =
+    props.refused && address !== null
+      ? "The host refused this device's sign-in. Pair this address again with Add route."
+      : null;
   const style = useAnimatedStyle(() => ({
     transform: [
       {
@@ -291,6 +300,8 @@ function RouteRow(props: {
           address,
           isLearned(route) ? "Found automatically" : null,
           props.inUse ? "In use" : null,
+          props.refused ? "Sign-in refused" : null,
+          refusedHint,
           `Route ${props.position} of ${props.count}`,
         ]
           .filter((part) => part !== null)
@@ -316,11 +327,17 @@ function RouteRow(props: {
             {props.inUse ? (
               <StatusPill {...connectionTone("connected")} label="In use" size="compact" />
             ) : null}
+            {props.refused ? (
+              <StatusPill {...connectionTone("error")} label="Sign-in refused" size="compact" />
+            ) : null}
           </View>
           {address !== null ? (
             <Text numberOfLines={1} className="text-sm text-foreground-muted">
               {isLearned(route) ? `${address} · found automatically` : address}
             </Text>
+          ) : null}
+          {refusedHint !== null ? (
+            <Text className="text-sm text-foreground-muted">{refusedHint}</Text>
           ) : null}
         </View>
       </View>

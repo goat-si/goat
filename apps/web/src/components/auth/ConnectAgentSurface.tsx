@@ -1,3 +1,4 @@
+import { normalizePairingCode } from "@goat/shared/pairingCode";
 import { msg, useMessages } from "gt-react";
 import {
   type AuthMcpApprovalDecision,
@@ -159,7 +160,7 @@ export function ConnectAgentSurface({
           : {
               _tag: "pairing-code",
               access,
-              code: pairingCode.trim(),
+              code: normalizePairingCode(pairingCode.trim()),
               memoryScopes,
               workspaceTerminalScopes,
             };

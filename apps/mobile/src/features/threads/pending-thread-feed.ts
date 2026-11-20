@@ -28,6 +28,13 @@ export type PendingThreadFeedEntry = ThreadFeedEntry & {
   readonly acknowledged?: boolean;
 };
 
+export interface PendingFoldFeedEntry {
+  readonly type: "pending-fold";
+  readonly id: string;
+  readonly createdAt: string;
+  readonly messageId: string;
+}
+
 // An acknowledged row stops being pending once the thread catches up to it,
 // even when the feed hides that message (a rolled-back or cancelled run).
 export function selectPendingAcknowledgedMessages(
@@ -51,11 +58,11 @@ export function selectPendingAcknowledgedMessages(
 }
 
 /** A row of the thread feed's list. */
-export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry;
+export type ThreadFeedRow = PendingThreadFeedEntry | GuestPendingFeedEntry | PendingFoldFeedEntry;
 
 /** Waiting guest messages go after the transcript, oldest first. */
 export function appendGuestPendingMessages(
-  presentedFeed: ReadonlyArray<PendingThreadFeedEntry>,
+  presentedFeed: ReadonlyArray<PendingThreadFeedEntry | PendingFoldFeedEntry>,
   share: ThreadGuestShare | null,
 ): ReadonlyArray<ThreadFeedRow> {
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];

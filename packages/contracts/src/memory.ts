@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
-import * as SchemaAST from "effect/SchemaAST";
+import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
   EnvironmentId,
@@ -164,7 +164,6 @@ export type MemoryImportSourceId = typeof MemoryImportSourceId.Type;
 
 export const MemorySourceReadRequestId = uuid.pipe(Schema.brand("MemorySourceReadRequestId"));
 export type MemorySourceReadRequestId = typeof MemorySourceReadRequestId.Type;
-
 export const MemoryModelSelection = struct({
   instanceId: canonical.pipe(Schema.brand("ProviderInstanceId")),
   model: canonical,
@@ -1870,14 +1869,24 @@ export const MemoryHubDisableInput = struct({
   expectedVersion: NonNegativeInt,
 });
 export type MemoryHubDisableInput = typeof MemoryHubDisableInput.Type;
-export const MemorySettingsGetInput = struct({});
+export const MemorySettingsGetInput = struct({
+  includeModelAvailability: Schema.optionalKey(Schema.Boolean).annotate({
+    description: "Include modelAvailable in the response.",
+  }),
+});
 export type MemorySettingsGetInput = typeof MemorySettingsGetInput.Type;
-export const MemorySettingsView = struct({
+const memorySettingsViewFields = {
   enabled: Schema.Boolean,
   hub: struct({ mode: Schema.Literals(["disabled", "hub", "member"]), version: NonNegativeInt }),
   model: struct({ selection: MemoryModelSelection, automatic: Schema.Boolean }),
-});
+};
+export const MemorySettingsView = struct(memorySettingsViewFields);
 export type MemorySettingsView = typeof MemorySettingsView.Type;
+export const MemorySettingsViewWithAvailability = struct({
+  ...memorySettingsViewFields,
+  modelAvailable: Schema.optionalKey(Schema.Boolean),
+});
+export type MemorySettingsViewWithAvailability = typeof MemorySettingsViewWithAvailability.Type;
 export const MemorySettingsUpdateInput = struct({
   requestId: MemoryOperationId,
   enabled: Schema.optionalKey(Schema.Boolean),

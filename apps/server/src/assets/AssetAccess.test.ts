@@ -1,6 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
   AssetAccessError,
@@ -10,7 +8,6 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { MCP_APP_MAX_HTML_BYTES } from "@goat/shared/mcpApp";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@goat/shared/projectFavicon";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
@@ -26,9 +23,15 @@ import { vi } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import { assetFileResponse } from "../http.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
+import {
+  ASSET_ROUTE_PREFIX,
+  issueAssetUrl,
+  resolveAsset,
+  resolveVerifiedAsset,
+} from "./AssetAccess.ts";
 import {
   layerTest,
+  scopedMediaFixture,
   oversizedScreenshotItem,
   screenshotItem,
   screenshotPng,
@@ -44,60 +47,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
 describe("AssetAccess", () => {
-  describe("readMcpAppHtml", () => {
-    it.effect("accepts snapshots at the stored HTML byte limit", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-mcp-html-" });
-        const file = path.join(directory, "app.html");
-        const limit = MCP_APP_MAX_HTML_BYTES + 128 * 1024;
-        yield* fileSystem.writeFile(file, new Uint8Array(limit).fill(120));
-        const bytes = yield* readMcpAppHtml(file);
-        expect(bytes?.byteLength).toBe(limit);
-        expect(bytes?.every((byte) => byte === 120)).toBe(true);
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-    );
-    it.effect("rejects snapshots one byte past the limit and much larger files", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-mcp-html-" });
-        const file = path.join(directory, "app.html");
-        const limit = MCP_APP_MAX_HTML_BYTES + 128 * 1024;
-        for (const size of [limit + 1, limit * 2]) {
-          yield* fileSystem.writeFile(file, new Uint8Array(size).fill(120));
-          expect(yield* readMcpAppHtml(file)).toBeNull();
-        }
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-    );
-    it.effect("preserves UTF-8 bytes across stream chunks and accepts empty snapshots", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-mcp-html-" });
-        const file = path.join(directory, "app.html");
-        for (const html of ["", "<body>" + "☃".repeat(100_000) + "</body>"]) {
-          const expected = new TextEncoder().encode(html);
-          yield* fileSystem.writeFile(file, expected);
-          const bytes = yield* readMcpAppHtml(file);
-          expect(bytes?.byteLength).toBe(expected.byteLength);
-          expect(bytes && new TextDecoder().decode(bytes)).toBe(html);
-        }
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-    );
-    // regression: #17026 apply host color scheme to saved MCP apps
-    it.effect("preserves filesystem failures instead of reporting oversized HTML", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-mcp-html-" });
-        const error = yield* readMcpAppHtml(path.join(directory, "missing.html")).pipe(Effect.flip);
-        expect(error._tag).toBe("PlatformError");
-        expect(error.reason._tag).toBe("NotFound");
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-    );
-  });
   it.effect("serves an image a tool returned inline from the stored item", () =>
     Effect.gen(function* () {
       const resource = {
@@ -863,6 +812,15 @@ describe("AssetAccess", () => {
         kind: "file",
         path: canonicalCssPath,
       });
+      yield* fileSystem.makeDirectory(path.join(root, "clips"));
+      for (const mediaName of ["clips/clip.mp4", "clips/clip.webm", "clips/clip.mp3"]) {
+        const mediaPath = path.join(root, mediaName);
+        yield* fileSystem.writeFileString(mediaPath, "media bytes");
+        expect(yield* resolveAsset(token, mediaName)).toMatchObject({
+          kind: "file",
+          path: yield* fileSystem.realPath(mediaPath),
+        });
+      }
       for (const extension of ["otf", "ttf", "woff", "woff2"]) {
         const fontName = `preview.${extension}`;
         const fontPath = path.join(root, fontName);
@@ -921,6 +879,40 @@ describe("AssetAccess", () => {
         }
       }
     }).pipe(Effect.provide(layerTest)),
+  );
+  it.effect.skipIf(!symlinksSupported)(
+    "rejects a scoped media file replaced by a symlink after validation",
+    () =>
+      Effect.gen(function* () {
+        const { fs, token, media, replacement, mediaPath } = yield* scopedMediaFixture();
+        const good = yield* resolveVerifiedAsset(token, "clip.mp4");
+        if (good?.asset.kind !== "file" || good.file === undefined)
+          throw new Error("Expected a guarded file");
+        const ranged = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ ...good.asset, file: good.file }, "bytes=0-7"),
+        );
+        expect(ranged.status).toBe(206);
+        expect(yield* Effect.promise(() => ranged.text())).toBe("original");
+        let changed = false;
+        const filesystem = FileSystem.FileSystem.of({
+          ...fs,
+          stat: Effect.fn(function* (filePath) {
+            const info = yield* fs.stat(filePath);
+            if (filePath === mediaPath && !changed) {
+              changed = true;
+              yield* fs.remove(media);
+              yield* fs.symlink(replacement, media);
+            }
+            return info;
+          }),
+        });
+        expect(
+          yield* resolveVerifiedAsset(token, "clip.mp4").pipe(
+            Effect.provideService(FileSystem.FileSystem, filesystem),
+          ),
+        ).toBeNull();
+        expect(changed).toBe(true);
+      }).pipe(Effect.provide(layerTest)),
   );
   it.effect("rejects workspace files outside the authorized root", () =>
     Effect.gen(function* () {

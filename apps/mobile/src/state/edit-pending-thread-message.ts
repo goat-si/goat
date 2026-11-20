@@ -1,6 +1,7 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@goat/contracts";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
+import { dispatchingQueuedMessageIdsAtom } from "./threadOutboxDispatching";
 import {
   confirmThreadOutboxMessageQueued,
   threadOutboxRevision,
@@ -27,6 +28,7 @@ export async function editPendingThreadMessage(message: QueuedThreadMessage): Pr
   if (
     message.creation ||
     appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId ||
+    appAtomRegistry.get(dispatchingQueuedMessageIdsAtom)[message.messageId] ||
     appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId]
   ) {
     return false;

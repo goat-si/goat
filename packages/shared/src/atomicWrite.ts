@@ -18,38 +18,56 @@ const LOCKED_RENAME_RETRIES = 20;
 const LOCKED_RENAME_RETRY_DELAY = "100 millis";
 const CHUNK_WRITE_LENGTH = 1 << 20;
 
-/** Resolves symlink targets before renaming so writes preserve the link. Iterable contents stream in bounded batches. */
+/** Preserves symlinks by default. Iterable contents stream in bounded batches. */
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string | Iterable<string>;
+  /** Requires an exclusive writer and reserves the destination's `.staging` sibling. */
+  readonly reuseStagingFile?: true;
+  /** Stages beside the configured path and renames over a symlink at that path. */
+  readonly replaceSymlink?: true;
 }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const platform = yield* HostProcess.Platform;
-      const targetPath = yield* resolveSymlinkTarget(input.filePath);
+      const targetPath = input.replaceSymlink
+        ? path.resolve(input.filePath)
+        : yield* resolveSymlinkTarget(input.filePath);
       const targetDirectory = path.dirname(targetPath);
 
       yield* fs.makeDirectory(targetDirectory, { recursive: true });
+      const stagingOptions = input.reuseStagingFile
+        ? ({ flag: "wx", mode: 0o600 } as const)
+        : undefined;
+      const stagingPath = `${targetPath}.staging`;
       // Cleanup failure must not fail a write that already landed.
-      const tempDirectory = yield* Effect.acquireRelease(
-        fs.makeTempDirectory({
-          directory: targetDirectory,
-          prefix: `${path.basename(targetPath)}.`,
-        }),
-        (directory) => fs.remove(directory, { recursive: true }).pipe(Effect.ignore({ log: true })),
-      );
-      const tempPath = path.join(tempDirectory, "contents.tmp");
+      const tempPath = stagingOptions
+        ? yield* Effect.acquireRelease(
+            fs.remove(stagingPath, { force: true }).pipe(Effect.as(stagingPath)),
+            (file) => fs.remove(file, { force: true }).pipe(Effect.ignore({ log: true })),
+          )
+        : path.join(
+            yield* Effect.acquireRelease(
+              fs.makeTempDirectory({
+                directory: targetDirectory,
+                prefix: "goat-write-",
+              }),
+              (directory) =>
+                fs.remove(directory, { recursive: true }).pipe(Effect.ignore({ log: true })),
+            ),
+            "contents.tmp",
+          );
 
       const contents = input.contents;
       if (typeof contents === "string") {
-        yield* fs.writeFileString(tempPath, contents);
+        yield* fs.writeFileString(tempPath, contents, stagingOptions);
       } else {
         // Closed before the rename, which Windows refuses for open files.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const file = yield* fs.open(tempPath, { flag: "w" });
+            const file = yield* fs.open(tempPath, stagingOptions ?? { flag: "w" });
             const encoder = new TextEncoder();
             let batch: string[] = [];
             let batchLength = 0;
@@ -68,7 +86,9 @@ export const writeFileStringAtomically = (input: {
       if (platform !== "win32") return yield* fs.rename(tempPath, targetPath);
 
       // Stop retrying if another save changes the target; read-only targets also return permanent EPERM.
-      const targetVersion = fs.stat(targetPath).pipe(
+      const targetVersion = (
+        input.replaceSymlink ? fs.lstat(targetPath) : fs.stat(targetPath)
+      ).pipe(
         Effect.map((info) => ({
           id: `${Option.getOrUndefined(info.ino)}:${info.size}:${Option.getOrUndefined(info.mtime)?.getTime()}`,
           readOnly: (info.mode & 0o200) === 0,

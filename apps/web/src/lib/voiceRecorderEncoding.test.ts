@@ -103,6 +103,98 @@ function fakeMicrophone() {
 }
 
 describe("browser microphone lifecycle", () => {
+  it("streams ordered PCM frames and flushes the final fragment on stop", async () => {
+    await using mic = fakeMicrophone();
+    const frames: Uint8Array[] = [];
+    const start = mic.recorder.startRecording({ onPcmFrame: (frame) => frames.push(frame) });
+    mic.permission.resolve(mic.stream);
+    await start;
+    const audio = new Float32Array(48_004).fill(0.25);
+    mic.frame(audio);
+    expect(frames.map((frame) => frame.byteLength)).toEqual([32_000]);
+    const full = await mic.recorder.stopRecording();
+    expect(full?.durationMs).toBe(1_000);
+    expect(frames.map((frame) => frame.byteLength)).toEqual([32_000, 2]);
+    const expected = encodeMonoPcm16Wav([audio], 48_000, 16_000);
+    if (!expected) throw new Error("invalid audio fixture");
+    expect(Uint8Array.from(frames.flatMap((frame) => [...frame]))).toEqual(
+      expected.bytes.subarray(44),
+    );
+  });
+
+  it("hands retained capture samples to live streaming without another PCM copy", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmFrame = vi.fn();
+    const onPcmSamples = vi.fn((samples: Float32Array) => {
+      samples[0] = 0.5;
+    });
+    const start = mic.recorder.startRecording({ onPcmFrame, onPcmSamples });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmSamples).toHaveBeenCalledOnce();
+    expect(onPcmFrame).not.toHaveBeenCalled();
+    const payload = await mic.recorder.stopRecording();
+    const wav = Buffer.from(payload?.audioBase64 ?? "", "base64");
+    expect(wav.readInt16LE(44)).toBe(Math.round(0.5 * 32_767));
+  });
+
+  it("does not flush a pending PCM fragment after cancellation", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmFrame = vi.fn();
+    const start = mic.recorder.startRecording({ onPcmFrame });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_004).fill(0.25));
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+    await mic.recorder.cancelRecording();
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+  });
+
+  it("stops encoding live PCM after the stream falls back to batch", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmFrame = vi.fn();
+    let active = true;
+    const start = mic.recorder.startRecording({ onPcmFrame, shouldEncodePcm: () => active });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+    active = false;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    await mic.recorder.stopRecording();
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the full recording when live PCM encoding cannot start", async () => {
+    await using mic = fakeMicrophone();
+    mic.context.sampleRate = 500_000;
+    const onPcmFrame = vi.fn();
+    const onPcmError = vi.fn();
+    const start = mic.recorder.startRecording({ onPcmFrame, onPcmError });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(5_000).fill(0.25));
+    expect(await mic.recorder.stopRecording()).not.toBeNull();
+    expect(onPcmError).toHaveBeenCalledOnce();
+    expect(onPcmFrame).not.toHaveBeenCalled();
+  });
+
+  it("keeps recording when a live PCM consumer fails", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmError = vi.fn();
+    const start = mic.recorder.startRecording({
+      onPcmFrame: () => {
+        throw new Error("stream closed");
+      },
+      onPcmError,
+    });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmError).toHaveBeenCalledOnce();
+    expect(await mic.recorder.stopRecording()).not.toBeNull();
+  });
   it("drops only initial digital silence, downmixes, streams WAV and releases all resources on stop", async () => {
     await using mic = fakeMicrophone();
     const onStreamingChunk = vi.fn();
@@ -144,17 +236,33 @@ describe("browser microphone lifecycle", () => {
 
   it("releases the microphone immediately when cancelled while its audio context is resuming", async () => {
     await using mic = fakeMicrophone();
+    const resuming = deferred<void>();
     const resumed = deferred<void>();
-    mic.context.resume.mockImplementation(() => resumed.promise);
+    mic.context.resume.mockImplementation(() => {
+      resuming.resolve();
+      return resumed.promise;
+    });
     const start = mic.recorder.startRecording().catch((error: unknown) => error);
     mic.permission.resolve(mic.stream);
-    await mic.permission.promise;
+    await resuming.promise;
     await mic.recorder.cancelRecording();
     expect(mic.stop).toHaveBeenCalledOnce();
     expect(mic.context.close).toHaveBeenCalledOnce();
     resumed.resolve();
     expect(isVoiceRecordingCancelledError(await start)).toBe(true);
     expect(mic.stop).toHaveBeenCalledOnce();
+  });
+
+  it("releases a microphone whose grant is still settling when cancelled, without an audio context", async () => {
+    await using mic = fakeMicrophone();
+    const start = mic.recorder.startRecording().catch((error: unknown) => error);
+    mic.permission.resolve(mic.stream);
+    await mic.permission.promise;
+    await mic.recorder.cancelRecording();
+    expect(isVoiceRecordingCancelledError(await start)).toBe(true);
+    expect(mic.stop).toHaveBeenCalledOnce();
+    expect(mic.context.resume).not.toHaveBeenCalled();
+    expect(mic.recorder.getSnapshot()).toMatchObject({ isStarting: false, isRecording: false });
   });
 
   it("retains at most 160 waveform levels and stops publishing after cancellation", async () => {

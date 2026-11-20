@@ -181,6 +181,8 @@ export const UsageLimitSourceSnapshot = Schema.Struct({
   label: TrimmedNonEmptyString,
   /** Origin of the hub, which also serves the agents sent through it. */
   origin: Schema.optional(TrimmedNonEmptyString),
+  /** Credential-free origin and base path of the quota hub. */
+  endpoint: Schema.optionalKey(TrimmedNonEmptyString),
   checkedAt: IsoDateTime,
   /** The OpenCodex Home whose newest snapshot decides membership and state. */
   homeId: Schema.optional(TrimmedNonEmptyString),

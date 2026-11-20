@@ -4,6 +4,7 @@ import {
   ThreadId,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
+  type ProviderDriverKind,
   type RunId,
   type ScreenBindingHints,
 } from "@goat/contracts";
@@ -46,6 +47,7 @@ export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly runId?: RunId;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly providerDriver?: ProviderDriverKind | undefined;
   /** False omits the preview capability wherever the token is honored. Defaults to full access. */
   readonly browserToolsAvailable?: boolean;
   readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
@@ -120,9 +122,14 @@ export interface McpSessionRegistryShape {
    * without counting the check as use: a stream that only watches a credential must not keep
    * it alive.
    */
-  readonly inspect: (
-    rawToken: string,
-  ) => Effect.Effect<{ readonly threadId: ThreadId; readonly recheckAt: number } | undefined>;
+  readonly inspect: (rawToken: string) => Effect.Effect<
+    | {
+        readonly threadId: ThreadId;
+        readonly recheckAt: number;
+        readonly recheckAtMonotonicMs: number;
+      }
+    | undefined
+  >;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -130,12 +137,21 @@ export class McpSessionRegistry extends Context.Service<
   McpSessionRegistryShape
 >()("goat/mcp/McpSessionRegistry") {}
 
+interface AliveMark {
+  readonly wallMs: number;
+  readonly monotonicMs: number;
+}
+
+function idleMs(since: AliveMark, now: AliveMark): number {
+  return Math.max(now.wallMs - since.wallMs, now.monotonicMs - since.monotonicMs);
+}
+
 interface CredentialRecord {
   readonly tokenHash: string;
   /** Bumped whenever authority is replaced under the same token. */
   readonly generation: number;
   readonly scope: McpInvocationContext.McpThreadInvocationScope;
-  readonly lastAliveAt: number;
+  readonly lastAlive: AliveMark;
   readonly memoryPolicy: McpMemoryPolicy | undefined;
   readonly readCurrentPolicy: (() => Effect.Effect<McpMemoryPolicy | undefined>) | undefined;
   readonly isLiveCaller: Effect.Effect<boolean> | undefined;
@@ -288,7 +304,18 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make(registryState(new Map(), new Map()));
   const changes = yield* PubSub.sliding<void>(1);
-  const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
+  const { now } = options;
+  const currentAliveMark = now
+    ? Effect.sync(() => {
+        const timestamp = now();
+        return { wallMs: timestamp, monotonicMs: timestamp };
+      })
+    : Effect.all({
+        wallMs: Clock.currentTimeMillis,
+        monotonicMs: Clock.monotonicTimeNanos.pipe(
+          Effect.map((nanos) => Number(nanos / 1_000_000n)),
+        ),
+      });
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const runTag = yield* random.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
   registerCredentialRunTag(runTag);
@@ -305,17 +332,17 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       .digest(Digest.sha256, new TextEncoder().encode(token))
       .pipe(Effect.map(bytesToHex), Effect.orDie);
 
-  const isIdle = (record: CredentialRecord, timestamp: number) =>
-    timestamp - record.lastAliveAt > livenessWindowMs;
+  const isIdle = (record: CredentialRecord, now: AliveMark) =>
+    idleMs(record.lastAlive, now) > livenessWindowMs;
 
   /**
    * Moves idle records to tombstones. One whose session may still be attached
    * stays live until a probe says otherwise: the bounded tombstones must never
    * evict a credential a provider process still holds.
    */
-  const pruneIdle = (current: RegistryState, timestamp: number): RegistryState => {
+  const pruneIdle = (current: RegistryState, now: AliveMark): RegistryState => {
     const idle = Array.from(current.records).filter(
-      ([, record]) => record.isAttached === undefined && isIdle(record, timestamp),
+      ([, record]) => record.isAttached === undefined && isIdle(record, now),
     );
     if (idle.length === 0) return current;
     const records = new Map(current.records);
@@ -324,13 +351,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       records,
       withTombstones(
         current.tombstones,
-        idle.map(([tokenHash, record]) => [tokenHash, tombstoneOf(record, "expired", timestamp)]),
+        idle.map(([tokenHash, record]) => [tokenHash, tombstoneOf(record, "expired", now.wallMs)]),
       ),
     );
   };
 
   /** Expires the record unless it was replaced or touched meanwhile. */
-  const expire = (record: CredentialRecord, timestamp: number) =>
+  const expire = (record: CredentialRecord, now: AliveMark) =>
     SynchronizedRef.modify(state, (current) => {
       if (current.records.get(record.tokenHash) !== record) return [false, current] as const;
       const records = new Map(current.records);
@@ -340,20 +367,18 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         registryState(
           records,
           withTombstones(current.tombstones, [
-            [record.tokenHash, tombstoneOf(record, "expired", timestamp)],
+            [record.tokenHash, tombstoneOf(record, "expired", now.wallMs)],
           ]),
         ),
       ] as const;
     });
 
   /** Eventually removes idle records whose session GOAT no longer holds. */
-  const expireDetached = Effect.fn("McpSessionRegistry.expireDetached")(function* (
-    timestamp: number,
-  ) {
+  const expireDetached = Effect.fn("McpSessionRegistry.expireDetached")(function* (now: AliveMark) {
     const idle = Array.from((yield* SynchronizedRef.get(state)).records.values()).filter(
-      (record) => record.isAttached !== undefined && isIdle(record, timestamp),
+      (record) => record.isAttached !== undefined && isIdle(record, now),
     );
-    for (const record of idle) if (!(yield* record.isAttached!)) yield* expire(record, timestamp);
+    for (const record of idle) if (!(yield* record.isAttached!)) yield* expire(record, now);
   });
 
   const liveRecord = (tokenHash: string) =>
@@ -361,8 +386,8 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   const issue: McpSessionRegistryShape["issue"] = Effect.fn("McpSessionRegistry.issue")(
     function* (request) {
-      const issuedAt = yield* currentTimeMillis;
-      yield* expireDetached(issuedAt);
+      const issuedAlive = yield* currentAliveMark;
+      yield* expireDetached(issuedAlive);
       const freshId = yield* random.uuidV4().pipe(Effect.orDie);
       const freshToken =
         runTag + (yield* random.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie));
@@ -433,6 +458,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             ...(request.runId === undefined ? {} : { runId: request.runId }),
             providerSessionId,
             providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+            providerDriver: request.providerDriver,
             subagent: request.subagent === true,
           },
           client: undefined,
@@ -442,13 +468,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             "pull-requests",
             ...(request.capabilities ?? (browserToolsAvailable ? (["preview"] as const) : [])),
           ]),
-          issuedAt,
+          issuedAt: issuedAlive.wallMs,
         };
         return {
           tokenHash,
           generation,
           scope,
-          lastAliveAt: issuedAt,
+          lastAlive: issuedAlive,
           memoryPolicy: request.memoryPolicy,
           readCurrentPolicy: request.readCurrentPolicy,
           isLiveCaller: request.isLiveCaller,
@@ -457,7 +483,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       };
 
       const { record, renewed } = yield* SynchronizedRef.modify(state, (before) => {
-        const current = pruneIdle(before, issuedAt);
+        const current = pruneIdle(before, issuedAlive);
         const retained =
           renewHash === undefined
             ? undefined
@@ -506,7 +532,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const renewIdle = Effect.fn("McpSessionRegistry.renewIdle")(function* (
     tokenHash: string,
     tombstone: Tombstone,
-    timestamp: number,
+    now: AliveMark,
   ) {
     const record = tombstone.record;
     if (!record?.isAttached || !(yield* record.isAttached)) return undefined;
@@ -516,7 +542,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const live = current.records.get(tokenHash);
       if (live) return [live, current] as const;
       if (current.tombstones.get(tokenHash) !== tombstone) return [undefined, current] as const;
-      const next = { ...record, lastAliveAt: timestamp };
+      const next = { ...record, lastAlive: now };
       const tombstones = new Map(current.tombstones);
       tombstones.delete(tokenHash);
       return [
@@ -535,22 +561,22 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const resolveHash = Effect.fn("McpSessionRegistry.resolveHash")(function* (
     tokenHash: string,
   ): Effect.fn.Return<McpInvocationContext.McpThreadInvocationScope | undefined> {
-    const timestamp = yield* currentTimeMillis;
+    const now = yield* currentAliveMark;
     const pruned = yield* SynchronizedRef.modify(state, (before) => {
-      const current = pruneIdle(before, timestamp);
+      const current = pruneIdle(before, now);
       return [current, current] as const;
     });
     let record = pruned.records.get(tokenHash);
-    while (record?.isAttached && isIdle(record, timestamp)) {
+    while (record?.isAttached && isIdle(record, now)) {
       if (yield* record.isAttached) break;
-      if (yield* expire(record, timestamp)) return undefined;
+      if (yield* expire(record, now)) return undefined;
       // Replaced or touched during the probe; judge the current record instead.
       record = yield* liveRecord(tokenHash);
     }
     if (!record) {
       const tombstone = pruned.tombstones.get(tokenHash);
       if (tombstone?.reason !== "expired") return undefined;
-      record = yield* renewIdle(tokenHash, tombstone, timestamp);
+      record = yield* renewIdle(tokenHash, tombstone, now);
       if (!record) return undefined;
     }
     let scope = record.scope;
@@ -569,7 +595,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       if (!latest) return [undefined, current] as const;
       const records = new Map(current.records).set(tokenHash, {
         ...latest,
-        lastAliveAt: timestamp,
+        lastAlive: now,
       });
       // Authority replaced while the policy was read: answer with the
       // replacement's scope, never the superseded one.
@@ -592,18 +618,21 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
       for (;;) {
-        const timestamp = yield* currentTimeMillis;
+        const now = yield* currentAliveMark;
         // The same pruning resolve starts with; it judges records and renews none.
         const current = yield* SynchronizedRef.modify(state, (before) => {
-          const pruned = pruneIdle(before, timestamp);
+          const pruned = pruneIdle(before, now);
           return [pruned, pruned] as const;
         });
         const live = current.records.get(tokenHash);
-        if (live !== undefined && !isIdle(live, timestamp))
+        if (live !== undefined && !isIdle(live, now)) {
+          const remaining = livenessWindowMs - idleMs(live.lastAlive, now) + 1;
           return {
             threadId: live.scope.thread.threadId,
-            recheckAt: live.lastAliveAt + livenessWindowMs + 1,
+            recheckAt: now.wallMs + remaining,
+            recheckAtMonotonicMs: now.monotonicMs + remaining,
           };
+        }
         const tombstone = current.tombstones.get(tokenHash);
         // Idle, or expired for idleness: still valid while its session is attached, as resolve
         // would renew it then; ask again after another window.
@@ -615,10 +644,14 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         if (after.records.get(tokenHash) !== live || after.tombstones.get(tokenHash) !== tombstone)
           continue;
         if (!attached) {
-          if (live !== undefined) yield* expire(live, timestamp);
+          if (live !== undefined) yield* expire(live, now);
           return undefined;
         }
-        return { threadId: record.scope.thread.threadId, recheckAt: timestamp + livenessWindowMs };
+        return {
+          threadId: record.scope.thread.threadId,
+          recheckAt: now.wallMs + livenessWindowMs,
+          recheckAtMonotonicMs: now.monotonicMs + livenessWindowMs,
+        };
       }
     },
   );
@@ -647,9 +680,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   const touch: McpSessionRegistryShape["touch"] = Effect.fn("McpSessionRegistry.touch")(
     function* (threadId) {
-      const timestamp = yield* currentTimeMillis;
+      const now = yield* currentAliveMark;
       yield* SynchronizedRef.update(state, (before) => {
-        const current = pruneIdle(before, timestamp);
+        const current = pruneIdle(before, now);
         const records = new Map(current.records);
         const tombstones = new Map(current.tombstones);
         for (const [tokenHash, tombstone] of current.tombstones) {
@@ -657,13 +690,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             tombstone.reason === "expired" &&
             tombstone.record?.scope.thread.threadId === threadId
           ) {
-            records.set(tokenHash, { ...tombstone.record, lastAliveAt: timestamp });
+            records.set(tokenHash, { ...tombstone.record, lastAlive: now });
             tombstones.delete(tokenHash);
           }
         }
         for (const [tokenHash, record] of current.records) {
           if (record.scope.thread.threadId === threadId) {
-            records.set(tokenHash, { ...record, lastAliveAt: timestamp });
+            records.set(tokenHash, { ...record, lastAlive: now });
           }
         }
         return registryState(records, tombstones);
@@ -674,7 +707,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const revokeWhere = Effect.fn("McpSessionRegistry.revokeWhere")(function* (
     predicate: (record: CredentialRecord) => boolean,
   ) {
-    const timestamp = yield* currentTimeMillis;
+    const now = yield* currentAliveMark;
     yield* SynchronizedRef.update(state, (current) => {
       const revoked = [
         ...Array.from(current.records).filter(([, record]) => predicate(record)),
@@ -694,7 +727,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           current.tombstones,
           revoked.map(([tokenHash, record]) => [
             tokenHash,
-            tombstoneOf(record, "revoked", timestamp),
+            tombstoneOf(record, "revoked", now.wallMs),
           ]),
         ),
       );
@@ -713,7 +746,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         const record = (yield* SynchronizedRef.get(state)).recordsById.get(providerSessionId);
         if (!record?.readCurrentPolicy || !record.memoryPolicy || !record.isLiveCaller)
           return undefined;
-        if ((yield* currentTimeMillis) - record.lastAliveAt > livenessWindowMs) return undefined;
+        if (isIdle(record, yield* currentAliveMark)) return undefined;
         const current = yield* record.readCurrentPolicy();
         const latest = (yield* SynchronizedRef.get(state)).records.get(record.tokenHash);
         return latest?.generation === record.generation &&

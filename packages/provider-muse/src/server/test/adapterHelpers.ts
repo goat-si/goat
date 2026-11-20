@@ -1,3 +1,4 @@
+import type { ProviderContinuationRequest } from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -348,4 +349,13 @@ export const startConversation = Effect.fnUntraced(function* (
     (event) => event.providerTurn.status === "running",
   );
   return { nativeId: call.commandId!, providerTurn: event.providerTurn };
+});
+
+export const captureWakeOffer = (
+  target: Deferred.Deferred<ProviderContinuationRequest> | Array<ProviderContinuationRequest>,
+) => ({
+  offer: (request: ProviderContinuationRequest) =>
+    Array.isArray(target)
+      ? Effect.sync(() => void target.push(request))
+      : Deferred.succeed(target, request).pipe(Effect.asVoid),
 });

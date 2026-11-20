@@ -8,7 +8,6 @@ import { checkConflictDependencies } from "./MemoryConflictDependencies.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned submission IDs.
 import * as NodeCrypto from "node:crypto";
 import * as M from "@goat/contracts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -155,9 +154,6 @@ const stableId = (attempt: string, kind: string) => {
 const sameHeads = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && [...a].sort().every((h, i) => h === [...b].sort()[i]);
 const selectionKey = Schema.encodeSync(Schema.fromJsonString(M.MemoryModelSelection));
-// New conflict claims freeze the memory model; frozen tickets keep theirs across devices.
-const memorySelection = (s: M.ServerSettings) =>
-  s.memoryEnabled ? resolveMemoryModelSelection(s, undefined) : null;
 const decodeMemorySelection = Schema.decodeUnknownEffect(M.MemoryModelSelection);
 const decodePull = Schema.decodeUnknownEffect(M.MemoryHubPullResult);
 const decodeSource = Schema.decodeUnknownEffect(M.MemorySourceReadOutcome);
@@ -179,6 +175,8 @@ const make = Effect.gen(function* () {
   const quota = yield* Quota.MemoryQuotaService;
   const generation = yield* Generation.TextGeneration;
   const hold = yield* Hold.shared;
+  const memorySelection = (s: M.ServerSettings) =>
+    s.memoryEnabled ? hold.resolveModel(s, "conflict") : Effect.succeed(null);
   const identity = yield* Environment.ServerEnvironmentIdentity;
   const local = yield* identity.getEnvironmentId;
   const scope = yield* Scope.Scope;
@@ -209,16 +207,16 @@ const make = Effect.gen(function* () {
   );
   const initialSettings = yield* readSettings;
   let settingsEpoch = initialSettings.memoryHubVersion;
-  const bindingKey = (s: typeof initialSettings) => ({
+  const bindingKey = (s: typeof initialSettings, model: M.ModelSelection | null) => ({
     space: s.memoryHub.mode === "disabled" ? null : s.memoryHub.memorySpaceId,
     mode: s.memoryHub.mode,
     hub: s.memoryHub.mode === "member" ? s.memoryHub.hubEnvironmentId : local,
     endpoint: s.memoryHub.mode === "member" ? s.memoryHub.endpoint : null,
     credential: s.memoryHub.mode === "member" ? s.memoryHub.secretName : null,
-    model: memorySelection(s) ? selectionKey(memorySelection(s)!) : null,
+    model: model === null ? null : selectionKey(model),
     epoch: s.memoryHubVersion,
   });
-  let previousBinding = bindingKey(initialSettings);
+  let previousBinding = bindingKey(initialSettings, yield* memorySelection(initialSettings));
   // One current binding, four classes, two keyset cursors per class.
   const rearms = new Map<
     Store.MemoryHoldClass,
@@ -688,8 +686,6 @@ const make = Effect.gen(function* () {
           heads,
           modelSelection: row.ticket.frozenDefaultModelSelection,
         }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
-        const model = generation.resolveMemoryConflict;
-        if (!model) return yield* new M.MemoryHubError({ code: "route_unavailable" });
         const renew = Effect.gen(function* () {
           while (true) {
             yield* Effect.sleep("30 seconds");
@@ -708,7 +704,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // Renewal failure interrupts the provider, including a hung one-shot execution.
             return yield* Effect.raceFirst(
-              hold.guard(holdKey, redacted(model(input))).pipe(
+              hold.guard(holdKey, redacted(generation.resolveMemoryConflict(input))).pipe(
                 // A held model or a refusal that repeats retires this attempt without a failure
                 // report (generation_failed is definitive but unreported): its lease is released
                 // and the conflict is claimed again once the model is no longer held.
@@ -1103,7 +1099,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             let frozen = yield* store.transact(store.prepareClaimAttemptTx(prepare));
             if (!frozen) {
-              const selection = memorySelection(yield* readSettings);
+              const selection = yield* memorySelection(yield* readSettings);
               if (!selection) return yield* new M.MemoryHubError({ code: "route_unavailable" });
               // A held model would refuse at once: leave the conflict unclaimed until it is due.
               if (yield* heldSelection(selection)) return yield* deferHeld(work.id);
@@ -2040,7 +2036,7 @@ const make = Effect.gen(function* () {
       yield* Stream.runForEach(changes, (s) =>
         Effect.gen(function* () {
           if (s.memoryHubVersion !== settingsEpoch) yield* cancelEpoch;
-          const next = bindingKey(s);
+          const next = bindingKey(s, yield* memorySelection(s));
           const classes: Store.MemoryHoldClass[] = [];
           if (
             next.epoch !== previousBinding.epoch ||
@@ -2307,17 +2303,17 @@ const make = Effect.gen(function* () {
           return yield* new M.MemoryHubError({ code: "fenced" });
         const failure = lastFailure?.epoch === epoch ? lastFailure.code : undefined;
         const success = lastSuccess?.epoch === epoch ? lastSuccess.at : null;
-        const selected = memorySelection(current);
+        const selected =
+          "includeGenerationHold" in input && input.includeGenerationHold
+            ? yield* memorySelection(current)
+            : null;
         const memoryModel =
           selected === null
             ? Option.none<M.MemoryModelSelection>()
             : yield* decodeMemorySelection(selected).pipe(Effect.option);
-        const generationHold =
-          "includeGenerationHold" in input &&
-          input.includeGenerationHold &&
-          Option.isSome(memoryModel)
-            ? yield* hold.status(yield* hold.keyFor(memoryModel.value))
-            : undefined;
+        const generationHold = Option.isSome(memoryModel)
+          ? yield* hold.status(yield* hold.keyFor(memoryModel.value))
+          : undefined;
         return {
           memorySpaceId: space,
           ...(includeRetained

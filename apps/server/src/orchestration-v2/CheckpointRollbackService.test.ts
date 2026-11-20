@@ -59,7 +59,10 @@ const layerCheckpointRollbackService = CheckpointRollbackService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
-      Layer.mock(ServerConfig.ServerConfig)({ worktreesDir: "/synthetic-worktrees" } as never),
+      Layer.mock(ServerConfig.ServerConfig)({
+        worktreesDir: "/synthetic-worktrees",
+        stateDir: "/synthetic-state",
+      } as never),
       ServerSettings.layerTest(),
       Layer.mock(GitWorkflow.GitWorkflowService)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeed(unrelatedProject) }),
@@ -186,6 +189,7 @@ it.effect.each([
     const workspaceRoot = yield* fileSystem.realPath(
       yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-rollback-" }),
     );
+    yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
     const worktreesDir = path.join(workspaceRoot, "worktrees");
     const worktreePath = unmanaged
       ? path.join(workspaceRoot, "elsewhere", "feature")
@@ -229,7 +233,7 @@ it.effect.each([
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           NodeServices.layer,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir, stateDir: workspaceRoot } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: (id) => {
@@ -243,6 +247,8 @@ it.effect.each([
                 assert.deepEqual(input, { cwd: workspaceRoot });
                 calls.push("prune");
               }),
+            resolveCommit: () => Effect.succeed({ commitSha: "fixture-head" }),
+            verifyManagedCheckout: () => Effect.void,
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {
@@ -751,6 +757,7 @@ it.effect.each([
     const workspaceRoot = yield* fileSystem.realPath(
       yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-rollback-" }),
     );
+    yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
     const worktreesDir = path.join(workspaceRoot, "worktrees");
     const worktreePath = unmanaged
       ? path.join(workspaceRoot, "elsewhere", "feature")
@@ -792,7 +799,7 @@ it.effect.each([
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           NodeServices.layer,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir, stateDir: workspaceRoot } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: (id) => {
@@ -806,6 +813,8 @@ it.effect.each([
                 assert.deepEqual(input, { cwd: workspaceRoot });
                 calls.push("prune");
               }),
+            resolveCommit: () => Effect.succeed({ commitSha: "fixture-head" }),
+            verifyManagedCheckout: () => Effect.void,
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {

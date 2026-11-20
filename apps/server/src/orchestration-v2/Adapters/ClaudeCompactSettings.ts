@@ -1,34 +1,39 @@
 import { fromLenientJson } from "@goat/shared/schemaJson";
+import type { OrchestrationV2TurnItem } from "@goat/contracts";
+import type * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const decodeSettings = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      autoCompactWindow: Schema.optionalKey(Schema.Unknown),
-      modelSettings: Schema.optionalKey(Schema.Unknown),
-    }),
-  ),
+const decodeEnvSettings = Schema.decodeUnknownEffect(
+  fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
 );
 
+const decodeCompactSettings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+const settingsField = (settings: unknown, key: string): unknown =>
+  typeof settings === "object" && settings !== null ? Reflect.get(settings, key) : undefined;
+
+const settingsEnv = (settings: unknown, key: string) => {
+  const value = settingsField(settingsField(settings, "env"), key);
+  return typeof value === "string" ? value : undefined;
+};
+
 function windowFrom(settings: unknown, model: string): string | undefined {
-  if (typeof settings !== "object" || settings === null) return undefined;
-  const models = Reflect.get(settings, "modelSettings");
-  const entry =
-    typeof models === "object" && models !== null ? Reflect.get(models, model) : undefined;
-  const modelWindow =
-    typeof entry === "object" && entry !== null
-      ? Reflect.get(entry, "autoCompactWindow")
-      : undefined;
+  const modelWindow = settingsField(
+    settingsField(settingsField(settings, "modelSettings"), model),
+    "autoCompactWindow",
+  );
   const validWindow = (value: unknown) =>
     typeof value === "number" && Number.isInteger(value) && value >= 100_000 && value <= 1_000_000
       ? String(value)
       : undefined;
   return modelWindow === "auto"
     ? ""
-    : (validWindow(modelWindow) ?? validWindow(Reflect.get(settings, "autoCompactWindow")));
+    : (validWindow(modelWindow) ?? validWindow(settingsField(settings, "autoCompactWindow")));
 }
 
 export const resolveAutoCompactWindow = Effect.fn("ClaudeAdapterV2.resolveAutoCompactWindow")(
@@ -40,63 +45,58 @@ export const resolveAutoCompactWindow = Effect.fn("ClaudeAdapterV2.resolveAutoCo
     readonly environment: NodeJS.ProcessEnv;
     readonly fileSystem: FileSystem.FileSystem;
   }) {
-    if (input.configured !== "") return input.configured;
-    const launchEnv =
-      typeof input.launchSettings === "object" && input.launchSettings !== null
-        ? Reflect.get(input.launchSettings, "env")
-        : undefined;
-    let envValue: unknown =
-      typeof launchEnv === "object" && launchEnv !== null
-        ? Reflect.get(launchEnv, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-        : undefined;
-    if (typeof envValue !== "string") {
-      for (const file of input.files) {
-        envValue = yield* readSettingsEnv(
-          input.fileSystem,
-          file,
-          "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-        );
-        if (envValue !== undefined) break;
+    const model = input.model.replace(/\[1m\]$/i, "");
+    const disableNames = ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"] as const;
+    const windowName = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+    const environment = new Map(
+      [...disableNames, windowName].map((name) => [name, settingsEnv(input.launchSettings, name)]),
+    );
+    const launchEnabled = settingsField(input.launchSettings, "autoCompactEnabled");
+    let enabled = typeof launchEnabled === "boolean" ? launchEnabled : undefined;
+    let settingsWindow = windowFrom(input.launchSettings, model);
+    for (const file of input.files) {
+      if (
+        enabled !== undefined &&
+        settingsWindow !== undefined &&
+        [...environment.values()].every((value) => value !== undefined)
+      )
+        break;
+      const text = yield* input.fileSystem
+        .readFileString(file)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (text === undefined) continue;
+      const settings = Option.getOrUndefined(decodeCompactSettings(text));
+      const envSettings =
+        settings ?? (yield* decodeEnvSettings(text).pipe(Effect.orElseSucceed(() => undefined)));
+      for (const [name, value] of environment) {
+        if (value === undefined) environment.set(name, settingsEnv(envSettings, name));
       }
-      envValue ??= input.environment.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+      const fileEnabled = settings?.autoCompactEnabled;
+      if (enabled === undefined && typeof fileEnabled === "boolean") enabled = fileEnabled;
+      settingsWindow ??= windowFrom(settings, model);
     }
-    const numeric = typeof envValue === "string" ? Number(envValue) : NaN;
+    const env = (name: string) => environment.get(name) ?? input.environment[name];
+    if (
+      enabled === false ||
+      disableNames.some((name) =>
+        ["1", "true", "yes", "on"].includes(env(name)?.trim().toLowerCase() ?? ""),
+      )
+    )
+      return "";
+    if (input.configured !== "") return input.configured;
+    const numeric = Number(env(windowName));
     if (Number.isInteger(numeric) && numeric >= 100_000 && numeric <= 1_000_000)
       return String(numeric);
-    const model = input.model.replace(/\[1m\]$/i, "");
-    const launch = windowFrom(input.launchSettings, model);
-    if (launch !== undefined) return launch;
-    for (const file of input.files) {
-      const settings = yield* input.fileSystem
-        .readFileString(file)
-        .pipe(Effect.flatMap(decodeSettings), Effect.option);
-      const value = Option.isSome(settings) ? windowFrom(settings.value, model) : undefined;
-      if (value !== undefined) return value;
-    }
-    return "";
+    return settingsWindow ?? "";
   },
 );
 
-const decodeEnvSettings = Schema.decodeUnknownEffect(
-  fromLenientJson(
-    Schema.StructWithRest(
-      Schema.Struct({ env: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)) }),
-      [Schema.Record(Schema.String, Schema.Unknown)],
-    ),
-  ),
-);
-const readSettingsEnv = (fileSystem: FileSystem.FileSystem, filePath: string, name: string) =>
+export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePath: string) =>
   fileSystem.readFileString(filePath).pipe(
     Effect.flatMap(decodeEnvSettings),
-    Effect.map((settings) => {
-      const value = settings.env?.[name];
-      return typeof value === "string" ? value : undefined;
-    }),
+    Effect.map((settings) => settingsEnv(settings, "ENABLE_TOOL_SEARCH")),
     Effect.orElseSucceed(() => undefined),
   );
-
-export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePath: string) =>
-  readSettingsEnv(fileSystem, filePath, "ENABLE_TOOL_SEARCH");
 
 /** The CLI reports a compaction it aborted for our interrupt as failed; callers pass that check in. */
 export const claudeCompactionOutcome = (succeeded: boolean, failed: boolean) =>
@@ -105,3 +105,10 @@ export const claudeCompactionOutcome = (succeeded: boolean, failed: boolean) =>
     : failed
       ? ({ status: "failed", title: "Context compaction failed" } as const)
       : ({ status: "interrupted", title: "Context compaction stopped" } as const);
+
+export const stoppedClaudeCompaction = (item: OrchestrationV2TurnItem, now: DateTime.Utc) => ({
+  ...item,
+  ...claudeCompactionOutcome(false, false),
+  completedAt: now,
+  updatedAt: now,
+});

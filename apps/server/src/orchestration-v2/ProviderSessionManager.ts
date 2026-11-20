@@ -1,3 +1,8 @@
+import { busyTurnPrefix, busyTurnKey } from "./ProviderSessionBusyKeys.ts";
+import {
+  makeProviderSessionEventSubscription,
+  type ProviderSessionEventSignal,
+} from "./providerSessionEventSubscription.ts";
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
 import {
   makeReleasedBackgroundWork,
@@ -46,13 +51,8 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { normalizeModelMetricLabel } from "../observability/Attributes.ts";
-import {
-  providerSessionsTotal,
-  providerTurnDuration,
-  providerTurnsTotal,
-  withMetrics,
-} from "../observability/Metrics.ts";
+import { providerTurnMetrics } from "./ProviderTurnMetrics.ts";
+import { providerSessionsTotal, withMetrics } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -77,6 +77,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { isAppOwnedDelegatedThread } from "./DelegatedThreadProvenance.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
 import { makeRetryStallWatch } from "./ProviderRetryStallWatch.ts";
 import * as Retirement from "./ProviderSessionRetirement.ts";
@@ -96,26 +97,25 @@ import {
 } from "./ProviderSessionManagerErrors.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
+import { interruptWithWatchdog } from "./ProviderStopWatchdog.ts";
 
 import type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 export type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
-/** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
-export const PROVIDER_INTERRUPT_TIMEOUT_MS = 15 * 1000;
+export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
 
-const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
-const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
-  `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
 const UNLOAD_THREAD_TIMEOUT_MS = 10 * 1000;
 
 import { WORKING_RUN_STATUSES } from "./ProviderSessionWorkingRuns.ts";
@@ -165,21 +165,6 @@ interface IdleThreadUnload {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
-}
-
-type ProviderSessionEventSignal =
-  | { readonly type: "event"; readonly event: ProviderAdapter.ProviderAdapterV2Event }
-  | {
-      readonly type: "failure";
-      readonly cause: Cause.Cause<ProviderAdapter.ProviderAdapterV2Error>;
-    };
-
-export interface ProviderSessionManagerV2LayerOptions {
-  readonly idleTimeoutMs?: number;
-  readonly maxIdlePinMs?: number;
-  readonly configureMcp?: boolean;
-  /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
-  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
 }
 
 export const layerWithOptions = (
@@ -288,7 +273,10 @@ export const layerWithOptions = (
                 return {
                   workspaceTerminalScopes: noWorkspaceScopes,
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
-                  device: deviceOverridden ? false : settings.enableAgentDeviceAccess,
+                  device:
+                    settings.enableDeviceSupport &&
+                    !deviceOverridden &&
+                    settings.enableAgentDeviceAccess,
                 };
             }
             const effective = resolveProjectSettings(settings, thread.projectId).settings;
@@ -298,7 +286,7 @@ export const layerWithOptions = (
                 readOnly,
               ),
               browser: effective.enableAgentBrowserAccess,
-              device: effective.enableAgentDeviceAccess,
+              device: settings.enableDeviceSupport && effective.enableAgentDeviceAccess,
             };
           }).pipe(
             Effect.catch((cause) =>
@@ -730,6 +718,7 @@ export const layerWithOptions = (
         const error = new ProviderAdapter.ProviderAdapterEventStreamError({
           driver: entry.runtime.driver,
           providerSessionId: entry.runtime.providerSessionId,
+          raisedByGoat: true,
           ...detachedThreadField(detachedThreadId),
           cause: detail,
         });
@@ -963,7 +952,7 @@ export const layerWithOptions = (
 
       const {
         readReleasedProviderThreads,
-        writeReleasedToolCallEvents,
+        writeReleasedProcessTaskEvents,
         writeReleasedBackgroundWorkEvents,
       } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
 
@@ -1122,10 +1111,10 @@ export const layerWithOptions = (
                   if (input.cancelIdleFiber !== false) {
                     yield* cancelIdleFiber(entry.idleFiber);
                   }
-                  // Queued events can persist tool calls after the release-time scan.
+                  // Queued events can persist tasks after the release-time scan.
                   const afterDrain = Effect.forEach(
                     releasedProviderThreads,
-                    (thread) => writeReleasedToolCallEvents(thread, releasedAt),
+                    (thread) => writeReleasedProcessTaskEvents(thread, releasedAt),
                     { discard: true },
                   ).pipe(logReleaseFailure(input.providerSessionId));
                   if (input.gracefulSubscribers === true) {
@@ -1475,6 +1464,24 @@ export const layerWithOptions = (
             loadedProviderThreadKeyByThread,
           });
           return updated;
+        });
+
+      const forgetProviderThreadLoaded = (input: {
+        readonly providerSessionId: ProviderSessionId;
+        readonly threadId: ThreadId;
+        readonly runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      }) =>
+        Ref.update(sessions, (current) => {
+          const key = sessionKey(input.providerSessionId);
+          const entry = current.get(key);
+          if (
+            entry?.runtime !== input.runtime ||
+            !entry.loadedProviderThreadKeyByThread.has(input.threadId)
+          )
+            return current;
+          const loadedProviderThreadKeyByThread = new Map(entry.loadedProviderThreadKeyByThread);
+          loadedProviderThreadKeyByThread.delete(input.threadId);
+          return new Map(current).set(key, { ...entry, loadedProviderThreadKeyByThread });
         });
 
       const isProviderThreadLoaded = (input: {
@@ -1899,53 +1906,6 @@ export const layerWithOptions = (
           ),
         );
 
-      const makeEventSubscription = Effect.fn("ProviderSessionManager.makeEventSubscription")(
-        function* (
-          subscribers: Ref.Ref<
-            ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
-          >,
-        ): Effect.fn.Return<ProviderAdapter.ProviderAdapterV2EventSubscription> {
-          const queue = yield* Queue.unbounded<ProviderSessionEventSignal, Cause.Done>();
-          const subscriberId = yield* Ref.getAndUpdate(nextSubscriberId, (value) => value + 1);
-          yield* Ref.update(subscribers, (current) => {
-            const updated = new Map(current);
-            updated.set(subscriberId, queue);
-            return updated;
-          });
-          const close = Ref.modify(subscribers, (current) => {
-            if (!current.has(subscriberId)) {
-              return [false, current] as const;
-            }
-            const updated = new Map(current);
-            updated.delete(subscriberId);
-            return [true, updated] as const;
-          }).pipe(
-            Effect.flatMap((removed) =>
-              removed
-                ? Queue.clear(queue).pipe(Effect.andThen(Queue.end(queue)), Effect.asVoid)
-                : Effect.void,
-            ),
-            // Detached so the consumer's run failure is not ordered behind release cleanup.
-            Effect.andThen(
-              Effect.suspend(() => {
-                const cleanup = subscriberReleaseCleanup.get(queue);
-                subscriberReleaseCleanup.delete(queue);
-                return cleanup === undefined ? Effect.void : Effect.forkDetach(cleanup);
-              }),
-            ),
-          );
-          const events = Stream.fromQueue(queue).pipe(
-            Stream.mapEffect((signal) =>
-              signal.type === "event"
-                ? Effect.succeed(signal.event)
-                : Effect.failCause(signal.cause),
-            ),
-            Stream.ensuring(close),
-          );
-          return { events, close } satisfies ProviderAdapter.ProviderAdapterV2EventSubscription;
-        },
-      );
-
       const decorateRuntime = (
         runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
         eventSubscribers: Ref.Ref<
@@ -1953,17 +1913,11 @@ export const layerWithOptions = (
         >,
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
-        const subscribeEvents = makeEventSubscription(eventSubscribers);
-        const turnMetrics = (operation: string, model?: string) =>
-          withMetrics({
-            counter: providerTurnsTotal,
-            ...(operation === "send" ? { timer: providerTurnDuration } : {}),
-            attributes: {
-              provider: runtime.driver,
-              operation,
-              modelFamily: normalizeModelMetricLabel(model),
-            },
-          });
+        const subscribeEvents = makeProviderSessionEventSubscription(
+          eventSubscribers,
+          nextSubscriberId,
+          subscriberReleaseCleanup,
+        );
         const trackTurn = (
           input: Pick<
             ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -2027,11 +1981,20 @@ export const layerWithOptions = (
                     ? observeActivity(
                         providerSessionId,
                         markIdle(providerSessionId, input.providerThread.id, input.runOrdinal),
+                      ).pipe(
+                        Effect.andThen(
+                          forgetProviderThreadLoaded({
+                            providerSessionId,
+                            threadId: input.threadId,
+                            runtime,
+                          }),
+                        ),
                       )
                     : Effect.void,
               ),
             ),
           );
+        const { resumeInterruptedTurn } = runtime;
         return {
           ...runtime,
           // Pi replaces its session snapshot as metadata changes.
@@ -2051,7 +2014,23 @@ export const layerWithOptions = (
                 providerInstanceId: runtime.instanceId,
               }),
             ).pipe(
-              Effect.andThen(runtime.ensureThread(input)),
+              Effect.andThen(
+                runtime.driver !== "codex"
+                  ? runtime.ensureThread(input)
+                  : isAppOwnedDelegatedThread(projectionStore, input.threadId).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new ProviderAdapter.ProviderAdapterEnsureThreadError({
+                            driver: runtime.driver,
+                            threadId: input.threadId,
+                            cause,
+                          }),
+                      ),
+                      Effect.flatMap((isAppOwnedDelegated) =>
+                        runtime.ensureThread({ ...input, isAppOwnedDelegated }),
+                      ),
+                    ),
+              ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
                   providerSessionId,
@@ -2143,8 +2122,15 @@ export const layerWithOptions = (
           startTurn: (input) =>
             trackTurn(
               input,
-              runtime.startTurn(input).pipe(turnMetrics("send", input.modelSelection.model)),
+              runtime
+                .startTurn(input)
+                .pipe(providerTurnMetrics(runtime.driver, "send", input.modelSelection.model)),
             ),
+          ...(resumeInterruptedTurn === undefined
+            ? {}
+            : {
+                resumeInterruptedTurn: (input) => trackTurn(input, resumeInterruptedTurn(input)),
+              }),
           ...(runtime.resumeTurn === undefined
             ? {}
             : {
@@ -2152,26 +2138,16 @@ export const layerWithOptions = (
               }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input).pipe(turnMetrics("steer"))),
+              Effect.andThen(
+                runtime.steerTurn(input).pipe(providerTurnMetrics(runtime.driver, "steer")),
+              ),
             ),
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
               Effect.andThen(
-                runtime.interruptTurn(input).pipe(
-                  Effect.timeoutOrElse({
-                    duration: PROVIDER_INTERRUPT_TIMEOUT_MS,
-                    orElse: () =>
-                      Effect.fail(
-                        new ProviderAdapter.ProviderAdapterInterruptTimeoutError({
-                          driver: runtime.driver,
-                          providerThreadId: input.providerThread.id,
-                          providerTurnId: input.providerTurnId,
-                          timeoutMs: PROVIDER_INTERRUPT_TIMEOUT_MS,
-                        }),
-                      ),
-                  }),
-                  turnMetrics("interrupt"),
+                interruptWithWatchdog(runtime, input).pipe(
+                  providerTurnMetrics(runtime.driver, "interrupt"),
                 ),
               ),
             ),
@@ -2180,7 +2156,7 @@ export const layerWithOptions = (
               Effect.andThen(
                 runtime
                   .respondToRuntimeRequest(input)
-                  .pipe(turnMetrics("runtime-request-response")),
+                  .pipe(providerTurnMetrics(runtime.driver, "runtime-request-response")),
               ),
             ),
         };
@@ -2324,6 +2300,7 @@ export const layerWithOptions = (
                               new ProviderAdapter.ProviderAdapterEventStreamError({
                                 driver: entry.runtime.driver,
                                 providerSessionId: entry.runtime.providerSessionId,
+                                raisedByGoat: true,
                                 cause,
                               }),
                           ),
@@ -2363,6 +2340,7 @@ export const layerWithOptions = (
                       new ProviderAdapter.ProviderAdapterEventStreamError({
                         driver: entry.runtime.driver,
                         providerSessionId: entry.runtime.providerSessionId,
+                        raisedByGoat: true,
                         cause: "Provider event stream ended unexpectedly.",
                       }),
                     );

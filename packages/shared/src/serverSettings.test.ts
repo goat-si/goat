@@ -21,7 +21,7 @@ import {
   resolveModelPreferences,
   isModelSelectionProviderEnabled,
   parsePersistedServerObservabilitySettings,
-  resolveMemoryModelSelection,
+  configuredMemoryModelSelection,
   resolveSourceControlWriterModelSelection,
   resolveProjectAgentBrowserAccess,
   resolveProjectAutoPull,
@@ -388,19 +388,19 @@ describe("serverSettings helpers", () => {
         "anthropic/claude-opus-5-5",
       ),
     };
-    expect(resolveMemoryModelSelection(settings, undefined)).toEqual({
+    expect(configuredMemoryModelSelection(settings)).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-6-luna",
       options: [{ id: "reasoningEffort", value: "low" }],
     });
     const dedicated = createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-sol");
-    expect(
-      resolveMemoryModelSelection({ ...settings, memoryModelSelection: dedicated }, undefined),
-    ).toBe(dedicated);
+    expect(configuredMemoryModelSelection({ ...settings, memoryModelSelection: dedicated })).toBe(
+      dedicated,
+    );
     const disabled = createModelSelection(ProviderInstanceId.make("off_instance"), "x");
-    expect(
-      resolveMemoryModelSelection({ ...settings, memoryModelSelection: disabled }, undefined),
-    ).toBe(settings.textGenerationModelSelection);
+    expect(configuredMemoryModelSelection({ ...settings, memoryModelSelection: disabled })).toBe(
+      settings.textGenerationModelSelection,
+    );
   });
 
   it("falls back from a writer provider that cannot generate application text", () => {

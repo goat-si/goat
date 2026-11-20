@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
@@ -64,7 +65,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ProviderLatestVersions.layer, ModelM
               }),
             ),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         };
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,

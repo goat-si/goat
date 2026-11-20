@@ -396,7 +396,7 @@ export const memoryEntries = {
     toolkit: "memoryAdministration",
     summary: "Read memory settings and the effective memory model.",
     description: "Read memory settings and the effective memory model.",
-    guide: "Needs memory:read.",
+    guide: "Needs memory:read. Set includeModelAvailability to true to include modelAvailable.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

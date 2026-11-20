@@ -29,6 +29,7 @@ export class NativeChildWorkQuery extends Context.Service<
 >()("goat/orchestration-v2/NativeChildWorkQuery") {}
 
 const NO_CHILDREN: OrchestrationV2GetNativeChildWorkResult = { children: [] };
+const MAX_NATIVE_CHILD_BATCHES = 256;
 
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -61,24 +62,68 @@ const make = Effect.gen(function* () {
       ) {
         return NO_CHILDREN;
       }
-      const others = subagents.filter(
-        (candidate) =>
-          candidate.id !== subagent.id &&
-          candidate.driver === "antigravity" &&
-          candidate.origin === "provider_native" &&
-          candidate.providerInstanceId === subagent.providerInstanceId,
-      );
-      const { runs, providerThreads } = yield* threads.getThreadRecords(
+      const others = [] as (typeof subagents)[number][];
+      for (const candidate of subagents) {
+        if (
+          candidate.id === subagent.id ||
+          candidate.driver !== "antigravity" ||
+          candidate.origin !== "provider_native" ||
+          candidate.providerInstanceId !== subagent.providerInstanceId
+        )
+          continue;
+        if (others.length >= MAX_NATIVE_CHILD_BATCHES - 1)
+          return yield* new OrchestrationV2GetNativeChildWorkError({
+            threadId: input.threadId,
+            cause: "Too many child batches to inspect safely.",
+          });
+        others.push(candidate);
+      }
+      const batches = [subagent, ...others];
+      const runIds = batches.flatMap((batch) => (batch.runId === null ? [] : [batch.runId]));
+      const { runs, nodes } = yield* threads.getThreadRecords(parentThreadId, ["runs", "nodes"], {
+        runIds,
+        nodeIds: batches.map((batch) => batch.id),
+      });
+      const { providerThreads } = yield* threads.getThreadRecords(
         parentThreadId,
-        ["runs", "providerThreads"],
-        { runIds: [subagent.runId, ...others.flatMap((other) => other.runId ?? [])] },
+        ["providerThreads"],
+        {
+          providerThreadIds: runs.flatMap((run) =>
+            run.providerThreadId === null ? [] : [run.providerThreadId],
+          ),
+        },
       );
+      const turnIds = nodes.flatMap((node) =>
+        node.providerTurnId === null ? [] : [node.providerTurnId],
+      );
+      const turns =
+        turnIds.length === 0
+          ? []
+          : (yield* threads.getThreadRecords(parentThreadId, ["providerTurns"], {
+              providerTurnIds: turnIds,
+            })).providerTurns;
+      const attemptIds = turns.flatMap((turn) =>
+        turn.runAttemptId === null ? [] : [turn.runAttemptId],
+      );
+      const attempts =
+        attemptIds.length === 0
+          ? []
+          : (yield* threads.getThreadRecords(parentThreadId, ["attempts"], { attemptIds }))
+              .attempts;
       const providerThreadOf = (runId: string | null) => {
         const providerThreadId = runs.find((run) => run.id === runId)?.providerThreadId;
         return providerThreads.find((candidate) => candidate.id === providerThreadId);
       };
       const providerThread = providerThreadOf(subagent.runId);
-      const rootSessionId = providerThread?.nativeThreadRef?.nativeId;
+      const sessionOf = (batch: typeof subagent) => {
+        const node = nodes.find((item) => item.id === batch.id);
+        const turn = turns.find((item) => item.id === node?.providerTurnId);
+        const attempt = attempts.find(
+          (item) => item.id === turn?.runAttemptId && item.runId === batch.runId,
+        );
+        return attempt?.nativeThreadId ?? providerThreadOf(batch.runId)?.nativeThreadRef?.nativeId;
+      };
+      const rootSessionId = sessionOf(subagent);
       if (!rootSessionId || providerThread?.providerInstanceId !== subagent.providerInstanceId) {
         return NO_CHILDREN;
       }
@@ -94,7 +139,7 @@ const make = Effect.gen(function* () {
         // Only batches from the same agent session can share its records.
         siblings: others.flatMap((other) => {
           const id = other.nativeTaskRef?.nativeId;
-          return id && providerThreadOf(other.runId)?.nativeThreadRef?.nativeId === rootSessionId
+          return id && sessionOf(other) === rootSessionId
             ? [{ nativeTaskId: id, title: other.title, prompt: other.prompt }]
             : [];
         }),

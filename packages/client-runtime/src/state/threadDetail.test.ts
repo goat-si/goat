@@ -125,6 +125,32 @@ const longConversation = (length: number) => {
 describe("sameThreadStructure", () => {
   const before = withItem(assistant);
 
+  it("holds streaming message text but observes completion", () => {
+    const message: OrchestrationV2ConversationMessage = {
+      createdBy: "agent",
+      creationSource: "provider",
+      id: MessageId.make("message-assistant"),
+      threadId: v2ThreadId,
+      runId: RunId.make("run-1"),
+      nodeId: null,
+      role: "assistant",
+      text: "Hel",
+      attachments: [],
+      streaming: true,
+      createdAt: v2Now,
+      updatedAt: v2Now,
+    };
+    const projection = { ...before, messages: [message] };
+    const updated = { ...message, text: "Hello", updatedAt: later };
+    expect(sameThreadStructure(projection, { ...projection, messages: [updated] })).toBe(true);
+    expect(
+      sameThreadStructure(projection, {
+        ...projection,
+        messages: [{ ...updated, streaming: false }],
+      }),
+    ).toBe(false);
+  });
+
   it("holds through streamed text", () => {
     const next = withItem({ ...assistant, text: "Hello", updatedAt: later }, later);
     expect(sameThreadStructure(before, next)).toBe(true);

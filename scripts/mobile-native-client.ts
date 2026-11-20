@@ -1,7 +1,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -19,6 +19,8 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { MOBILE_APP_IDENTITY } from "@goat/shared/mobileAppIdentity";
+
+import { prebuildAndroid } from "./lib/mobile-native-prebuild.ts";
 
 export type NativePlatform = "ios" | "android";
 const NativeClientRecord = Schema.Struct({ fingerprint: Schema.String, binary: Schema.String });
@@ -40,10 +42,8 @@ const decodeSimulators = Schema.decodeUnknownEffect(
 );
 export type NativeClientRecord = typeof NativeClientRecord.Type;
 export type NativeClientStatus = "compatible" | "missing" | "unknown" | "stale";
-export class NativeClientError extends Schema.TaggedError<NativeClientError>()(
-  "NativeClientError",
-  { message: Schema.String },
-) {}
+import { NativeClientError, resolveAdb, androidSdk } from "./lib/mobile-native-adb.ts";
+export { NativeClientError, resolveAdb } from "./lib/mobile-native-adb.ts";
 
 export function clientStatus(
   fingerprint: string,
@@ -151,21 +151,6 @@ const collect = <E>(stream: Stream.Stream<Uint8Array, E>) =>
       (a, b) => a + b,
     ),
   );
-export const resolveAdb = Effect.gen(function* () {
-  if (yield* isCommandAvailable("adb")) return "adb";
-  const environment = yield* HostProcess.Environment;
-  const path = yield* Path.Path;
-  const executable = (yield* HostProcess.Platform) === "win32" ? "adb.exe" : "adb";
-  for (const sdk of [environment.ANDROID_SDK_ROOT, environment.ANDROID_HOME]) {
-    if (!sdk) continue;
-    const candidate = path.join(sdk, "platform-tools", executable);
-    if (yield* isCommandAvailable(candidate)) return candidate;
-  }
-  return yield* new NativeClientError({
-    message:
-      "adb was not found on PATH or in ANDROID_SDK_ROOT/ANDROID_HOME. Install Android SDK platform-tools.",
-  });
-});
 
 /** Build tool output goes to this file instead of the caller's terminal; null streams it. */
 const BuildLog = Context.Reference<string | null>("nativeClient/BuildLog", {
@@ -177,17 +162,24 @@ const command = Effect.fn("nativeClient.command")(function* (
   args: string[],
   inherit = false,
   cwd?: string,
+  withoutEnvironment: ReadonlyArray<string> = [],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = yield* HostProcess.Environment;
+  const environment = Object.fromEntries(
+    Object.entries(yield* HostProcess.Environment).filter(
+      ([name]) => !withoutEnvironment.includes(name),
+    ),
+  );
   const log = inherit ? yield* BuildLog : null;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
+  const sdk = yield* androidSdk;
   const child = yield* spawner.spawn(
     ChildProcess.make(spawn.command, spawn.args, {
       shell: spawn.shell,
       cwd: cwd ?? (yield* roots).mobile,
       env: {
         ...environment,
+        ...(sdk ? { ANDROID_HOME: sdk } : {}),
         APP_VARIANT: "development",
         MOBILE_VERSION_POLICY: "appVersion",
         GOAT_IOS_PERSONAL_TEAM: "0",
@@ -372,38 +364,6 @@ export const installedBinary = Effect.fn("installedBinary")(function* (
     }),
   );
   return yield* digest(hashes.sort().join("\n"));
-});
-
-/** Preserve input-invalidated Gradle/.cxx caches; exclude app/build because its tasks omit inputs. Ignore cache failures. */
-export const prebuildAndroid = Effect.fn("nativeClient.prebuildAndroid")(function* <E, R>(
-  mobile: string,
-  prebuild: Effect.Effect<void, E, R>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const android = path.join(mobile, "android");
-  // Sibling renames stay on one filesystem; interrupted runs leave this gitignored cache for next-run cleanup.
-  const saved = path.join(mobile, ".android-cache");
-  const caches = [".gradle", "app/.cxx"];
-  const clear = fs.remove(saved, { recursive: true, force: true }).pipe(Effect.ignore);
-  const move = (from: string, to: string) =>
-    Effect.forEach(
-      caches,
-      (cache) =>
-        Effect.gen(function* () {
-          const source = path.join(from, cache);
-          const target = path.join(to, cache);
-          if (!(yield* fs.exists(source)) || (yield* fs.exists(target))) return;
-          yield* fs.makeDirectory(path.dirname(target), { recursive: true });
-          yield* fs.rename(source, target);
-        }).pipe(Effect.ignore),
-      { discard: true },
-    );
-  yield* Effect.acquireUseRelease(
-    clear.pipe(Effect.andThen(move(android, saved))),
-    () => prebuild,
-    () => move(saved, android).pipe(Effect.andThen(clear)),
-  );
 });
 
 const artifactNames = { ios: `${devApp.xcodeName}.app`, android: "app-debug.apk" } as const;
@@ -926,12 +886,13 @@ const reportTelemetry = Effect.fn("nativeClient.reportTelemetry")(
  * provider, or a local device). A cache miss builds here, as for a local device: the device
  * only runs the client.
  */
-const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function* (
+export const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function* (
   home: string,
   platform: NativePlatform,
   session: string,
   abi: string,
   metro: string | undefined,
+  config: string | undefined,
 ) {
   const started = yield* Clock.currentTimeMillis;
   const path = yield* Path.Path;
@@ -942,6 +903,11 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   );
   // agent-device scopes session ownership to the workspace (working directory) it runs in.
   const workspace = yield* HostProcess.WorkingDirectory;
+  const target = ["--session", session, ...(config ? ["--config", config] : [])];
+  // Shell daemon credentials override the gateway config and may belong to another lease.
+  const withoutEnvironment = config
+    ? ["AGENT_DEVICE_DAEMON_BASE_URL", "AGENT_DEVICE_DAEMON_AUTH_TOKEN", "AGENT_DEVICE_CONFIG"]
+    : [];
   const deviceAbi = platform === "android" ? abi : null;
   const task = deviceAbi ? `native-client:android-${deviceAbi}` : `native-client:${platform}`;
   const current = yield* fingerprint(platform);
@@ -952,17 +918,10 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   const downloadOnDevice = source
     ? command(
         node,
-        [
-          agentDevice,
-          "install-from-source",
-          source.url,
-          "--header",
-          source.header,
-          "--session",
-          session,
-        ],
+        [agentDevice, "install-from-source", source.url, "--header", source.header, ...target],
         true,
         workspace,
+        withoutEnvironment,
       ).pipe(
         Effect.as(true),
         Effect.catch((error) =>
@@ -984,9 +943,10 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         yield* Console.error(`Installing into agent-device session ${session}...`);
         yield* command(
           node,
-          [agentDevice, "install", bundleId, local.file, "--session", session],
+          [agentDevice, "install", bundleId, local.file, ...target],
           true,
           workspace,
+          withoutEnvironment,
         );
         return local;
       });
@@ -998,12 +958,12 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         agentDevice,
         "open",
         bundleId,
-        `t3code-dev://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
-        "--session",
-        session,
+        `${devApp.scheme}://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
+        ...target,
       ],
       true,
       workspace,
+      withoutEnvironment,
     );
   }
   yield* reportTelemetry(
@@ -1047,6 +1007,12 @@ const main = Command.make(
       Flag.withDescription("With --session, open the dev client against this Metro URL."),
       Flag.optional,
     ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription(
+        "With --session, use the agent-device --config returned in device.open targetArgs for pooled devices.",
+      ),
+      Flag.optional,
+    ),
     prepare: Flag.Boolean("prepare").pipe(
       Flag.withDescription(
         "Fetch or build the client for this checkout without a device (Android: for --abi). Run it before leasing a device: a build can outlast the lease.",
@@ -1061,6 +1027,7 @@ const main = Command.make(
     session,
     abi: sessionAbi,
     metro,
+    config,
     prepare,
   }) {
     const started = yield* Clock.currentTimeMillis;
@@ -1103,6 +1070,7 @@ const main = Command.make(
         session.value,
         sessionAbi,
         Option.getOrUndefined(metro),
+        Option.getOrUndefined(config),
       );
     }
     const target = yield* resolveDevice(platform, Option.getOrUndefined(requested));

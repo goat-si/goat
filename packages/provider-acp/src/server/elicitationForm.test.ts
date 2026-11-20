@@ -3,6 +3,22 @@ import { assert, describe, it } from "@effect/vitest";
 import { parseElicitationForm } from "./elicitationForm.ts";
 
 describe("parseElicitationForm", () => {
+  it("preserves optional text omission and explicit empty values", () => {
+    const form = parseElicitationForm(
+      {
+        type: "object",
+        required: ["name"],
+        properties: { name: { type: "string" }, note: { type: "string" } },
+      },
+      "Continue?",
+    );
+    assert(form !== undefined);
+    assert.strictEqual(form.questions.find((question) => question.id === "note")?.required, false);
+    assert.deepStrictEqual(form.content({ name: "Ada" }), { name: "Ada" });
+    assert.deepStrictEqual(form.content({ name: "Ada", note: "" }), { name: "Ada", note: "" });
+    assert.strictEqual(form.content({ note: "" }), undefined);
+  });
+
   for (const type of ["string", "array"] as const) {
     it.each([
       { values: [" padded ", "", "plain"], labels: ["padded", '""', "plain"] },

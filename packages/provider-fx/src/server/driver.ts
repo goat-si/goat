@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import { TextGenerationError } from "@goat/contracts";
 import { FxSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -53,6 +54,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
       }),
     );
   return {
+    ...noMemoryGeneration,
     generateCommitMessage: () => unsupported("generateCommitMessage"),
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),

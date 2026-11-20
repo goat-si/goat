@@ -56,4 +56,16 @@ describe("imageMime", () => {
   it("does not read inherited keys from mime extension map", () => {
     expect(inferImageExtension({ mimeType: "constructor" })).toBe(".bin");
   });
+
+  it.each(["\t", "\f"])("normalizes ASCII whitespace %j inside a base64 payload", (space) => {
+    expect(parseBase64DataUrl(`data:image/png;base64,SGVs${space}bG8=\n`)).toEqual({
+      mimeType: "image/png",
+      base64: "SGVsbG8=",
+    });
+    expect(parseBase64DataUrl(`data:image/png;base64,${space}`)).toBeNull();
+  });
+
+  it.each(["\v", "\u00a0", "\u2003"])("rejects non-base64 whitespace %j", (space) => {
+    expect(parseBase64DataUrl(`data:image/png;base64,SGVs${space}bG8=`)).toBeNull();
+  });
 });

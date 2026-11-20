@@ -1,6 +1,8 @@
 import { SymbolView } from "./ui/AppSymbol";
 import { AppText } from "./ui/AppText";
 import { Image } from "expo-image";
+import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
+import { resolveProjectFaviconColorScheme } from "../lib/projectFaviconColorScheme";
 import { memo, useLayoutEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import type { EnvironmentId, ProjectIconOverride } from "@goat/contracts";
@@ -174,6 +176,15 @@ function ProjectFaviconImage(props: {
       : "loading",
   );
 
+  const { themeAppearance } = useAppearancePreferences();
+  const requestUrl = faviconRequest?.faviconUrl;
+  const inlineUrl = useMemo(
+    () =>
+      requestUrl?.startsWith("data:")
+        ? resolveProjectFaviconColorScheme(requestUrl, themeAppearance)
+        : null,
+    [requestUrl, themeAppearance],
+  );
   const showImage = faviconRequest !== null && status === "loaded";
   const fallbackGlyph = showImage ? null : projectAutoMonogram(props.projectTitle);
 
@@ -201,11 +212,11 @@ function ProjectFaviconImage(props: {
         <Image
           key={faviconRequest.faviconUrl}
           source={
-            faviconRequest.faviconUrl.startsWith("data:")
-              ? { uri: faviconRequest.faviconUrl }
+            inlineUrl !== null
+              ? { uri: inlineUrl }
               : { uri: faviconRequest.faviconUrl, cacheKey: faviconRequest.cacheKey }
           }
-          cachePolicy={faviconRequest.faviconUrl.startsWith("data:") ? "memory" : "memory-disk"}
+          cachePolicy={inlineUrl !== null ? "memory" : "memory-disk"}
           recyclingKey={faviconRequest.cacheKey}
           accessibilityLabel={`${props.projectTitle} favicon`}
           style={{

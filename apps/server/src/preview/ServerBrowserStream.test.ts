@@ -32,6 +32,7 @@ const platformLayer = NodeHttpPlatform.layer.pipe(Layer.provideMerge(NodeService
 const makeAuth = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   error?: EnvironmentAuth.ServerAuthCredentialError,
+  revoked?: Promise<void>,
 ) => {
   const requests: string[] = [];
   const authLayer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
@@ -48,7 +49,13 @@ const makeAuth = (
           });
     },
   });
-  return { layer: Layer.merge(authLayer, SessionLifetime.layerStable), requests };
+  return {
+    layer: Layer.merge(
+      authLayer,
+      revoked ? SessionLifetime.layerRevocable(revoked) : SessionLifetime.layerStable,
+    ),
+    requests,
+  };
 };
 
 const mutations = [
@@ -95,6 +102,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -161,6 +169,7 @@ it.effect.each([
 
 it.effect("sends replies ahead of stale frames and only the newest frame after an ack", () =>
   Effect.gen(function* () {
+    const revoked = Promise.withResolvers<void>();
     const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
     const released: number[] = [];
     const frame = (id: number): ServerBrowser.ServerBrowserViewerOutput => ({
@@ -174,6 +183,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -188,7 +198,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
         { disableListenLog: true },
       ).pipe(
         Layer.provideMerge(layerTestLoopback),
-        Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
+        Layer.provide(makeAuth([AuthOrchestrationReadScope], undefined, revoked.promise).layer),
       ),
     );
     const server = Context.get(services, HttpServer.HttpServer);
@@ -232,6 +242,10 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
     yield* Effect.promise(() => next.promise);
     expect(received).toEqual([1, "probe", 4]);
     expect(released).toEqual([2, 3, 1]);
+    const closed = Promise.withResolvers<void>();
+    socket.addEventListener("close", () => closed.resolve(), { once: true });
+    revoked.resolve();
+    yield* Effect.promise(() => closed.promise);
   }).pipe(Effect.scoped),
 );
 
@@ -249,6 +263,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -294,6 +309,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: (input) =>
         Effect.sync(() => {
@@ -346,6 +362,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
@@ -419,6 +436,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
+      adjustPreview: () => Effect.die("unused preview adjustment"),
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),

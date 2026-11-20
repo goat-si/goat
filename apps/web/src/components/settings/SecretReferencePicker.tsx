@@ -4,6 +4,7 @@ import {
   type SecretSourceCheckResult,
   isOnePasswordReference,
   type EnvironmentId,
+  AuthProvidersManageScope,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -11,6 +12,7 @@ import { useState } from "react";
 import { isSecretsFeatureEnabled } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
@@ -40,6 +42,7 @@ export function SecretReferencePicker({
     readonly result: SecretSourceCheckResult | null;
   } | null>(null);
   const permitted = useAtomValue(serverEnvironment.checkSecretSource.permissionAtom(environmentId));
+  const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
   const choices = Object.entries(providers).filter(
     ([, provider]) => classifySecretProvider(provider).kind === "one_password",
@@ -59,6 +62,7 @@ export function SecretReferencePicker({
   // Older servers lack the check; offering it there would only fail.
   const canCheck =
     permitted === true &&
+    canManageProviders &&
     config?.environment.capabilities.secretSourceCheck === true &&
     value !== undefined &&
     value.provider === selected &&
@@ -82,7 +86,7 @@ export function SecretReferencePicker({
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <Select
-        disabled={disabled}
+        disabled={disabled || !canManageProviders}
         value={selected}
         onValueChange={(next) => {
           if (typeof next !== "string") return;
@@ -111,7 +115,7 @@ export function SecretReferencePicker({
           size="sm"
           font="mono"
           aria-label="Secret reference"
-          disabled={disabled}
+          disabled={disabled || !canManageProviders}
           aria-invalid={invalid || undefined}
           placeholder="op://vault/item/field"
           value={value?.provider === selected ? value.reference : ""}

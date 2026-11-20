@@ -1,5 +1,11 @@
 import { useEffect } from "react";
-import { type ComposerContextRecord, ComposerContextId, EnvironmentId } from "@goat/contracts";
+import { threadContextRecord } from "../../lib/composerContextRecords";
+import {
+  type ComposerContextRecord,
+  ComposerContextId,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 import { act, render, stubGlobal } from "../../../test/render";
@@ -44,6 +50,7 @@ function deferred<T>() {
 it.each([
   { kind: "file", edit: "delete" },
   { kind: "image", edit: "delete" },
+  { kind: "image", edit: "retain" },
   { kind: "file", edit: "undo" },
   { kind: "file", edit: "retain" },
   { kind: "file", edit: "switch" },
@@ -119,7 +126,17 @@ it.each([
   const attachment = (
     kind === "file"
       ? { ...attachmentFields, kind: "file" as const }
-      : { ...attachmentFields, kind: "image" as const }
+      : {
+          ...attachmentFields,
+          kind: "image" as const,
+          source: {
+            kind: "snap-shot" as const,
+            appName: "Finder",
+            windowTitle: "Downloads",
+            capturedAt: "2026-01-01T00:00:00.000Z",
+            accessibleText: "Downloads",
+          },
+        }
   ) satisfies ComposerContextRecord;
   const annotation = {
     version: 1,
@@ -177,6 +194,10 @@ it.each([
   const draft = store.getComposerDraft(target)!;
   expect(draft.prompt).toBe(promptRef.current);
   const attachments = kind === "file" ? draft.files : draft.images;
+  if (kind === "image" && edit === "retain")
+    expect(draft.images[0]?.source).toEqual(
+      attachment.kind === "image" ? attachment.source : undefined,
+    );
   expect(attachments.map((file) => file.name)).toEqual(
     edit === "undo" ||
       edit === "retain" ||
@@ -186,4 +207,64 @@ it.each([
       ? ["notes.txt"]
       : [],
   );
+});
+
+it("resolves colliding thread references against the destination draft by identity", async () => {
+  const target = DraftId.make("thread-collision-target");
+  const otherTarget = DraftId.make("thread-collision-other");
+  const store = useComposerDraftStore.getState();
+  using _draft = {
+    [Symbol.dispose]: () => {
+      store.clearComposerContent(target);
+      store.clearComposerContent(otherTarget);
+    },
+  };
+  const environmentId = EnvironmentId.make("thread-source");
+  const first = threadContextRecord({ environmentId, threadId: ThreadId.make("first") }, "First");
+  const pasted = {
+    ...threadContextRecord({ environmentId, threadId: ThreadId.make("second") }, "Second"),
+    contextId: first.contextId,
+  };
+  store.setThreadContexts(target, [first]);
+  let importer!: Importer;
+  await using _screen = await render(
+    <Harness
+      input={{
+        environmentId,
+        activeThread: undefined,
+        activeThreadId: null,
+        composerDraftTarget: otherTarget,
+        attachmentDraftTarget: otherTarget,
+        attachmentTargetKey: otherTarget,
+        attachmentTargetKeyRef: { current: otherTarget },
+        questionAttachmentTarget: null,
+        pendingUserInputs: [],
+        composerContextRecords: new Map([[first.contextId, { kind: "thread", record: first }]]),
+        composerImages: [],
+        composerFilesRef: { current: [] },
+        pendingThreadImportsRef: { current: new Map() },
+        promptRef: { current: "" },
+        addComposerFilesToDraft: () => [],
+      }}
+      ready={(value) => {
+        importer = value;
+      }}
+    />,
+  );
+  let importedId: string | undefined;
+  await act(() => {
+    importedId = importer
+      .importContextRecords([pasted], environmentId, target)
+      .get(pasted.contextId);
+  });
+  const records = store.getComposerDraft(target)?.threadContexts ?? [];
+  expect(records).toHaveLength(2);
+  expect(records.find((record) => record.contextId === importedId)?.threadId).toBe(pasted.threadId);
+  expect(store.getComposerDraft(otherTarget)?.threadContexts ?? []).toEqual([]);
+  await act(() => {
+    expect(
+      importer.importContextRecords([pasted], environmentId, target).get(pasted.contextId),
+    ).toBe(importedId);
+  });
+  expect(store.getComposerDraft(target)?.threadContexts).toHaveLength(2);
 });

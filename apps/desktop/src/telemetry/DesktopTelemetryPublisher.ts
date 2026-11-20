@@ -509,6 +509,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateRequestQueue, message).pipe(Effect.asVoid);
       case "commitDesktopUpdate":
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
+      case "serverReady":
+        return Effect.void;
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
       case "cuaWatch":

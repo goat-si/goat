@@ -1,0 +1,1 @@
+export const WORKTREE_HOLDER_SCAN_LIMIT = 10_000;

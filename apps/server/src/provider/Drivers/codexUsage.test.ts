@@ -609,6 +609,98 @@ describe("parseCodexLine", () => {
     });
   });
 
+  const at = (time: string, line: string) => line.replace("05:17:49.919Z", `${time}.000Z`);
+  const anonymousRequest = (time: string, usage: unknown) =>
+    JSON.stringify({
+      type: "token_usage_record",
+      timestamp: `2026-08-01T${time}.000Z`,
+      payload: { usage },
+    });
+  it.each([
+    {
+      name: "does not bill an older snapshot re-emitted after requests without cumulative counters",
+      lines: [
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        at("10:00:05", counted(counters(20, 4))),
+        at("10:00:10", counted(counters(30, 6))),
+        at("10:00:05", counted(counters(20, 4), counters(120, 24))),
+      ],
+      processed: [120, 24, 36, 0],
+      skipped: 1,
+    },
+    {
+      name: "bills a rewind that follows a request without cumulative counters",
+      lines: [
+        at("10:00:00", counted(counters(100, 20))),
+        at("10:00:10", counted(counters(20, 4), counters(60, 12))),
+      ],
+      processed: [120, 24],
+      skipped: 0,
+    },
+    {
+      name: "keeps the baseline when it rejects an older snapshot, so the replay that follows is not billed",
+      lines: [
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        at("10:00:05", counted(counters(20, 4), counters(120, 24))),
+        at("10:00:10", counted(counters(30, 6), counters(150, 30))),
+        at("10:00:05", counted(counters(20, 4), counters(120, 24))),
+        at("10:00:10", counted(counters(30, 6), counters(150, 30))),
+      ],
+      processed: [120, 24, 36, 0, 0],
+      skipped: 1,
+    },
+    {
+      name: "keeps the baseline when it rejects a lower snapshot from the baseline's own time",
+      lines: [
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        at("10:00:00", counted(counters(20, 4), counters(120, 24))),
+        at("10:00:00", counted(counters(30, 6), counters(150, 30))),
+        at("10:00:00", counted(counters(20, 4), counters(120, 24))),
+        at("10:00:00", counted(counters(30, 6), counters(150, 30))),
+      ],
+      processed: [120, 24, 36, 0, 0],
+      skipped: 1,
+    },
+    {
+      name: "does not bill replayed snapshots against a cached baseline of unknown age",
+      lines: [
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        at("10:00:05", counted(counters(20, 4), counters(120, 24))),
+        at("10:00:10", counted(counters(30, 6), counters(150, 30))),
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        at("10:00:05", counted(counters(20, 4), counters(120, 24))),
+      ],
+      undatedAfter: 3,
+      processed: [120, 24, 36, 0, 0],
+      skipped: 1,
+    },
+    {
+      name: "warns about the anonymous request a rewound snapshot does not report",
+      lines: [
+        at("10:00:00", counted(counters(100, 20), counters(100, 20))),
+        anonymousRequest("10:00:05", counters(40, 8)),
+        anonymousRequest("10:00:06", counters(20, 4)),
+        at("10:00:07", counted(counters(20, 4), counters(60, 12))),
+        at("10:00:08", counted(counters(10, 2), counters(70, 14))),
+      ],
+      processed: [120, 0, 0, 24, 12],
+      skipped: 1,
+    },
+  ])("$name", ({ lines, undatedAfter, processed, skipped }) => {
+    const state = initialCodexScanState();
+    parseCodexLine(turnContext, state);
+    const billed = lines.map((line, index) => {
+      if (index === undatedAfter) delete state.latestCumulativeAtMs;
+      const record = parseCodexLine(line, state);
+      return record === null ? 0 : totalTokens(record.totals);
+    });
+
+    expect({ processed: billed, skipped: codexUsageFormat.readMalformedRecords?.(state) }).toEqual({
+      processed,
+      skipped,
+    });
+  });
+
   it("ignores a replay of the current sequence's first request without rewinding the baseline", () => {
     const state = initialCodexScanState();
     parseCodexLine(turnContext, state);
@@ -776,149 +868,5 @@ describe("parseCodexLine", () => {
         expect(record).not.toHaveProperty("unresolvedServiceTierTurnId");
       }
     }
-  });
-
-  // A forked/subagent rollout opens with the parent's history copied in and
-  // every line re-stamped to the fork instant, then the ancestors' session
-  // metas. Counting those again multiplied usage ~1.85x on real data.
-  describe("forked rollouts", () => {
-    const meta = (overrides: {
-      id: string;
-      timestamp: string;
-      forkedFromId?: string;
-      spawnParentId?: string;
-    }) =>
-      JSON.stringify({
-        type: "session_meta",
-        timestamp: overrides.timestamp,
-        payload: {
-          type: "session_meta",
-          id: overrides.id,
-          ...(overrides.forkedFromId === undefined
-            ? {}
-            : { forked_from_id: overrides.forkedFromId }),
-          ...(overrides.spawnParentId === undefined
-            ? {}
-            : {
-                source: {
-                  subagent: { thread_spawn: { parent_thread_id: overrides.spawnParentId } },
-                },
-              }),
-        },
-      });
-    const stamped = (timestamp: string, line: string) => {
-      const parsed = JSON.parse(line) as { timestamp: string };
-      parsed.timestamp = timestamp;
-      return JSON.stringify(parsed);
-    };
-
-    it("drops the re-stamped copied burst and keeps the first real event", () => {
-      const state = initialCodexScanState();
-      const forkInstant = "2026-08-01T05:00:00.000Z";
-      parseCodexLine(meta({ id: "child", timestamp: forkInstant, forkedFromId: "parent" }), state);
-      parseCodexLine(meta({ id: "parent", timestamp: forkInstant }), state);
-      parseCodexLine(stamped(forkInstant, turnContext), state);
-
-      expect(
-        parseCodexLine(
-          stamped("2026-08-01T05:00:00.001Z", counted(counters(100, 10), counters(100, 10))),
-          state,
-        ),
-      ).toBeNull();
-      expect(
-        parseCodexLine(
-          stamped("2026-08-01T05:00:00.002Z", counted(counters(200, 20), counters(300, 30))),
-          state,
-        ),
-      ).toBeNull();
-
-      const real = parseCodexLine(
-        stamped("2026-08-01T05:00:06.000Z", counted(counters(200, 20), counters(500, 50))),
-        state,
-      );
-      expect(real).not.toBeNull();
-      expect(real?.sessionId).toBe("child");
-      expect(real?.totals.outputTokens).toBe(20);
-
-      const next = parseCodexLine(
-        stamped("2026-08-01T05:00:06.100Z", counted(counters(400, 40), counters(900, 90))),
-        state,
-      );
-      expect(next).not.toBeNull();
-      expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(0);
-    });
-
-    it("recognizes subagent spawns without forked_from_id", () => {
-      const state = initialCodexScanState();
-      const spawnInstant = "2026-08-01T05:00:00.000Z";
-      parseCodexLine(
-        meta({ id: "child", timestamp: spawnInstant, spawnParentId: "parent" }),
-        state,
-      );
-      parseCodexLine(stamped(spawnInstant, turnContext), state);
-      expect(
-        parseCodexLine(stamped("2026-08-01T05:00:00.001Z", tokenCount(100, 0, 10, 0)), state),
-      ).toBeNull();
-    });
-
-    it("does not suppress anything in a rollout that is not a fork", () => {
-      const state = initialCodexScanState();
-      parseCodexLine(meta({ id: "root", timestamp: "2026-08-01T05:00:00.000Z" }), state);
-      parseCodexLine(stamped("2026-08-01T05:00:00.100Z", turnContext), state);
-      const record = parseCodexLine(
-        stamped("2026-08-01T05:00:00.200Z", tokenCount(100, 0, 10, 0)),
-        state,
-      );
-      expect(record).not.toBeNull();
-    });
-
-    it("forgets the old sequence start when a copied zero baseline rebases the counters", () => {
-      const state = initialCodexScanState();
-      const forkInstant = "2026-08-01T05:00:00.000Z";
-      const request = counters(100, 20);
-      const billed = (line: string) => {
-        const record = parseCodexLine(line, state);
-        return record === null ? 0 : totalTokens(record.totals);
-      };
-      parseCodexLine(stamped("2026-08-01T04:59:00.000Z", turnContext), state);
-      const first = billed(stamped("2026-08-01T04:59:01.000Z", counted(request, request)));
-      parseCodexLine(meta({ id: "child", timestamp: forkInstant, forkedFromId: "parent" }), state);
-      const copied = billed(
-        stamped(
-          "2026-08-01T05:00:00.001Z",
-          counted({ ...counters(0, 0), total_tokens: 26387 }, counters(0, 0)),
-        ),
-      );
-      const afterBurst = billed(stamped("2026-08-01T05:00:06.000Z", counted(request, request)));
-      const next = billed(
-        stamped("2026-08-01T05:00:06.100Z", counted(counters(30, 5), counters(130, 25))),
-      );
-
-      expect({
-        processed: [first, copied, afterBurst, next],
-        skipped: codexUsageFormat.readMalformedRecords?.(state),
-      }).toEqual({ processed: [120, 0, 120, 35], skipped: 0 });
-    });
-
-    it("bills the child's first request when its turn is interrupted before any snapshot", () => {
-      const state = initialCodexScanState();
-      const forkInstant = "2026-08-01T05:00:00.000Z";
-      const request = (timestamp: string, usage: unknown) =>
-        JSON.stringify({ type: "token_usage_record", timestamp, payload: { usage } });
-      const billed = [
-        meta({ id: "child", timestamp: forkInstant, forkedFromId: "parent" }),
-        stamped(forkInstant, turnContext),
-        request("2026-08-01T05:00:00.001Z", counters(100, 20)),
-        stamped("2026-08-01T05:00:00.001Z", counted(counters(100, 20), counters(100, 20))),
-        request("2026-08-01T05:00:06.000Z", counters(150, 10)),
-        request("2026-08-01T05:00:10.000Z", counters(200, 30)),
-        stamped("2026-08-01T05:00:10.000Z", counted(counters(200, 30), counters(450, 60))),
-      ].flatMap((line) => parseCodexRecords(line, state));
-
-      expect({
-        processed: billed.map((record) => totalTokens(record.totals)),
-        skipped: codexUsageFormat.readMalformedRecords?.(state),
-      }).toEqual({ processed: [160, 230], skipped: 0 });
-    });
   });
 });

@@ -98,6 +98,7 @@ import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
+  homeProjectFilterOptions,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
@@ -759,6 +760,10 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
+  const projectOptions = useMemo(
+    () => homeProjectFilterOptions(projectScopes, props.threads),
+    [projectScopes, props.threads],
+  );
   const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
 
   const v2ListHeader = (
@@ -769,10 +774,7 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListFilters
           gutter={primaryColumn ? 8 : 0}
           environments={props.environments}
-          projects={pickableProjectGroups(projectScopes).map((scope) => ({
-            key: scope.key,
-            label: scope.title,
-          }))}
+          projects={projectOptions}
           selectedEnvironmentId={props.selectedEnvironmentId}
           selectedProjectKey={props.selectedProjectKey}
           onEnvironmentChange={props.onEnvironmentChange}
@@ -788,6 +790,12 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title="Searching thread messages…"
         detail={`Looking for "${props.searchQuery}" in messages.`}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : hasSearchQuery && threadSearch.failed ? (
+      <EmptyState
+        title="Search failed"
+        detail={`Couldn't search messages for "${props.searchQuery}". Change the search to try again.`}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : hasSearchQuery ? (
@@ -835,12 +843,16 @@ export function HomeScreen(props: HomeScreenProps) {
             : cn("flex-1", contentBackground)
         }
       >
-        <SwipeableScrollGateProvider enabled={swipeEnabled} activation={swipeRowActivation}>
+        <SwipeableScrollGateProvider
+          listAnimatesLayout
+          enabled={swipeEnabled}
+          activation={swipeRowActivation}
+        >
           {/* As the iPad primary column, the list stays on screen while a thread holds focus. */}
           <ThreadListPaneVisibleContext value={primaryColumn?.presented}>
             <GestureDetector gesture={homeScrollGesture}>
               <AnimatedLegendList
-                itemLayoutAnimation={primaryColumn ? THREAD_SIDEBAR_ROW_LAYOUT : undefined}
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 ref={listRef}
                 onLoad={() => {
                   settleLaunchSplashHomeRows();

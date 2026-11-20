@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   type EnvironmentId,
   type TerminalAttachInput,
   type TerminalCloseInput,
@@ -20,10 +21,16 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
+  isAtomCommandInterrupted,
   runAtomCommand,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { subscribe, subscribeDynamic, type EnvironmentRpcInput } from "../rpc/client.ts";
+import {
+  requestGuarded,
+  subscribe,
+  subscribeDynamic,
+  type EnvironmentRpcInput,
+} from "../rpc/client.ts";
 import {
   applyTerminalAttachStreamEvent,
   applyTerminalMetadataStreamEvent,
@@ -65,11 +72,18 @@ export function createTerminalEnvironmentAtoms<R, E>(
     }),
     attach: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:terminal:attach",
+      // The server sizes the PTY to every attached viewer, so a closed view must detach now.
+      idleTtlMs: 0,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) => {
         // Retry an unanswered first attach unchanged so it can still open the shell.
         let replied = false;
+        const request = {
+          ...input,
+          terminalErrorMessage: true as const,
+          maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+        };
         return subscribeDynamic(WS_METHODS.terminalAttach, () =>
-          Effect.sync(() => (replied ? { ...input, resume: true } : input)),
+          Effect.sync(() => (replied ? { ...request, resume: true } : request)),
         ).pipe(
           Stream.onFirst(() =>
             Effect.sync(() => {
@@ -96,6 +110,8 @@ export function createTerminalEnvironmentAtoms<R, E>(
     open: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:terminal:open",
       tag: WS_METHODS.terminalOpen,
+      execute: (input) =>
+        requestGuarded(WS_METHODS.terminalOpen, { ...input, terminalErrorMessage: true }),
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
@@ -118,6 +134,8 @@ export function createTerminalEnvironmentAtoms<R, E>(
     restart: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:terminal:restart",
       tag: WS_METHODS.terminalRestart,
+      execute: (input) =>
+        requestGuarded(WS_METHODS.terminalRestart, { ...input, terminalErrorMessage: true }),
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
@@ -233,7 +251,7 @@ export interface TerminalSessionOptions {
     readonly terminalId: string;
   };
   readonly gridSize: TerminalGridSize;
-  /** Written once, as soon as the first attachment snapshot lands. */
+  /** Written once, after the measured grid reaches a running shell. */
   readonly initialInput?: string | undefined;
   /** Read right before every command, so revoking operate stops them at once. */
   readonly canOperate: () => boolean;
@@ -268,18 +286,49 @@ export function createTerminalSession(
   const { environmentId, threadId, terminalId } = options.target;
   let lifecycle = INITIAL_TERMINAL_LIFECYCLE;
   let gridSize = options.gridSize;
+  let gridMeasured = false;
   let generation: number | null = null;
   let liveLifecycleVersion: number | null = null;
   let initialInputPending = Boolean(options.initialInput);
   let lastStatus: TerminalBufferState["status"] | null = null;
   let loggedFirstOutput = false;
   let resizeRegistry: AtomRegistry.AtomRegistry | null = null;
+  let shellResized: ReturnType<typeof runAtomCommand> | null = null;
 
-  const sendResize = () => {
+  const sendResize = (retry = false) => {
     if (generation === null || resizeRegistry === null || !options.canOperate()) return;
-    void runAtomCommand(resizeRegistry, atoms.resize, {
+    const registry = resizeRegistry;
+    const resized = runAtomCommand(registry, atoms.resize, {
       environmentId,
       input: { threadId, terminalId, cols: gridSize.cols, rows: gridSize.rows },
+    });
+    shellResized = resized;
+    void resized.then((result) => {
+      if (
+        !retry &&
+        resized === shellResized &&
+        result._tag === "Failure" &&
+        !isAtomCommandInterrupted(result)
+      ) {
+        sendResize(true);
+        return;
+      }
+      const data = options.initialInput;
+      if (
+        result._tag !== "Success" ||
+        resized !== shellResized ||
+        !gridMeasured ||
+        generation === null ||
+        !initialInputPending ||
+        !data ||
+        !options.canOperate()
+      )
+        return;
+      initialInputPending = false;
+      void runAtomCommand(registry, atoms.write, {
+        environmentId,
+        input: { threadId, terminalId, data },
+      });
     });
   };
 
@@ -364,15 +413,8 @@ export function createTerminalSession(
       buffer.version > 0 && status === "running" ? buffer.output.generation : null;
     if (nextGeneration !== generation) {
       generation = nextGeneration;
+      shellResized = null;
       sendResize();
-    }
-
-    if (initialInputPending && buffer.version > 0 && options.initialInput && options.canOperate()) {
-      initialInputPending = false;
-      void runAtomCommand(registry, atoms.write, {
-        environmentId,
-        input: { threadId, terminalId, data: options.initialInput },
-      });
     }
 
     apply({ type: "status", status, version: buffer.version }, registry, input);
@@ -398,6 +440,7 @@ export function createTerminalSession(
       const registry = get.registry;
       get.addFinalizer(() => {
         generation = null;
+        shellResized = null;
         lastStatus = null;
         setLive(null);
         lifecycle = transitionTerminalLifecycle(lifecycle, {
@@ -421,7 +464,8 @@ export function createTerminalSession(
       return attached;
     },
     reportGridSize: (size) => {
-      if (size.cols === gridSize.cols && size.rows === gridSize.rows) return;
+      if (gridMeasured && size.cols === gridSize.cols && size.rows === gridSize.rows) return;
+      gridMeasured = true;
       gridSize = size;
       sendResize();
     },

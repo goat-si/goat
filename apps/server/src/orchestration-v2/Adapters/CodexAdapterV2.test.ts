@@ -34,7 +34,7 @@ import {
   TurnItemId,
   type ServerProviderModel,
 } from "@goat/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import { toolOutputImages } from "@goat/shared/toolOutput";
 
 import * as CodexClient from "effect-codex-app-server/client";
@@ -83,6 +83,7 @@ import {
 } from "./CodexAdapterV2.testkit.ts";
 import {
   codexReplayPreamble,
+  codexReplayThreadResult,
   makeCodexReplayHarness,
   RESUME_SCENARIO,
   RESUME_NATIVE_THREAD,
@@ -1615,7 +1616,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ...CODEX_EXPECTED_THREAD_CONFIG,
             "mcp_servers.goat": {
               url: attachment.endpoint,
-              disabled_tools: [...disabledTools, "goat_thread_wait"],
+              disabled_tools: [...disabledTools, "goat_thread_wait", "goat_task_create"],
               tool_timeout_sec: 3900,
               http_headers: { Authorization: attachment.authorizationHeader },
             },
@@ -1623,7 +1624,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               url: attachment.endpoint,
               tool_timeout_sec: 3900,
               http_headers: { Authorization: attachment.authorizationHeader },
-              enabled_tools: ["goat_thread_wait"],
+              enabled_tools: ["goat_thread_wait", "goat_task_create"],
               omit_tools_from: ["code_mode", "deferred"],
             },
           },
@@ -2806,7 +2807,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     { hook: "wrong-turn", status: "interrupted", expected: false },
     { hook: "wrong-thread", status: "interrupted", expected: false },
     { hook: "unscoped", status: "interrupted", expected: false },
-    { hook: "stopped", status: "completed", expected: false },
+    { hook: "stopped", status: "completed", expected: true },
     { hook: "stopped", status: "failed", expected: false },
   ] as const)(
     "correlates $hook hook output with a $status turn only",
@@ -4470,7 +4471,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  it.effect("Stop ends a background command no Codex process tracks any more", () =>
+  it.effect("ends a background command when its Codex process is gone", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -4507,6 +4508,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
+          using dispatchSpy = vi.spyOn(orchestrator, "dispatch");
           const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
           const threadId = ThreadId.make("thread:background-stop-untracked");
           yield* orchestrator.dispatch({
@@ -4546,21 +4548,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* worker.drain();
           yield* Fiber.join(settled);
           yield* worker.drain();
-          const before = yield* orchestrator.getThreadShell(threadId);
-          assert.deepEqual(
-            before?.pendingBackgroundTasks?.map((task) => task.kind),
-            ["command"],
-            "the thread still shows the command the gone process never finished",
-          );
-          const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
-          yield* orchestrator.dispatch({
-            type: "run.interrupt",
-            commandId: CommandId.make("stop-background-untracked"),
-            threadId,
-            runId: run.id,
-            holdQueue: true,
-          });
-          yield* worker.drain();
+          // regression: #37290 the command stayed running, and the thread waiting, until Stop.
           const projection = yield* orchestrator.getThreadProjection(threadId);
           assert.deepEqual(
             projection.turnItems.flatMap((item) =>
@@ -4569,6 +4557,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ["interrupted"],
           );
           assert.equal(projection.runs.at(-1)?.status, "completed");
+          assert.isFalse(
+            dispatchSpy.mock.calls.some(([command]) => command.type === "run.interrupt"),
+          );
           assert.deepEqual(
             (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
             [],
@@ -7265,42 +7256,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
-  const codexReplayThreadResult = (input: {
-    readonly nativeThreadId: string;
-    readonly forkedFromId: string | null;
-  }) => ({
-    thread: {
-      id: input.nativeThreadId,
-      sessionId: input.nativeThreadId,
-      forkedFromId: input.forkedFromId,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1782622440,
-      updatedAt: 1782622440,
-      status: { type: "idle" },
-      path: `/tmp/${input.nativeThreadId}.jsonl`,
-      cwd: "/workspace",
-      cliVersion: "0.144.0",
-      source: "vscode",
-      threadSource: null,
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/workspace",
-    instructionSources: [],
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
-    reasoningEffort: "medium",
-  });
-
   const errorCauseChainText = (error: unknown): string =>
     error instanceof Error ? `${error.message} ${errorCauseChainText(error.cause)}` : String(error);
 
@@ -7433,7 +7388,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               frame: {
                 id: 3,
                 method: "thread/fork",
-                params: { threadId: nativeThreadId, config: CodexAdapterV2.CODEX_THREAD_CONFIG },
+                params: {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                },
               },
             },
             {
@@ -9046,7 +9005,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "mcp_servers.goat": {
               url: "http://127.0.0.1:43123/mcp",
-              disabled_tools: [...GOAT_MEMORY_TOOLS, "goat_thread_wait"],
+              disabled_tools: [...GOAT_MEMORY_TOOLS, "goat_thread_wait", "goat_task_create"],
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
             },
@@ -9054,7 +9013,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
-              enabled_tools: ["goat_thread_wait"],
+              enabled_tools: ["goat_thread_wait", "goat_task_create"],
               omit_tools_from: ["code_mode", "deferred"],
             },
           },

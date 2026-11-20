@@ -16,7 +16,10 @@ import {
   composerFileNeedsReattach,
 } from "../../composerDraftStore";
 import { retryAttachmentUpload, useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
-import type { AttachmentUploadState } from "../../lib/attachmentUploadState";
+import {
+  attachmentUploadForEnvironment,
+  type AttachmentUploadState,
+} from "../../lib/attachmentUploadState";
 import { useAttachmentUploadProgress } from "../../hooks/useAttachmentUploadProgress";
 import { isHeicImageFile } from "../../lib/imageCompression";
 import {
@@ -133,6 +136,7 @@ export function ComposerAttachmentMediaRow({
   environmentId,
   attachmentDraftTarget,
   canOperateThread,
+  onCopySnapshot,
   onExpandImage,
   onFileOpen,
   onRemoveImage,
@@ -152,6 +156,7 @@ export function ComposerAttachmentMediaRow({
   readonly environmentId: EnvironmentId;
   readonly attachmentDraftTarget: ScopedThreadRef | DraftId;
   readonly canOperateThread: boolean;
+  readonly onCopySnapshot?: (id: string) => Promise<void>;
   readonly onExpandImage: (preview: ExpandedImagePreview) => void;
   readonly onFileOpen: (attachment: ChatFileAttachment) => void;
   readonly onRemoveImage: (imageId: string) => void;
@@ -178,7 +183,9 @@ export function ComposerAttachmentMediaRow({
       ]
         .map(({ image, ready }) => {
           const upload =
-            ready && supportsAttachmentUploads ? uploadsByImageId[image.id] : undefined;
+            ready && supportsAttachmentUploads
+              ? attachmentUploadForEnvironment(uploadsByImageId[image.id], environmentId)
+              : undefined;
           const source = ready?.source;
           const snapShotAnimationPending =
             source?.kind === "snap-shot" && pendingSnapShotIdSet.has(image.id);
@@ -209,7 +216,7 @@ export function ComposerAttachmentMediaRow({
                   aria-label={`Preview ${image.name}`}
                   disabled={!ready}
                   onClick={() => {
-                    const preview = buildExpandedImagePreview(images, image.id);
+                    const preview = buildExpandedImagePreview(images, image.id, onCopySnapshot);
                     if (!preview) return;
                     onExpandImage(preview);
                   }}
@@ -243,6 +250,9 @@ export function ComposerAttachmentMediaRow({
               {source?.kind === "snap-shot" ? (
                 <SnapShotAttachmentDetails
                   source={source}
+                  onCopySnapshot={
+                    ready && onCopySnapshot ? () => onCopySnapshot(ready.id) : undefined
+                  }
                   className={cn(
                     upload?.status === "uploading" && "bottom-4",
                     upload?.status === "failed" && "bottom-8",
@@ -341,7 +351,9 @@ export function ComposerAttachmentMediaRow({
           supportsAttachmentUploads &&
           maxFileAttachmentBytes !== null &&
           file.sizeBytes <= maxFileAttachmentBytes;
-        const upload = fileCanUpload ? uploadsByImageId[file.id] : undefined;
+        const upload = fileCanUpload
+          ? attachmentUploadForEnvironment(uploadsByImageId[file.id], environmentId)
+          : undefined;
         return (
           <div
             key={file.id}
@@ -447,7 +459,9 @@ export function ComposerAttachmentFileList({
           supportsAttachmentUploads &&
           maxFileAttachmentBytes !== null &&
           file.sizeBytes <= maxFileAttachmentBytes;
-        const upload = fileCanUpload ? uploadsByImageId[file.id] : undefined;
+        const upload = fileCanUpload
+          ? attachmentUploadForEnvironment(uploadsByImageId[file.id], environmentId)
+          : undefined;
         const needsReattach = composerFileNeedsReattach(file);
         const canReattachFile = fileStagingLimit !== null && file.sizeBytes <= fileStagingLimit;
         return (
@@ -570,12 +584,14 @@ export function ComposerRestingImagePreviews({
   images,
   allImages,
   resolvedTheme,
+  onCopySnapshot,
   onExpandImage,
   onShowMore,
 }: {
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly allImages: ReadonlyArray<ComposerImageAttachment>;
   readonly resolvedTheme: "light" | "dark";
+  readonly onCopySnapshot?: (id: string) => Promise<void>;
   readonly onExpandImage: (preview: ExpandedImagePreview) => void;
   readonly onShowMore: () => void;
 }) {
@@ -591,7 +607,7 @@ export function ComposerRestingImagePreviews({
           aria-label={`Preview ${image.name}`}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => {
-            const preview = buildExpandedImagePreview(allImages, image.id);
+            const preview = buildExpandedImagePreview(allImages, image.id, onCopySnapshot);
             if (preview) onExpandImage(preview);
           }}
         >

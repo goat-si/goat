@@ -49,7 +49,6 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import {
   createServerPairingCredential,
-  isLoopbackHostname,
   type ServerClientSessionRecord,
   type ServerPairingLinkRecord,
 } from "~/environments/primary";
@@ -168,7 +167,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
     endpointPairingUrl ??
     (credential && endpointUrl != null && endpointUrl !== ""
       ? (hostedPairingUrl ?? resolveDesktopPairingUrl(endpointUrl, credential))
-      : !servedByEnvironment || isLoopbackHostname(window.location.hostname)
+      : !servedByEnvironment
         ? null
         : currentOriginPairingUrl);
   const [failedCopyValue, setFailedCopyValue] = useState<string | null>(null);

@@ -1,3 +1,9 @@
+import { makeGitLabAwards } from "./gitLabAwards.ts";
+import { makeGitLabPullRequestStats } from "./gitLabPullRequestStats.ts";
+import {
+  decodeMergeRequestWatchFingerprintJson,
+  MERGE_REQUEST_WATCH_FINGERPRINT_GRAPHQL_QUERY,
+} from "./gitLabMergeRequestWatchFingerprint.ts";
 import { makeGitLabProjectUsers, makeReviewerCandidates } from "./gitLabProjectUsers.ts";
 import { makeReferenceSearch } from "./gitLabReferenceSearch.ts";
 export { referenceSearches } from "./gitLabReferenceSearch.ts";
@@ -71,7 +77,7 @@ import type {
   PullRequestReaction,
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
-  PullRequestReviewThread,
+  PullRequestConversationThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
 } from "@goat/contracts";
@@ -89,25 +95,20 @@ import {
   decodeMergeRequestDiffsJson,
   decodeMergeRequestChangesJson,
   decodeMergeRequestListJson,
-  decodeMergeRequestFileStatsJson,
-  decodeMergeRequestStatsJson,
   decodeNotesJson,
-  decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
-  decodeProjectLabelsJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
-  gitLabAwardName,
-  MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
-  MERGE_REQUEST_STATS_GRAPHQL_QUERY,
   REPOSITORY_BLOBS_GRAPHQL_QUERY,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
   type GitLabMergeRequestListState,
 } from "./gitLabMergeRequestJson.ts";
+import { decodeProjectLabelsJson } from "./gitLabProjectLabels.ts";
 import type {
   ProviderChangeRequestSummary,
+  ProviderChangeRequestWatchFingerprint,
   ProviderFileStats,
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
@@ -143,7 +144,6 @@ const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 const isVcsProcessExitError = Schema.is(VcsProcessExitError);
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-
 export class GitLabPullRequestCli extends Context.Service<
   GitLabPullRequestCli,
   {
@@ -219,6 +219,13 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<ProviderFileStats, GitLabPullRequestCliError>;
+
+    readonly getMergeRequestWatchFingerprint: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<ProviderChangeRequestWatchFingerprint | null, GitLabPullRequestCliError>;
 
     readonly listNotes: (input: {
       readonly cwd: string;
@@ -494,6 +501,7 @@ export const make = Effect.gen(function* () {
         ["per_page", String(perPage)],
         ["page", String(input.page)],
       ])}`,
+      maxOutputBytes: 16 * 1024 * 1024,
     }).pipe(
       Effect.flatMap((result) => {
         const raw = result.stdout.trim();
@@ -697,7 +705,7 @@ export const make = Effect.gen(function* () {
     readonly repository: string;
     readonly number: number;
     readonly page: number;
-    readonly collected: ReadonlyArray<PullRequestReviewThread>;
+    readonly collected: ReadonlyArray<PullRequestConversationThread>;
     readonly collectedDiffRefs: ReadonlyMap<string, GitLabDiffRefs>;
     readonly collectedFindingIds: ReadonlyArray<string>;
   }): Effect.Effect<GitLabDiscussionThreads, GitLabPullRequestCliError> =>
@@ -884,17 +892,6 @@ export const make = Effect.gen(function* () {
 
   const projectUsers = makeGitLabProjectUsers(api);
 
-  const awardSubjectPath = (input: {
-    readonly repository: string;
-    readonly number: number;
-    readonly noteId?: string | undefined;
-  }) => {
-    const mergeRequest = `projects/${projectPath(input.repository)}/merge_requests/${input.number}`;
-    return input.noteId === undefined
-      ? `${mergeRequest}/award_emoji`
-      : `${mergeRequest}/notes/${encodeURIComponent(input.noteId)}/award_emoji`;
-  };
-
   const awardsPage = (input: {
     readonly cwd: string;
     readonly host?: string | undefined;
@@ -966,7 +963,6 @@ export const make = Effect.gen(function* () {
     );
 
   /** The stats connection hands back one page, so a repository's rows are asked for 100 at a time. */
-  const STAT_IIDS_PER_REQUEST = 100;
 
   const projectLabels = (input: {
     readonly cwd: string;
@@ -1036,67 +1032,8 @@ export const make = Effect.gen(function* () {
   const { labelPermission, maintainerEditsPermission, supportsGraphqlList, pipelineStageChecks } =
     makeGitLabGraphqlSupport(graphqlRead);
 
-  const mergeRequestStats = (input: {
-    readonly cwd: string;
-    readonly host?: string | undefined;
-    readonly repository: string;
-    readonly numbers: ReadonlyArray<number>;
-  }) =>
-    graphqlRead({
-      cwd: input.cwd,
-      host: input.host,
-      operation: "listMergeRequestStats",
-      query: MERGE_REQUEST_STATS_GRAPHQL_QUERY,
-      variables: { fullPath: input.repository, iids: input.numbers.map(String) },
-      decode: decodeMergeRequestStatsJson,
-    });
-
-  const STAT_REQUEST_CONCURRENCY = 4;
-
-  const listMergeRequestStats: GitLabPullRequestCli["Service"]["listMergeRequestStats"] = (
-    input,
-  ) => {
-    const byRepository = new Map<string, Set<number>>();
-    for (const { repository, number } of input.changeRequests) {
-      const numbers = byRepository.get(repository) ?? new Set<number>();
-      numbers.add(number);
-      byRepository.set(repository, numbers);
-    }
-    const reads: Array<{ readonly repository: string; readonly numbers: ReadonlyArray<number> }> =
-      [];
-    for (const [repository, numberSet] of byRepository) {
-      const numbers = [...numberSet];
-      for (let start = 0; start < numbers.length; start += STAT_IIDS_PER_REQUEST) {
-        reads.push({ repository, numbers: numbers.slice(start, start + STAT_IIDS_PER_REQUEST) });
-      }
-    }
-    return Effect.forEach(
-      reads,
-      (read) =>
-        mergeRequestStats({ cwd: input.cwd, host: input.host, ...read }).pipe(
-          Effect.map((stats) =>
-            read.numbers.flatMap((number) => {
-              const stat = stats.get(number);
-              return stat === undefined ? [] : [{ repository: read.repository, number, ...stat }];
-            }),
-          ),
-          // One read GitLab could not answer costs its own rows their counts, not every other
-          // read's on the same page. An unusable CLI or account still reaches the caller.
-          Effect.catchIf(
-            (cause) =>
-              cause._tag !== "GitLabCliUnavailableError" &&
-              cause._tag !== "GitLabCliAuthenticationError" &&
-              cause._tag !== "GitLabCliRateLimitError",
-            (cause) =>
-              Effect.logWarning("GitLab merge request line count read failed", {
-                repository: read.repository,
-                reason: cause._tag,
-              }).pipe(Effect.as([])),
-          ),
-        ),
-      { concurrency: STAT_REQUEST_CONCURRENCY },
-    ).pipe(Effect.map((results) => results.flat()));
-  };
+  const { listMergeRequestStats, getMergeRequestFileStats } =
+    makeGitLabPullRequestStats(graphqlRead);
 
   // GitLab charges by path count and returns one connection page; respect both limits.
   const BLOB_PATHS_PER_REQUEST = 100;
@@ -1176,6 +1113,7 @@ export const make = Effect.gen(function* () {
 
   const viewerUsername = makeGitLabViewer(api);
   const requestChanges = makeGitLabRequestChanges(graphqlRead, viewerUsername);
+  const { setReaction } = makeGitLabAwards(api, viewerUsername);
 
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
@@ -1260,14 +1198,18 @@ export const make = Effect.gen(function* () {
 
     listMergeRequestStats,
 
-    getMergeRequestFileStats: Effect.fn("GitLabPullRequestCli.getMergeRequestFileStats")((input) =>
+    getMergeRequestFileStats,
+
+    getMergeRequestWatchFingerprint: Effect.fn(
+      "GitLabPullRequestCli.getMergeRequestWatchFingerprint",
+    )((input) =>
       graphqlRead({
         cwd: input.cwd,
         host: input.host,
-        operation: "getMergeRequestFileStats",
-        query: MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
+        operation: "getMergeRequestWatchFingerprint",
+        query: MERGE_REQUEST_WATCH_FINGERPRINT_GRAPHQL_QUERY,
         variables: { fullPath: input.repository, iid: String(input.number) },
-        decode: decodeMergeRequestFileStatsJson,
+        decode: decodeMergeRequestWatchFingerprintJson,
       }),
     ),
 
@@ -1281,41 +1223,7 @@ export const make = Effect.gen(function* () {
 
     getFileRevisions: fileRevisions,
 
-    setReaction: Effect.fn("GitLabPullRequestCli.setReaction")(function* (input) {
-      const subject = awardSubjectPath(input);
-      if (input.reacted) {
-        yield* api({
-          cwd: input.cwd,
-          host: input.host,
-          path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
-          method: "POST",
-        });
-        return;
-      }
-      // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
-      // award of that name is looked up first.
-      const viewer = yield* viewerUsername(input);
-      const listed = yield* api({ cwd: input.cwd, host: input.host, path: subject });
-      const own = decodeOwnAwardIdJson(listed.stdout.trim(), {
-        content: input.content,
-        viewer,
-      });
-      if (!Result.isSuccess(own)) {
-        return yield* new GitLabMergeRequestReadError({
-          command: "glab",
-          cwd: input.cwd,
-          operation: "setReaction",
-          cause: own.failure,
-        });
-      }
-      if (own.success === null) return;
-      yield* api({
-        cwd: input.cwd,
-        host: input.host,
-        path: `${subject}/${own.success}`,
-        method: "DELETE",
-      });
-    }),
+    setReaction,
 
     listCommits: Effect.fn("GitLabPullRequestCli.listCommits")(function (input) {
       return api({

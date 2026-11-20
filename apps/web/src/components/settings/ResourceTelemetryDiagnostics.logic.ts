@@ -18,6 +18,8 @@ export function visibleResourceTelemetryProcesses(
   const hidden = new Set<string>();
   const hideDescendants = (pid: number): void => {
     for (const child of childrenByParent.get(pid) ?? []) {
+      // Depth 0 rows are their own roots, e.g. the server launched by Electron main.
+      if (child.depth === 0) continue;
       const key = processIdentityKey(child);
       if (hidden.has(key)) continue;
       hidden.add(key);
@@ -57,4 +59,13 @@ export function resourceHistoryCpuScaleMax(
   buckets: ReadonlyArray<{ readonly avgCpuPercent: number }>,
 ): number {
   return Math.max(1, ...buckets.map((bucket) => bucket.avgCpuPercent));
+}
+
+export function formatSampleInterval(valueMs: number): string {
+  if (valueMs <= 0) return "on demand";
+  if (valueMs < 1_000) return `${Math.max(0, Math.round(valueMs))} ms`;
+  const seconds = valueMs / 1_000;
+  return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${
+    seconds === 1 ? "second" : "seconds"
+  }`;
 }

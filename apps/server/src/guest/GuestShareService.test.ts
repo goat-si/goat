@@ -1,5 +1,4 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as DocumentText from "../provider/DocumentText.ts";
 import { assert, it } from "@effect/vitest";
 import {
   ChatAttachmentId,
@@ -7,16 +6,13 @@ import {
   EventId,
   GuestShareId,
   MessageId,
-  type OrchestrationV2TurnItem,
-  ProjectId,
   ProviderDriverKind,
-  ProviderInstanceId,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -30,150 +26,27 @@ import {
   createAttachmentId,
   createPendingAttachmentId,
   resolveAttachmentPath,
-  resolveAttachmentPathById,
 } from "../attachmentStore.ts";
 import * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import { makeSweepCursor } from "../assets/PendingAttachmentSweepCursor.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
-import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ResourceCleanupService from "../orchestration-v2/ResourceCleanupService.ts";
-import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GuestShareService from "./GuestShareService.ts";
-
-const instanceId = ProviderInstanceId.make("codex");
-const adapter = {
+import {
+  hostname,
   instanceId,
-  driver: ProviderDriverKind.make("codex"),
-  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-  openSession: () => Effect.die("No provider process needed for guest shares"),
-} as ProviderAdapter.ProviderAdapterV2["Service"];
-const layerDatabase = SqlitePersistence.layerMemory;
-const layerOrchestration = Layer.mergeAll(
-  layerDatabase,
-  ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
-  EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
-  ProviderReplayHarness.layerWithRegistry(
-    { name: "guest-share-service" },
-    ProviderAdapterRegistry.layerFromAdapters([adapter]),
-    { databaseLayer: layerDatabase, runEffectWorker: false },
-  ),
-);
-
-// The Connect hostname the fake tunnel reports. Tests set it to null to simulate an unlink.
-const hostname = Ref.makeUnsafe<string | null>("env.t3.test");
-const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
-  inspectConnector: Effect.map(Ref.get(hostname), (value) => ({
-    pid: 1,
-    readyConnections: 1,
-    hostname: value,
-    protocol: "http2",
-  })),
-});
-const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
-  getProviders: Effect.succeed([]),
-});
-const layerConfig = ServerConfig.layerTest(process.cwd(), { prefix: "goat-guest-share-" });
-// The real cleanup also closes terminals and previews; these tests only need the files gone.
-const layerCleanup = Layer.effect(
-  ResourceCleanupService.ResourceCleanupService,
-  Effect.gen(function* () {
-    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-    const fileSystem = yield* FileSystem.FileSystem;
-    return {
-      cleanupScheduledTasks: () => Effect.void,
-      cleanupTerminals: () => Effect.void,
-      cleanupPreviews: () => Effect.void,
-      cleanupDevices: () => Effect.void,
-      cleanupAttachments: (attachmentIds) =>
-        Effect.forEach(
-          attachmentIds,
-          (attachmentId) => {
-            const path = resolveAttachmentPathById({ attachmentsDir, attachmentId });
-            return path === null ? Effect.void : fileSystem.remove(path).pipe(Effect.orDie);
-          },
-          { discard: true },
-        ),
-    };
-  }),
-).pipe(
-  Layer.provide(layerConfig),
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-);
-class RecordedAnalytics extends Context.Service<
+  joinedGuest,
+  layerTest,
+  makeLayerTest,
   RecordedAnalytics,
-  Ref.Ref<ReadonlyArray<Readonly<Record<string, unknown>>>>
->()("goat/guest/GuestShareService.test/RecordedAnalytics") {}
-const layerAnalytics = Layer.effectContext(
-  Effect.gen(function* () {
-    const recorded = yield* Ref.make<ReadonlyArray<Readonly<Record<string, unknown>>>>([]);
-    return Context.make(RecordedAnalytics, recorded).pipe(
-      Context.add(
-        AnalyticsService.AnalyticsService,
-        AnalyticsService.AnalyticsService.of({
-          record: (event, properties) =>
-            Ref.update(recorded, (events) => [...events, { event, ...properties }]),
-          flush: Effect.void,
-          recordOwners: () => Effect.void,
-        }),
-      ),
-    );
-  }),
-);
-const layerTest = GuestShareService.layer.pipe(
-  Layer.provideMerge(
-    CommandOutputHub.layer.pipe(
-      Layer.provideMerge(layerOrchestration.pipe(Layer.provide(layerCleanup))),
-    ),
-  ),
-  Layer.provide(layerProviders),
-  Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
-  Layer.provide(layerConnect),
-  Layer.provideMerge(layerAnalytics),
-  Layer.provide(ServerSecretStore.layer),
-  Layer.provideMerge(layerConfig),
-  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-);
-
-const threadId = ThreadId.make("thread:guest-share-service");
-
-const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
-  yield* Ref.set(hostname, "env.t3.test");
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  yield* orchestrator.dispatch({
-    type: "thread.create",
-    commandId: CommandId.make(`create:${threadId}`),
-    threadId,
-    projectId: ProjectId.make("project:guest-share-service"),
-    title: "Review me",
-    modelSelection: { instanceId, model: "gpt-5.1-codex" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    createdBy: "user",
-    creationSource: "web",
-  });
-  const guestShares = yield* GuestShareService.GuestShareService;
-  const { url } = yield* guestShares.create({ threadId });
-  assert.isTrue(url.startsWith("https://env.t3.test/guest#"));
-  const credential = url.slice(url.indexOf("#") + 1);
-  return { orchestrator, guestShares, credential };
-});
-const shareThread = shareThreadFor(threadId);
+  shareThread,
+  shareThreadFor,
+  threadId,
+  writeItem,
+} from "./GuestShareService.testkit.ts";
 
 it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
   Effect.gen(function* () {
@@ -415,71 +288,6 @@ it.effect("serves no render for an item outside the shared thread", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-const ownerRun = Effect.gen(function* () {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  yield* orchestrator.dispatch({
-    type: "message.dispatch",
-    commandId: CommandId.make("owner-message-for-command"),
-    threadId,
-    messageId: MessageId.make("message:command"),
-    text: "Build it",
-    attachments: [],
-    dispatchMode: { type: "defer_start" },
-    createdBy: "user",
-    creationSource: "web",
-  });
-  const { runs } = (yield* orchestrator.getThreadSnapshotWindow(threadId, { rowLimit: 10 }))
-    .projection;
-  return runs[0]!.id;
-});
-
-const writeItem = (
-  id: string,
-  fields:
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
-        "type" | "status" | "input" | "output"
-      >
-    | Pick<
-        Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
-        "type" | "status" | "fileName" | "diffStr" | "oldStr" | "newStr"
-      >,
-) =>
-  Effect.gen(function* () {
-    const runId = yield* ownerRun;
-    const eventSink = yield* EventSink.EventSinkV2;
-    const now = yield* DateTime.now;
-    yield* eventSink.write({
-      events: [
-        {
-          id: EventId.make(`event:${id}`),
-          type: "turn-item.updated",
-          threadId,
-          driver: ProviderDriverKind.make("codex"),
-          providerInstanceId: instanceId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make(id),
-            threadId,
-            runId,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            title: null,
-            startedAt: now,
-            completedAt: fields.status === "running" ? null : now,
-            updatedAt: now,
-            ...fields,
-          },
-        },
-      ],
-    });
-    return TurnItemId.make(id);
-  });
-
 it.effect("gives the guest a command's detail and output, but no file diffs", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
@@ -530,6 +338,96 @@ it.effect("gives the guest a command's detail and output, but no file diffs", ()
     for (const request of refused) {
       assert.isTrue(Exit.isFailure(yield* Effect.exit(request)));
     }
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("guests can expand only source commands visible at the fork point", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares } = yield* shareThread;
+    const visible = yield* writeItem("item:visible-before-fork", {
+      type: "command_execution",
+      status: "completed",
+      input: "ls",
+      output: "visible",
+    });
+    const run = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs[0]!;
+    const now = yield* DateTime.now;
+    yield* (yield* EventSink.EventSinkV2).write({
+      events: [
+        {
+          id: EventId.make("event:fork-run-done"),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const forkId = ThreadId.make("thread:guest-command-fork");
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("fork-command"),
+      sourceThreadId: threadId,
+      targetThreadId: forkId,
+      sourcePoint: { type: "run", runId: run.id },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const hidden = TurnItemId.make("item:hidden-after-fork");
+    const laterRun = RunId.make("run:guest-after-fork");
+    const visibleItem = yield* orchestrator.getTurnItem({ threadId, itemId: visible });
+    assert.isNotNull(visibleItem);
+    if (!visibleItem || visibleItem.type !== "command_execution")
+      return yield* Effect.die("Missing command");
+    yield* (yield* EventSink.EventSinkV2).write({
+      events: [
+        {
+          id: EventId.make("event:later-run"),
+          type: "run.updated",
+          threadId,
+          runId: laterRun,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: {
+            ...run,
+            id: laterRun,
+            ordinal: run.ordinal + 1,
+            status: "completed",
+            completedAt: now,
+          },
+        },
+        {
+          id: EventId.make("event:hidden-command"),
+          type: "turn-item.updated",
+          threadId,
+          runId: laterRun,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...visibleItem, id: hidden, runId: laterRun, input: "pwd", output: "private" },
+        },
+      ],
+    });
+    const { url } = yield* guestShares.create({ threadId: forkId });
+    const { token: session } = yield* guestShares.redeem({
+      credential: url.slice(url.indexOf("#") + 1),
+      name: "Sam",
+    });
+    assert.deepInclude((yield* guestShares.item(session, visible)).item, {
+      input: "ls",
+      output: "visible",
+    });
+    assert.deepEqual(
+      Array.from(yield* Stream.runCollect(yield* guestShares.commandOutput(session, visible))),
+      [{ kind: "replace", text: "visible", truncated: false, running: false }],
+    );
+    assert.equal((yield* Effect.flip(guestShares.item(session, hidden))).reason, "unavailable");
+    assert.equal(
+      (yield* Effect.flip(guestShares.commandOutput(session, hidden))).reason,
+      "unavailable",
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -588,15 +486,6 @@ const storedFiles = Effect.gen(function* () {
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   return yield* fileSystem.readDirectory(attachmentsDir).pipe(Effect.orElseSucceed(() => []));
-});
-
-const joinedGuest = Effect.gen(function* () {
-  const shared = yield* shareThread;
-  const { token: session, shareId } = yield* shared.guestShares.redeem({
-    credential: shared.credential,
-    name: "Sam",
-  });
-  return { ...shared, session, shareId };
 });
 
 const waitingMessages = Effect.gen(function* () {
@@ -661,26 +550,125 @@ it.effect("refuses too many files, too many bytes, and images that are not what 
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
-it.effect("caps the bytes of files waiting in one share", () =>
+const guestDocument = {
+  name: "notes.rtf",
+  contentType: "application/rtf",
+  bytes: new TextEncoder().encode(String.raw`{\rtf1 Available}`),
+};
+
+it.effect("extracts a guest document into a host-side attachment sidecar", () =>
   Effect.gen(function* () {
     const { guestShares, session, shareId } = yield* joinedGuest;
-    const submit = (sizeBytes: number) =>
+    yield* guestShares.submit(session, { shareId, text: "" }, yield* uploadsOf([guestDocument]));
+    const [message] = yield* waitingMessages;
+    const { path } = yield* guestShares.attachment(session, message!.attachments![0]!.id);
+    assert.equal(yield* (yield* FileSystem.FileSystem).readFileString(`${path}.txt`), "Available");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("cleans up guest attachments and extracted text after cancelling a pending copy", () =>
+  Effect.gen(function* () {
+    const copying = yield* Deferred.make<{ from: string; to: string }>();
+    const copied = yield* Deferred.make<void>();
+    let copies = 0;
+    let rollbackStarted = false;
+    const layerCopyTest = makeLayerTest(
+      GuestShareService.layer.pipe(
+        Layer.provide(
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.map(FileSystem.FileSystem, (fs) => ({
+              ...fs,
+              copyFile: (from, to) =>
+                Effect.suspend(() =>
+                  ++copies === 2
+                    ? Deferred.succeed(copying, { from, to }).pipe(
+                        Effect.andThen(Deferred.await(copied)),
+                      )
+                    : fs.copyFile(from, to),
+                ),
+              remove: (path, options) =>
+                Effect.sync(() => {
+                  rollbackStarted = true;
+                }).pipe(Effect.andThen(fs.remove(path, options))),
+            })),
+          ),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const { guestShares, session, shareId } = yield* joinedGuest;
+      const fs = yield* FileSystem.FileSystem;
+      const uploads = yield* uploadsOf([guestDocument, guestDocument]);
+      const submission = yield* guestShares
+        .submit(session, { shareId, text: "" }, uploads)
+        .pipe(Effect.forkChild);
+      const { from, to } = yield* Effect.raceFirst(
+        Deferred.await(copying),
+        Fiber.join(submission).pipe(
+          Effect.andThen(Effect.die("Submission finished before the second copy")),
+        ),
+      );
+      assert.isTrue((yield* storedFiles).some((path) => path.endsWith(".rtf.txt")));
+
+      const cancelling = yield* Fiber.interrupt(submission).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      // The filesystem callback can finish after cancellation and its rollback.
+      if (rollbackStarted) yield* Fiber.join(cancelling);
+      yield* fs.copyFile(from, to);
+      yield* Deferred.succeed(copied, undefined);
+      yield* Fiber.join(cancelling);
+
+      assert.deepEqual(yield* storedFiles, []);
+      assert.deepEqual(yield* waitingMessages, []);
+    }).pipe(Effect.provide(layerCopyTest));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("caps the bytes of files waiting in one share", () => {
+  let extractions = 0;
+  const layerQuotaTest = makeLayerTest(
+    GuestShareService.layer.pipe(
+      Layer.provide(
+        Layer.succeed(DocumentText.DocumentText, {
+          ensure: () =>
+            Effect.sync(() => {
+              extractions += 1;
+              return undefined;
+            }),
+        }),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const { guestShares, session, shareId } = yield* joinedGuest;
+    const submit = (sizeBytes: number, ...more: (typeof guestDocument)[]) =>
       Effect.gen(function* () {
         return guestShares.submit(
           session,
           { shareId, text: "Look" },
-          yield* uploadsOf([png("big.png", sizeBytes)]),
+          yield* uploadsOf([png("big.png", sizeBytes), ...more]),
         );
       }).pipe(Effect.flatten);
     yield* submit(9 * MIB);
     yield* submit(9 * MIB);
-    const error = yield* Effect.flip(submit(9 * MIB));
+    const before = yield* storedFiles;
+    const beforeExtractions = extractions;
+    const error = yield* Effect.flip(submit(9 * MIB, guestDocument));
+    assert.deepEqual(yield* storedFiles, before);
     assert.equal(error.reason, "files_busy");
     // Text alone still goes through.
     yield* guestShares.submit(session, { shareId, text: "One more thing" }, []);
     assert.equal((yield* waitingMessages).length, 3);
-  }).pipe(Effect.scoped, Effect.provide(layerTest)),
-);
+    const full = yield* uploadsOf([guestDocument]);
+    const messageQuota = yield* Effect.flip(
+      guestShares.submit(session, { shareId, text: "" }, full),
+    );
+    assert.equal(messageQuota.reason, "busy");
+    assert.equal(extractions, beforeExtractions);
+  }).pipe(Effect.scoped, Effect.provide(layerQuotaTest));
+});
 
 it.effect("deletes a waiting message's files when the owner dismisses it or stops sharing", () =>
   Effect.gen(function* () {

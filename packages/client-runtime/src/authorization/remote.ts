@@ -1,3 +1,4 @@
+import { normalizePairingCode } from "@goat/shared/pairingCode";
 import { LEGACY_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE } from "@goat/contracts/legacyT3Names";
 import {
   AuthAccessTokenType,
@@ -134,7 +135,7 @@ const exchangeBootstrapToken = Effect.fn(function* (input: {
         headers: input.dpopProof ? { dpop: input.dpopProof } : {},
         payload: {
           grant_type: AuthTokenExchangeGrantType,
-          subject_token: input.credential,
+          subject_token: normalizePairingCode(input.credential),
           subject_token_type: subjectTokenType,
           requested_token_type: AuthAccessTokenType,
           ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),

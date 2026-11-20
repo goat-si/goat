@@ -41,6 +41,16 @@ const decodeMemoryHubSettings = Schema.decodeSync(MemoryHubSettings);
 const decodeUnknownMemoryHubSettings = Schema.decodeUnknownSync(MemoryHubSettings);
 const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateInput);
 
+it("lets administrators disable agent theme publication", () => {
+  expect(decodeServerSettings({}).enableAgentThemeWrites).toBe(false);
+  expect(decodeServerSettingsPatch({ enableAgentThemeWrites: false })).toEqual({
+    enableAgentThemeWrites: false,
+  });
+  expect(decodeServerSettings({ enableAgentThemeWrites: false }).enableAgentThemeWrites).toBe(
+    false,
+  );
+});
+
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
   expect(
@@ -182,28 +192,20 @@ describe("storage cleanup settings", () => {
   });
 });
 
-describe("ServerSettings usage price overrides", () => {
-  const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
-
-  it("rejects empty model IDs and incomplete input/output pricing", () => {
-    for (const usagePriceOverrides of [
-      { " ": prices },
-      { "example-model": { inputCostPerMillionTokens: 2 } },
-      { "example-model": { outputCostPerMillionTokens: 8 } },
-    ]) {
-      expect(() => decodeServerSettingsPatch({ usagePriceOverrides })).toThrow();
+describe("usage history retention", () => {
+  it("keeps the legacy default and round-trips configured retention", () => {
+    expect(decodeServerSettings({}).usageHistoryRetentionDays).toBe(92);
+    for (const days of [30, "unlimited"] as const) {
+      const patch = decodeServerSettingsPatch({ usageHistoryRetentionDays: days });
+      expect(patch.usageHistoryRetentionDays).toBe(days);
+      const encoded = encodeServerSettings(decodeServerSettings(patch));
+      expect(decodeServerSettings(encoded).usageHistoryRetentionDays).toBe(days);
     }
   });
 
-  it("ignores an invalid model filter without dropping the other settings", () => {
-    const valid = { include: [{ provider: "newer-provider", model: "orbit-1" }] };
-    expect(decodeServerSettings({ usageModelFilter: valid }).usageModelFilter).toEqual(valid);
-    const settings = decodeServerSettings({
-      usageModelFilter: { exclude: [{ model: "" }] },
-      usageModelAliases: { "drift-9": "orbit-1" },
-    });
-    expect(settings.usageModelFilter).toBeUndefined();
-    expect(settings.usageModelAliases).toEqual({ "drift-9": "orbit-1" });
+  it.each([0, -1, 1.5, null, "forever"])("rejects invalid retention %s", (days) => {
+    expect(() => decodeServerSettings({ usageHistoryRetentionDays: days })).toThrow();
+    expect(() => decodeServerSettingsPatch({ usageHistoryRetentionDays: days })).toThrow();
   });
 });
 

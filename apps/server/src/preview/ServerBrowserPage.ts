@@ -1,3 +1,4 @@
+import { SnapshotTiming } from "./snapshotTiming.ts";
 import { actionabilityReason } from "./actionability.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 
@@ -18,13 +19,13 @@ import {
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
-import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
+import { shrinkPng, shrinkJpegWithin, cappedJpegSize } from "./ServerBrowserImage.ts";
 import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
 import { clickToState, heldKeys, type ClickReport } from "./clickState.ts";
 import type { DownloadWait } from "./downloadJournal.ts";
-import { extraWaits } from "./waitExtras.ts";
+import { waitForWithLocator } from "./actionWait.ts";
 import { evaluateWithTimeout, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
@@ -47,7 +48,7 @@ import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffec
 import { aimClickPoint } from "./clickAim.ts";
 import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
-import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
+import { pageChanged, runSnapshot, transientCapture } from "./snapshotRetry.ts";
 import {
   resetSnapshotDiff,
   snapshotOptionsResult,
@@ -57,6 +58,7 @@ import { interactiveElementsOf, narrowTree } from "./snapshotInteractive.ts";
 import { readLayersHeader } from "./blockingLayers.ts";
 import {
   frameUrls,
+  FRAME_ANSWER_MS,
   maskSecrets,
   maskSnapshotRecords,
   maskTree,
@@ -76,7 +78,11 @@ export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
 export { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
-import { matchesState, stateConditions } from "./locatorState.ts";
+import {
+  focusedFieldState,
+  pinFocusedTarget,
+  waitUntilFocusedTargetWritable,
+} from "./focusedTextTarget.ts";
 import { setRange } from "./rangeValue.ts";
 import { scrollPositionRead, settleScroll } from "./scrollPositions.ts";
 export const toOperationError = (
@@ -456,6 +462,7 @@ type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly fullScreenshot?: boolean | undefined;
   /** False skips the capture when nothing would show or save the image (L4). */
   readonly captureImage?: boolean;
+  readonly measureSnapshotFrame?: true | (() => boolean) | undefined;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
@@ -491,17 +498,19 @@ type CapturedScreenshot = {
 const capture = async (
   input: SnapshotInput,
   deadline: number,
+  timing: SnapshotTiming,
 ): Promise<PreviewAutomationSnapshot> => {
-  const { renderScale, viewport } = await renderingOf(input);
+  const track = timing.track.bind(timing);
+  const { renderScale, viewport } = await track("metrics", () => renderingOf(input));
   // A late metrics reply must not begin a capture after viewers have resumed.
-  if (Date.now() >= deadline) throw tooBusy();
+  if (Date.now() >= deadline) throw timing.timeout(input.timeoutMs);
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
   const scoped = input.scope ? await resolvePageScope(input.page, input.scope) : undefined;
   invalidateRefs(input.page, true);
   const generation = state.generation;
-  const { readers, read } = await openReaders(input.page, input.cdp);
-  const before = await read();
+  const { readers, read } = await track("frames", () => openReaders(input.page, input.cdp));
+  const before = await track("frames", () => read());
   const captureImage = (): Promise<CapturedScreenshot | undefined> =>
     input.captureImage === false
       ? Promise.resolve(undefined)
@@ -518,14 +527,29 @@ const capture = async (
               ...(scale < 1 && input.fullScreenshot === true ? { full: png } : {}),
             };
           });
+  const canMeasureFrame = () =>
+    input.captureImage === false &&
+    input.renderScale !== "display" &&
+    (input.measureSnapshotFrame === true || input.measureSnapshotFrame?.() === true);
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    snapshotPageMetadata(input.page, scoped),
-    readLayersHeader(input.page),
-    input.annotate ? Promise.resolve(undefined) : captureImage(),
-    tabCookies(input.page),
-    capturePaint(input.cdp),
+    track("page state", () => snapshotPageMetadata(input.page, scoped)),
+    track("page state", () => readLayersHeader(input.page)),
+    input.annotate || input.captureImage === false ? undefined : track("screenshot", captureImage),
+    track("frames", () => tabCookies(input.page)),
+    track("page state", () => capturePaint(input.cdp)),
+    canMeasureFrame()
+      ? track("screenshot", async () =>
+          viewportPlacement(
+            viewport,
+            cappedJpegSize(
+              await captureViewport(input.cdp, { format: "jpeg", quality: 10 }),
+              scale,
+            ),
+          ),
+        )
+      : undefined,
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -534,11 +558,13 @@ const capture = async (
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
-    tree = await (scoped ?? input.page).ariaSnapshot({
-      mode: "ai",
-      boxes: true,
-      timeout: Math.max(1, deadline - Date.now() - 2_000),
-    });
+    tree = await track("accessibility tree", () =>
+      (scoped ?? input.page).ariaSnapshot({
+        mode: "ai",
+        boxes: true,
+        timeout: Math.max(1, deadline - Date.now() - 2_000),
+      }),
+    );
     const image =
       input.annotate && input.captureImage !== false
         ? withRefAnnotations(
@@ -549,12 +575,12 @@ const capture = async (
               generation,
               refs: new Map(),
             }).accessibilityTree,
-            captureImage,
+            () => track("screenshot", captureImage),
             input.actionChannel,
           )
         : Promise.resolve(undefined);
     capturedScreenshot = await image;
-    const after = await read(before);
+    const after = await track("frames", () => read(before));
     // A value that changed meanwhile may be in the tree under neither reading.
     if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
       throw pageChanged();
@@ -564,17 +590,20 @@ const capture = async (
     unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
     const filled = /^\s*- iframe (?:\[active\] )?\[ref=(\S+?)\].*:$/gm;
     for (const [, ref] of unread.length ? tree.matchAll(filled) : []) {
-      const iframe = await input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 });
+      const iframe = await track("frames", () =>
+        input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 }),
+      );
       if (!iframe) throw pageChanged();
-      const frame = await iframe.contentFrame();
+      const frame = await track("frames", () => iframe.contentFrame());
       void iframe.dispose().catch(constVoid);
-      if (frame && unread.includes(frame)) throw tooBusy();
+      if (frame && unread.includes(frame)) throw timing.unreadFrame(FRAME_ANSWER_MS);
     }
   } catch (cause) {
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [captured, layersLine, capturedImage, cookies, paint] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies, paint, screenshotSize] =
+    await pageAndScreenshot;
   // Checked after the reads: an embedding frame element can be hidden while they run.
   const hidden = scoped ? await scopeHidden(scoped) : false;
   const page = hidden ? { ...captured, visibleText: "" } : captured;
@@ -621,6 +650,7 @@ const capture = async (
       treeComplete,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
+      ...(screenshotSize === undefined || !canMeasureFrame() ? {} : { screenshotSize }),
       ...(full === undefined ? {} : { fullScreenshot: { data: full, ...pngSize(full) } }),
     },
     input,
@@ -630,13 +660,16 @@ const capture = async (
   );
 };
 
-export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapshot> =>
+export const snapshot = (
+  input: SnapshotInput,
+  timing = new SnapshotTiming(),
+): Promise<PreviewAutomationSnapshot> =>
   runSnapshot({
     page: input.page,
     timeoutMs: input.timeoutMs,
-    capture: (deadline) => capture(input, deadline),
+    capture: (deadline) => capture(input, deadline, timing),
     retryable: transientCapture,
-    tooBusy,
+    tooBusy: () => timing.timeout(input.timeoutMs),
   });
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
@@ -799,69 +832,40 @@ export const type = async (
   const channel = gate.channel;
   if (!channel) throw new Error("An action channel is required for typing.");
   const locator = targetLocator(page, input);
-  // A shadow host also matches :focus; use its innermost focused descendant.
-  const target = locator ?? page.locator("*:focus").last();
-  const present = locator !== null || (await target.count()) > 0;
-  const handle = present ? await pinTarget(target, deadline, gate.signal, gate) : null;
+  const handle = locator
+    ? await pinTarget(locator, deadline, gate.signal, gate)
+    : await pinFocusedTarget(page, deadline, gate);
   try {
-    if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
-    if (handle) await gate();
-    gate.signal?.throwIfAborted();
-    const focused =
-      handle !== null &&
-      (await channel.call(() =>
-        handle.evaluate((element, clear) => {
-          // Like the desktop host: an enabled text control or contenteditable
-          // that actually takes focus. Anything else would swallow the text or
-          // send it to whichever field had focus before.
-          const control = element as unknown as {
-            readonly type?: string;
-            readonly disabled?: boolean;
-            readonly readOnly?: boolean;
-            readonly isContentEditable?: boolean;
-            readonly focus?: () => void;
-          };
-          // A native range takes a value, not keystrokes; setRange sets it after the gate.
-          if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
-            return "range";
-          const nonText = [
-            "button",
-            "checkbox",
-            "color",
-            "file",
-            "hidden",
-            "image",
-            "radio",
-            "range",
-            "reset",
-            "submit",
-          ];
-          const textControl =
-            element.tagName === "TEXTAREA" ||
-            (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
-          if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
-            return false;
-          }
-          control.focus?.();
-          const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
-          const active = root.activeElement;
-          const owned = active != null && (active === element || element.contains(active));
-          // Selected here, the old text is replaced by the one input sent after the gate.
-          return owned ? (textControl ? "text" : "editable") : false;
-        }, input.clear === true),
-      ));
-    if (focused === "range" && handle) {
-      remaining(deadline);
+    if (handle) {
+      if (locator) await waitUntilWritable(handle, deadline, readiness, gate);
+      else await waitUntilFocusedTargetWritable(page, handle, deadline, readiness, gate);
       await gate();
-      gate.signal?.throwIfAborted();
-      return await channel.call(() => setRange(handle, input.text));
     }
-    if (focused !== "text" && focused !== "editable") {
-      throw new ServerBrowserOperationError(
+    gate.signal?.throwIfAborted();
+    const phase = input.clear === true ? "clear" : "focus";
+    const focused = handle && (await channel.call(() => handle.evaluate(focusedFieldState, phase)));
+    const notEditable = () =>
+      new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
         "The target is not an enabled text field, so no text was typed.",
       );
+    const checkDispatch = async (phase: "range" | "dispatch") => {
+      remaining(deadline);
+      await gate();
+      gate.signal?.throwIfAborted();
+      if (
+        !locator &&
+        handle &&
+        !(await channel.call(() => handle.evaluate(focusedFieldState, phase)))
+      )
+        throw notEditable();
+      remaining(deadline);
+    };
+    if (focused === "range" && handle) {
+      await checkDispatch("range");
+      return await channel.call(() => setRange(handle, input.text));
     }
+    if (focused !== "text" && focused !== "editable") throw notEditable();
     if (input.clear && handle) {
       await gate();
       gate.signal?.throwIfAborted();
@@ -880,9 +884,7 @@ export const type = async (
       );
     }
     await readiness.onHistoryFocus?.();
-    remaining(deadline);
-    await gate();
-    gate.signal?.throwIfAborted();
+    await checkDispatch("dispatch");
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
@@ -1057,133 +1059,12 @@ export const evaluate = async (
 
 /** Native Playwright waits share one deadline; recheck the conjunction on the current document. */
 
-export const waitFor = async (
+export const waitFor = (
   page: Page,
   input: PreviewAutomationWaitForInput,
   signal?: AbortSignal,
   downloads?: DownloadWait,
-) => {
-  signal?.throwIfAborted();
-  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  const target = targetLocator(page, input);
-  // Legacy presence checks accepted multiple matches, including hidden elements.
-  const elementConditions = stateConditions(input);
-  // Legacy presence waits take the first of several matches; element conditions need the one.
-  const locator =
-    input.state === undefined && elementConditions.length === 0 ? target?.first() : target;
-  const state = input.state ?? "attached";
-  const loadState =
-    input.loadState === "domContentLoaded"
-      ? "domcontentloaded"
-      : input.loadState === "networkIdle"
-        ? "networkidle"
-        : input.loadState;
-  const documentCondition = `(() => (
-    ${input.text === undefined ? "true" : `(document.body?.innerText ?? "").includes(${JSON.stringify(input.text)})`}
-    && ${input.urlIncludes === undefined ? "true" : `location.href.includes(${JSON.stringify(input.urlIncludes)})`}
-  ))()`;
-  const extras = extraWaits(page, input, downloads);
-  const conditions = [
-    ...(locator ? [`locator:${state}`] : []),
-    ...elementConditions,
-    ...(input.text === undefined ? [] : ["text"]),
-    ...(input.urlIncludes === undefined ? [] : ["url"]),
-    ...(input.loadState === undefined ? [] : [`load:${input.loadState}`]),
-    ...extras.names,
-  ];
-  const timeout = () =>
-    new ServerBrowserOperationError(
-      "PreviewAutomationTimeoutError",
-      `Waited ${timeoutMs}ms without all conditions holding: ${conditions.join(", ")}.`,
-    );
-  let stopped = false;
-  const remaining = () => {
-    signal?.throwIfAborted();
-    if (stopped || Date.now() >= deadline) throw timeout();
-    return Math.max(1, deadline - Date.now());
-  };
-  let documentVersion = 0;
-  const navigated = (frame: import("playwright-core").Frame) => {
-    if (frame === page.mainFrame()) documentVersion++;
-  };
-  page.on("framenavigated", navigated);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  const interrupted = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(timeout()), timeoutMs);
-    abort = () => reject(signal?.reason);
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-  const wait = async () => {
-    for (;;) {
-      // One budget per pass: a deadline passing while the list is built would leave a started wait unobserved.
-      const left = remaining();
-      await Promise.all([
-        locator?.waitFor({ state, timeout: left }),
-        ...(input.text === undefined && input.urlIncludes === undefined
-          ? []
-          : [
-              page
-                .waitForFunction(documentCondition, undefined, { timeout: left })
-                .then((handle) => handle.dispose()),
-            ]),
-        ...extras.pending(left),
-      ]);
-      remaining();
-      const version = documentVersion;
-      // Wait after URL/text resolve so an old document's completed load cannot satisfy a new one.
-      if (loadState !== undefined) await page.waitForLoadState(loadState, { timeout: remaining() });
-      remaining();
-      const [locatorMatches, documentMatches] = await Promise.all([
-        locator === null || locator === undefined
-          ? true
-          : state === "visible"
-            ? locator.isVisible()
-            : state === "hidden"
-              ? locator.isHidden()
-              : locator.count().then((count) => (state === "detached" ? count === 0 : count > 0)),
-        input.text === undefined && input.urlIncludes === undefined
-          ? true
-          : page.evaluate(documentCondition).catch((cause: unknown) => {
-              // Navigation can destroy the old execution context. Retry only that transition.
-              if (
-                cause instanceof Error &&
-                /execution context was destroyed|cannot find context/i.test(cause.message)
-              )
-                return false;
-              throw cause;
-            }),
-      ]);
-      remaining();
-      // Revalidate snapshot refs after a navigation even if the native locator happened to settle.
-      if (target) targetLocator(page, input);
-      const held =
-        (locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
-          ? await matchesState(locator, input, remaining())
-          : true) && extras.held();
-      if (version === documentVersion && locatorMatches && documentMatches === true && held)
-        return extras.finish();
-      // An element condition has no event to wait on: look again shortly, within the deadline.
-      if (!held) await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining())));
-    }
-  };
-  try {
-    return await Promise.race([wait(), interrupted]);
-  } catch (cause) {
-    signal?.throwIfAborted();
-    if (cause instanceof Error && cause.name === "TimeoutError") throw timeout();
-    throw cause;
-  } finally {
-    // Playwright's read-only wait has no AbortSignal API. It may settle until its deadline,
-    // but cannot start another check or hold the control queue after takeover/timeout.
-    stopped = true;
-    extras.end();
-    clearTimeout(timer);
-    if (abort) signal?.removeEventListener("abort", abort);
-    page.off("framenavigated", navigated);
-  }
-};
+) => waitForWithLocator(targetLocator, DEFAULT_TIMEOUT_MS, page, input, signal, downloads);
 
 const NET_ERROR_CODES: Readonly<Record<string, number>> = {
   ERR_FAILED: -2,

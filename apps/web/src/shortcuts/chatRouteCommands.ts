@@ -1,10 +1,13 @@
+import { readPreviewFindAvailable } from "../components/preview/findAvailability";
 import { AuthPreviewOperateScope, type EnvironmentId } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { readPreviewShown } from "../lib/previewShown";
 import type { AnyRouter } from "@tanstack/react-router";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { dispatchPreviewAction, type PreviewAction } from "../components/preview/previewActionBus";
 import { isAppModalPage, isSettingsPage } from "../components/sidebar/mainAppLocation";
 import { createNewThreadHandler, readNewThreadContext } from "../hooks/useHandleNewThread";
@@ -43,7 +46,10 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
   const readRouteTarget = () => resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
   const readRouteThreadRef = () => {
     const target = readRouteTarget();
-    return target?.kind === "server" ? target.threadRef : null;
+    if (target?.kind === "server") return target.threadRef;
+    if (target?.kind !== "draft") return null;
+    const draft = useComposerDraftStore.getState().getDraftSession(target.draftId);
+    return draft ? (draft.promotedTo ?? scopeThreadRef(draft.environmentId, draft.threadId)) : null;
   };
   const readPreviewOpen = () => {
     const threadRef = readRouteThreadRef();
@@ -74,8 +80,14 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
-      claim(event);
       const threadRef = readRouteThreadRef();
+      if (action === "find") {
+        if (!threadRef || !readPreviewFindAvailable(threadRef)) return false;
+        claim(event);
+        dispatchPreviewAction("find");
+        return;
+      }
+      claim(event);
       if (threadRef && canOperatePreview(threadRef.environmentId)) dispatchPreviewAction(action);
     };
 
@@ -114,6 +126,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
         dispatchPreviewAction("toggle-panel");
       },
       "preview.refresh": previewCommand("refresh"),
+      "preview.find": previewCommand("find"),
       "preview.focusUrl": previewCommand("focus-url"),
       "preview.zoomIn": previewCommand("zoom-in"),
       "preview.zoomOut": previewCommand("zoom-out"),

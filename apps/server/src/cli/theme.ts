@@ -10,6 +10,7 @@ import {
 } from "@goat/contracts";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import { BUILT_IN_THEME_IDS, UNPUBLISHABLE_THEME_IDS } from "@goat/shared/themePalettes";
+import { sanitizeThemeCss } from "@goat/shared/themeCssSanitizer";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -285,6 +286,13 @@ const publishThemeFile = Effect.fn(function* (input: {
   if (decoded._tag === "Failure") {
     return yield* new ThemeFileInvalidError({ filePath: input.filePath, cause: decoded.cause });
   }
+  const css = decoded.value.css;
+  if (css !== undefined) {
+    yield* Effect.try({
+      try: () => sanitizeThemeCss(css),
+      catch: (cause) => new ThemeFileInvalidError({ filePath: input.filePath, cause }),
+    });
+  }
   if (!environmentThemeFileHasColors(decoded.value)) {
     return yield* new ThemeFileColorlessError({ filePath: input.filePath });
   }
@@ -456,7 +464,7 @@ const themeSetCommand = Command.make("set", {
 );
 
 const themeClearCommand = Command.make("clear", { baseDir: baseDirFlag }).pipe(
-  Command.withDescription("Remove the environment's theme; clients keep what they have."),
+  Command.withDescription("Remove the environment default; clients keep their current themes."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const paths = yield* resolveThemePaths(flags.baseDir);

@@ -1,4 +1,5 @@
 import type { ServerConfig, ServerConfigStreamEvent } from "@goat/contracts";
+import { wireProviderCatalogs, withHeldProviderCatalogs } from "./serverProviderCatalog.ts";
 import { applyProviderStatusChanges } from "@goat/shared/providerStatusChanges";
 import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
@@ -82,6 +83,10 @@ export function applyServerConfigProjection(
           : undefined;
       const config: ServerConfig = {
         ...event.config,
+        providers: withHeldProviderCatalogs(
+          Option.getOrUndefined(current)?.config.providers,
+          event.config.providers,
+        ),
         ...(carriedThemes === undefined ? {} : { environmentThemes: carriedThemes }),
         ...(carriedSources === undefined ? {} : { usageLimitSources: carriedSources }),
       };
@@ -106,7 +111,10 @@ export function applyServerConfigProjection(
       return Option.map(current, (projection) => ({
         config: {
           ...projection.config,
-          providers: reuseUnchanged(projection.config.providers, event.payload.providers),
+          providers: reuseUnchanged(
+            projection.config.providers,
+            withHeldProviderCatalogs(projection.config.providers, event.payload.providers),
+          ),
         },
         latestEvent: event,
         source: "live",
@@ -115,7 +123,16 @@ export function applyServerConfigProjection(
       return Option.map(current, (projection) => ({
         config: {
           ...projection.config,
-          providers: applyProviderStatusChanges(projection.config.providers, event.payload),
+          providers: reuseUnchanged(
+            projection.config.providers,
+            withHeldProviderCatalogs(
+              projection.config.providers,
+              applyProviderStatusChanges(
+                wireProviderCatalogs(projection.config.providers),
+                event.payload,
+              ),
+            ),
+          ),
         },
         latestEvent: event,
         source: "live",
@@ -136,7 +153,7 @@ export function applyServerConfigProjection(
       return Option.map(current, (projection) => ({
         config: {
           ...projection.config,
-          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
+          environmentThemes: event.payload.themes,
         },
         latestEvent: event,
         source: "live",

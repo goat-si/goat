@@ -1,3 +1,7 @@
+import * as Effect from "effect/Effect";
+import { uploadComposerAttachmentShared } from "./composer-attachment-uploads";
+import { uploadingComposerAttachmentKeys } from "../lib/composerAttachmentUploadQueue";
+import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
@@ -65,6 +69,7 @@ import {
   retryingQueuedMessageIdsAtom,
   threadOutboxShellStatusesAtom,
 } from "./use-thread-outbox";
+import { dispatchingQueuedMessageIdsAtom } from "./threadOutboxDispatching";
 import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
 import { workspaceConnections } from "./workspace";
 
@@ -148,12 +153,25 @@ export function setQueuedMessageRetrying(queuedMessageId: MessageId, retrying: b
 export function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
   // An attempt in flight is sending, even while its retry count is kept.
   setQueuedMessageRetrying(queuedMessageId, false);
+  appAtomRegistry.set(dispatchingQueuedMessageIdsAtom, {
+    ...appAtomRegistry.get(dispatchingQueuedMessageIdsAtom),
+    [queuedMessageId]: true,
+  });
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
 }
 
 export function finishDispatchingQueuedMessage(queuedMessageId: MessageId): void {
+  const { [queuedMessageId]: _finished, ...remaining } = appAtomRegistry.get(
+    dispatchingQueuedMessageIdsAtom,
+  );
+  appAtomRegistry.set(dispatchingQueuedMessageIdsAtom, remaining);
   const current = appAtomRegistry.get(dispatchingQueuedMessageIdAtom);
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, current === queuedMessageId ? null : current);
+  appAtomRegistry.set(
+    dispatchingQueuedMessageIdAtom,
+    current === queuedMessageId
+      ? ((Object.keys(remaining)[0] as MessageId | undefined) ?? null)
+      : current,
+  );
 }
 
 export function findThread(
@@ -209,6 +227,10 @@ export async function prepareQueuedMessageAttachments(
     environmentId: queuedMessage.environmentId,
     attachments: queuedMessage.attachments,
     supportsImageUploads,
+    uploadAttachment: (attachment, signal) =>
+      Effect.runPromise(uploadComposerAttachmentShared(queuedMessage.environmentId, attachment), {
+        signal,
+      }),
     persistUploadedReferences: async (draftAttachments) => {
       if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
         return "abandon";
@@ -569,6 +591,11 @@ export async function preserveUploadedAttachmentsForEditor(
 
 // Everything a drain pass decides from. Each queued environment's session is
 // read here so a granted or revoked operate scope re-runs the drain.
+const uploadingComposerAttachmentKeysAtom = Atom.map(
+  composerAttachmentUploadsAtom,
+  uploadingComposerAttachmentKeys,
+);
+
 export const deliveryInputsAtom = Atom.make((get) => {
   const connectedEnvironments = get(workspaceConnections.environmentsAtom);
   const operableEnvironments = new Set<EnvironmentId>();
@@ -592,6 +619,7 @@ export const deliveryInputsAtom = Atom.make((get) => {
     serverConfigs: get(environmentServerConfigsAtom),
     connectedEnvironments,
     operableEnvironments,
+    uploadingAttachmentKeys: get(uploadingComposerAttachmentKeysAtom),
   };
 }).pipe(Atom.withLabel("mobile:thread-outbox:delivery-inputs"));
 

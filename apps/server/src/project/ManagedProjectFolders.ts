@@ -18,7 +18,7 @@ import {
   type ThreadId,
   VcsProcessSpawnError,
 } from "@goat/contracts";
-import { newProjectFolderName } from "@goat/shared/path";
+import { foldLatinDiacritics, newProjectFolderName } from "@goat/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -151,7 +151,7 @@ export class ManagedProjectFolders extends Context.Service<
 >()("goat/project/ManagedProjectFolders") {}
 
 const folderWords = (text: string) =>
-  text
+  foldLatinDiacritics(text)
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
@@ -286,15 +286,17 @@ const make = Effect.gen(function* () {
           return Effect.logWarning(unavailable.message).pipe(Effect.as(Result.fail(unavailable)));
         },
       ),
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.interrupt
-          : Effect.succeed(Result.fail(new ScratchUnavailableError({ baseDir: config.baseDir }))),
-      ),
     ),
-    Duration.infinity,
+    Exit.match({ onSuccess: () => Duration.infinity, onFailure: () => Duration.zero }),
   );
-  const scratchProbe = probe.pipe(Effect.onInterrupt(() => invalidate));
+  const scratchProbe = probe.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause)
+        ? Effect.interrupt
+        : Effect.succeed(Result.fail(new ScratchUnavailableError({ baseDir: config.baseDir }))),
+    ),
+    Effect.onInterrupt(() => invalidate),
+  );
   // A symlinked scratch folder lets the No project live at either the link or its target.
   const scratchProjectRoot = (root: string) =>
     fileSystem.realPath(root).pipe(

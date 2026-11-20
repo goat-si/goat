@@ -73,6 +73,12 @@ export function SourceControlHostSettings({
                 value={isSecretReference(saved?.[field]) ? saved[field] : undefined}
                 onChange={(reference) => void save({ [field]: reference ?? "" })}
               />
+              {isSecretReference(saved?.[field]) ? (
+                <span>
+                  Saved {definition.label} credentials are only used for the server's configured
+                  host.
+                </span>
+              ) : null}
             </div>
           ))
         : null}

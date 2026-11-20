@@ -126,9 +126,10 @@ export const WorkGroupSection = memo(function WorkGroupSection({
 });
 
 function WorkingTimer({ createdAt }: { createdAt: string }) {
+  const { activeThreadEnvironmentId } = use(TimelineRowCtx);
   return (
     <span
-      ref={tickTextContent(() => formatWorkingTimerNow(createdAt), true)}
+      ref={tickTextContent(() => formatWorkingTimerNow(createdAt, activeThreadEnvironmentId), true)}
       className="tabular-nums"
     />
   );
@@ -428,10 +429,16 @@ function CompactingLabel({ createdAt }: { createdAt: string | null }) {
 
 export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "thinking" }> }) {
   const ctx = use(TimelineRowCtx);
-  const { isCompacting, isPreparingWorktree, providerStartingLabel } = use(TimelineRowActivityCtx);
+  const { isCompacting, isPreparingWorktree, providerStartingLabel, liveAnswerPreview } =
+    use(TimelineRowActivityCtx);
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
   const activity = (
-    <LiveActivityRow label={providerStartingLabel ?? "Thinking"} iconName="brain" active shimmer />
+    <LiveActivityRow
+      label={providerStartingLabel ?? row.label ?? liveAnswerPreview ?? "Thinking"}
+      iconName="brain"
+      active
+      shimmer
+    />
   );
   const { groupId } = row;
   if (groupId === undefined) return activity;

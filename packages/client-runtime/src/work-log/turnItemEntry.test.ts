@@ -81,6 +81,12 @@ function row(name: keyof typeof fixtures): OrchestrationV2ProjectedTurnItem {
 }
 
 describe("turnItemWorkLogEntry", () => {
+  it("keeps the file name when the detailed change list is empty", () => {
+    const source = row("fileChange");
+    if (source.item.type !== "file_change") throw new Error("expected file change");
+    const entry = turnItemWorkLogEntry({ ...source, item: { ...source.item, changes: [] } });
+    expect(entry.changedFiles).toEqual(["src/a.ts"]);
+  });
   // Labels and summaries the web coding thread's projectedWorkEntry gave before it moved here.
   it.each([
     [

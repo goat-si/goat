@@ -110,6 +110,8 @@ export interface TimelineRowActivityState {
   isPreparingWorktree: boolean;
   providerStartingLabel: string | null;
   latestRunId: RunId | null;
+  /** In zen, the latest line of the open answer, shown in place of "Thinking". */
+  liveAnswerPreview: string | null;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
 }
 

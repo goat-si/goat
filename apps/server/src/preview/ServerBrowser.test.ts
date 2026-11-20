@@ -57,7 +57,13 @@ import {
   scope,
   fileChooserElement,
   makeFrame,
-  makeSession,
+  makePageContext,
+  makeDesktopViewer,
+  holdTitleObservation,
+  assertCrashReload,
+  assertStopThroughFailedRecovery,
+  type ContextSetupGate,
+  viewerInput,
   mockCopy,
   refClickTarget,
   stallViewer,
@@ -74,8 +80,10 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     async contextFor(profileId: string, isolationKey?: string) {
       contextRequests.push({ profileId, isolated: isolationKey !== undefined });
       if (contextFailure) throw contextFailure;
-      await contextGate?.promise;
+      const gate = contextGate;
+      await gate?.promise;
       const context = makeContext(this.onClose);
+      gate?.prepare?.(context);
       contexts.push(context);
       return context as unknown as BrowserContext;
     }
@@ -101,115 +109,25 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
   },
 }));
 
-export function makeContext(
-  onClose?: (context: BrowserContext) => void,
-  initialUrl = "about:blank",
-) {
-  const events = new NodeEvents.EventEmitter();
-  const nativeFileChooser = vi.fn();
-  const setChooserFiles = vi.fn(async (_files: unknown) => {});
-  const sessions: ReturnType<typeof makeSession>[] = [];
-  let url = initialUrl;
-  let viewport: ReturnType<Page["viewportSize"]> = { width: 1280, height: 800 };
-  const cssViewport = { width: 1920, height: 1080 };
-  let closed = false;
-  let contextClosed = false;
-  const page = {
-    on: (name: string, callback: (...args: unknown[]) => void) => events.on(name, callback),
-    once: (name: string, callback: (...args: unknown[]) => void) => events.once(name, callback),
-    off: (name: string, callback: (...args: unknown[]) => void) => events.off(name, callback),
-    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
-    emitConsole: (text: string, level = "log", args: unknown[] = [text]) =>
-      events.emit("console", { type: () => level, text: () => text, args: () => args }),
-    nativeFileChooser,
-    setChooserFiles,
-    openFileChooser: () => {
-      if (
-        !events.emit("filechooser", {
-          isMultiple: () => false,
-          element: () => fileChooserElement(".csv"),
-          setFiles: setChooserFiles,
-        })
-      ) {
-        nativeFileChooser();
-      }
+export const makeContext = (onClose?: (context: BrowserContext) => void, initialUrl?: string) =>
+  makePageContext(
+    {
+      setupFailure: () => pageSetupFailure,
+      initialNavigation: () => {
+        const pending = initialNavigation;
+        initialNavigation = null;
+        return pending?.();
+      },
+      desktopSize: () => desktopSizeAnswer?.(),
     },
-    emitAsync: (name: string, ...args: unknown[]) =>
-      Promise.all(events.listeners(name).map((listener) => listener(...args))),
-    setDefaultTimeout: vi.fn(),
-    setDefaultNavigationTimeout: vi.fn(),
-    context: () => context,
-    mainFrame: () => page,
-    frames: () => [page],
-    url: () => url,
-    title: vi.fn(async () => "test page"),
-    viewportSize: vi.fn(() => viewport),
-    setViewportSize: vi.fn(async (size: typeof viewport) => {
-      viewport = size;
-    }),
-    goto: vi.fn(async (next: string) => {
-      url = next;
-      events.emit("load");
-      const pending = initialNavigation;
-      initialNavigation = null;
-      await pending?.();
-    }),
-    goBack: vi.fn(async () => {}),
-    goForward: vi.fn(async () => {}),
-    reload: vi.fn(async () => {}),
-    emulateMedia: vi.fn(async () => {}),
-    waitForLoadState: vi.fn(async () => {}),
-    waitForNavigation: vi.fn(async () => null),
-    evaluate: vi.fn(async () => ({
-      url,
-      title: "test page",
-      loading: false,
-      visibleText: "delete",
-      interactiveElements: [],
-    })),
-    ariaSnapshot: vi.fn(async () => '- button "delete" [ref=e1]'),
-    locator: vi.fn(() => {
-      throw new Error("Unexpected locator action");
-    }),
-    mouse: { click: async () => {} },
-    isClosed: () => closed,
-    close: vi.fn(async () => {
-      if (!closed) {
-        closed = true;
-        events.emit("close");
-      }
-    }),
-  };
-  const context = {
-    page,
-    sessions,
-    on: () => context,
-    cssViewport,
-    newPage: async () => page as unknown as Page,
-    grantPermissions: vi.fn(async () => {}),
-    cookies: async () => [],
-    newCDPSession: async (target: unknown) => {
-      if (pageSetupFailure) throw pageSetupFailure;
-      const session = makeSession(
-        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
-        () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
-      );
-      sessions.push(session);
-      return session;
-    },
-    close: vi.fn(async () => {
-      if (contextClosed) return;
-      contextClosed = true;
-      await page.close();
-      onClose?.(context as unknown as BrowserContext);
-    }),
-  };
-  return context;
-}
+    onClose,
+    initialUrl,
+  );
+
 const contexts: ReturnType<typeof makeContext>[] = [];
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
-let contextGate: PromiseWithResolvers<void> | null = null;
+let contextGate: ContextSetupGate | null = null;
 let decodeGate: Promise<void> | undefined;
 let contextFailure: Error | null = null;
 let pageSetupFailure: Error | null = null;
@@ -305,27 +223,15 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { browser, broker, tabId };
 });
-const viewerInput = (tabId: string, canOperate: boolean) => ({
-  threadId: scope.thread.threadId,
-  tabId,
-  canOperate,
-  maxWidth: 1280,
-  maxHeight: 800,
-  quality: 70,
-});
 const openDesktopViewer = Effect.gen(function* () {
-  const browser = yield* ServerBrowser.ServerBrowser;
-  const manager = yield* Manager.PreviewManager;
-  desktopRendersNext = true;
-  const { tabId } = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-  const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
-  const context = desktopConnections[0]!.context;
-  const cdp = context.sessions[0]!;
-  const resize = (width: number, height: number) => {
-    Object.assign(context.cssViewport, { width, height });
-    return Effect.promise(() => cdp.emitAsync("Page.frameResized"));
-  };
-  return { tabId, viewer, context, cdp, resize };
+  return yield* makeDesktopViewer(
+    yield* ServerBrowser.ServerBrowser,
+    yield* Manager.PreviewManager,
+    () => {
+      desktopRendersNext = true;
+    },
+    () => desktopConnections[0]!.context,
+  );
 });
 
 beforeEach(() => {
@@ -2608,4 +2514,94 @@ it.effect("server tabs are marked server-rendered without a desktop channel", ()
       expect(sessions.find((session) => session.tabId === tabId)?.serverRendered).toBe(true);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.effect("keeps a tab's zoom when its viewer resizes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      const { tabId } = yield* manager.open({
+        threadId: scope.thread.threadId,
+        runtime: "server",
+        zoomFactor: 1.5,
+      });
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const cdp = contexts[0]!.sessions[0]!;
+      cdp.send.mockClear();
+      // Resizing the page resets Chromium's device metrics, so zoom must be applied again.
+      yield* viewer.input({ type: "resize", width: 390, height: 844 });
+      expect(cdp.send).toHaveBeenCalledWith(
+        "Emulation.setDeviceMetricsOverride",
+        expect.objectContaining({ deviceScaleFactor: 3 }),
+      );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["plain", "stopAll", "settle", "failed"] as const)(
+  "a crashed tab stays open and preserves control during recovery: %s",
+  (duringRecovery) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        yield* assertCrashReload(contexts[0]!, browser, broker, tabId, duringRecovery);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
+const setContextGate = (gate: ContextSetupGate | null) => {
+  contextGate = gate;
+};
+
+it.effect.each(["context", "viewport"] as const)(
+  "Stop All survives failed recovery during reconnect at %s",
+  (stage) =>
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      yield* assertStopThroughFailedRecovery(contexts[0]!, browser, tabId, setContextGate, stage);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+it.effect("a popup opens in its opener's appearance", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      const opened = yield* manager.open({
+        threadId: scope.thread.threadId,
+        runtime: "server",
+        colorScheme: "dark",
+      });
+      yield* browser.attachViewer(viewerInput(opened.tabId, true));
+      const events = yield* manager.subscribeEvents;
+      contexts[0]!.page.emit("popup", makeContext().page);
+      let event = yield* PubSub.take(events);
+      while (event.type !== "opened") event = yield* PubSub.take(events);
+      expect(event.snapshot.colorScheme).toBe("dark");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("publishes a same-document title change without a navigation", () =>
+  Effect.gen(function* () {
+    yield* ready;
+    const events = yield* (yield* Manager.PreviewManager).subscribeEvents;
+    const { page, observeTitle, change } = holdTitleObservation(contexts[0]!);
+    page.commit("https://example.com/");
+    yield* Effect.promise(() => page.emitAsync("load"));
+    expect(observeTitle).toHaveBeenCalledTimes(1);
+    page.title.mockResolvedValue("Updated title");
+    change.resolve({ result: { value: true } });
+    for (;;) {
+      const event = yield* PubSub.take(events);
+      if (
+        event.type === "navigated" &&
+        event.snapshot.navStatus._tag === "Success" &&
+        event.snapshot.navStatus.title === "Updated title"
+      )
+        break;
+    }
+  }).pipe(Effect.scoped, Effect.provide(layer)),
 );

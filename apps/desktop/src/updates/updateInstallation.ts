@@ -1,3 +1,7 @@
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+
 export type DesktopUpdateInstallationReason = "translocated" | "read-only-volume" | "needs-admin";
 
 export function classifyDesktopUpdateInstallation(input: {
@@ -29,3 +33,35 @@ export function getDesktopUpdateInstallationMessage(
       return `Your account can't write to GOAT or its folder, so installing updates needs an administrator. ${SERVER_UPDATE_NOTICE}`;
   }
 }
+
+export const inspectDesktopUpdateInstallation = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  if (environment.platform !== "darwin" || !environment.isPackaged) return null;
+  // Electron's app path points inside the bundle (usually app.asar), not at the bundle.
+  const bundlePath = environment.appPath.match(/^(.*?\.app)(?:\/|$)/)?.[1];
+  if (!bundlePath) return null;
+  const writability = (path: string) =>
+    fileSystem.access(path, { writable: true }).pipe(
+      Effect.match({
+        onSuccess: () => "writable" as const,
+        // access(2) reports EROFS only for a read-only filesystem, such as a mounted disk
+        // image; a plain permission failure on a writable disk still allows an admin install.
+        onFailure: (error) =>
+          (error.reason as { cause?: { code?: unknown } }).cause?.code === "EROFS"
+            ? ("read-only" as const)
+            : ("denied" as const),
+      }),
+    );
+  const [bundle, parent] = yield* Effect.all([
+    writability(bundlePath),
+    writability(environment.path.dirname(bundlePath)),
+  ]);
+  return classifyDesktopUpdateInstallation({
+    platform: environment.platform,
+    appBundlePath: bundlePath,
+    bundleWritable: bundle === "writable",
+    parentWritable: parent === "writable",
+    readOnlyVolume: bundle === "read-only" || parent === "read-only",
+  });
+});

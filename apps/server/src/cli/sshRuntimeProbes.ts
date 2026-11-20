@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/cli";
+import { sshProbeDeadline } from "./sshProbeDeadline.ts";
 import {
   ExecutionEnvironmentDescriptor,
   GOAT_RUNTIME_CONTROL_HEADER,
@@ -344,12 +345,14 @@ export const protocolShellLine = (signals: ProtocolSignals) => {
 
 export const protocol = Command.make("protocol", {
   shell: Flag.Boolean("shell").pipe(Flag.withDefault(false)),
+  deadlineMs: Flag.Int("deadline-ms").pipe(Flag.optional),
   runtimeFile: Flag.String("runtime-file").pipe(Flag.optional),
   portFile: Flag.String("port-file").pipe(Flag.optional),
   pidFile: Flag.String("pid-file").pipe(Flag.optional),
 }).pipe(
-  Command.withHandler(({ shell, runtimeFile, portFile, pidFile }) =>
+  Command.withHandler(({ shell, runtimeFile, portFile, pidFile, deadlineMs }) =>
     Effect.promise(async () => {
+      const cancelDeadline = sshProbeDeadline(Option.getOrUndefined(deadlineMs));
       try {
         const signals = Option.isSome(runtimeFile)
           ? await readLiveSshRuntimeProtocol(
@@ -369,6 +372,8 @@ export const protocol = Command.make("protocol", {
           (cause instanceof Error ? cause.message : "Cannot inspect SSH protocol") + "\n",
         );
         process.exitCode = 1;
+      } finally {
+        cancelDeadline();
       }
     }),
   ),

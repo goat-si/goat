@@ -15,6 +15,7 @@ export function ThreadMarkdownVideo(props: {
   readonly source: MediaVideoPreviewSource;
   /** The environment a URL source came from, so its loopback address resolves to that machine. */
   readonly environmentId?: EnvironmentId | undefined;
+  readonly thumbnailKey?: string;
   readonly thumbnailVisible?: boolean;
   readonly onPlaybackStart?: () => void;
 }) {
@@ -34,11 +35,14 @@ export function ThreadMarkdownVideo(props: {
     "uri" in source ? source.uri : "",
   );
   // A reconnect can move or remove the address, so the thumbnail and an open player start over.
-  const thumbnailKey = mediaVideoThumbnailKey(
-    "uri" in source && routed.uri !== null ? { ...source, uri: routed.uri } : source,
-  );
+  const thumbnailKey =
+    props.thumbnailKey ??
+    mediaVideoThumbnailKey(
+      "uri" in source && routed.uri !== null ? { ...source, uri: routed.uri } : source,
+    );
   const playerKey =
-    "uri" in source ? `${thumbnailKey}|${routed.uri ?? "unavailable"}` : thumbnailKey;
+    props.thumbnailKey ??
+    ("uri" in source ? `${thumbnailKey}|${routed.uri ?? "unavailable"}` : thumbnailKey);
   const uri =
     "uri" in source
       ? routed.uri

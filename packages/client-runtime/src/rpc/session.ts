@@ -1,3 +1,4 @@
+import { beginServerClockSample, endServerClockSample, recordServerClockSample } from "../clock.ts";
 import {
   type ServerConfig,
   type ServerConfigStreamEvent,
@@ -60,6 +61,7 @@ const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
+  readonly vcsBranchTransportSupported?: boolean;
   readonly initialConfig: Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly subscribeServerConfig: (
     input?: ServerConfigSubscriptionInput,
@@ -75,6 +77,8 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  readonly providerCatalogsOnDemand?: boolean;
+  readonly providerCatalogDigests?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -194,6 +198,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
+    ...(options.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
@@ -310,6 +316,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       reason: "remote-unavailable",
       detail: `${connection.label} config subscription ended.`,
     });
+    const clockToken = beginServerClockSample(connection.environmentId);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => endServerClockSample(connection.environmentId, clockToken)),
+    );
+    const configRequestedAtMs = yield* Clock.currentTimeMillis;
     const openServerConfig = protocolClient[WS_METHODS.subscribeServerConfig];
     const serverConfigSource = withProviderStatusChangesOrFullLists(
       openServerConfig,
@@ -355,6 +366,18 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
             yield* PubSub.publish(serverConfigUpdates, buffered.value);
           }
           if (event.type === "snapshot") {
+            if (
+              event.config.environment.environmentId === connection.environmentId &&
+              !(yield* Deferred.isDone(initialConfigDeferred))
+            ) {
+              recordServerClockSample(
+                connection.environmentId,
+                clockToken,
+                event.config.serverTime,
+                configRequestedAtMs,
+                yield* Clock.currentTimeMillis,
+              );
+            }
             const first = yield* Deferred.succeed(initialConfigDeferred, event.config);
             if (ssh && first)
               yield* logSshConnectionTiming("initial-snapshot", yield* Ref.get(openedAt));
@@ -471,6 +494,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
 
     return {
       client: protocolClient,
+      vcsBranchTransportSupported:
+        connection.target._tag !== "HubProxyConnectionTarget" ||
+        connection.hubVcsBranchSupported === true,
       initialConfig,
       subscribeServerConfig,
       ready: Deferred.await(connected).pipe(

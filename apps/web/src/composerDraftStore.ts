@@ -1,9 +1,20 @@
+import { clearStaleFileUploadMetadata } from "./lib/clearStaleFileUploadMetadata";
+import {
+  resolvedCheckoutField,
+  sameCheckoutPullRequest,
+  storedCheckoutField,
+  type DraftCheckoutPullRequest,
+} from "./composerDraftCheckoutPullRequest";
 import { queuedRunEditThreadId } from "./queuedRunEditDraftId";
 import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./state/modelPickPending";
 import * as draftModels from "./lib/persistedModelSelections";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
-import { composerFileAttachmentMimeType } from "./components/chat/composerAttachmentFiles";
+import {
+  composerFileDedupKey,
+  composerFileMatchesReattachMarker,
+  composerImageDedupKey,
+} from "./components/chat/composerAttachmentFiles";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ElementContextDetails,
@@ -61,13 +72,15 @@ import {
   DEFAULT_RUNTIME_MODE,
   type ChatFileAttachment,
   type ChatImageAttachment,
-  videoMimeType,
 } from "./types";
 import {
   type TerminalContextDraft,
   migrateLegacyTerminalContextPlaceholders,
-  normalizeTerminalContextText,
 } from "./lib/terminalContext";
+import {
+  normalizeTerminalContextForThread,
+  terminalContextDedupKey,
+} from "./composerDraftTerminalContexts";
 import {
   appendInlineContextReference,
   type ComposerContextReference,
@@ -100,7 +113,6 @@ import {
   createComposerPersistStorage,
   type ComposerPersistState,
 } from "./composerDraftPersistStorage";
-import { useShallow } from "zustand/react/shallow";
 import {
   replaceComposerContextReferences,
   toComposerContextId,
@@ -151,29 +163,6 @@ export interface ComposerFileAttachment extends Omit<ChatFileAttachment, "previe
 
 export function composerFileNeedsReattach(file: ComposerFileAttachment): boolean {
   return file.file === null && file.uploadedAttachmentId === undefined;
-}
-
-function clearStaleFileUploadMetadata(
-  draft: ComposerThreadDraftState,
-  environmentId: EnvironmentId,
-): ComposerThreadDraftState {
-  let changed = false;
-  const files = draft.files.map((file) => {
-    if (
-      (file.uploadedAttachmentId === undefined && file.uploadEnvironmentId === undefined) ||
-      file.uploadEnvironmentId === environmentId
-    ) {
-      return file;
-    }
-
-    changed = true;
-    const nextFile = { ...file };
-    delete nextFile.uploadedAttachmentId;
-    delete nextFile.uploadEnvironmentId;
-    return nextFile;
-  });
-
-  return changed ? { ...draft, files } : draft;
 }
 
 export const PersistedComposerFileAttachment = Schema.Struct({
@@ -293,6 +282,8 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   sshDestination: Schema.optionalKey(Schema.NullOr(DraftSshDestinationSchema)),
+  // Unknown, so one malformed value cannot fail the whole-storage read; read leniently.
+  checkoutPullRequest: Schema.optionalKey(Schema.Unknown),
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
@@ -391,6 +382,8 @@ export interface DraftSessionState {
   envMode: DraftThreadEnvMode;
   sshDestination?: DraftSshDestination | null;
   startFromOrigin: boolean;
+  /** Linked to the thread when the draft is sent on this branch. */
+  checkoutPullRequest?: DraftCheckoutPullRequest;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -436,6 +429,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       sshDestination?: DraftSshDestination | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
@@ -453,6 +447,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       sshDestination?: DraftSshDestination | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
@@ -469,6 +464,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       sshDestination?: DraftSshDestination | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
@@ -605,12 +601,11 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   /** Clears text and attachments, preserving terminal/element contexts, preview annotations, and review comments. */
   clearComposerPromptAndImages: (threadRef: ComposerThreadTarget) => void;
   /** Keeps attachments over destination limits, other environments' uploads, terminal/element contexts, annotations, and review comments in source. */
-  moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
-}
-
-interface ComposerDraftModelState {
-  activeProvider: ProviderInstanceId | null;
-  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
+  moveComposerPromptAndImages: (
+    from: ComposerThreadTarget,
+    to: ComposerThreadTarget,
+    keepUnreachableFiles?: boolean,
+  ) => void;
 }
 
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
@@ -689,11 +684,6 @@ Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
-const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
-  activeProvider: null,
-  modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
-});
-
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
@@ -729,69 +719,6 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
-  };
-}
-
-function composerImageDedupKey(image: ComposerImageAttachment): string {
-  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
-  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
-}
-
-export function composerFileDedupKey(
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): string {
-  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
-}
-
-export function composerFileMatchesReattachMarker(
-  marker: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): boolean {
-  if (marker.name !== file.name || marker.sizeBytes !== file.sizeBytes) return false;
-  if (marker.mimeType === file.mimeType) return true;
-  const normalizedMarkerMimeType = composerFileAttachmentMimeType({
-    name: marker.name,
-    type: marker.mimeType,
-  });
-  if (
-    normalizedMarkerMimeType === "image/x-adobe-dng" &&
-    normalizedMarkerMimeType ===
-      composerFileAttachmentMimeType({ name: file.name, type: file.mimeType })
-  ) {
-    return true;
-  }
-  const markerMimeType = marker.mimeType.toLowerCase();
-  return (
-    (markerMimeType === "" || markerMimeType === "application/octet-stream") &&
-    videoMimeType(marker) !== null &&
-    videoMimeType(file) !== null
-  );
-}
-
-function terminalContextDedupKey(context: TerminalContextDraft): string {
-  return `${context.terminalId}\u0000${context.lineStart}\u0000${context.lineEnd}`;
-}
-
-function normalizeTerminalContextForThread(
-  threadId: ThreadId,
-  context: TerminalContextDraft,
-): TerminalContextDraft | null {
-  const terminalId = context.terminalId.trim();
-  const terminalLabel = context.terminalLabel.trim();
-  if (terminalId.length === 0 || terminalLabel.length === 0) {
-    return null;
-  }
-  const lineStart = Math.max(1, Math.floor(context.lineStart));
-  const lineEnd = Math.max(lineStart, Math.floor(context.lineEnd));
-  return {
-    ...context,
-    id: toComposerContextId(context.id),
-    threadId,
-    terminalId,
-    terminalLabel,
-    lineStart,
-    lineEnd,
-    text: normalizeTerminalContextText(context.text),
   };
 }
 
@@ -1287,6 +1214,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     sshDestination?: DraftSshDestination | null;
+    checkoutPullRequest?: DraftCheckoutPullRequest | null;
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
@@ -1354,6 +1282,7 @@ function createDraftThreadState(
       ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
       : {}),
     startFromOrigin: nextStartFromOrigin,
+    ...resolvedCheckoutField(existingThread, options?.checkoutPullRequest, projectChanged),
     promotedTo: null,
   };
 }
@@ -1389,6 +1318,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.envMode === right.envMode &&
     draftSshDestinationsEqual(left.sshDestination, right.sshDestination) &&
     left.startFromOrigin === right.startFromOrigin &&
+    sameCheckoutPullRequest(left, right) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1551,6 +1481,7 @@ function normalizePersistedDraftThreads(
           : candidateDraftThread.loadBalancedEnvironmentId === null
             ? { loadBalancedEnvironmentId: null }
             : {}),
+        ...storedCheckoutField(candidateDraftThread.checkoutPullRequest),
         sshDestination: normalizedSshDestination,
         ...(normalizedSshDestination
           ? {
@@ -2316,6 +2247,7 @@ function toHydratedDraftThreadState(
     envMode: persistedDraftThread.envMode,
     sshDestination: persistedDraftThread.sshDestination ?? null,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...storedCheckoutField(persistedDraftThread.checkoutPullRequest),
     ...(persistedDraftThread.environmentSelection
       ? { environmentSelection: persistedDraftThread.environmentSelection }
       : {}),
@@ -2622,6 +2554,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
                 : {}),
               startFromOrigin: nextStartFromOrigin,
+              ...resolvedCheckoutField(existing, options.checkoutPullRequest, projectChanged),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2638,6 +2571,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.envMode === existing.envMode &&
               draftSshDestinationsEqual(nextDraftThread.sshDestination, existing.sshDestination) &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              sameCheckoutPullRequest(nextDraftThread, existing) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;
@@ -2966,10 +2900,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return;
           }
           const instanceKey = options?.instanceId ?? defaultInstanceIdForDriver(normalizedProvider);
+          const shownModel = normalizeCustomModelSlug(options?.model);
           const fallbackModel =
-            normalizeCustomModelSlug(options?.model) ??
-            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ??
-            DEFAULT_MODEL;
+            shownModel ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ?? DEFAULT_MODEL;
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
 
@@ -2981,7 +2914,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const currentForProvider = nextMap[instanceKey];
             nextMap[instanceKey] = createModelSelection(
               instanceKey,
-              currentForProvider?.model ?? fallbackModel,
+              shownModel ?? currentForProvider?.model ?? fallbackModel,
               providerOpts,
             );
 
@@ -2994,32 +2927,27 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextStickyMap[instanceKey] ??
                 base.modelSelectionByProvider[instanceKey] ??
                 createModelSelection(instanceKey, fallbackModel);
-              const rememberedModel = normalizeCustomModelSlug(options?.model) ?? stickyBase.model;
-              if (providerOpts) {
+              const rememberedModel = shownModel ?? stickyBase.model;
+              if (
+                rememberedModel === stickyBase.model &&
+                (providerOpts || stickyBase.options?.length)
+              ) {
                 nextStickyMap[instanceKey] = createModelSelection(
                   instanceKey,
                   stickyBase.model,
                   providerOpts,
                 );
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: {
-                    ...state.stickyOptionsByModelByProvider[instanceKey],
-                    [rememberedModel]: providerOpts,
-                  },
-                };
-              } else if ((stickyBase.options?.length ?? 0) > 0) {
-                const { options: _, ...rest } = stickyBase;
-                nextStickyMap[instanceKey] = rest as ModelSelection;
-                const rememberedByModel = {
-                  ...state.stickyOptionsByModelByProvider[instanceKey],
-                };
-                delete rememberedByModel[rememberedModel];
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: rememberedByModel,
-                };
               }
+              const rememberedByModel = { ...state.stickyOptionsByModelByProvider[instanceKey] };
+              if (providerOpts) {
+                rememberedByModel[rememberedModel] = providerOpts;
+              } else {
+                delete rememberedByModel[rememberedModel];
+              }
+              nextOptionsByModel = {
+                ...state.stickyOptionsByModelByProvider,
+                [instanceKey]: rememberedByModel,
+              };
               nextStickyActiveProvider = options.instanceId
                 ? instanceKey
                 : (base.activeProvider ?? instanceKey);
@@ -3956,7 +3884,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        moveComposerPromptAndImages: (from, to) => {
+        moveComposerPromptAndImages: (from, to, keepUnreachableFiles = false) => {
           const fromKey = resolveComposerDraftKey(get(), from) ?? "";
           const toKey = resolveComposerDraftKey(get(), to) ?? "";
           if (fromKey.length === 0 || toKey.length === 0 || fromKey === toKey) {
@@ -3978,7 +3906,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const destinationFileKeys = new Set(destination.files.map(composerFileDedupKey));
             const transferableFiles = source.files.filter(
               (file) =>
-                (file.file !== null || file.uploadEnvironmentId === destinationEnvironmentId) &&
+                (keepUnreachableFiles ||
+                  file.file !== null ||
+                  file.uploadEnvironmentId === destinationEnvironmentId) &&
                 !destinationFileIds.has(file.id) &&
                 !destinationFileKeys.has(composerFileDedupKey(file)),
             );
@@ -3988,7 +3918,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 destination.images.length -
                 destination.files.length,
             );
-            const movedImages = source.images.slice(0, remainingAttachmentSlots);
+            const destinationImageIds = new Set(destination.images.map((image) => image.id));
+            const movedImages = source.images
+              .filter((image) => !destinationImageIds.has(image.id))
+              .slice(0, remainingAttachmentSlots);
             const movedImageIds = new Set(movedImages.map((image) => image.id));
             const retainedImages = source.images.filter((image) => !movedImageIds.has(image.id));
             const movedFiles = transferableFiles
@@ -3996,7 +3929,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               .map((file) => {
                 // Re-upload local bytes across environments; the destination cannot reach source upload ids.
                 if (
-                  file.file === null ||
                   file.uploadEnvironmentId === undefined ||
                   file.uploadEnvironmentId === destinationEnvironmentId
                 ) {
@@ -4268,22 +4200,6 @@ export function useComposerThreadDraft(threadRef: ComposerThreadTarget): Compose
 export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
   return useComposerDraftStore((state) =>
     composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
-  );
-}
-
-export function useComposerDraftModelState(
-  threadRef: ComposerThreadTarget,
-): ComposerDraftModelState {
-  return useComposerDraftStore(
-    useShallow((state) => {
-      const draft = getComposerDraftState(state, threadRef);
-      return draft
-        ? {
-            activeProvider: draft.activeProvider,
-            modelSelectionByProvider: draft.modelSelectionByProvider,
-          }
-        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
-    }),
   );
 }
 

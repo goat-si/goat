@@ -177,6 +177,7 @@ function typedAnswer(
 export function parseElicitationForm(
   requestedSchema: unknown,
   message: string,
+  { allowOther = false }: { readonly allowOther?: boolean } = {},
 ): ElicitationForm | undefined {
   const schema = unknownRecord(requestedSchema);
   const required = new Set(
@@ -223,10 +224,14 @@ export function parseElicitationForm(
       header: text(property.title) ?? `Question ${questions.length + 1}`,
       question: text(property.description) ?? message,
       options,
-      ...(kind === "text" || kind === "number" || companions.has(id)
+      ...(kind === "text" ||
+      kind === "number" ||
+      companions.has(id) ||
+      (allowOther && kind === "choice" && !fields.has(`${id}__other`))
         ? {}
         : { allowCustomAnswer: false }),
       ...(kind === "multiChoice" ? { multiSelect: true } : {}),
+      ...(kind === "text" && !required.has(id) ? { required: false } : {}),
     });
   }
   return {
@@ -241,6 +246,14 @@ export function parseElicitationForm(
         if (typed !== undefined) entries.push([id, typed]);
         else if (companionId !== undefined && typeof answer === "string") {
           entries.push([companionId, answer]);
+        } else if (
+          allowOther &&
+          field.kind === "choice" &&
+          !fields.has(`${id}__other`) &&
+          typeof answer === "string" &&
+          answer.trim() !== ""
+        ) {
+          entries.push([id, answer]);
         } else if (required.has(id)) return undefined;
       }
       // Own properties for every field, `__proto__` included; assigning to

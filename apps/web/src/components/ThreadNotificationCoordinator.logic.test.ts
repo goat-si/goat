@@ -48,6 +48,21 @@ function harness() {
 }
 
 describe("createThreadNotificationGate", () => {
+  it("suppresses snoozed completions and pending wake notifications but retains attention", () => {
+    using _timers = fakeTimers();
+    const notify = vi.fn();
+    const gate = createThreadNotificationGate<string>(notify);
+    const snoozed = { ...visible, snoozed: true };
+    gate.observe("thread", undefined, working, visible);
+    gate.observe("thread", working, woke(1), visible);
+    gate.observe("thread", woke(1), woke(1), snoozed);
+    vi.advanceTimersByTime(RELEASED_COMPLETION_GRACE_MS);
+    expect(notify).not.toHaveBeenCalled();
+    gate.observe("thread", woke(1), completed(1), visible);
+    expect(notify).not.toHaveBeenCalled();
+    gate.observe("thread", working, { ...working, attention: "approval" }, snoozed);
+    expect(notify).toHaveBeenCalledWith("thread", "input");
+  });
   it("notifies each replacement request once while attention remains pending", () => {
     const { notify, observe } = harness();
     observe(working);

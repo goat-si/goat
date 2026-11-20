@@ -216,6 +216,17 @@ describe("resolveBoundEndpoints", () => {
     ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
   });
 
+  it("reports an explicit bind to Tailscale's IPv6 address as the tailnet route", () => {
+    expect(
+      resolveBoundEndpoints({
+        platform: "linux",
+        host: "fd7a:115c:a1e0::1",
+        port: 3773,
+        interfaces: INTERFACES,
+      }),
+    ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://[fd7a:115c:a1e0::1]:3773/" }]);
+  });
+
   it("never reports an IPv4-mapped host, which can name the client's own loopback", () => {
     expect(
       resolveBoundEndpoints({
@@ -347,4 +358,22 @@ describe("DirectEndpoints Tailscale Serve", () => {
       expect(yield* resolveWithServe(502)).toEqual([]);
     }),
   );
+});
+
+it("advertises Linux host bridges while excluding container links", () => {
+  const input = {
+    host: "0.0.0.0",
+    port: 3773,
+    interfaces: {
+      "ve-container": vpnInterface("10.11.0.1"),
+      "vb-container": vpnInterface("10.12.0.1"),
+      "vz-container": vpnInterface("10.13.0.1"),
+      br0: vpnInterface("192.168.2.1"),
+      vmbr0: vpnInterface("192.168.3.1"),
+    },
+  };
+  expect(
+    resolveBoundEndpoints({ ...input, platform: "linux" }).map((route) => route.httpBaseUrl),
+  ).toEqual(["http://192.168.2.1:3773/", "http://192.168.3.1:3773/"]);
+  expect(resolveBoundEndpoints({ ...input, platform: "win32" })).toHaveLength(5);
 });

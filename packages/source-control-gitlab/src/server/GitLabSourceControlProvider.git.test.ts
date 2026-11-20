@@ -1,3 +1,4 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -47,7 +48,7 @@ it.effect("lists a nested-group fork's merge requests by source branch and names
     const calls: SourceControlHost.SourceControlProcessInput[] = [];
     const provider = yield* GitLabSourceControlProvider.make.pipe(
       Effect.provide(
-        GitLabCli.layer.pipe(
+        TestGitLabCli.layer.pipe(
           Layer.provideMerge(
             TestSourceControlHost.layer({
               process: {

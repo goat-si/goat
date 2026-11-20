@@ -17,6 +17,9 @@ import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterFailureReason } from "./ProviderAdapter.ts";
 import * as Schema from "effect/Schema";
 
+/** Upper bound on one uninterrupted series of provider-native retries. */
+export const PROVIDER_RETRY_BUDGET_MS = 10 * 60 * 1000;
+
 export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
   "ContextHandoffBudgetError",
   {},
@@ -118,12 +121,15 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeSettingsLaunchArgError":
         case "ClaudeMcpRegistrationTimeoutError":
         case "ClaudeCodeRootRefusalError":
+        case "ClaudeConversationNotFoundError":
         case "CursorModelUnavailableError":
+        case "PiPromptAcknowledgmentTimeoutError":
         case "CodexGoalObjectiveTooLongError":
         case "ProviderAdapterThreadInUseError":
         case "ProviderSetupError":
         case "ProviderRestartRequiredError":
         case "ProviderCliMissingError":
+        case "ProviderResumeUnsupportedError":
         case "ProviderCompactionUnsupportedError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
         // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.
@@ -160,6 +166,13 @@ function curatedCauseMessages(cause: unknown): {
             category: categoryMessage(),
           };
         }
+        case "AcpRequestError":
+          if ((cause as Record<string, unknown>).code !== -32000) break;
+          return {
+            known:
+              "The provider needs you to sign in. Sign in from its provider settings or with its own CLI or app, then retry the turn.",
+            category: categoryMessage(),
+          };
         case "ContextHandoffDeliveryUncertainError":
           return {
             known:

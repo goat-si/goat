@@ -94,6 +94,28 @@ const handoff: OrchestrationV2ContextHandoff = {
 };
 
 describe("handoff budget", () => {
+  it("keeps the file name when a file change has no detailed paths", () => {
+    const item = {
+      id: TurnItemId.make("item:empty-change"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed" as const,
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "file_change" as const,
+      fileName: "src/a.ts",
+      changes: [],
+    };
+    assert.equal(historicalMessage(item)?.text, "File change: src/a.ts");
+  });
   it("keeps old preview handoffs readable and delivery history off the wire", () => {
     const projected = projectContextHandoffForWire({
       ...handoff,
@@ -705,3 +727,44 @@ describe("handoff delivery", () => {
     }),
   );
 });
+
+it.effect("excludes the exact request being replayed from every delivered handoff", () =>
+  Effect.gen(function* () {
+    const replayed = message("item:replayed", "user", "Live only request");
+    const earlier = message("item:earlier", "user", "Earlier accepted request");
+    const deliver = (native: boolean) =>
+      deliverContextHandoffs({
+        handoffs: [
+          { ...handoff, history: { ...handoff.history!, messages: [earlier, replayed] } },
+          {
+            ...handoff,
+            id: ContextHandoffId.make("handoff:other"),
+            history: { ...handoff.history!, messages: [replayed] },
+          },
+        ],
+        providerThread,
+        budget: 8_000,
+        alreadyDeliveredItemIds: new Set(),
+        replayedInput: { itemId: replayed.itemId, threadId, runOrdinal: 2 },
+        persist: () => Effect.void,
+        ...(native
+          ? {
+              inject: ({
+                messages: delivered,
+              }: ProviderAdapter.ProviderAdapterV2HistoricalContext) =>
+                Effect.sync(() => {
+                  assert.deepEqual(
+                    delivered.map((item) => item.itemId),
+                    [earlier.itemId],
+                  );
+                  return true;
+                }),
+            }
+          : {}),
+      });
+    const inline = yield* deliver(false);
+    assert.include(inline.context, "Earlier accepted request");
+    assert.notInclude(inline.context, "Live only request");
+    yield* deliver(true);
+  }),
+);

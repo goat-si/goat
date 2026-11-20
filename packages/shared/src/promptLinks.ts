@@ -1,3 +1,4 @@
+import { parseUrl } from "./parseUrl.ts";
 import { LEGACY_HOSTED_APP_ORIGIN } from "@goat/contracts/legacyT3Names";
 
 export const PROMPT_LINK_MAX_PROMPT_LENGTH = 8_000;
@@ -192,8 +193,8 @@ export function promptLinkAppPath(
   value: string,
   hostedAppUrl: string | null = null,
 ): string | null {
-  if (!URL.canParse(value)) return null;
-  const url = new URL(value);
+  const url = parseUrl(value);
+  if (url === null) return null;
   if (APP_SCHEME.test(url.protocol)) {
     if (url.host === "new" && (url.pathname === "" || url.pathname === "/")) {
       return `/new${url.search}`;
@@ -201,8 +202,7 @@ export function promptLinkAppPath(
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
-  const hostedOrigin =
-    hostedAppUrl !== null && URL.canParse(hostedAppUrl) ? new URL(hostedAppUrl).origin : null;
+  const hostedOrigin = hostedAppUrl === null ? null : (parseUrl(hostedAppUrl)?.origin ?? null);
   if (url.origin !== LEGACY_HOSTED_APP_ORIGIN && url.origin !== hostedOrigin) return null;
   if (url.pathname === "/new") return `/new${url.search}`;
   const thread = url.searchParams.has("prompt") ? THREAD_PATH.exec(url.pathname) : null;

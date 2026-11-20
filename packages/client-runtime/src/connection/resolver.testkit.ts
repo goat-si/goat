@@ -97,6 +97,7 @@ export const makeDependencies = Effect.fn("TestConnectionResolver.makeDependenci
             expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
           },
         })),
+    rememberCheckedDescriptor: () => Effect.void,
     authorizeDpopHttp: () => Effect.die("unused"),
   });
   const ssh = ClientCapabilities.SshEnvironmentGateway.of({

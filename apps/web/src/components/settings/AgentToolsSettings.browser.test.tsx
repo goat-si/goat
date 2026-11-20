@@ -138,6 +138,21 @@ it("shows GOAT Docs only when the server advertises it", async () => {
   expect(screen.getByRole("switch", { name: "GOAT Docs" }).query()).toBeNull();
 });
 
+it("leaves agent theme writes disabled until a person enables them", async () => {
+  setup(shippedDefault);
+  await using screen = await render(<AgentToolsSettings />);
+  const control = screen.getByRole("switch", { name: "Agent theme changes" });
+  await expect.element(control).not.toBeChecked();
+  control.element().focus();
+  await userEvent.keyboard(" ");
+  await vi.waitFor(() =>
+    expect(state.updateSettings).toHaveBeenCalledWith({
+      environmentId: "env",
+      input: { patch: { enableAgentThemeWrites: true } },
+    }),
+  );
+});
+
 it("writes Off to the selected project and removes that skill override with Inherit", async () => {
   setup(shippedDefault);
   state.projectScope = true;

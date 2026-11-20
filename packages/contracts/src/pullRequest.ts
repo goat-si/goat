@@ -1,7 +1,5 @@
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
-import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
-import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   ForwardCompatibleArray,
@@ -178,6 +176,8 @@ export const PullRequestThreadComment = Schema.Struct({
   createdAt: IsoDateTime,
   editedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   url: Schema.NullOr(Schema.String),
+  /** The review that posted the comment, so a link to a review with no text finds its comments. */
+  reviewUrl: Schema.optional(Schema.NullOr(Schema.String)),
   reactions: Schema.optional(Schema.Array(PullRequestReaction)),
   canEdit: Schema.optional(Schema.Boolean),
 });
@@ -197,6 +197,16 @@ export const PullRequestReviewThread = Schema.Struct({
   canResolve: Schema.optional(Schema.Boolean),
 });
 export type PullRequestReviewThread = typeof PullRequestReviewThread.Type;
+
+/** A thread on the change request as a whole, such as a GitLab overview thread. */
+export const PullRequestOverviewThread = Schema.Struct({
+  ...PullRequestReviewThread.fields,
+  path: Schema.Null,
+  line: Schema.Null,
+});
+export type PullRequestOverviewThread = typeof PullRequestOverviewThread.Type;
+
+export type PullRequestConversationThread = PullRequestReviewThread | PullRequestOverviewThread;
 
 export const PullRequestReviewerKind = Schema.Literals(["user", "team"]);
 export type PullRequestReviewerKind = typeof PullRequestReviewerKind.Type;
@@ -306,6 +316,7 @@ export const PullRequestCapabilities = Schema.Struct({
    * reported rather than that the repository runs none. Absent means an empty list says nothing.
    */
   checksAlwaysReport: Schema.optional(Schema.Boolean),
+  withheldFileDiff: Schema.optional(Schema.Boolean),
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
@@ -357,6 +368,7 @@ export const PullRequestListEntry = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   mergeability: PullRequestMergeability,
+  rebaseRequired: Schema.optional(Schema.Boolean),
   /** Zero until fetched through `PullRequestListStatsInput`; GitHub listings omit counts. */
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
@@ -376,12 +388,16 @@ export const PullRequestListCursors = Schema.Record(
 );
 export type PullRequestListCursors = typeof PullRequestListCursors.Type;
 
+export const PULL_REQUEST_LIST_PROJECT_LIMIT = 100;
+
 export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
   filters: Schema.optional(PullRequestListFilters),
   projectId: Schema.optional(ProjectId),
-  projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
+  projectIds: Schema.optional(
+    Schema.Array(ProjectId).check(Schema.isMaxLength(PULL_REQUEST_LIST_PROJECT_LIMIT)),
+  ),
   host: Schema.optional(TrimmedNonEmptyString),
   /** Also list the upstream repositories forks were made from. */
   includeUpstream: Schema.optional(Schema.Boolean),
@@ -397,6 +413,8 @@ export const PullRequestProviderSummary = Schema.Struct({
   searchesOnHost: Schema.Boolean,
   actions: Schema.optional(ForwardCompatibleArray(PullRequestAction)),
   projectCount: PositiveInt,
+  /** SSH checkouts can resolve to an HTTP authority different from their stored identity. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
   configured: Schema.Boolean,
   detail: Schema.NullOr(TrimmedNonEmptyString),
 });
@@ -511,6 +529,7 @@ export const PullRequestSummary = Schema.Struct({
   reviewDecision: Schema.optional(Schema.NullOr(PullRequestReviewDecision)),
   checksState: Schema.optional(Schema.NullOr(PullRequestChecksState)),
   mergeability: Schema.optional(PullRequestMergeability),
+  rebaseRequired: Schema.optional(Schema.Boolean),
   /** Null when the host says the pull request is in no stack; absent when the read did not ask. */
   stack: Schema.optional(Schema.NullOr(PullRequestStackMembership)),
   headSha: Schema.optional(TrimmedNonEmptyString),
@@ -638,6 +657,7 @@ export const PullRequestDetail = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   mergeability: PullRequestMergeability,
+  rebaseRequired: Schema.optional(Schema.Boolean),
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
   changedFiles: NonNegativeInt,
@@ -682,10 +702,19 @@ export const PullRequestActivity = Schema.Struct({
   commentsTruncated: Schema.Boolean,
   reviewThreadsTruncated: Schema.optional(Schema.Boolean),
   reviewThreads: Schema.Array(PullRequestReviewThread),
+  // Apart from reviewThreads so clients that require a thread path still decode the activity.
+  overviewThreads: Schema.optional(Schema.Array(PullRequestOverviewThread)),
   commits: Schema.Array(PullRequestCommit),
   reactions: Schema.optional(Schema.Array(PullRequestReaction)),
 });
 export type PullRequestActivity = typeof PullRequestActivity.Type;
+
+export const pullRequestConversationThreads = (
+  activity: Pick<PullRequestActivity, "reviewThreads" | "overviewThreads">,
+): ReadonlyArray<PullRequestConversationThread> =>
+  activity.overviewThreads === undefined || activity.overviewThreads.length === 0
+    ? activity.reviewThreads
+    : [...activity.reviewThreads, ...activity.overviewThreads];
 
 export const PullRequestDetailView = Schema.Struct({
   ...PullRequestDetail.fields,
@@ -695,11 +724,16 @@ export const PullRequestDetailView = Schema.Struct({
 });
 export type PullRequestDetailView = typeof PullRequestDetailView.Type;
 
-/** GitHub refuses diffs past 300 files, so callers must page large changes. */
+const DiffRevision = Schema.Struct({
+  baseSha: TrimmedNonEmptyString,
+  headSha: TrimmedNonEmptyString,
+});
 export const PullRequestDiffInput = Schema.Struct({
   ...PullRequestRef.fields,
   cursor: Schema.optional(TrimmedNonEmptyString),
   commit: Schema.optional(TrimmedNonEmptyString),
+  path: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))),
+  revision: Schema.optional(DiffRevision),
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
@@ -712,10 +746,11 @@ export type PullRequestOmittedFileStat = typeof PullRequestOmittedFileStat.Type;
 
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
-  /** Content omitted within this slice; nextCursor separately indicates more slices. */
   truncated: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
+  revision: Schema.optional(DiffRevision),
+  withheldFilesReadable: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
@@ -786,6 +821,8 @@ export const PullRequestSetFilesViewedInput = Schema.Struct({
     Schema.Struct({
       path: FilePath,
       viewed: Schema.Boolean,
+      /** The file's version in the diff the reader was shown; without it the head's is recorded. */
+      revision: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
     }),
   ).check(Schema.isMaxLength(MAX_FILES_VIEWED_PRESSES)),
 });
@@ -860,10 +897,7 @@ export const PullRequestReviewCommentDraft = Schema.Struct({
   /** GitLab needs both names for renamed-file comments; hosts using one path ignore this. */
   oldPath: Schema.optional(TrimmedNonEmptyString),
   position: PullRequestReviewPosition,
-  /**
-   * The first line of a comment on a range, which ends at `position`. Sent only to a host whose
-   * capabilities include `review.rangeComment`.
-   */
+  /** The start of a range, on hosts that support range comments. */
   startPosition: Schema.optional(PullRequestReviewPosition),
   body: CommentBody,
 });
@@ -874,6 +908,9 @@ export const PullRequestSubmitReviewInput = Schema.Struct({
   verdict: PullRequestReviewVerdict,
   body: Schema.String.check(Schema.isMaxLength(65_536)),
   comments: Schema.Array(PullRequestReviewCommentDraft),
+  revision: Schema.optional(
+    DiffRevision.mapFields((fields) => ({ ...fields, baseSha: Schema.optional(fields.baseSha) })),
+  ),
 });
 export type PullRequestSubmitReviewInput = typeof PullRequestSubmitReviewInput.Type;
 
@@ -930,64 +967,4 @@ export const PullRequestLabelChangeInput = Schema.Struct({
 });
 export type PullRequestLabelChangeInput = typeof PullRequestLabelChangeInput.Type;
 
-/**
- * The names keep their `cli-` prefix for wire compatibility; for a host read with a credential
- * rather than a tool they mean "no credential" and "a refused credential".
- */
-export const PullRequestUnavailableReason = Schema.Literals([
-  "cli-missing",
-  "cli-unauthenticated",
-  "provider-unsupported",
-]);
-export type PullRequestUnavailableReason = typeof PullRequestUnavailableReason.Type;
-
 export { resolvePullRequestAuthorFilter } from "./pullRequestAuthorFilter.ts";
-
-export class PullRequestUnavailableError extends Schema.TaggedError<PullRequestUnavailableError>()(
-  "PullRequestUnavailableError",
-  {
-    reason: PullRequestUnavailableReason,
-    provider: Schema.optional(SourceControlProviderKind),
-    /**
-     * What the host needs on the server, in its own words. Absent from older servers, which
-     * shipped no such field, and for a host that names nothing.
-     */
-    requirement: Schema.optional(TrimmedNonEmptyString),
-    cause: Schema.optional(Schema.Defect()),
-  },
-  { httpApiStatus: 503 },
-) {
-  [HttpServerRespondable.symbol]() {
-    return HttpServerResponse.schemaJson(PullRequestUnavailableError)(this, { status: 503 });
-  }
-
-  override get message(): string {
-    switch (this.reason) {
-      case "cli-missing":
-        return this.requirement ?? "The tool this host is read through is not installed or set up.";
-      case "cli-unauthenticated":
-        return this.requirement ?? "This host has no working credentials.";
-      case "provider-unsupported":
-        return "Change requests cannot be browsed for this project's host yet.";
-    }
-  }
-}
-
-export class PullRequestOperationError extends Schema.TaggedError<PullRequestOperationError>()(
-  "PullRequestOperationError",
-  {
-    operation: Schema.String,
-    detail: TrimmedNonEmptyString,
-    reason: Schema.optional(Schema.Literal("not-found")),
-    cause: Schema.optional(Schema.Defect()),
-  },
-  { httpApiStatus: 502 },
-) {
-  [HttpServerRespondable.symbol]() {
-    return HttpServerResponse.schemaJson(PullRequestOperationError)(this, { status: 502 });
-  }
-
-  override get message(): string {
-    return `Pull request operation ${this.operation} failed: ${this.detail}`;
-  }
-}

@@ -218,9 +218,11 @@ export function runStopBannerItem(input: {
       ? undefined
       : input.stop.cloud
         ? "The cloud provider has not confirmed the stop yet."
-        : "It may be short on memory. Force stop kills its processes.",
+        : input.stop.forceStopSupported
+          ? "It may be short on memory. Force stop kills its processes."
+          : "The OpenCode server has not confirmed the stop yet.",
     actions:
-      unresponsive && input.canForceStop && !input.stop.cloud ? (
+      unresponsive && input.canForceStop && input.stop.forceStopSupported ? (
         <Button
           size="xs"
           variant="ghost"

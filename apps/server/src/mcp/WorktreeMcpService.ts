@@ -238,6 +238,15 @@ const make = Effect.gen(function* () {
       }
     }
 
+    const expectedHead = startedFromOrigin
+      ? worktreeBaseRef
+      : (yield* gitWorkflow
+          .resolveCommit({
+            cwd: projectCwd,
+            revision: worktreeBaseRef,
+          })
+          .pipe(asOperationFailed("Unable to resolve the worktree base"))).commitSha;
+
     const ids = yield* handoffIds(scope);
 
     // Mask interruption after worktree creation through setup; binding can detach and interrupt the caller.
@@ -248,7 +257,7 @@ const make = Effect.gen(function* () {
             .createWorktree(
               {
                 cwd: projectCwd,
-                refName: worktreeBaseRef,
+                refName: expectedHead,
                 newRefName: input.branch,
                 baseRefName,
                 path: null,
@@ -269,20 +278,6 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as({ status: "failed", detail } as const));
           });
 
-        const removeCreatedWorktree = Effect.suspend(() =>
-          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
-            Effect.andThen(
-              Effect.suspend(() =>
-                gitWorkflow.deleteLocalBranch({
-                  cwd: projectCwd,
-                  refName: worktree.worktree.refName,
-                  force: true,
-                }),
-              ),
-            ),
-          ),
-        ).pipe(Effect.ignoreCause({ log: true }));
-
         const recheckAndBind = Effect.gen(function* () {
           // A concurrent UI binding may have landed during git work; do not orphan a second worktree.
           const recheck = yield* loadThread(scope);
@@ -292,9 +287,17 @@ const make = Effect.gen(function* () {
           if (recheck.thread.archivedAt !== null) {
             return yield* failure(
               "invalid_request",
-              `Thread '${scope.thread.threadId}' was archived while the worktree was being created; the handoff was rolled back.`,
+              `Thread '${scope.thread.threadId}' was archived while the worktree was being created.`,
             );
           }
+          yield* gitWorkflow
+            .verifyManagedCheckout({
+              projectCwd,
+              worktreePath,
+              branch: input.branch,
+              expectedHead,
+            })
+            .pipe(asOperationFailed("Unable to verify the new worktree"));
           return yield* threadManagement
             .dispatch({
               type: "thread.metadata.update",
@@ -326,9 +329,8 @@ const make = Effect.gen(function* () {
               ),
             );
         }).pipe(
-          // Do not remove on interruption alone; the thread binding may already have committed.
-          Effect.onError((cause) =>
-            Cause.hasInterruptsOnly(cause) ? Effect.void : removeCreatedWorktree,
+          Effect.mapError((error) =>
+            failure(error.code, `${error.message} The new worktree was kept at ${worktreePath}.`),
           ),
         );
 

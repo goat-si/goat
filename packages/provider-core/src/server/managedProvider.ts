@@ -448,7 +448,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     ),
   ).pipe(Effect.forkScoped);
 
-  yield* applySnapshot(initialSettings, { forceRefresh: true }).pipe(
+  yield* (host.awaitServerReady ?? Effect.void).pipe(
+    Effect.andThen(
+      refreshSemaphore.withPermits(1)(
+        Ref.get(settingsRef).pipe(
+          Effect.flatMap((settings) => applySnapshotBase(settings, { forceRefresh: true })),
+        ),
+      ),
+    ),
     Effect.ignoreCause({ log: true }),
     Effect.forkScoped,
   );

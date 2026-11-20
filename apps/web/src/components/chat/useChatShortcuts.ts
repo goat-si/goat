@@ -21,8 +21,15 @@ export type ChatShortcutHandler = (context: {
 
 export type ChatShortcutCommands = Partial<Record<KeybindingCommand, ChatShortcutHandler>>;
 
+const SIDE_CHAT_PANEL_COMMANDS: ReadonlySet<KeybindingCommand> = new Set([
+  "rightPanel.toggle",
+  "rightPanel.close",
+  "rightPanel.toggleMaximized",
+]);
+
 export interface ChatShortcutsInput {
   readonly enabled: boolean;
+  readonly embedded?: boolean;
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly scriptKeybindings: ResolvedKeybindingsConfig;
   readonly getShortcutContext: (target: EventTarget | null) => ShortcutMatchContext & {
@@ -46,6 +53,9 @@ export interface ChatShortcutsInput {
 export function useChatShortcuts(input: ChatShortcutsInput) {
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
     const { keybindings } = input;
+    const inSideChat =
+      event.target instanceof Element && event.target.closest("[data-side-chat-surface]") !== null;
+    if (input.embedded && !inSideChat) return;
     if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
       event.stopPropagation();
       return;
@@ -61,6 +71,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     const shortcutContext = input.getShortcutContext(event.target);
 
     if (
+      (!inSideChat || input.embedded) &&
       !shortcutContext.terminalFocus &&
       !shortcutContext.modelPickerOpen &&
       shouldTypeToFocusComposer(event) &&
@@ -75,15 +86,20 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       context: shortcutContext,
     });
     if (!command) return;
-    const run =
-      input.commands[command] ??
-      composerShortcutCommands(input.composerRef, input.branchToolbarRef)[command] ??
-      input.fallback(command);
+    if (inSideChat && !input.embedded && !SIDE_CHAT_PANEL_COMMANDS.has(command)) return;
+    if (inSideChat && input.embedded && SIDE_CHAT_PANEL_COMMANDS.has(command)) return;
+    const composerCommands = composerShortcutCommands(input.composerRef, input.branchToolbarRef);
+    const run = input.embedded
+      ? composerCommands[command]
+      : (input.commands[command] ?? composerCommands[command] ?? input.fallback(command));
     if (!run || run({ event, terminalFocusOwner }) === false) return;
     event.preventDefault();
     event.stopPropagation();
   });
   const dismissFind = useEffectEvent((event: KeyboardEvent) => {
+    const inSideChat =
+      event.target instanceof Element && event.target.closest("[data-side-chat-surface]") !== null;
+    if (Boolean(input.embedded) !== inSideChat) return;
     if (
       event.key !== "Escape" ||
       !input.threadFindActive ||

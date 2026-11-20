@@ -14,6 +14,7 @@ import {
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
+  getDesktopUpdateInstallError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
@@ -214,22 +215,19 @@ export async function downloadLocalUpdate(
   }
 }
 
-async function installLocalUpdate(
+export async function installLocalUpdate(
   bridge: DesktopBridge,
   reportError: ReportLocalUpdateError = toastUpdateError,
 ): Promise<boolean> {
   try {
     const result = await bridge.installUpdate();
-    if (!result.accepted) {
-      showDesktopUpdateDownloadedToast(bridge, result.state);
+    const actionError = getDesktopUpdateInstallError(result);
+    if (actionError) {
+      reportError("Could not install update", actionError);
       return false;
     }
-    const actionError = shouldToastDesktopUpdateActionResult(result)
-      ? getDesktopUpdateActionError(result)
-      : null;
-    if (!actionError) return true;
-    reportError("Could not install update", actionError);
-    return false;
+    if (!result.accepted) showDesktopUpdateDownloadedToast(bridge, result.state);
+    return result.accepted;
   } catch (error) {
     reportError(
       "Could not install update",
@@ -440,24 +438,22 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     void Promise.allSettled([appCheck, providersChecked]).then(() => setIsActionPending(false));
   };
 
-  const runEverything = async ({ tab, rows }: UpdateDialogSelection) => {
+  const runEverything = async ({ rows }: UpdateDialogSelection) => {
     const bridge = window.desktopBridge;
     setIsConfirmingEverything(false);
     setIsActionPending(true);
     const result = await settlePromise(() =>
-      tab === "runtimes"
-        ? everything.runRuntimes(rows, everything.localEnvironmentId)
-        : everything.runApp(rows, {
-            ...(bridge && action === "download"
-              ? {
-                  downloadLocal: (reportError) =>
-                    downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
-                }
-              : {}),
-            ...(bridge && action !== "none"
-              ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
-              : {}),
-          }),
+      everything.runUpdates(rows, {
+        ...(bridge && action === "download"
+          ? {
+              downloadLocal: (reportError) =>
+                downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
+            }
+          : {}),
+        ...(bridge && action !== "none"
+          ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
+          : {}),
+      }),
     );
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);

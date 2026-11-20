@@ -28,6 +28,7 @@ export function assertClaudeBackgroundMonitorWakeOutput(
   assertSemanticProjectionIntegrity(projection);
   assertUserMessagesInclude(projection, [CLAUDE_BACKGROUND_MONITOR_WAKE_PROMPT]);
 
+  const [rootRun, wakeRun] = projection.runs;
   const rosterTasks = result.domainEvents
     .flatMap((event) =>
       event.type === "provider-thread.updated" ? (event.payload.pendingBackgroundTasks ?? []) : [],
@@ -35,12 +36,17 @@ export function assertClaudeBackgroundMonitorWakeOutput(
     .filter((task) => task.taskId === MONITOR_TASK_ID);
   // The first roster precedes task_started linking the Monitor call, so that entry reads command.
   assert.isAbove(rosterTasks.length, 1);
-  for (const task of rosterTasks.slice(1)) {
+  for (const { runId, ...task } of rosterTasks.slice(1)) {
+    // Adapter rosters carry no run; server rewrites retain the projection's stamp.
+    if (runId !== undefined) assert.equal(runId, rootRun?.id);
     assert.deepEqual(task, {
       taskId: MONITOR_TASK_ID,
       description: "Background monitor test",
       kind: "monitor",
       nativeItemId: "toolu_019b4EUbhEcYP4TS7vZn27N1",
+      command: "sleep 8 && echo MONITOR_DONE",
+      startedAt: "1970-01-01T00:00:00.002Z",
+      awaited: true,
     });
   }
   assert.deepEqual(projection.providerThreads[0]?.pendingBackgroundTasks ?? [], []);
@@ -53,7 +59,6 @@ export function assertClaudeBackgroundMonitorWakeOutput(
     },
   ]);
 
-  const [rootRun, wakeRun] = projection.runs;
   const assistantTexts = (runId: string | undefined) =>
     projection.turnItems.flatMap((item) =>
       item.runId === runId && item.type === "assistant_message" ? [item.text.trim()] : [],

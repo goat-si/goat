@@ -62,19 +62,16 @@ import {
 } from "./baseSchemas.ts";
 import { ServerActivityBlocker } from "./serverActivity.ts";
 import {
-  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ShellHttpSnapshot,
+  OrchestrationV2ShellResumable,
   OrchestrationV2ThreadBoundedSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
-import {
-  PullRequestDiffInput,
-  PullRequestDiffResult,
-  PullRequestOperationError,
-  PullRequestUnavailableError,
-} from "./pullRequest.ts";
+import { PullRequestDiffInput, PullRequestDiffResult } from "./pullRequest.ts";
+import { PullRequestOperationError, PullRequestUnavailableError } from "./pullRequestErrors.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -777,6 +774,7 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
 export const EnvironmentOrchestrationShellSnapshotQuery = Schema.Struct({
   omitIdleSubagents: Schema.optionalKey(Schema.String),
   omitOlderSettled: Schema.optionalKey(Schema.String),
+  resumeFrom: Schema.optionalKey(Schema.String),
 });
 
 export const EnvironmentOrchestrationThreadBoundedSnapshotQuery = Schema.Struct({
@@ -806,7 +804,7 @@ class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
       headers: OrchestrationProtocolHeaders,
       query: EnvironmentOrchestrationShellSnapshotQuery,
-      success: OrchestrationV2ShellSnapshot,
+      success: [OrchestrationV2ShellHttpSnapshot, OrchestrationV2ShellResumable],
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

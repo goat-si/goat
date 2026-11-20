@@ -1,7 +1,9 @@
+import { makeRestorePending } from "./goat/restorePending.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import {
   CheckpointId,
   CheckpointScopeId,
+  type GitCommandError,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
   ProviderThreadId,
@@ -22,6 +24,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { withCheckpointRestoreReservation } from "../workspace/checkpointRestoreReservation.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
@@ -36,6 +39,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { makeNoticeFolderReplaced } from "./goat/noticeFolderReplaced.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./goat/setAsideFolder.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -96,9 +100,10 @@ export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionE
   const restartRequired = restartRequiredIn(error.cause);
   if (restartRequired !== undefined) return restartRequired.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
-  return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
-    ? GIT_INDEX_LOCKED_DETAIL
-    : ROLLBACK_FAILED_MESSAGE;
+  if (isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL)
+    return GIT_INDEX_LOCKED_DETAIL;
+  if (error.reason === "shared-workspace") return SHARED_WORKSPACE_RESTORE_MESSAGE;
+  return ROLLBACK_FAILED_MESSAGE;
 }
 
 export interface CheckpointRollbackServiceV2Shape {
@@ -148,6 +153,8 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const setAside = yield* makeSetAsideFolder;
+    const pendingRestore = yield* makeRestorePending;
+    const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
       input: {
@@ -250,9 +257,38 @@ export const layer: Layer.Layer<
 
       const { worktreePath, branch } = context.thread;
       let setAsidePath: string | null = null;
+      let verifyRecreation = Effect.void as Effect.Effect<void, GitCommandError>;
+      let completeRecreation = Effect.void as Effect.Effect<
+        void,
+        import("./goat/restorePending.ts").RestorePendingError
+      >;
+
       // Recreated only where the server would have made it, as turn start does.
       if (worktreePath != null && branch != null) {
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
+        if (
+          restoreFiles &&
+          (yield* fileSystem
+            .exists(path.join(worktreePath, ".git"))
+            .pipe(Effect.orElseSucceed(() => false)))
+        ) {
+          const project = yield* projects.get(context.thread.projectId);
+          if (
+            Option.isSome(project) &&
+            (yield* pendingRestore.readStrict(worktreePath, project.value.workspaceRoot))
+              ?.applied === false
+          ) {
+            return yield* new CheckpointRollbackExecutionError({
+              reason: "unexpected-failure",
+              threadId: input.threadId,
+              providerThreadId: input.providerThreadId,
+              checkpointId: input.checkpointId,
+              cause: new Error(
+                `Restore the incomplete workspace at ${worktreePath} before retrying Edit from here.`,
+              ),
+            });
+          }
+        }
         const leftover = restoreFiles && (yield* setAside.lostCheckout(worktreePath));
         if (
           (leftover || (yield* setAside.missing(worktreePath))) &&
@@ -260,21 +296,42 @@ export const layer: Layer.Layer<
         ) {
           const project = yield* projects.get(context.thread.projectId);
           if (Option.isSome(project)) {
-            const recreate = gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: project.value.workspaceRoot,
-                  refName: branch,
-                  path: worktreePath,
-                }),
-              ),
-            );
+            const cwd = project.value.workspaceRoot;
+            const recreate = Effect.gen(function* () {
+              yield* gitWorkflow.pruneWorktrees({ cwd });
+              const { commitSha: headSha } = yield* gitWorkflow.resolveCommit({
+                cwd,
+                revision: `refs/heads/${branch}`,
+              });
+              const state = {
+                restoredFrom: "branch" as const,
+                headSha,
+                snapshotSha: null,
+                snapshotRef: null,
+                applied: false,
+              };
+              yield* pendingRestore.write(worktreePath, state, cwd);
+              yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
+              verifyRecreation = gitWorkflow.verifyManagedCheckout({
+                projectCwd: cwd,
+                worktreePath: scope.cwd,
+                expectedPath: worktreePath,
+                branch,
+                expectedHead: headSha,
+              });
+              completeRecreation = pendingRestore.write(
+                worktreePath,
+                { ...state, applied: true },
+                cwd,
+              );
+            });
             if (leftover) {
               if (!(yield* isolated)) return yield* sharedWorkspace();
               setAsidePath = (yield* setAside.around(worktreePath, recreate, aside)).setAsidePath;
             } else {
               yield* recreate;
             }
+            yield* noticeFolderReplaced(worktreePath, setAsidePath);
           }
         }
       }
@@ -311,6 +368,7 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      if (restoreFiles && runsToRollback.length > 0) yield* verifyRecreation;
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }
@@ -319,7 +377,11 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (restoreFiles) yield* checkpoints.restore({ scope, checkpoint });
+      if (restoreFiles) {
+        yield* verifyRecreation;
+        yield* checkpoints.restore({ scope, checkpoint });
+      }
+      yield* completeRecreation;
       if (staleCheckpoints.length > 0) {
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });
       }
@@ -434,10 +496,17 @@ export const layer: Layer.Layer<
           // Storage cleanup removes worktrees under the same lease.
           const thread = yield* projections.getThread(input.threadId);
           const aside: { path: string | null } = { path: null };
-          yield* (
-            thread.worktreePath === null
+          const worktree = thread.worktreePath === null ? null : path.resolve(thread.worktreePath);
+          const rollback =
+            worktree === null
               ? execute(input, aside)
-              : withWorkspaceLease(path.resolve(thread.worktreePath), execute(input, aside))
+              : withWorkspaceLease(worktree, execute(input, aside));
+          // A file restore keeps turn starts out of every overlapping folder. A rewind takes no
+          // reservation, even when it recreates a missing worktree (under the folder lease only).
+          yield* (
+            worktree === null || input.restoreFiles === false
+              ? rollback
+              : withCheckpointRestoreReservation(fileSystem, path, worktree, rollback)
           ).pipe(
             // A failure after the folder was moved aside says where its files are.
             Effect.tapError(() =>

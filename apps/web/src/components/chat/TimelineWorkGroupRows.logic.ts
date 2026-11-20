@@ -1,3 +1,5 @@
+import { toServerClock } from "@goat/client-runtime/clock";
+import type { EnvironmentId } from "@goat/contracts";
 import { formatDuration } from "@goat/shared/orchestrationTiming";
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
@@ -15,6 +17,11 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
   return formatDuration(elapsedSeconds * 1_000);
 }
 
-export function formatWorkingTimerNow(startIso: string): string {
-  return formatWorkingTimer(startIso, new Date().toISOString()) ?? "0s";
+export function formatWorkingTimerNow(startIso: string, environmentId: EnvironmentId): string {
+  return (
+    formatWorkingTimer(
+      startIso,
+      new Date(toServerClock(environmentId, Date.now())).toISOString(),
+    ) ?? "0s"
+  );
 }

@@ -3,12 +3,18 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   GitCommandError,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
   ProjectId,
+  type ModelSelection,
   type PullRequestActivity,
   type PullRequestDetail,
   type PullRequestRef,
   type PullRequestStack,
+  type ServerProvider,
 } from "@goat/contracts";
+import { resolveReviewGuideModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -31,6 +37,23 @@ import * as PullRequestReviewGuideService from "./PullRequestReviewGuideService.
 import * as PullRequestService from "./PullRequestService.ts";
 
 const projectId = ProjectId.make("project-1");
+const guideProvider = (driver: string, model: string): ServerProvider => ({
+  instanceId: ProviderInstanceId.make(driver),
+  driver: ProviderDriverKind.make(driver),
+  enabled: true,
+  installed: true,
+  status: "ready",
+  auth: { status: "authenticated" },
+  version: null,
+  checkedAt: "2026-11-17T00:00:00.000Z",
+  models: [{ slug: model, name: model, isCustom: false, capabilities: null }],
+  slashCommands: [],
+  skills: [],
+});
+const codex = guideProvider("codex", "gpt-6-luna");
+const pi = guideProvider("pi", "pi-model");
+const piSelection = { instanceId: pi.instanceId, model: "pi-model" };
+const piConfig = { [pi.instanceId]: { driver: pi.driver, enabled: true } };
 const ACME_APP = {
   canonicalKey: "github.com/acme/app",
   locator: {
@@ -159,6 +182,8 @@ const makeLayer = (input: {
   readonly enabled?: boolean;
   readonly currentHead?: Ref.Ref<string>;
   readonly identity?: typeof ACME_APP;
+  readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly guideModel?: ModelSelection;
 }) =>
   PullRequestReviewGuideService.layer.pipe(
     Layer.provide(
@@ -203,7 +228,7 @@ const makeLayer = (input: {
     ),
     Layer.provide(
       Layer.succeed(ProviderRegistry.ProviderRegistry, {
-        getProviders: Effect.succeed([]),
+        getProviders: Effect.succeed(input.providers ?? [codex]),
       } as unknown as ProviderRegistry.ProviderRegistry["Service"]),
     ),
     Layer.provide(
@@ -211,7 +236,13 @@ const makeLayer = (input: {
         generateReviewGuide: input.generate,
       } as unknown as TextGeneration.TextGeneration["Service"]),
     ),
-    Layer.provide(ServerSettings.layerTest({ reviewGuidesEnabled: input.enabled ?? true })),
+    Layer.provide(
+      ServerSettings.layerTest({
+        reviewGuidesEnabled: input.enabled ?? true,
+        reviewGuideModelSelection: input.guideModel ?? null,
+        providerInstances: piConfig,
+      }),
+    ),
     Layer.provide(ServerConfig.layerTest(input.root, { prefix: "goat-review-guide-config-" })),
   );
 
@@ -362,6 +393,61 @@ const startSingleBranchRun = (input: {
   });
 
 it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideService", (it) => {
+  it.effect.each([
+    { providers: [pi, codex], availability: "with Codex available" },
+    { providers: [pi], availability: "with only Pi available" },
+  ])("guide generation agrees with Settings for explicit Pi $availability", (row) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repositories = yield* makeRepositories;
+        const stored = yield* Deferred.make<void>();
+        const dispatched: ModelSelection[] = [];
+        const context = yield* Layer.build(
+          makeLayer({
+            ...repositories,
+            stored,
+            providers: row.providers,
+            guideModel: piSelection,
+            generate: ({ modelSelection }) =>
+              Effect.sync(() => {
+                dispatched.push(modelSelection);
+                return { stops: [] };
+              }),
+          }),
+        );
+        const service = Context.get(
+          context,
+          PullRequestReviewGuideService.PullRequestReviewGuideService,
+        );
+        const runs = yield* watchRuns;
+        yield* runs.generate(service, reference);
+        const outcome = yield* runs.settled(service, reference);
+        const shown = resolveReviewGuideModelSelection(
+          {
+            ...DEFAULT_SERVER_SETTINGS,
+            reviewGuideModelSelection: piSelection,
+            providerInstances: piConfig,
+          },
+          row.providers,
+          projectId,
+          Date.parse(pi.checkedAt),
+        );
+        assert.deepStrictEqual(
+          {
+            shown,
+            dispatched,
+            error: outcome.run?._tag === "Failed" ? outcome.run.detail : null,
+          },
+          {
+            shown: piSelection,
+            dispatched: [piSelection],
+            error: null,
+          },
+        );
+      }),
+    ),
+  );
+
   it.effect.each([
     {
       name: "a branch named like the short head",

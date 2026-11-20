@@ -104,6 +104,19 @@ const holderAlive = (dir: string, holder: string): boolean | { readonly reason: 
   }
 };
 
+/** Creation locks identify a registry holder, independent of process ID reuse. */
+export const workspaceClaimHolder = () => registry?.holder;
+
+export const workspaceClaimHolderState = (holder: string): "live" | "dead" | "unknown" => {
+  const current = registry;
+  if (current === undefined) return "unknown";
+  if (holder === current.holder) return "live";
+  // A lock from another registry (for example a checkout on shared storage) is unproved.
+  if (!NodeFS.existsSync(holderFile(current.dir, holder))) return "unknown";
+  const checked = holderAlive(current.dir, holder);
+  return checked === true ? "live" : checked === false ? "dead" : "unknown";
+};
+
 const decodeRecord = (text: string): ClaimRecord | null => {
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null) return null;

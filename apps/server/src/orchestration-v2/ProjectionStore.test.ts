@@ -1,3 +1,4 @@
+import { threadWorktreePathsIncludeArchivedOnRequest } from "./ProjectionWorktreePaths.testkit.ts";
 import { PlanId } from "@goat/contracts";
 import * as NodeSqlite from "node:sqlite";
 import { assert, it, vi } from "@effect/vitest";
@@ -97,65 +98,6 @@ const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   const updated = (yield* store.getThreadProjection(threadId)).runs[0];
   assert.equal(updated?.status, "completed");
   assert.deepEqual(updated?.restartCancelledBackgroundWork, work);
-});
-
-const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const create = (id: string, input: { worktreePath: string | null; archived?: boolean }) => {
-    const threadId = ThreadId.make(id);
-    const thread = {
-      createdBy: "user" as const,
-      creationSource: "web" as const,
-      id: threadId,
-      projectId: ProjectId.make("project:worktree-paths"),
-      title: id,
-      providerInstanceId,
-      modelSelection,
-      runtimeMode: "full-access" as const,
-      interactionMode: "default" as const,
-      branch: input.worktreePath === null ? null : id,
-      worktreePath: input.worktreePath,
-      activeProviderThreadId: null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: input.archived === true ? now : null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-    return store
-      .apply({
-        id: EventId.make(`event:${id}:created`),
-        type: "thread.created",
-        threadId,
-        occurredAt: now,
-        payload: thread,
-      })
-      .pipe(Effect.as(thread));
-  };
-  yield* create("thread:active", { worktreePath: "/worktrees/active" });
-  yield* create("thread:archived", { worktreePath: "/worktrees/archived", archived: true });
-  yield* create("thread:local", { worktreePath: null });
-  const deleted = yield* create("thread:deleted", { worktreePath: "/worktrees/deleted" });
-  yield* store.apply({
-    id: EventId.make("event:thread:deleted:deleted"),
-    type: "thread.deleted",
-    threadId: deleted.id,
-    occurredAt: now,
-    payload: { ...deleted, deletedAt: now },
-  });
-
-  assert.deepEqual(yield* store.getThreadWorktreePaths(), [
-    { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
-  ]);
-  assert.deepEqual(yield* store.getThreadWorktreePaths({ includeArchived: true }), [
-    { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
-    { threadId: ThreadId.make("thread:archived"), worktreePath: "/worktrees/archived" },
-  ]);
 });
 
 it.effect("the filters every command reads with seek the rows they keep", () =>
@@ -1595,9 +1537,9 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         [threadId, "[]"],
       )).map((row) => row.detail);
       assert.isTrue(
-        // 088's thread_type_idx is not partial, so the plan must bind the type on it too.
         plan.some(
           (detail) =>
+            detail.includes("turn_items_message_ordinal_idx") ||
             detail.includes("turn_items_user_message_idx") ||
             detail.includes("turn_items_thread_type_idx (thread_id=? AND type=?)"),
         ),
@@ -1716,12 +1658,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.strictEqual(decodeThreadHistoryCursor(page.nextCursor!).p, 914);
         // A jump to an entry reads the full index and leaves it cached. With work, it scans
-        // payloads for inline output only in its page's runs, not in a run after its cursor.
+        // inline output only in its page's runs, not in a run after its cursor.
         const scannedRuns: Array<string> = [];
         yield* read("turn-item:bounded-sql-history:950").pipe(
           Effect.provideService(Statement.CurrentTransformer, (statement) => {
             const [query, params] = statement.compile();
-            if (query.includes("LIKE '%htmlRender%'")) scannedRuns.push(String(params[0]));
+            if (query.includes("item.inline_work_output = 1")) scannedRuns.push(String(params[0]));
             return Effect.succeed(statement);
           }),
         );
@@ -1947,7 +1889,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       }
       assert.strictEqual(workIds.size, 999);
       for (const toolName of ["goat.delegate_task", "mcp__goat__delegate_task"]) {
-        yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+        yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
           payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', ${toolName})
           WHERE thread_id = ${threadId} AND ordinal = 2`;
         const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
@@ -1982,13 +1924,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           "deferred",
         ).pipe(Effect.withTracer(pageRead.tracer));
         const payloadScans = pageRead.statements.filter((statement) =>
-          statement.includes("LIKE '%htmlRender%'"),
+          statement.includes("item.inline_work_output = 1"),
         );
         assert.lengthOf(payloadScans, 1);
         assert.include(payloadScans[0], "item.run_id IS json_extract(wanted.value, '$.id')");
       }
       // Until its run is scanned, a cursor on inline output is hidden inside a work group.
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
         payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', 't3-code.delegate_task')
         WHERE thread_id = ${threadId} AND ordinal = 4`;
       const sharedRunId = "run:bounded-sql-history:1";
@@ -2050,7 +1992,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             '$.status', CASE WHEN ordinal <= 700 THEN 'running' ELSE 'completed' END,
             '$.runId', CASE WHEN ordinal <= 700 THEN 'run:bounded-sql-history:300' ELSE ${sharedRunId} END)
         WHERE thread_id = ${threadId} AND ordinal >= 100`;
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'dynamic_tool', inline_work_output = 1,
         payload_json = json_set(payload_json, '$.type', 'dynamic_tool', '$.toolName', 't3-code.delegate_task')
         WHERE thread_id = ${threadId} AND ordinal = 720`;
       const beforeMissingCursor = yield* historyPage(
@@ -2070,7 +2012,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         run_id = ${sharedRunId},
         payload_json = json_set(payload_json, '$.status', 'completed', '$.runId', ${sharedRunId})
         WHERE thread_id = ${threadId} AND ordinal >= 100`;
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution',
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution', inline_work_output = 0,
         payload_json = json_set(payload_json, '$.type', 'command_execution') WHERE thread_id = ${threadId} AND ordinal IN (2, 4, 720)`;
       for (const [ordinal, status] of [
         [0, "completed"],
@@ -7103,6 +7045,26 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           ["local", targetThreadId, "command_execution"],
         ],
       );
+
+      const sourceThread = (yield* projectionStore.getThreadProjection(sourceThreadId)).thread;
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-fork-source-rollback:source-deleted"),
+        type: "thread.deleted",
+        threadId: sourceThreadId,
+        occurredAt: now,
+        payload: { ...sourceThread, deletedAt: now },
+      });
+      const afterSourceDeleted = yield* projectionStore.getShellSnapshot();
+      assert.isUndefined(afterSourceDeleted.threads.find((thread) => thread.id === sourceThreadId));
+      for (const forkId of [targetThreadId, nestedThreadId]) {
+        const expected = (yield* projectionStore.getThreadProjection(forkId)).visibleTurnItems
+          .length;
+        assert.equal((yield* projectionStore.getThreadShell(forkId))?.visibleItemCount, expected);
+        assert.equal(
+          afterSourceDeleted.threads.find((thread) => thread.id === forkId)?.visibleItemCount,
+          expected,
+        );
+      }
     }),
   );
 

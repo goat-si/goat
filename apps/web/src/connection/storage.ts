@@ -15,7 +15,8 @@ import {
   isFutureConnectionCatalog,
   type ConnectionCatalogDocument as ConnectionCatalogDocumentType,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
-  ORCHESTRATION_CACHE_SCHEMA_VERSION,
+  makeShellCacheRecord,
+  shellFromCacheRecord,
   ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION,
   StoredOrchestrationShellSnapshot,
   StoredOrchestrationThreadSnapshot,
@@ -753,7 +754,7 @@ export const layer = Layer.effectContext(
                 Effect.mapError((cause) => persistenceError("load-shell", cause)),
                 Effect.map((stored) =>
                   stored.environmentId === environmentId
-                    ? Option.some(stored.snapshot)
+                    ? Option.some(shellFromCacheRecord(stored))
                     : Option.none(),
                 ),
               ),
@@ -764,12 +765,10 @@ export const layer = Layer.effectContext(
         );
       }),
       saveShell: Effect.fn("storage.saveShell")(
-        function* (environmentId, snapshot) {
-          const encoded = yield* encodeStoredShellSnapshot({
-            schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
-            environmentId,
-            snapshot,
-          }).pipe(Effect.mapError((cause) => persistenceError("save-shell", cause)));
+        function* (environmentId, snapshot, origin) {
+          const encoded = yield* encodeStoredShellSnapshot(
+            makeShellCacheRecord(environmentId, snapshot, origin),
+          ).pipe(Effect.mapError((cause) => persistenceError("save-shell", cause)));
           yield* writeDatabaseValue(database, SHELL_STORE_NAME, environmentId, encoded);
         },
         Effect.mapError((cause) =>

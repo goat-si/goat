@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
@@ -200,6 +201,7 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
         orchestrationAdapter,
         auth: credentials.auth,
         textGeneration: {
+          ...noMemoryGeneration,
           generateCommitMessage: () => unsupported("generateCommitMessage"),
           generatePrContent: () => unsupported("generatePrContent"),
           generateBranchName: () => unsupported("generateBranchName"),

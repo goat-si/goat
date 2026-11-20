@@ -1,3 +1,4 @@
+import { compareTimestamps } from "../../lib/time";
 import { pullRequestFilterProjects } from "@goat/client-runtime/pull-request-project-filter";
 import { parsePullRequestQuery } from "@goat/client-runtime/pull-request-query";
 import {
@@ -207,21 +208,29 @@ export function retainPullRequestStatsAnswers(
     : next;
 }
 
+interface PullRequestProjectOrderGroup {
+  readonly memberProjectRefs: readonly ScopedProjectRef[];
+  readonly pinned?: boolean;
+  readonly archived?: boolean;
+}
+
 export function pullRequestProjectOrderIsEqual(
-  previous: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
-  next: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+  previous: readonly PullRequestProjectOrderGroup[],
+  next: readonly PullRequestProjectOrderGroup[],
 ) {
   return (
     previous.length === next.length &&
     previous.every((group, index) => {
-      const members = next[index]?.memberProjectRefs;
+      const candidate = next[index];
       return (
-        members !== undefined &&
-        group.memberProjectRefs.length === members.length &&
+        candidate !== undefined &&
+        group.pinned === candidate.pinned &&
+        group.archived === candidate.archived &&
+        group.memberProjectRefs.length === candidate.memberProjectRefs.length &&
         group.memberProjectRefs.every(
           (ref, member) =>
-            ref.environmentId === members[member]?.environmentId &&
-            ref.projectId === members[member]?.projectId,
+            ref.environmentId === candidate.memberProjectRefs[member]?.environmentId &&
+            ref.projectId === candidate.memberProjectRefs[member]?.projectId,
         )
       );
     })
@@ -327,7 +336,7 @@ export function mergePullRequestListEntries(
     const held = entries.get(key);
     if (!held || (entry.observedAt ?? 0) >= (held.observedAt ?? 0)) entries.set(key, entry);
   }
-  return [...entries.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return [...entries.values()].sort((a, b) => compareTimestamps(b.updatedAt, a.updatedAt));
 }
 
 export interface PullRequestListPages {
@@ -533,10 +542,10 @@ export function filterPullRequestList<
   }
   return [...unique.values()].sort((a, b) =>
     controls.sort === "created"
-      ? b.createdAt.localeCompare(a.createdAt)
+      ? compareTimestamps(b.createdAt, a.createdAt)
       : controls.sort === "oldest"
-        ? a.updatedAt.localeCompare(b.updatedAt)
-        : b.updatedAt.localeCompare(a.updatedAt),
+        ? compareTimestamps(a.updatedAt, b.updatedAt)
+        : compareTimestamps(b.updatedAt, a.updatedAt),
   );
 }
 

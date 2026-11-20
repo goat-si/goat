@@ -1,9 +1,11 @@
+import { validatedReleaseBaseUrl } from "./desktopReleaseBaseUrl.ts";
 import { DesktopShellEnvironmentSnapshot, ShellEnvironmentPatch } from "@goat/contracts";
 import { appendWellKnownCliDirs, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "@goat/shared/cliPath";
 import {
   applyShellEnvironment,
   buildEnvironmentCaptureCommand,
   listLoginShellCandidates,
+  mergePathValues,
   setWindowsPath,
 } from "@goat/shared/shell";
 import * as Context from "effect/Context";
@@ -88,6 +90,8 @@ export class DesktopShellEnvironment extends Context.Service<
 
 const LOGIN_SHELL_ENV_NAMES = [
   "PATH",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
   "DBUS_SESSION_BUS_ADDRESS",
   "DISPLAY",
   "LANG",
@@ -107,12 +111,19 @@ const LOGIN_SHELL_ENV_NAMES = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
+  "GOAT_RELEASE_BASE_URL",
   "GOAT_TELEMETRY_ENABLED",
   "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
   "__MISE_DIFF",
   "JAVA_HOME",
 ] as const;
-const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
+const WINDOWS_PROFILE_ENV_NAMES = [
+  "PATH",
+  "FNM_DIR",
+  "FNM_MULTISHELL_PATH",
+  "GOAT_RELEASE_BASE_URL",
+] as const;
+const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
 const FALLBACK_LC_CTYPE = "en_US.UTF-8";
 const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
@@ -127,10 +138,11 @@ const trimNonEmpty = (value: string | null | undefined): Option.Option<string> =
     Option.filter((entry) => entry.length > 0),
   );
 
-const pathDelimiter = (platform: NodeJS.Platform) => (platform === "win32" ? ";" : ":");
+const nonEmptyPath = (value: string | null | undefined): Option.Option<string> =>
+  Option.fromNullishOr(value).pipe(Option.filter((entry) => entry.length > 0));
 
 const readEnvPath = (env: NodeJS.ProcessEnv): Option.Option<string> =>
-  trimNonEmpty(env.PATH ?? env.Path ?? env.path);
+  nonEmptyPath(env.PATH ?? env.Path ?? env.path);
 
 const normalizeRuntimeDir = (value: string): string => value.replace(/\/+$/u, "");
 
@@ -149,39 +161,16 @@ const linuxRuntimeDirCandidates = (
   return candidates.filter((candidate) => candidate.length > 0);
 };
 
-const pathComparisonKey = (entry: string, platform: NodeJS.Platform) => {
-  const normalized = entry.trim().replace(/^"+|"+$/g, "");
-  return platform === "win32" ? normalized.toLowerCase() : normalized;
-};
-
-const sanitizePathEntry = (entry: string, platform: NodeJS.Platform) =>
-  platform === "win32" ? entry.replaceAll('"', "") : entry;
-
 const mergePaths = (
   platform: NodeJS.Platform,
   values: ReadonlyArray<Option.Option<string>>,
-): Option.Option<string> => {
-  const delimiter = pathDelimiter(platform);
-  const entries: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of values) {
-    if (Option.isNone(value)) continue;
-
-    for (const entry of value.value.split(delimiter)) {
-      const sanitized = sanitizePathEntry(entry.trim(), platform);
-      if (sanitized.length === 0) continue;
-
-      const key = pathComparisonKey(sanitized, platform);
-      if (key.length === 0 || seen.has(key)) continue;
-
-      seen.add(key);
-      entries.push(sanitized);
-    }
-  }
-
-  return entries.length > 0 ? Option.some(entries.join(delimiter)) : Option.none();
-};
+): Option.Option<string> =>
+  Option.fromNullishOr(
+    values.reduce<string | undefined>(
+      (merged, value) => mergePathValues(merged, Option.getOrUndefined(value), platform),
+      undefined,
+    ),
+  );
 
 const knownWindowsCliDirs = (env: NodeJS.ProcessEnv): ReadonlyArray<string> => [
   ...trimNonEmpty(env.APPDATA).pipe(
@@ -353,7 +342,7 @@ const readLaunchctlPath = (env: NodeJS.ProcessEnv) =>
     command: "/bin/launchctl",
     args: ["getenv", "PATH"],
     timeout: LAUNCHCTL_TIMEOUT,
-  }).pipe(Effect.map(trimNonEmpty));
+  }).pipe(Effect.map((value) => nonEmptyPath(value.replace(/\r?\n$/, ""))));
 
 const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEnvironment")(
   function* (
@@ -410,6 +399,10 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (Option.isSome(mergedPath)) {
       setWindowsPath(config.env, mergedPath.value);
     }
+    if (profile.GOAT_RELEASE_BASE_URL !== undefined) {
+      config.env.GOAT_RELEASE_BASE_URL =
+        validatedReleaseBaseUrl(profile.GOAT_RELEASE_BASE_URL) ?? "";
+    }
     if (!config.env.FNM_DIR && profile.FNM_DIR) {
       config.env.FNM_DIR = profile.FNM_DIR;
     }
@@ -449,7 +442,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
         ? yield* readLaunchctlPath(config.env)
         : Option.none<string>();
     const mergedPath = mergePaths(config.platform, [
-      trimNonEmpty(shellEnvironment.PATH).pipe(Option.orElse(() => launchctlPath)),
+      nonEmptyPath(shellEnvironment.PATH).pipe(Option.orElse(() => launchctlPath)),
       readEnvPath(config.env),
     ]);
 
@@ -458,6 +451,12 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
     }
     if (!config.env.SSH_AUTH_SOCK && shellEnvironment.SSH_AUTH_SOCK) {
       config.env.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
+    }
+
+    const shellReleaseBase = shellEnvironment.GOAT_RELEASE_BASE_URL;
+    if (shellReleaseBase !== undefined) {
+      const valid = validatedReleaseBaseUrl(shellReleaseBase);
+      config.env.GOAT_RELEASE_BASE_URL = valid ?? "";
     }
 
     const shellPreferredEnvNames = [
@@ -498,6 +497,13 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
     // A login shell configured before the GOAT rename exports the legacy opt-out.
     adoptLegacyEnv(config.env);
 
+    if (ANDROID_SDK_ENV_NAMES.every((name) => Option.isNone(trimNonEmpty(config.env[name])))) {
+      for (const name of ANDROID_SDK_ENV_NAMES) {
+        const value = trimNonEmpty(shellEnvironment[name]);
+        if (Option.isSome(value)) config.env[name] = value.value;
+      }
+    }
+
     // Hydrate locale variables together; inherited LC_ALL can override LANG or LC_CTYPE.
     if (
       config.platform === "darwin" &&
@@ -533,7 +539,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
     }
 
     // A fallback shell's PATH is used but is not the person's, so discovery stays unfinished.
-    return answeredBy === candidates[0] && Option.isSome(trimNonEmpty(shellEnvironment.PATH));
+    return answeredBy === candidates[0] && Option.isSome(nonEmptyPath(shellEnvironment.PATH));
   },
 );
 
@@ -602,8 +608,12 @@ export const make = Effect.gen(function* () {
   ) {
     // Added here and not in refresh, so the cache keeps only what the shell answered.
     const { platform, homeDirectory } = environment;
-    const path = appendWellKnownCliDirs(shellPatch.PATH, platform, homeDirectory);
-    const patch = path ? { ...shellPatch, PATH: path } : shellPatch;
+    const invalidMirror =
+      typeof shellPatch.GOAT_RELEASE_BASE_URL === "string" &&
+      validatedReleaseBaseUrl(shellPatch.GOAT_RELEASE_BASE_URL) === undefined;
+    const safePatch = invalidMirror ? { ...shellPatch, GOAT_RELEASE_BASE_URL: null } : shellPatch;
+    const path = appendWellKnownCliDirs(safePatch.PATH, platform, homeDirectory);
+    const patch = path ? { ...safePatch, PATH: path } : safePatch;
     applyShellEnvironment(env, patch, environment.platform);
     const message: DesktopShellEnvironmentSnapshot = {
       version: 1,

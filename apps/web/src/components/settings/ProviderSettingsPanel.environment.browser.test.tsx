@@ -9,6 +9,7 @@ import {
   type UnifiedSettings,
 } from "@goat/contracts";
 import * as Duration from "effect/Duration";
+import * as Cause from "effect/Cause";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -276,6 +277,170 @@ async function setup() {
 }
 
 describe("EnvironmentProviderSettings routing", () => {
+  it("does not include a failed pending edit in a later model save", async () => {
+    await setup();
+    const first = { slug: "model-a", name: "Original A" };
+    const second = { slug: "model-b", name: "Original B" };
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [first, second] },
+        },
+      },
+    };
+    let failFirst!: () => void;
+    state.mutateProviderInstance.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          failFirst = () => resolve(AsyncResult.failure(Cause.fail(new Error("Save failed"))));
+        }),
+    );
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    const rename = async (slug: string, name: string) => {
+      await userEvent.click(screen.getByRole("button", { name: `Edit ${slug}`, exact: true }));
+      await userEvent.fill(
+        screen.getByRole("textbox", { name: "Display name", exact: true }),
+        name,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    };
+    await rename("model-a", "Failed A");
+    await rename("model-b", "Saved B");
+    expect(state.mutateProviderInstance).toHaveBeenCalledTimes(1);
+    await act(() => failFirst());
+    await vi.waitFor(() => expect(state.mutateProviderInstance).toHaveBeenCalledTimes(2));
+    expect(state.mutateProviderInstance.mock.calls[1]?.[0].instance.config.customModels).toEqual([
+      first,
+      { ...second, name: "Saved B" },
+    ]);
+  });
+
+  it("builds a second custom model edit while the first reply is still pending", async () => {
+    await setup();
+    const first = { slug: "model-a", name: "Original A" };
+    const second = { slug: "model-b", name: "Original B" };
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [first, second] },
+        },
+      },
+    };
+    const replies: Array<() => void> = [];
+    state.mutateProviderInstance.mockImplementation(
+      () => new Promise((resolve) => replies.push(() => resolve(AsyncResult.success({})))),
+    );
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    const rename = async (slug: string, name: string) => {
+      await userEvent.click(screen.getByRole("button", { name: `Edit ${slug}`, exact: true }));
+      await userEvent.fill(
+        screen.getByRole("textbox", { name: "Display name", exact: true }),
+        name,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    };
+    await rename("model-a", "Entered A");
+    await rename("model-b", "Entered B");
+    expect(state.mutateProviderInstance).toHaveBeenCalledTimes(1);
+    await act(() => replies[0]!());
+    await vi.waitFor(() => expect(state.mutateProviderInstance).toHaveBeenCalledTimes(2));
+    expect(state.mutateProviderInstance.mock.calls[1]?.[0].instance.config.customModels).toEqual([
+      { ...first, name: "Entered A" },
+      { ...second, name: "Entered B" },
+    ]);
+    await act(() => replies[1]!());
+  });
+
+  it("keeps a failed edit as a draft without copying it into a later model save", async () => {
+    await setup();
+    const first = { slug: "model-a", name: "Original A" };
+    const second = { slug: "model-b", name: "Original B" };
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [first, second] },
+        },
+      },
+    };
+    state.mutateProviderInstance.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("Save failed"))),
+    );
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit model-a" }));
+    await userEvent.fill(screen.getByRole("textbox", { name: "Display name" }), "Draft A");
+    await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await expect
+      .element(screen.getByRole("textbox", { name: "Display name" }))
+      .toHaveValue("Draft A");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit model-b" }));
+    await userEvent.fill(screen.getByRole("textbox", { name: "Display name" }), "Saved B");
+    await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await vi.waitFor(() => expect(state.mutateProviderInstance).toHaveBeenCalledTimes(2));
+    expect(state.mutateProviderInstance.mock.calls[1]?.[0].instance.config.customModels).toEqual([
+      first,
+      { ...second, name: "Saved B" },
+    ]);
+  });
+
+  it("builds a second custom model edit on the acknowledged first edit before its echo", async () => {
+    await setup();
+    const first = { slug: "model-a", name: "Original A" };
+    const second = { slug: "model-b", name: "Original B" };
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [first, second] },
+        },
+      },
+    };
+    const replies: Array<() => void> = [];
+    state.mutateProviderInstance.mockImplementation(
+      () => new Promise((resolve) => replies.push(() => resolve(AsyncResult.success({})))),
+    );
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    const rename = async (slug: string, name: string) => {
+      await userEvent.click(screen.getByRole("button", { name: `Edit ${slug}`, exact: true }));
+      await userEvent.fill(
+        screen.getByRole("textbox", { name: "Display name", exact: true }),
+        name,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    };
+    await rename("model-a", "Entered A");
+    await act(() => replies[0]!());
+    await rename("model-b", "Entered B");
+    expect(state.mutateProviderInstance.mock.calls[1]?.[0].instance.config.customModels).toEqual([
+      { ...first, name: "Entered A" },
+      { ...second, name: "Entered B" },
+    ]);
+    await act(() => replies[1]!());
+    state.settings = {
+      ...state.settings,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [{ ...first, name: "Entered A" }, second] },
+        },
+      },
+    };
+    await screen.rerender(panel({ targetInstanceId: customId }));
+    await rename("model-a", "Again A");
+    expect(state.mutateProviderInstance.mock.calls[2]?.[0].instance.config.customModels).toEqual([
+      { ...first, name: "Again A" },
+      { ...second, name: "Entered B" },
+    ]);
+    await act(() => replies[2]!());
+  });
+
   it("does not substitute another account when the requested instance was removed", async () => {
     await setup();
     await setProviders([provider()]);

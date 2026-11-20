@@ -1,3 +1,11 @@
+import {
+  FILL_VALUE,
+  RESPONSIVE_VALUE,
+  viewportSelectValue,
+  viewportSelectLabel,
+  isValidDimension,
+  rotateViewport,
+} from "./browserViewportSettings";
 import { ScreenRotationIcon } from "~/components/solar";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
@@ -46,7 +54,6 @@ import {
   resolveBrowserProfiles,
   type BrowserImportSource,
   type PreviewAppearancePreference,
-  type PreviewViewportSetting,
 } from "@goat/contracts";
 import { isValidSearchUrlTemplate } from "@goat/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@goat/shared/previewViewport";
@@ -134,9 +141,6 @@ import { importBrowserCookiesIntoTarget } from "./browserProfileImport";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 
-const FILL_VALUE = "fill";
-const RESPONSIVE_VALUE = "responsive";
-
 type BrowserProfileDataBridge = Pick<
   NonNullable<typeof previewBridge>,
   "clearCookies" | "clearCache"
@@ -188,38 +192,6 @@ const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> =
 
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
 
-const viewportSelectValue = (viewport: PreviewViewportSetting): string => {
-  if (viewport._tag === "fill") return FILL_VALUE;
-  if (
-    viewport._tag === "preset" &&
-    PREVIEW_VIEWPORT_PRESETS.some((preset) => preset.id === viewport.presetId)
-  ) {
-    return viewport.presetId;
-  }
-  return RESPONSIVE_VALUE;
-};
-
-/** Inline options lack an items map; bare SelectValue would display the stored fill token. */
-const viewportSelectLabel = (viewport: PreviewViewportSetting): string => {
-  const value = viewportSelectValue(viewport);
-  if (value === FILL_VALUE) return "Fill panel";
-  if (value === RESPONSIVE_VALUE) return "Responsive";
-  return PREVIEW_VIEWPORT_PRESETS.find((preset) => preset.id === value)?.label ?? "Responsive";
-};
-
-const isValidDimension = (value: number) =>
-  Number.isInteger(value) &&
-  value >= PREVIEW_VIEWPORT_MIN_DIMENSION &&
-  value <= PREVIEW_VIEWPORT_MAX_DIMENSION;
-
-const rotateViewport = (
-  viewport: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }>,
-): PreviewViewportSetting => ({
-  ...viewport,
-  width: viewport.height,
-  height: viewport.width,
-});
-
 function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
   const viewport = useClientSettings((settings) => settings.browserDefaultViewport);
   const updateSettings = useUpdateScopedSettings();
@@ -269,6 +241,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
   return (
     <SettingsRow
       {...searchableSetting("browser-default-viewport")}
+      devicePreference
       description="Tab size for you and agents. Fill fits the panel; other sizes show the device toolbar."
       resetAction={
         !disabled && viewport._tag !== DEFAULT_BROWSER_VIEWPORT._tag ? (
@@ -377,6 +350,7 @@ function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
   return (
     <SettingsRow
       {...searchableSetting("browser-default-zoom")}
+      devicePreference
       description="Page zoom applied to new browser tabs."
       resetAction={
         !disabled && zoomFactor !== DEFAULT_PREVIEW_ZOOM_FACTOR ? (
@@ -420,6 +394,7 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
   return (
     <SettingsRow
       {...searchableSetting("browser-default-appearance")}
+      devicePreference
       description="The color scheme pages are told to prefer. System follows your OS setting."
       resetAction={
         !disabled && appearance !== DEFAULT_PREVIEW_APPEARANCE ? (
@@ -467,6 +442,7 @@ function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolea
     <>
       <SettingsRow
         {...searchableSetting("browser-recording-key-presses")}
+        devicePreference
         description="Show pressed keys and shortcuts in new recordings. Password fields are excluded."
         control={
           <Switch
@@ -481,6 +457,7 @@ function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolea
       />
       <SettingsRow
         {...searchableSetting("browser-recording-mouse-presses")}
+        devicePreference
         description="Highlight mouse presses and held buttons in new recordings."
         control={
           <Switch
@@ -504,6 +481,7 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
   return (
     <SettingsRow
       {...searchableSetting("browser-recording-frame-rate")}
+      devicePreference
       description="Maximum recording rate. 30 fps saves CPU and storage; 60 fps is smoother."
       resetAction={
         !disabled && frameRate !== DEFAULT_BROWSER_RECORDING_FRAME_RATE ? (
@@ -558,6 +536,7 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
   return (
     <SettingsRow
       {...searchableSetting("browser-link-target")}
+      devicePreference
       description="Where links in the chat and terminal open. Hold ⌘ or Ctrl while clicking a link to open it in your default browser either way."
       resetAction={
         !disabled && linkTarget !== DEFAULT_BROWSER_LINK_TARGET ? (
@@ -612,6 +591,7 @@ function BrowserSearchEngineSetting() {
     <>
       <SettingsRow
         {...searchableSetting("browser-search-engine")}
+        devicePreference
         description="What the address bar searches when you type something that isn't a URL."
         resetAction={
           engine !== DEFAULT_BROWSER_SEARCH_ENGINE || customUrl !== "" ? (
@@ -652,6 +632,7 @@ function BrowserSearchEngineSetting() {
       {engine === "custom" ? (
         <SettingsRow
           title="Custom search URL"
+          devicePreference
           description="Use %s where the search terms go."
           status={
             isValidSearchUrlTemplate(customUrl)
@@ -685,6 +666,7 @@ function PullRequestLinksOpenInAppSetting() {
   return (
     <SettingsRow
       {...searchableSetting("pull-request-links-open-in-app")}
+      devicePreference
       description="Clicking a pull request link opens it in GOAT. Turn off to open pull request links like any other link, on your git host."
       resetAction={
         openInApp ? null : (
@@ -986,6 +968,7 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
   return (
     <SettingsRow
       {...searchableSetting("browser-auto-show-floating-preview")}
+      devicePreference
       description="Show the floating preview when an agent opens a browser or device unless the agent says otherwise."
       resetAction={
         !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
@@ -1020,6 +1003,8 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   // Profile edits pair with profile data on disk, so they save for this device in every scope.
   const updateSettings = useUpdatePrimarySettings();
   const updateDefaultProfile = useUpdateScopedSettings();
+  const { scope } = useSettingsScope();
+  const defaultProfileReadOnly = scope.kind === "project" || scope.kind === "checkout";
   const { environments, isReady: environmentsReady } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
   const [sources, setSources] = useState<ReadonlyArray<BrowserImportSource> | null>(null);
@@ -1349,7 +1334,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     </>
                   ) : null}
                   <MenuItem
-                    disabled={!settingsHydrated || isDefault}
+                    disabled={!settingsHydrated || isDefault || defaultProfileReadOnly}
                     onClick={() => {
                       if (settingsHydrated) {
                         updateDefaultProfile({ browserDefaultProfileId: profile.id });

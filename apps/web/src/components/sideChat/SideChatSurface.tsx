@@ -56,7 +56,8 @@ export function SideChatSurface({
   const parentRef = scopeThreadRef(environmentId, parent.id);
   const parentKey = scopedThreadKey(parentRef);
   const shells = useThreadShells();
-  const sideThread = findSideChatThread(shells, parentRef);
+  const selectedSideChat = useSideChatStore((state) => state.selectedSideChats[parentKey]);
+  const sideThread = findSideChatThread(shells, parentRef, selectedSideChat);
 
   const forkAsSideChat = useOrchestrationCommand(threadEnvironment.forkAsSideChat, {
     reportFailure: false,

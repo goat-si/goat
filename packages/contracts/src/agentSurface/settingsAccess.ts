@@ -11,7 +11,13 @@ export type SettingsAccess =
   | { readonly access: "path"; readonly path: AgentSurfacePath }
   | { readonly access: "person"; readonly reason: string };
 
-export type SettingsKey = keyof typeof ServerSettingsPatch.fields | "memoryOwnerSourceReadPolicy";
+export type SettingsKey =
+  | keyof typeof ServerSettingsPatch.fields
+  | "memoryOwnerSourceReadPolicy"
+  | "defaultTheme"
+  | "defaultThemeSetAt"
+  | "defaultAppearance"
+  | "defaultAppearanceSetAt";
 
 const agent = { access: "agent" } as const;
 const path = (owner: AgentSurfacePath) => ({ access: "path", path: owner }) as const;
@@ -22,6 +28,10 @@ const HOLDS_SECRETS = "It holds credentials; a person enters them in Settings.";
 
 export const SETTINGS_ACCESS = {
   disabledGlobalSkills: agent,
+  defaultTheme: path("theme.set"),
+  defaultThemeSetAt: path("theme.set"),
+  defaultAppearance: path("theme.set"),
+  defaultAppearanceSetAt: path("theme.set"),
   mcpServers: person("It runs commands and holds credentials; a person configures it."),
   speech: person("A person controls local speech model configuration."),
   setModelFavorites: agent,
@@ -49,6 +59,7 @@ export const SETTINGS_ACCESS = {
   channelAutoPlacement: agent,
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,
+  keepAwakeWhileAgentsWork: person("A person controls whether this machine is allowed to sleep."),
   continueThreadsAfterServerUpdate: agent,
   codexTurnsSurviveServerStop: agent,
   codexAppServerIsolation: agent,
@@ -69,6 +80,9 @@ export const SETTINGS_ACCESS = {
     "Each entry replaces a project's whole override set, including runtime mode, agent access and provider overrides. Project defaults go through project.update and project standing instructions through environment.preferences_update.",
   ),
   enableAgentDeviceAccess: person(GRANTS_AGENTS),
+  enableAgentThemeWrites: person(
+    "An agent must not grant itself permission to publish environment themes.",
+  ),
   agentToolListing: agent,
   enableDeviceSupport: person("It turns on control of phones and simulators on this machine."),
   enableCua: path("computer_use.update"),
@@ -132,6 +146,9 @@ export const SETTINGS_ACCESS = {
   textGenerators: person(HOLDS_SECRETS),
   secretProviders: person(HOLDS_SECRETS),
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
+  usageHistoryRetentionDays: person(
+    "Shorter retention can permanently remove saved usage history.",
+  ),
   usagePriceOverrides: agent,
   usageModelAliases: agent,
   usageModelFilter: agent,
@@ -144,6 +161,8 @@ export const SETTINGS_ACCESS = {
  * reviewer accepts; a setting that only needs a value stored is classified agent instead.
  */
 export const SETTINGS_WRITE_EXCEPTIONS = {
+  "theme.set":
+    "Validates and publishes a theme, then selects it as the environment default atomically.",
   "environment.preferences_update":
     "The first settings tool, kept for callers that use it; it also edits project standing instructions inside project overrides.",
   "thread.replication_set": "Changes checkpoint capture policy for a host alias.",

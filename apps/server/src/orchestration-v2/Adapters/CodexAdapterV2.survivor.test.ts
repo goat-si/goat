@@ -42,7 +42,7 @@ import {
   makeCodexThreadGoal,
   makeReplayServerConfig,
 } from "./CodexAdapterV2.testkit.ts";
-import { layerTest } from "./CodexAdapterV2.survivor.testkit.ts";
+import { layerTest, makeSurvivorInputEvidence } from "./CodexAdapterV2.survivor.testkit.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -563,7 +563,9 @@ const runScenario = (
       assert.notInclude(requests, "turn/start");
       return;
     }
+    const evidence = makeSurvivorInputEvidence();
     const turnInput = {
+      ...(mode === "running" ? { inputDelivery: evidence.inputDelivery } : {}),
       ...makeCodexTestTurnInput({
         threadId,
         providerThread,
@@ -583,6 +585,7 @@ const runScenario = (
     const start = yield* runtime.startTurn(turnInput).pipe(Effect.exit);
     assert.equal(start._tag, "Success");
     yield* Deferred.await(readStarted);
+    if (mode === "running") assert.equal(evidence.inheritedCount(), 1);
     const stopEvents =
       (stopMode && mode !== "stop-fence") || goalMode || lossMode || readFailure
         ? yield* runtime.events.pipe(

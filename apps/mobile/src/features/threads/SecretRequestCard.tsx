@@ -12,13 +12,19 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import {
+  AuthProvidersManageScope,
+  type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@goat/contracts";
 import { useRef, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SecretTextInput } from "../../components/ui/SecretTextInput";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../../components/ui/Button";
 
@@ -98,9 +104,11 @@ function PendingSecretRequestForm(props: {
   });
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
-  const providers = config?.secretRequestReferences
-    ? secretRequestProviders(settings?.secretProviders)
-    : [];
+  const canManageProviders = useEnvironmentScope(props.environmentId, AuthProvidersManageScope);
+  const providers =
+    config?.secretRequestReferences && canManageProviders
+      ? secretRequestProviders(settings?.secretProviders)
+      : [];
   const [providerId, setProviderId] = useState("");
   const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");
@@ -204,7 +212,7 @@ function PendingSecretRequestForm(props: {
           />
         ))
       ) : (
-        <TextInput
+        <SecretTextInput
           accessibilityLabel={login ? "Password" : item.label}
           placeholder={
             login
@@ -217,29 +225,21 @@ function PendingSecretRequestForm(props: {
           onChangeText={setSecret}
           editable={canAnswer && !submitting}
           onFocus={markOpened}
-          secureTextEntry
-          autoCorrect={false}
-          autoCapitalize="none"
-          autoComplete="off"
-          textContentType="none"
-          importantForAutofill="no"
-          spellCheck={false}
-          returnKeyType="done"
-          onSubmitEditing={() =>
+          onSubmitEditing={(value) =>
             void send(
               login
                 ? {
                     type: "save_login",
                     username,
-                    password: secret,
+                    password: value,
                     authenticatorSetupKey: setupKey,
                   }
                 : selectedProvider
                   ? {
                       type: "reference",
-                      reference: { provider: selectedProvider.id, reference: secret },
+                      reference: { provider: selectedProvider.id, reference: value },
                     }
-                  : { type: "save", secret },
+                  : { type: "save", secret: value },
             )
           }
         />

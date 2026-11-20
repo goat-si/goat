@@ -133,6 +133,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
   ),
+  goat_message_show: tool(["Send", "Sending", "Sent", "a message"], "message-show"),
   goat_background_wait: tool(
     ["Update", "Updating", "Updated", "background waits"],
     "background-wait",
@@ -435,6 +436,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment settings"],
     "environment-update",
   ),
+  goat_theme_set: tool(["Set", "Setting", "Set", "environment theme"], "environment-update"),
   goat_docs_search: tool(["Search", "Searching", "Searched", "GOAT docs"], "environment-read"),
   goat_docs_read: tool(["Read", "Reading", "Read", "GOAT docs"], "environment-read"),
   goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),

@@ -1,5 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the executed suite runs the generated install script through a real POSIX shell.
-import { describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Option from "effect/Option";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import { afterAll, expect } from "vite-plus/test";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -12,14 +16,25 @@ import {
   LEGACY_WSL_RUNTIME_SELECTED_MARKER,
 } from "@goat/contracts/legacyT3Names";
 
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { layerEnvironment } from "../backend/DesktopBackendConfiguration.testkit.ts";
+import {
+  DesktopWslEnvironment,
+  layer as layerWsl,
+  buildWslRuntimeProbeScript,
+  parseResolvedPath,
+  windowsToWslPathImpl,
+} from "./DesktopWslEnvironment.ts";
 import {
   buildWslRuntimeInstallScript,
   buildWslRuntimeInvalidateScript,
   buildWslRuntimePruneScript,
-  buildWslRuntimeProbeScript,
-  parseResolvedPath,
   parseWslRuntimeRoot,
-} from "./DesktopWslEnvironment.ts";
+} from "./wslRuntimeCache.ts";
 
 // The install script only fails the way this file cares about when a real shell
 // runs it, so find one that has the tools it needs: bash directly on Linux, and
@@ -267,7 +282,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         "  }",
         '  eval "$2"',
         "); }",
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 
@@ -302,7 +317,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
       [
         "bash() { return 127; }",
         'export PATH="/fixture/bin:/usr/bin:/bin"',
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 
@@ -550,6 +565,10 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
   );
 });
 
+it("resolves the WSL environment without re-running the staged CLI", () => {
+  expect(buildWslRuntimeProbeScript()).not.toContain(" --version >/dev/null 2>&1");
+});
+
 describe("parseResolvedPath", () => {
   it("preserves spaces and apostrophes in the resolved login-shell PATH", () => {
     const resolvedPath = "/home/test user/bin:/opt/test's tools/bin:/usr/bin:/bin";
@@ -563,4 +582,124 @@ describe("parseResolvedPath", () => {
       "/usr/local/bin:/usr/bin",
     );
   });
+});
+
+it.live("streams the archive into the selected distro when wslpath cannot translate it", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-wsl-archive-" });
+    const archive = path.join(root, "host.tar.gz");
+    const stage = path.join(root, "stage");
+    const linuxStage = "/home/goat/archive-stage";
+    const linuxCache = "/home/goat/cache";
+    const payload = Uint8Array.of(0, 1, 127, 128, 255);
+    yield* fs.writeFile(archive, payload);
+    const fakeWsl = Layer.effect(
+      ChildProcessSpawner.ChildProcessSpawner,
+      Effect.map(ChildProcessSpawner.ChildProcessSpawner, (local) =>
+        ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) return local.spawn(command);
+          const [flag, distro, , utility, ...args] = command.args;
+          expect([command.command, flag, distro]).toEqual(["wsl.exe", "-d", "Ubuntu"]);
+          if (utility === "wslpath") {
+            return local.spawn(ChildProcess.make(process.execPath, ["-e", "process.exit(1)"]));
+          }
+          if (utility === "dd") expect(args[0]).toBe(`of=${linuxStage}/runtime.tar.gz`);
+          return local.spawn(
+            ChildProcess.make(
+              process.execPath,
+              [
+                "-e",
+                `
+                const fs = require("node:fs");
+                const path = require("node:path");
+                const [utility, stage, archive, linuxStage, linuxCache] = process.argv.slice(1);
+                const input = fs.readFileSync(0);
+                const stagedArchive = path.join(stage, "runtime.tar.gz");
+                if (utility === "dd") fs.writeFileSync(stagedArchive, input);
+                else if (input.includes("archiveStage:")) {
+                  fs.mkdirSync(stage);
+                  console.log("archiveStage:" + linuxStage);
+                } else if (input.includes("archive_sha")) {
+                  if (!input.includes("a".repeat(64)) ||
+                      !fs.readFileSync(stagedArchive).equals(fs.readFileSync(archive))) process.exit(1);
+                  console.log("runtimeRoot:" + linuxCache);
+                } else if (input.toString().startsWith("rm -rf ")) {
+                  fs.rmSync(stage, { recursive: true });
+                } else process.exit(1);
+              `,
+                String(utility),
+                stage,
+                archive,
+                linuxStage,
+                linuxCache,
+              ],
+              command.options,
+            ),
+          );
+        }),
+      ),
+    );
+    const result = yield* Effect.flatMap(DesktopWslEnvironment, (wsl) =>
+      wsl.prepareRuntime("Ubuntu", {
+        windowsPath: archive,
+        runtimeId: "goat-test",
+        sha256: "a".repeat(64),
+      }),
+    ).pipe(
+      Effect.provide(
+        layerWsl.pipe(
+          Layer.provide(Layer.mergeAll(fakeWsl, layerEnvironment(root, { platform: "win32" }))),
+        ),
+      ),
+    );
+    expect(result).toEqual({ ok: true, linuxAppRoot: linuxCache });
+    expect(yield* fs.exists(stage)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+describe("windowsToWslPathImpl", () => {
+  it.effect("runs wslpath without a shell so folder names stay one literal argument", () =>
+    Effect.gen(function* () {
+      const spawned: Array<ChildProcess.Command> = [];
+      const stdout = Stream.make(new TextEncoder().encode("/mnt/c/a$b & c;(d)\n"));
+      const spawner = ChildProcessSpawner.make((command) => {
+        spawned.push(command);
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            stdout,
+            stderr: Stream.empty,
+            all: stdout,
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            stdin: Sink.drain,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+            unref: Effect.succeed(Effect.void),
+          }),
+        );
+      });
+
+      const converted = yield* windowsToWslPathImpl("Ubuntu", "C:\\a$b & c;(d)").pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+
+      assert.deepStrictEqual(converted, Option.some("/mnt/c/a$b & c;(d)"));
+      assert.lengthOf(spawned, 1);
+      const [command] = spawned;
+      assert(command?._tag === "StandardCommand");
+      assert.strictEqual(command.command, "wsl.exe");
+      assert.deepStrictEqual(command.args, [
+        "-d",
+        "Ubuntu",
+        "--exec",
+        "wslpath",
+        "-u",
+        "C:/a$b & c;(d)",
+      ]);
+    }),
+  );
 });

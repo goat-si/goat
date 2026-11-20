@@ -32,6 +32,7 @@ import {
   layerQueryRunner,
 } from "./ClaudeAdapterV2.ts";
 import { spawnClaudeProcessGroup } from "./ClaudeProcessSpawn.ts";
+import { claudeProcessExitFailure } from "./ClaudeQueryRunnerErrors.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -251,6 +252,7 @@ it.effect("reopens a stalled MCP registration before delivering the resumed prom
         if (typeof prompt === "string") throw new Error("Expected streaming input");
         prompts.push(prompt);
         return {
+          initializationResult: async () => ({}),
           setMcpServers: prompts.length === 1 ? firstRegistration : secondRegistration,
           close: prompts.length === 1 ? firstClose : secondClose,
           [Symbol.asyncDispose]: async () => {
@@ -325,6 +327,7 @@ it.effect.each([true, false])("only retries after confirmed process exit: %s", (
           cleanupProgress.resolve("retry");
         }
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             registrationStarted.resolve();
             return first
@@ -375,6 +378,7 @@ it.effect("stops retrying MCP registration after two timeouts and reports the ca
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
         const started = querySpy.mock.calls.length === 1 ? firstRegistration : secondRegistration;
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             started.resolve();
             return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -414,6 +418,7 @@ it.effect("a failed open keeps its typed error when the query's disposal also fa
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
         const started = registrations[querySpy.mock.calls.length - 1];
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             started?.resolve();
             return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -449,6 +454,7 @@ it.effect("cancels a stalled registration without retrying or retaining its prom
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
         () =>
           ({
+            initializationResult: async () => ({}),
             setMcpServers: () => {
               registrationStarted.resolve();
               return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -471,16 +477,17 @@ it.effect("cancels a stalled registration without retrying or retaining its prom
   ),
 );
 
-it.effect("does not reuse a fresh session ID after MCP registration times out", () =>
+it.effect("does not reuse a fresh session ID after MCP registration times out twice", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const registrationStarted = Promise.withResolvers<void>();
+      const registrations = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
       const disposed = vi.fn(async () => {});
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
         () =>
           ({
+            initializationResult: async () => ({}),
             setMcpServers: () => {
-              registrationStarted.resolve();
+              registrations[querySpy.mock.calls.length - 1]?.resolve();
               return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
             },
             [Symbol.asyncDispose]: disposed,
@@ -495,13 +502,69 @@ it.effect("does not reuse a fresh session ID after MCP registration times out", 
           options: { ...options, sessionId: resume },
         })
         .pipe(Effect.result, Effect.forkChild);
-      yield* Effect.promise(() => registrationStarted.promise);
+      yield* Effect.promise(() => registrations[0]!.promise);
+      yield* TestClock.adjust("90 seconds");
+      yield* Effect.promise(() => registrations[1]!.promise);
       yield* TestClock.adjust("90 seconds");
       const result = yield* Fiber.join(opening);
 
       assert.equal(result._tag, "Failure");
-      assert.equal(querySpy.mock.calls.length, 1);
-      assert.equal(disposed.mock.calls.length, 1);
+      assert.equal(querySpy.mock.calls.length, 2);
+      assert.notEqual(querySpy.mock.calls[1]?.[0].options?.sessionId, resume);
+      assert.equal(disposed.mock.calls.length, 2);
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);
+
+it.effect.each([
+  ["opens after a slow CLI boot", "120 seconds", true],
+  ["times out a CLI that never boots", "5 minutes", false],
+] as const)("%s", ([, bootWait, boots]) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const waiting = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const booted = Promise.withResolvers<void>();
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+        () =>
+          ({
+            initializationResult: () => {
+              waiting[querySpy.mock.calls.length - 1]?.resolve();
+              return booted.promise;
+            },
+            // The CLI answers control requests only after it has booted.
+            setMcpServers: async () => {
+              waiting[querySpy.mock.calls.length - 1]?.resolve();
+              await booted.promise;
+              return { added: ["t3-code"], removed: [], errors: {} };
+            },
+            close: vi.fn(),
+            [Symbol.asyncDispose]: async () => {},
+          }) as unknown as ClaudeSdk.Query,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const { resume, ...options } = resumedMcpQueryInput.options;
+      const opening = yield* runner
+        .open({ ...resumedMcpQueryInput, options: { ...options, sessionId: resume } })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => waiting[0]!.promise);
+      yield* TestClock.adjust(bootWait);
+      if (boots) booted.resolve();
+      else {
+        yield* Effect.promise(() => waiting[1]!.promise);
+        yield* TestClock.adjust(bootWait);
+      }
+      const result = yield* Fiber.join(opening);
+
+      assert.equal(result._tag, boots ? "Success" : "Failure");
+      if (result._tag === "Success") yield* result.success.close;
+      else
+        assert.equal(
+          makeProviderFailure({
+            cause: { _tag: "ProviderAdapterTurnStartError", cause: result.failure },
+          }).message,
+          "Claude timed out while starting up. Retry the turn; if it keeps failing, check Claude and the server logs.",
+        );
     }).pipe(Effect.provide(realQueryRunner)),
   ),
 );
@@ -578,6 +641,90 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     }),
   );
 
+  // The default AgentScope is what macOS gets: no systemd scope to catch a job outside the CLI's group.
+  it.effect("stops a job the CLI started in its own process group when the session closes", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli(
+        [
+          'dir=$(dirname "$0")',
+          `perl -e 'setpgrp(0, 0); exec @ARGV' sleep 600 > "$dir/alive" &`,
+          'echo $! > "$dir/leftover.pid"',
+          "cat > /dev/null",
+        ].join("\n"),
+      );
+      const dir = NodePath.dirname(cli);
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "alive")]);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(Number(NodeFS.readFileSync(NodePath.join(dir, "leftover.pid"), "utf8")));
+          } catch {}
+          NodeFS.rmSync(dir, { recursive: true, force: true });
+        }),
+      );
+      const alive = NodeFS.createReadStream(NodePath.join(dir, "alive"));
+      const leftoverStarted = new Promise<void>((resolve) => alive.once("open", () => resolve()));
+      const leftoverStopped = new Promise<void>((resolve) => alive.once("close", () => resolve()));
+      alive.resume();
+
+      const session = yield* openFakeCli(cli).pipe(Effect.provide(realQueryRunner));
+      yield* Effect.promise(() => leftoverStarted);
+      yield* session.close;
+      yield* Effect.promise(() => leftoverStopped);
+    }),
+  );
+
+  // Live clock: the job is found by polling while the CLI runs, and the CLI exits on its own.
+  it.live("stops a job the CLI started in its own process group when the CLI exits", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli(
+        [
+          'dir=$(dirname "$0")',
+          `perl -e 'setpgrp(0, 0); exec @ARGV' sleep 600 > "$dir/alive" &`,
+          'echo $! > "$dir/leftover.pid"',
+          "sleep 3",
+        ].join("\n"),
+      );
+      const dir = NodePath.dirname(cli);
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "alive")]);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(Number(NodeFS.readFileSync(NodePath.join(dir, "leftover.pid"), "utf8")));
+          } catch {}
+          NodeFS.rmSync(dir, { recursive: true, force: true });
+        }),
+      );
+      const alive = NodeFS.createReadStream(NodePath.join(dir, "alive"));
+      const leftoverStopped = new Promise<void>((resolve) => alive.once("close", () => resolve()));
+      alive.resume();
+
+      // The runner layer owns the poll, so it stays open until the CLI has exited, as in the server.
+      yield* openFakeCli(cli);
+      yield* Effect.promise(() => leftoverStopped);
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
+  // The boot deadline is for a CLI that hangs; one that exits is reported by its exit.
+  it.effect("a CLI that exits during boot reports its exit, not a start-up timeout", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli("exit 3");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(NodePath.dirname(cli), { recursive: true, force: true })),
+      );
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open({
+        ...resumedMcpQueryInput,
+        options: { ...resumedMcpQueryInput.options, pathToClaudeCodeExecutable: cli },
+      });
+      const exit = yield* Stream.runDrain(session.messages).pipe(Effect.exit);
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isSuccess(exit)) return;
+      assert.equal(claudeProcessExitFailure(exit.cause)?.code, "process_exited_nonzero");
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
   const rootRefusal =
     "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons";
 
@@ -608,6 +755,53 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
 
       const unknown = yield* startupFailureMessage("token=sk-private-123");
       assert.notInclude(unknown, "sk-private-123");
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
+  it.effect("reports a missing Claude conversation without exposing its native id", () =>
+    Effect.gen(function* () {
+      const message = yield* startupFailureMessage(
+        "No conversation found with session ID: private-native-id",
+      );
+      assert.include(message, "could not find this conversation");
+      assert.notInclude(message, "private-native-id");
+    }).pipe(Effect.provide(realQueryRunner)),
+  );
+
+  // What Claude Code writes when the session store behind --resume is gone.
+  it.effect("names a resumed conversation Claude Code cannot find", () =>
+    Effect.gen(function* () {
+      const missing = "No conversation found with session ID: native-session-fake-cli";
+      const result = JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        num_turns: 0,
+        duration_ms: 0,
+        duration_api_ms: 0,
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        errors: [missing],
+        session_id: "native-session-fake-cli",
+        uuid: "00000000-0000-4000-8000-000000000000",
+      });
+      const cli = fakeClaudeCli(
+        `printf '%s\\n' '${result}'\nprintf '%s\\n' '${missing}' >&2\nexit 1`,
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(NodePath.dirname(cli), { recursive: true, force: true })),
+      );
+      const session = yield* openFakeCli(cli);
+      const exit = yield* Stream.runDrain(session.messages).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.include(
+          makeProviderFailure({ cause: exit.cause, class: "transport_error" }).message,
+          "could not find this conversation",
+        );
+      }
     }).pipe(Effect.provide(realQueryRunner)),
   );
 
@@ -643,6 +837,47 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
       // A dying server's descriptors close; the kernel would do this for it.
       for (const pipe of child.stdio) pipe?.destroy();
       yield* Effect.promise(() => turnStopped);
+    }),
+  );
+
+  // A restarted server reaps recorded CLIs, so a CLI must never run before its record exists.
+  it.effect("records the CLI before it runs and forgets it once it exits", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli(
+        ['dir=$(dirname "$0")', 'printf \'%s %s\' "$$" "$(cat "$dir/record")" > "$dir/seen"'].join(
+          "\n",
+        ),
+      );
+      const dir = NodePath.dirname(cli);
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "seen")]);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+      );
+      const forgotten = yield* Deferred.make<void>();
+      let registered = 0;
+      spawnClaudeProcessGroup(
+        {
+          command: cli,
+          args: [],
+          cwd: dir,
+          env: process.env,
+          // @effect-diagnostics-next-line abortControllerInEffect:off - The CLI exits on its own.
+          signal: new AbortController().signal,
+        },
+        undefined,
+        undefined,
+        undefined,
+        (pid) => {
+          registered = pid;
+          NodeFS.writeFileSync(NodePath.join(dir, "record"), String(pid));
+          return () => Deferred.doneUnsafe(forgotten, Effect.void);
+        },
+      );
+      const seen = yield* Effect.promise(() =>
+        NodeFS.promises.readFile(NodePath.join(dir, "seen"), "utf8"),
+      );
+      assert.equal(seen, `${registered} ${registered}`);
+      yield* Deferred.await(forgotten);
     }),
   );
 });
@@ -683,3 +918,64 @@ if (HostProcess.Platform.defaultValue() !== "win32") {
     ),
   );
 }
+
+it.effect("filters only the synchronous SDK shadow warning during query startup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
+        process.emitWarning("shadowed", { code: "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED" });
+        process.emitWarning("other", { code: "OTHER_WARNING" });
+        return {
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
+          close: () => {},
+          [Symbol.asyncDispose]: async () => {},
+        } as unknown as ClaudeSdk.Query;
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          warning.mockRestore();
+          querySpy.mockRestore();
+        }),
+      );
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open(resumedMcpQueryInput);
+      yield* Effect.addFinalizer(() => session.close.pipe(Effect.orDie));
+      assert.deepEqual(
+        warning.mock.calls.map(([, options]) =>
+          typeof options === "object" ? options.code : options,
+        ),
+        ["OTHER_WARNING"],
+      );
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);
+
+it.effect("sends a native session rename on the SDK control channel", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const request = vi.fn(async () => ({ response: {} }));
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+        () =>
+          ({
+            initializationResult: async () => ({}),
+            setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
+            request,
+            close: () => {},
+            [Symbol.asyncDispose]: async () => {},
+          }) as unknown as ClaudeSdk.Query,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open(resumedMcpQueryInput);
+      yield* Effect.addFinalizer(() => session.close.pipe(Effect.orDie));
+      assert.isDefined(session.renameSession);
+      if (session.renameSession === undefined) return;
+      yield* session.renameSession("A title");
+      assert.deepEqual(request.mock.calls, [
+        [{ subtype: "rename_session", title: "A title", source: "host" }],
+      ]);
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);

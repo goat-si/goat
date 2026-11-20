@@ -5,17 +5,22 @@ import { act, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
+import { NativeWorkspaceTabActivityContext } from "../../native/v5-workspace-context";
 import type { WorkspaceEnvironment } from "../../state/workspaceModel";
 import type { PullRequestEnvironmentTarget } from "./pullRequestEnvironmentFallback";
 
 const mocks = vi.hoisted(() => ({
   environments: [] as ReadonlyArray<WorkspaceEnvironment>,
+  focused: true,
   isReady: true,
   projects: [] as ReadonlyArray<EnvironmentProject>,
   navigation: { setParams: vi.fn<(params: Partial<PullRequestEnvironmentTarget>) => void>() },
 }));
 
-vi.mock("@react-navigation/native", () => ({ useNavigation: () => mocks.navigation }));
+vi.mock("@react-navigation/native", () => ({
+  useIsFocused: () => mocks.focused,
+  useNavigation: () => mocks.navigation,
+}));
 vi.mock("../../state/entities", () => ({ useProjects: () => mocks.projects }));
 vi.mock("../../state/workspace", () => ({
   useWorkspaceEnvironments: () => mocks.environments,
@@ -43,6 +48,7 @@ function environment(
 
 function setup() {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.focused = true;
   mocks.isReady = true;
   mocks.environments = [environment("requested", "connecting"), environment("copy", "connected")];
   mocks.projects = [
@@ -66,16 +72,24 @@ function setup() {
       host: "github.com",
     });
     useEffect(() => {
-      mocks.navigation.setParams.mockImplementation((next) =>
-        updateParams((previous) => ({ ...previous, ...next })),
-      );
+      mocks.navigation.setParams.mockImplementation((next) => {
+        if (!mocks.focused)
+          throw new Error("Actions cannot be dispatched from a placeholder screen.");
+        updateParams((previous) => ({ ...previous, ...next }));
+      });
     }, []);
     usePullRequestEnvironmentFallback(params);
     return <span>{`${params.environmentId}/${params.projectId}`}</span>;
   }
   return {
-    render() {
-      act(() => root.render(<Probe />));
+    render(tabActivity: React.ContextType<typeof NativeWorkspaceTabActivityContext> = null) {
+      act(() =>
+        root.render(
+          <NativeWorkspaceTabActivityContext value={tabActivity}>
+            <Probe />
+          </NativeWorkspaceTabActivityContext>,
+        ),
+      );
     },
     get target() {
       return container.textContent;
@@ -85,6 +99,26 @@ function setup() {
     },
   };
 }
+
+it("waits for the remembered pull request to open before switching to its connected copy", () => {
+  using screen = setup();
+  mocks.environments = [environment("requested", "offline"), environment("copy", "connected")];
+  mocks.focused = false;
+  screen.render({ active: false, isActive: () => false, prewarming: true });
+  expect(screen.target).toBe("requested/original");
+  expect(mocks.navigation.setParams).not.toHaveBeenCalled();
+
+  screen.render({ active: true, isActive: () => true });
+  expect(mocks.navigation.setParams).not.toHaveBeenCalled();
+
+  mocks.focused = true;
+  screen.render({ active: true, isActive: () => true });
+  expect(screen.target).toBe("copy/copy-project");
+  expect(mocks.navigation.setParams).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "copy",
+    projectId: "copy-project",
+  });
+});
 
 it("keeps the requested target while the catalog initializes or its enabled connection is pending", () => {
   using screen = setup();

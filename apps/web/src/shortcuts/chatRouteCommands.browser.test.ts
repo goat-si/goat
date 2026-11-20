@@ -1,17 +1,45 @@
+import { AuthPreviewOperateScope, EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { readPreviewFindAvailable } from "../components/preview/findAvailability";
+import { subscribePreviewAction } from "../components/preview/previewActionBus";
+import { readEnvironmentScope } from "../state/session";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { installChatRouteCommands } from "./chatRouteCommands";
+import { registerCommands } from "./dispatcher";
+import { DraftId, useComposerDraftStore } from "../composerDraftStore";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "../state/server";
+import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
+import { Atom } from "effect/reactivity";
 
-type Match = { readonly routeId: string; readonly pathname: string };
+vi.mock("../components/preview/findAvailability", { spy: true });
+vi.mock("../state/session", { spy: true });
+vi.mock(import("../state/server"), async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  const { compileResolvedKeybindingsConfig } = await import("@goat/shared/keybindings");
+  return {
+    ...(await original()),
+    primaryServerKeybindingsAtom: Atom.make(
+      compileResolvedKeybindingsConfig([{ key: "f", command: "preview.find" }]),
+    ),
+  };
+});
+
+type Match = {
+  readonly routeId: string;
+  readonly pathname: string;
+  readonly params?: Record<string, string>;
+};
 
 function routerAt(matches: Match[]) {
-  const state = { matches: matches.map((match) => ({ ...match, params: {} })) };
+  const withParams = (match: Match) => ({ ...match, params: match.params ?? {} });
+  const state = { matches: matches.map(withParams) };
   return {
     router: { state } as unknown as AnyRouter,
     navigate: (next: Match[]) => {
-      state.matches = next.map((match) => ({ ...match, params: {} }));
+      state.matches = next.map(withParams);
     },
   };
 }
@@ -21,11 +49,13 @@ const CHAT: Match[] = [
   { routeId: "/_chat", pathname: "/" },
 ];
 
-function pressEscape(): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+function pressKey(key: string): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { key, cancelable: true, bubbles: true });
   window.dispatchEvent(event);
   return event;
 }
+
+const pressEscape = () => pressKey("Escape");
 
 function selectThread(threadKey: string) {
   useThreadSelectionStore.getState().clearSelection();
@@ -33,6 +63,100 @@ function selectThread(threadKey: string) {
 }
 
 describe("chat route commands", () => {
+  it("checks the current draft environment for preview refresh permission", () => {
+    const draftId = DraftId.make("draft-refresh");
+    const first = EnvironmentId.make("first");
+    const second = EnvironmentId.make("second");
+    const projectId = ProjectId.make("project-refresh");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId({ environmentId: first, projectId }, draftId);
+    const keybindingsAtom = primaryServerKeybindingsAtom as Atom.Writable<
+      ReturnType<typeof compileResolvedKeybindingsConfig>
+    >;
+    const original = appAtomRegistry.get(keybindingsAtom);
+    appAtomRegistry.set(
+      keybindingsAtom,
+      compileResolvedKeybindingsConfig([{ key: "r", command: "preview.refresh" }]),
+    );
+    const { router } = routerAt([
+      ...CHAT,
+      { routeId: "/_chat/draft/$draftId", pathname: `/draft/${draftId}`, params: { draftId } },
+    ]);
+    const onPreviewAction = vi.fn();
+    const scope = vi.mocked(readEnvironmentScope).mockImplementation((id) => id === first);
+    using stack = new DisposableStack();
+    stack.defer(() => scope.mockRestore());
+    stack.defer(() => appAtomRegistry.set(keybindingsAtom, original));
+    stack.defer(() => useComposerDraftStore.getState().clearDraftThread(draftId));
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+    pressKey("r");
+    expect(onPreviewAction).toHaveBeenCalledExactlyOnceWith("refresh");
+    useComposerDraftStore
+      .getState()
+      .setDraftThreadContext(draftId, { projectRef: { environmentId: second, projectId } });
+    pressKey("r");
+    expect(scope).toHaveBeenLastCalledWith(second, AuthPreviewOperateScope);
+    expect(onPreviewAction).toHaveBeenCalledTimes(1);
+  });
+  it("routes preview find on a draft using its current environment and reserved thread", () => {
+    const draftId = DraftId.make("draft-preview");
+    const environmentId = EnvironmentId.make("draft-environment");
+    const threadId = ThreadId.make("draft-thread");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId({ environmentId, projectId: ProjectId.make("project") }, draftId, {
+        threadId,
+      });
+    const { router } = routerAt([
+      ...CHAT,
+      { routeId: "/_chat/draft/$draftId", pathname: `/draft/${draftId}`, params: { draftId } },
+    ]);
+    const onPreviewAction = vi.fn();
+    const available = vi.mocked(readPreviewFindAvailable).mockReturnValue(true);
+    using stack = new DisposableStack();
+    stack.defer(() => available.mockRestore());
+    stack.defer(() => useComposerDraftStore.getState().clearDraftThread(draftId));
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+    expect(pressKey("f").defaultPrevented).toBe(true);
+    expect(available).toHaveBeenCalledWith({ environmentId, threadId });
+    expect(onPreviewAction).toHaveBeenCalledExactlyOnceWith("find");
+  });
+  it("lets a lower shortcut scope handle Find when the preview cannot search", () => {
+    const { router } = routerAt(CHAT);
+    const lower = vi.fn();
+    using stack = new DisposableStack();
+    stack.defer(registerCommands({ "preview.find": lower }));
+    stack.defer(installChatRouteCommands(router));
+
+    expect(pressKey("f").defaultPrevented).toBe(false);
+    expect(lower).toHaveBeenCalledOnce();
+  });
+
+  it("dispatches Find for a searchable preview without browser operate permission", () => {
+    const environmentId = EnvironmentId.make("read-only-env");
+    const { router } = routerAt([
+      ...CHAT,
+      {
+        routeId: "/_chat/$environmentId/$threadId",
+        pathname: "/read-only-env/thread-1",
+        params: { environmentId, threadId: "thread-1" },
+      },
+    ]);
+    const onPreviewAction = vi.fn();
+    const available = vi.mocked(readPreviewFindAvailable).mockReturnValue(true);
+    using stack = new DisposableStack();
+    stack.defer(() => available.mockRestore());
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+
+    expect(readEnvironmentScope(environmentId, AuthPreviewOperateScope)).toBe(false);
+    expect(pressKey("f").defaultPrevented).toBe(true);
+    expect(onPreviewAction).toHaveBeenCalledExactlyOnceWith("find");
+  });
+
   it("clears a selection made after install, reading the store at keypress time", () => {
     const { router } = routerAt(CHAT);
     using stack = new DisposableStack();

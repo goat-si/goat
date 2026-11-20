@@ -353,7 +353,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "re-registers GOAT MCP each turn and drops its instructions when adding fails",
   ],
   [
-    "apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.test.ts",
+    "apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.sessions.test.ts",
     "keeps thread-scoped T3 waits as dynamic tools through their lifecycle",
     "keeps thread-scoped GOAT waits as dynamic tools through their lifecycle",
   ],

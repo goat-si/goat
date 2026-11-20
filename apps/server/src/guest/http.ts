@@ -19,8 +19,11 @@ import {
 import * as ByteSize from "effect/ByteSize";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse, Multipart } from "effect/http";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
@@ -161,40 +164,75 @@ const UPLOAD_LIMITS = Multipart.limitsServices({
   fieldMimeTypes: [],
 });
 
+const isMultipartSubmission = (request: HttpServerRequest.HttpServerRequest) =>
+  request.headers["content-type"]?.startsWith("multipart/form-data") ?? false;
+
 /** A message as JSON (text only), or as multipart form data with `file` parts. */
-export const readSubmission = Effect.gen(function* () {
+export const readSubmission = Effect.fn("GuestHttp.readSubmission")(function* (
+  acquireUploadSlot: GuestShareService["Service"]["acquireUploadSlot"],
+) {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!request.headers["content-type"]?.startsWith("multipart/form-data")) {
+  if (!isMultipartSubmission(request)) {
     const body = yield* readJson.pipe(Effect.flatMap(decodeSubmit), Effect.option);
     return body._tag === "None" ? null : { fields: body.value, uploads: [] };
   }
-  const parts = yield* request.multipart.pipe(
+
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // The parser finishes before submission, so the permit and files belong to the request scope.
+  const requestScope = yield* Scope.Scope;
+  const stageUploads = acquireUploadSlot.pipe(
+    Effect.andThen(fileSystem.makeTempDirectoryScoped()),
+    Effect.provideService(Scope.Scope, requestScope),
+  );
+  const fields: Partial<Record<"shareId" | "text", string>> = {};
+  const uploads: Array<GuestUpload> = [];
+  let invalidFields = false;
+  let directory: string | undefined;
+  yield* Stream.runForEach(
+    request.multipartStream,
+    // The outer submission span covers all parts in this body.
+    Effect.fnUntraced(function* (part) {
+      const isSubmitField = part.key === "shareId" || part.key === "text";
+      if (part._tag === "Field") {
+        if (isSubmitField) {
+          if (fields[part.key] !== undefined) invalidFields = true;
+          fields[part.key] = part.value;
+        }
+        return;
+      }
+      if (part.key !== "file" || part.name === "") {
+        if (isSubmitField && part.name !== "") invalidFields = true;
+        yield* Stream.runDrain(part.content);
+        return;
+      }
+
+      directory ??= yield* stageUploads;
+      const destination = path.join(directory, String(uploads.length));
+      yield* Stream.run(part.content, fileSystem.sink(destination));
+      uploads.push({ name: part.name, contentType: part.contentType, path: destination });
+    }),
+  ).pipe(
     Effect.provideContext(UPLOAD_LIMITS),
-    Effect.mapError(
-      (error) =>
-        new GuestShareAccessError({
-          reason:
-            error.reason._tag === "TooManyParts"
-              ? "too_many_files"
-              : error.reason._tag === "Parse"
-                ? "rejected"
-                : "too_large",
-        }),
-    ),
+    Effect.mapError((error) => {
+      if (error._tag === "GuestShareAccessError") return error;
+      const reason = error._tag === "MultipartError" ? error.reason._tag : "InternalError";
+      return new GuestShareAccessError({
+        reason:
+          reason === "TooManyParts"
+            ? "too_many_files"
+            : reason === "Parse"
+              ? "rejected"
+              : "too_large",
+      });
+    }),
   );
-  const fields = yield* decodeSubmit({ shareId: parts.shareId, text: parts.text ?? "" }).pipe(
-    Effect.option,
-  );
-  if (fields._tag === "None") return null;
-  const files = parts.file;
-  const uploads: ReadonlyArray<GuestUpload> = Array.isArray(files)
-    ? files.filter(Multipart.isPersistedFile).map(({ name, contentType, path }) => ({
-        name,
-        contentType,
-        path,
-      }))
-    : [];
-  return { fields: fields.value, uploads };
+  if (invalidFields) return null;
+  const body = yield* decodeSubmit({
+    shareId: fields.shareId,
+    text: fields.text?.replaceAll("\r\n", "\n") ?? "",
+  }).pipe(Effect.option);
+  return body._tag === "None" ? null : { fields: body.value, uploads };
 });
 
 const submitRoute = HttpRouter.add(
@@ -208,15 +246,11 @@ const submitRoute = HttpRouter.add(
     const shareId = requestedShareId(request);
     const session = sessionFor(request, shareId);
     yield* guestShares.check(session);
-    const submission = yield* readSubmission;
+    const submission = yield* readSubmission(guestShares.acquireUploadSlot);
     if (submission === null || submission.fields.shareId !== shareId) return yield* badRequest;
     yield* guestShares.submit(session, submission.fields, submission.uploads);
     return HttpServerResponse.empty({ status: 204, headers: NO_STORE });
-  }).pipe(
-    Effect.catchTags({ GuestShareAccessError: errorResponse }),
-    // The parser's temporary files are removed once the response is ready.
-    Effect.scoped,
-  ),
+  }).pipe(Effect.scoped, Effect.catchTags({ GuestShareAccessError: errorResponse })),
 );
 
 const streamRoute = HttpRouter.add(

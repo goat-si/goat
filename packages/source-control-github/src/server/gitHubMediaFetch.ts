@@ -9,7 +9,7 @@ import {
   type HttpClientResponse,
 } from "effect/http";
 
-import { GITHUB_CREDENTIALED_MEDIA_HOSTS } from "../shared/gitHubMedia.ts";
+import { GITHUB_CREDENTIALED_MEDIA_HOSTS, gitHubLfsMediaUrl } from "../shared/gitHubMedia.ts";
 
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubRest from "./GitHubRest.ts";
@@ -106,9 +106,10 @@ export const make = Effect.gen(function* () {
     repository?: string,
   ) {
     let target = url;
+    let credentialAllowed = true;
     for (let hop = 0; ; hop += 1) {
       const authorization =
-        token !== null && carriesCredential(target, repository)
+        credentialAllowed && token !== null && carriesCredential(target, repository)
           ? `Bearer ${Redacted.value(token)}`
           : null;
       const response: HttpClientResponse.HttpClientResponse = yield* httpClient
@@ -134,6 +135,7 @@ export const make = Effect.gen(function* () {
       if (next === null || next.protocol !== "https:" || next.username || next.password) {
         return null;
       }
+      if (next.host !== URL.parse(target)?.host) credentialAllowed = false;
       target = next.toString();
     }
   });
@@ -191,6 +193,16 @@ export const make = Effect.gen(function* () {
         signedIn?.token ?? null,
         request.repository,
       );
+      const lfsUrl = gitHubLfsMediaUrl(request.url);
+      if (lfsUrl !== null && response?.status === 200 && contentTypeOf(response) === "text/plain") {
+        const lfs = yield* fetchFollowingRedirects(lfsUrl, request.headers, null);
+        if (
+          (lfs?.status === 200 || lfs?.status === 206) &&
+          MEDIA_CONTENT_TYPE_PATTERN.test(contentTypeOf(lfs))
+        ) {
+          return lfs;
+        }
+      }
       if (response === null || contentTypeOf(response) !== "text/html") return response;
     }
     if (cacheKey === null || repository === undefined || signedIn === null) return response;

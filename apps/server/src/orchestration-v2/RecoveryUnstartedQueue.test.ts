@@ -33,7 +33,6 @@ it.effect.each([
   const terminalized =
     status === "preparing" ||
     scenario === "starting-own-request" ||
-    scenario === "starting-scheduled" ||
     scenario === "starting-delegated";
   const threadId = ThreadId.make("thread_queued_restart");
   const runId = RunId.make("run_queued_restart");
@@ -132,6 +131,7 @@ it.effect.each([
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getNextTurnItemOrdinal: () => Effect.succeed(1),
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
           getThreadRecords: () => Effect.succeed(projection),

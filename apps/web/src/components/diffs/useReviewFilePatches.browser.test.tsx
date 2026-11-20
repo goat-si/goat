@@ -29,6 +29,49 @@ vi.mock("~/state/review", () => ({
 
 import { useReviewFilePatches } from "./useReviewFilePatches";
 
+it("shows deferred additions, deletions and an unknown future type distinctly", async () => {
+  state.patches.clear();
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  const metadata = {
+    ...source(["added", "deleted", "future"], "types"),
+    files: [
+      { path: "added", previousPath: null, additions: 1, deletions: 0, changeType: "new" },
+      { path: "deleted", previousPath: null, additions: 0, deletions: 1, changeType: "deleted" },
+      { path: "future", previousPath: null, additions: 0, deletions: 0, changeType: "future-kind" },
+    ],
+  };
+  function TypeProbe() {
+    const files = useReviewFilePatches({
+      environmentId: EnvironmentId.make("environment"),
+      cwd: "/project",
+      source: metadata,
+      baseRef: "HEAD",
+      ignoreWhitespace: false,
+      theme: "dark",
+      previewInput: { cwd: "/project", metadataOnly: true },
+      preview: null,
+    });
+    return (
+      <>
+        {files.renderableFiles.map((file) => (
+          <div key={file.name}>
+            {file.name}:{files.fileStates.get(file.name)?.unknownChangeType ? "unknown" : file.type}
+          </div>
+        ))}
+      </>
+    );
+  }
+  await using screen = await render(
+    <RegistryContext.Provider value={registry}>
+      <TypeProbe />
+    </RegistryContext.Provider>,
+  );
+  await expect.element(screen.getByText("added:new")).toBeVisible();
+  await expect.element(screen.getByText("deleted:deleted")).toBeVisible();
+  await expect.element(screen.getByText("future:unknown")).toBeVisible();
+});
+
 function source(paths: string[], hash: string): ReviewDiffPreviewSource {
   return {
     id: "working-tree",

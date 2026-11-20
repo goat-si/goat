@@ -13,6 +13,22 @@ export const SecretReference = Schema.Struct({
 });
 export type SecretReference = typeof SecretReference.Type;
 export const isSecretReference = Schema.is(SecretReference);
+export function containsSecretReference(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object" || seen.has(current)) continue;
+    if (isSecretReference(current)) return true;
+    seen.add(current);
+    if (seen.size > 10_000) return true;
+    for (const child of Object.values(current)) {
+      pending.push(child);
+      if (pending.length > 10_000) return true;
+    }
+  }
+  return false;
+}
 const ONE_PASSWORD_NAME = String.raw`[A-Za-z0-9._-](?:[A-Za-z0-9 ._-]*[A-Za-z0-9._-])?`;
 const ONE_PASSWORD_REFERENCE = new RegExp(
   String.raw`^op://${ONE_PASSWORD_NAME}(?:/${ONE_PASSWORD_NAME}){2,3}(?:\?[a-z-]+=[A-Za-z0-9_-]+)?$`,

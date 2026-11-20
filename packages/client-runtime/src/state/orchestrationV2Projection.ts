@@ -1,3 +1,4 @@
+import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../threadPullRequests.ts";
 import type {
   OrchestrationV2DomainEvent,
@@ -12,6 +13,7 @@ import {
 } from "@goat/shared/orchestrationV2DedupedBodies";
 import {
   createOrchestrationV2TurnItemVisibility,
+  CURSOR_TASK_SAVED_ITEM_PREFIX,
   isOrchestrationV2TurnItemVisible,
 } from "@goat/shared/orchestrationV2Timeline";
 
@@ -150,6 +152,14 @@ function shouldDropMissingPartialTurnItem(
     return false;
   }
   if (item.runId === null) {
+    if (
+      item.type === "assistant_message" &&
+      item.nativeItemRef?.driver === "cursor" &&
+      item.nativeItemRef.nativeId?.startsWith(CURSOR_TASK_SAVED_ITEM_PREFIX)
+    ) {
+      const oldest = oldestLocalTurnOrdinal(projection.visibleTurnItems);
+      return oldest !== null && item.ordinal < oldest;
+    }
     return isBelowPartialWindow(projection, item, latestLocalTurnOrdinal);
   }
   // A queued run keeps the ordinal it got when queued, so a steer sent later
@@ -317,6 +327,11 @@ export function applyOrchestrationV2ProjectionEvent(
     case "thread.guest-share-updated":
       return { ...base, thread: event.payload };
     // Visited tracking is read state, not activity: skip the updatedAt bump.
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
+      };
     case "thread.visited":
     case "thread.marked-unread":
       return { ...projection, thread: event.payload };

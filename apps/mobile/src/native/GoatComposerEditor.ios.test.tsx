@@ -12,6 +12,7 @@ interface NativeEvent {
   readonly value: string;
   readonly selection: Selection;
   readonly eventCount: number;
+  readonly trailingInlineSource?: string | null;
 }
 interface Document {
   readonly value: string;
@@ -115,7 +116,7 @@ vi.mock("../lib/nativeComposerTheme", () => ({
 }));
 vi.mock("../lib/contextChipIconSource", () => ({ contextChipIconUri: () => null }));
 vi.mock("../features/settings/appearance/useScaledTextRole", () => ({
-  useScaledTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
+  useComposerTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
 }));
 
 import { ComposerEditor } from "./GoatComposerEditor.ios";
@@ -214,6 +215,66 @@ it("sends a model mention to the native editor as a chip with its exact source",
   }
 });
 
+it.each([{ batched: false }, { batched: true }])(
+  "keeps the Undo chip and leaves raw text plain after Redo (batched: $batched)",
+  async ({ batched }) => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const prefix = "👋 ";
+    const source = "@README.md";
+    const text = prefix + source;
+    const initial = text + " ";
+    native.value = "";
+    native.selection = { start: 0, end: 0 };
+    native.eventCount = 0;
+    native.tokensJson = "[]";
+    draft.text = initial;
+    const root = createRoot(document.createElement("div"));
+    const edit = (value: string, nativeTokens: string, trailingInlineSource?: string | null) => {
+      native.tokensJson = nativeTokens;
+      native.onChange?.({
+        nativeEvent: {
+          ...nativeEdit(value, value.length),
+          ...(trailingInlineSource === undefined ? {} : { trailingInlineSource }),
+        },
+      });
+    };
+
+    try {
+      await act(async () => root.render(<Host initial={initial} />));
+      const confirmed = native.tokensJson;
+      expect(JSON.parse(confirmed)).toEqual([
+        expect.objectContaining({ source, start: prefix.length, end: text.length }),
+      ]);
+      // Older native builds omit the field when Backspace removes the confirming space.
+      await act(async () => edit(text, confirmed));
+      expect(native.tokensJson).toBe(confirmed);
+      await act(async () => edit(prefix, "[]")); // Cut the trailing chip.
+      native.writes = [];
+      // UIKit restores the attachment before the callback.
+      await act(async () => edit(text, confirmed, source));
+      expect(native.tokensJson).toBe(confirmed);
+      expect(native.writes).toEqual([]);
+      expect(native.selection).toEqual({ start: text.length, end: text.length });
+
+      native.writes = [];
+      if (batched) {
+        await act(async () => {
+          edit(prefix, "[]", null); // Redo.
+          edit(text, "[]", null); // Raw input before React commits the intermediate draft.
+        });
+      } else {
+        await act(async () => edit(prefix, "[]"));
+        await act(async () => edit(text, "[]"));
+      }
+      expect(native.tokensJson).toBe("[]");
+      expect(native.writes).toEqual([]);
+      expect(native.selection).toEqual({ start: text.length, end: text.length });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  },
+);
+
 async function typeKorean(
   prefix: string,
   suffix: string,
@@ -307,3 +368,54 @@ it.each(CASES)(
     });
   },
 );
+
+it("renders a recovered response whose source is missing as its existing neutral chip", async () => {
+  const { EnvironmentId, ThreadId, MessageId, TurnItemId, ComposerContextId } =
+    await import("@goat/contracts");
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const reply = {
+    version: 1 as const,
+    kind: "response" as const,
+    contextId: ComposerContextId.make("response_answer"),
+    label: "Done",
+    citation: {
+      version: 1 as const,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("missing-thread"),
+      messageId: MessageId.make("answer"),
+      text: "Done",
+      start: 0,
+      end: 4,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item"),
+  };
+  const text = `${formatComposerContextReference(reply)} original`;
+  native.value = "";
+  native.selection = { start: 0, end: 0 };
+  native.eventCount = 0;
+  native.writes = [];
+  native.tokensJson = "[]";
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () =>
+      root.render(
+        <ComposerEditor
+          value={text}
+          context={{ version: 1, records: [reply] }}
+          onChangeText={() => {}}
+        />,
+      ),
+    );
+    expect(JSON.parse(native.tokensJson)).toContainEqual(
+      expect.objectContaining({
+        type: "context",
+        source: formatComposerContextReference(reply),
+        label: "Done",
+      }),
+    );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

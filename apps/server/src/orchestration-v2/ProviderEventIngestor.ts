@@ -10,7 +10,6 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2TurnItem,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
@@ -23,6 +22,7 @@ import {
   RawEventId,
   RunAttemptId,
   RunId,
+  type RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -34,7 +34,7 @@ import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@goat/shared/AgentScope";
-import { isCommandActions, parseCommandActions } from "@goat/shared/commandActions";
+import { withCommandActions, compactUndefined } from "./ProviderEventCommandActions.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -278,25 +278,6 @@ export class ProviderEventIngestorV2 extends Context.Service<
   ProviderEventIngestorV2Shape
 >()("goat/orchestration-v2/ProviderEventIngestor/ProviderEventIngestorV2") {}
 
-function compactUndefined<T extends Record<string, unknown>>(record: T): T {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
-}
-
-/**
- * Providers that report only a raw shell command get a conservative read,
- * list, or search classification once, as the item arrives. Items a provider
- * already classified (Codex) keep that classification if it fits the wire.
- */
-function withCommandActions(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
-  if (item.type !== "command_execution") return item;
-  const commandActions = item.commandActions ?? parseCommandActions(item.input);
-  // Classification is optional; invalid metadata must never fail the provider run.
-  if (!isCommandActions(commandActions)) return { ...item, commandActions: [] };
-  return item.commandActions !== undefined || commandActions.length === 0
-    ? item
-    : { ...item, commandActions };
-}
-
 const decodeDomainEvent = Schema.decodeUnknownEffect(OrchestrationV2DomainEvent);
 
 export const layer: Layer.Layer<
@@ -363,11 +344,14 @@ export const layer: Layer.Layer<
         input: ProviderEventIngestInput,
         providerTurnId: ProviderTurnId,
         threadId = input.threadId,
+        retained: ReadonlyArray<RuntimeRequestId> = [],
       ) {
         const pending = yield* projections.getPendingNativeUserInputs(threadId, providerTurnId);
         const now = yield* DateTime.now;
         const events: Array<OrchestrationV2DomainEvent> = [];
+        const kept = new Set(retained);
         for (const request of pending.runtimeRequests) {
+          if (kept.has(request.id)) continue;
           events.push(
             yield* makeDomainEvent(input, {
               type: "runtime-request.updated",
@@ -378,6 +362,7 @@ export const layer: Layer.Layer<
           );
         }
         for (const node of pending.nodes) {
+          if (node.runtimeRequestId !== null && kept.has(node.runtimeRequestId)) continue;
           events.push(
             yield* makeDomainEvent(input, {
               type: "node.updated",
@@ -389,6 +374,7 @@ export const layer: Layer.Layer<
           );
         }
         for (const item of pending.turnItems) {
+          if (item.type === "user_input_request" && kept.has(item.requestId)) continue;
           events.push(
             yield* makeDomainEvent(input, {
               type: "turn-item.updated",
@@ -599,6 +585,7 @@ export const layer: Layer.Layer<
                       input,
                       input.event.providerTurn.id,
                       input.event.threadId,
+                      input.event.retainedRuntimeRequestIds,
                     )
                   : []),
                 yield* makeDomainEvent(input, {
@@ -749,7 +736,12 @@ export const layer: Layer.Layer<
               // Live output is routed to the command output hub before ingestion.
               return [];
             case "turn.terminal":
-              const dismissed = yield* dismissNativeUserInputs(input, input.event.providerTurnId);
+              const dismissed = yield* dismissNativeUserInputs(
+                input,
+                input.event.providerTurnId,
+                undefined,
+                input.event.retainedRuntimeRequestIds,
+              );
               if (input.event.status !== "failed") {
                 return dismissed;
               }
@@ -831,6 +823,29 @@ export const layer: Layer.Layer<
         /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
         Effect.fnUntraced(
           function* (input) {
+            if (
+              input.event.type === "app_thread.created" &&
+              input.event.onlyIfDefaultTitle === true
+            ) {
+              const current = yield* projections.getThread(input.event.appThread.id).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderEventNormalizeError({
+                      providerSessionId: input.providerSessionId,
+                      threadId: input.threadId,
+                      providerEvent: input.event,
+                      cause,
+                    }),
+                ),
+              );
+              if (current !== null && current.title !== "New thread") {
+                yield* Effect.logDebug("Skipped an automatic provider title for a named thread.");
+                return [];
+              }
+            }
             const events = yield* normalize(input);
             if (events.length === 0) {
               return [];

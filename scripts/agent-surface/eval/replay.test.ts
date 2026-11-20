@@ -125,6 +125,36 @@ const continuations: Readonly<
     good: run([], "The suite is still running; I'll report what fails when it finishes."),
     bad: run([call("ScheduleWakeup", { delaySeconds: 900 })]),
   },
+  "draft-before-question-sent-in-full": {
+    good: run([
+      dispatch("message.show", {
+        message: "Thanks, Dana. Can we move the renewal to January 15? —Morgan",
+      }),
+      call("AskUserQuestion", { question: "Send as written or shorten it?" }),
+    ]),
+    bad: run([call("AskUserQuestion", { question: "Send as written or shorten it?" })]),
+  },
+  "control-draft-as-final-reply": {
+    good: run([], "Thanks, Dana, for the new renewal price. —Morgan"),
+    bad: run([dispatch("message.show", { message: "Thanks, Dana. —Morgan" })], "Draft above."),
+  },
+  "control-progress-updates-stay-text": {
+    good: run(
+      [call("Bash", { command: "vp test run src/price.test.ts" })],
+      "Fixed the price test.",
+    ),
+    bad: run(
+      [dispatch("message.show", { message: "Running the test now." })],
+      "Fixed the price test.",
+    ),
+  },
+  "answer-before-bookkeeping-call": {
+    good: run(
+      [call("Bash", { command: "scripts/log-question.sh port" })],
+      "The dev server defaults to 4817. Set PORT to change it.",
+    ),
+    bad: run([call("Bash", { command: "scripts/log-question.sh port" })], "Done."),
+  },
 };
 
 it("grades each replay's good and mistaken continuation against the served full and core listings", async () => {

@@ -40,6 +40,7 @@ import {
   settlePullRequestOverrides,
 } from "./pullRequestList.logic";
 import { pullRequestGroups } from "./pullRequestListGroups.logic";
+import { preferredPullRequestEntries } from "./pullRequestListTargets";
 import {
   readPullRequestListPreferences,
   writePullRequestListPreferences,
@@ -207,21 +208,63 @@ describe("ranking what a search found", () => {
   const row = (overrides: Partial<PullRequestListEntry> & { number?: number }) =>
     entry({ number: 1, ...overrides });
 
-  it("puts the pull request whose title says it above one that merely mentions it", () => {
-    const titled = row({
-      number: 1,
-      title: "Add the welcome wizard",
-      updatedAt: "2026-07-01T00:00:00Z",
+  it("keeps fallback rows in Others while account groups load and after they settle", () => {
+    const fallback = row({
+      author: { login: "Bilal", name: null, avatarUrl: null },
+      viewerReviewRequested: true,
     });
-    const mentioned = row({
+    const preferred = entry({
       number: 2,
-      title: "Unrelated work",
-      updatedAt: "2026-08-01T00:00:00Z",
+      projectId: "preferred-project" as ProjectId,
+      viewerReviewRequested: true,
     });
-    expect(
-      rankPullRequestMatches([mentioned, titled], "welcome wizard").map((entry) => entry.number),
-    ).toEqual([1, 2]);
+    const input = {
+      known: [fallback, preferred],
+      baseline: undefined,
+      providers: [],
+      viewers: VIEWERS,
+      involvement: "all" as const,
+      localFilters: {},
+      hasLocalFilters: false,
+      text: "",
+      answeredLocally: true,
+      baselineEmpty: false,
+      held: undefined,
+      partitionsWanted: true,
+      isPreferredEntry: preferredPullRequestEntries([
+        { environmentId: preferred.environmentId, projectIds: [preferred.projectId] },
+      ]),
+    };
+    const pending = pullRequestGroups({ ...input, authored: undefined, reviewing: undefined });
+    const settled = pullRequestGroups({ ...input, authored: [fallback], reviewing: [preferred] });
+    const expected = [
+      ["reviewRequested", [preferred.number]],
+      ["others", [fallback.number]],
+    ];
+    for (const { groups } of [pending, settled]) {
+      expect(groups.map(({ key, entries }) => [key, entries.map(({ number }) => number)])).toEqual(
+        expected,
+      );
+    }
   });
+
+  it.each([
+    ["welcome wizard", "Add the welcome wizard"],
+    ["24", "Upgrade Node to 24"],
+  ])(
+    "puts the pull request whose title says %j above one that merely mentions it",
+    (query, title) => {
+      const titled = row({ number: 1, title, updatedAt: "2026-07-01T00:00:00Z" });
+      const mentioned = row({
+        number: 2,
+        title: "Unrelated work",
+        updatedAt: "2026-08-01T00:00:00Z",
+      });
+      expect(
+        rankPullRequestMatches([mentioned, titled], query).map((entry) => entry.number),
+      ).toEqual([1, 2]);
+    },
+  );
 
   it("keeps loaded partial-word matches the host's whole-word search missed, after its answer", () => {
     const bilal = { login: "bilal", name: null, avatarUrl: null };

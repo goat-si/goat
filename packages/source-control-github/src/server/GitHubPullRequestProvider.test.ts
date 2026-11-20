@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -703,7 +704,12 @@ describe("getChangeRequestActivity dismissed reviews", () => {
     Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
       revalidateChecks: (_input, read) => read,
       getPullRequestActivity: () =>
-        Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
+        Effect.succeed({
+          author: null,
+          comments: [dismissedReview(body)],
+          commits: [],
+          truncated: false,
+        }),
       listReviewThreadComments: () => Effect.succeed(threadComments),
     });
   const readActivity = Effect.gen(function* () {
@@ -725,6 +731,78 @@ describe("getChangeRequestActivity dismissed reviews", () => {
       }),
       Effect.provide(layerFor("<!-- Macroscope (Approvability) review body marker -->")),
     ),
+  );
+  const failingThreadRead = (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
+    Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+      getPullRequestActivity: () =>
+        Effect.succeed({ author: null, comments: [], commits: [], truncated: false }),
+      listReviewThreadComments: () => Effect.fail(error),
+    });
+  const retryAt = 1_900_000_000_000;
+  it.effect.each([
+    {
+      name: "rate limit",
+      error: new GitHubRequestPolicy.GitHubApiRateLimitError({
+        host: "github.com",
+        operation: "listReviewThreadComments",
+        retryAt,
+      }),
+    },
+    {
+      name: "rate-limit pause",
+      error: new SourceControlRateLimit.SourceControlRateLimitPausedError({
+        provider: SourceControlProviderKind.make("github"),
+        host: "github.com",
+        retryAt,
+      }),
+    },
+  ])("reports a $name during review thread reads", ({ error }) =>
+    readActivity.pipe(
+      Effect.flip,
+      Effect.map((failure) => expect(failure).toMatchObject({ reason: "rate-limited", retryAt })),
+      Effect.provide(failingThreadRead(error)),
+    ),
+  );
+  it.effect("retains partial activity for other review thread errors", () =>
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.reviewThreads).toEqual([]);
+        expect(activity.reviewThreadsTruncated).toBe(true);
+      }),
+      Effect.provide(
+        failingThreadRead(
+          new GitHubRequestPolicy.GitHubApiResponseError({
+            host: "github.com",
+            operation: "listReviewThreadComments",
+            status: 500,
+          }),
+        ),
+      ),
+    ),
+  );
+  it.effect.each([
+    { activityTruncated: true, threadsTruncated: false, expected: true },
+    { activityTruncated: false, threadsTruncated: true, expected: true },
+    { activityTruncated: false, threadsTruncated: false, expected: false },
+  ])(
+    "reports truncated comments when either source is incomplete",
+    ({ activityTruncated, threadsTruncated, expected }) =>
+      readActivity.pipe(
+        Effect.map((activity) => expect(activity.commentsTruncated).toBe(expected)),
+        Effect.provide(
+          Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+            getPullRequestActivity: () =>
+              Effect.succeed({
+                author: null,
+                comments: [],
+                commits: [],
+                truncated: activityTruncated,
+              }),
+            listReviewThreadComments: () =>
+              Effect.succeed({ ...threadComments, truncated: threadsTruncated }),
+          }),
+        ),
+      ),
   );
 });
 

@@ -214,7 +214,9 @@ it.effect("a terminal puts a set-aside folder back when the restore fails", () =
       { prepare: leaveDependencies, setupExitCode: 1 },
     );
     assert.isFalse(linked);
-    assert.deepEqual(siblings, ["feature"]);
+    assert.equal(siblings.length, 2);
+    assert.equal(siblings[0], "feature");
+    assert.match(siblings[1] ?? "", /^feature-set-aside-/);
     assert.deepEqual(inPlace, ["node_modules"]);
     assert.deepEqual(notices, []);
   }),

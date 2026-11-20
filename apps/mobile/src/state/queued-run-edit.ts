@@ -1,3 +1,4 @@
+import { queuedReplySnapshot, recoverQueuedReplyText } from "./recoverQueuedReply";
 import type {
   ChatAttachment,
   MessageId,
@@ -80,28 +81,38 @@ export function useQueuedRunEdit(threadKey: string | null): QueuedRunEdit | null
  * the thread's composer when that is empty; otherwise it is dropped. Either
  * way the thread says so, wherever the user is when it happens.
  */
-function exitQueuedRunEdit(threadKey: string, edit: QueuedRunEdit): void {
+function exitQueuedRunEdit(
+  threadKey: string,
+  edit: QueuedRunEdit,
+  originalContext: string,
+  originalReplies: ReadonlyMap<string, string>,
+): void {
   const editDraftKey = queuedEditDraftKey(threadKey, edit.runId);
   const editDraft = getComposerDraftSnapshot(editDraftKey);
   const threadDraft = getComposerDraftSnapshot(threadKey);
-  const editRestorable = editDraft.text.trim().length > 0 || editDraft.attachments.length > 0;
+  const editRestorable =
+    editDraft.text.trim().length > 0 ||
+    editDraft.attachments.length > 0 ||
+    (editDraft.context?.records.length ?? 0) > 0;
   const recovery = resolveQueuedEditExit({
     editChanged:
       editDraft.text !== edit.originalText ||
+      JSON.stringify(editDraft.context ?? null) !== originalContext ||
       editDraft.attachments.length > 0 ||
       edit.removedExistingAttachment === true,
     // A cleared edit has nothing to put back, so it can only be discarded.
     threadDraftEmpty:
       editRestorable &&
       threadDraft.text.trim().length === 0 &&
-      threadDraft.attachments.length === 0,
+      threadDraft.attachments.length === 0 &&
+      (threadDraft.context?.records.length ?? 0) === 0,
   });
   if (recovery === "kept") {
     // The merge publishes the draft before writing it, so a failed write only delays persistence to the next one.
     mergeComposerDraftContent(threadKey, {
-      text: editDraft.text,
+      text: recoverQueuedReplyText(editDraft.text, editDraft.context, originalReplies),
       attachments: editDraft.attachments,
-      ...(editDraft.context ? { context: editDraft.context } : {}),
+      ...(editDraft.context ? { context: editDraft.context, preserveContextRecords: true } : {}),
     }).catch((error: unknown) => {
       console.warn("[queued-run-edit] could not persist the recovered edit", error);
     });
@@ -133,10 +144,17 @@ export function beginQueuedRunEdit(
   clearComposerDraft(draftKey);
   setComposerDraftText(draftKey, originalText);
   setComposerDraftContext(draftKey, edit.context);
+  const initialContext = getComposerDraftSnapshot(draftKey).context;
+  const originalContext = JSON.stringify(initialContext ?? null);
+  const originalReplies = queuedReplySnapshot(initialContext);
   queuedRunEdits.begin(
     threadKey,
     { ...edit, originalText },
-    { runs, onRunLeftQueue: exitQueuedRunEdit },
+    {
+      runs,
+      onRunLeftQueue: (key, current) =>
+        exitQueuedRunEdit(key, current, originalContext, originalReplies),
+    },
   );
 }
 

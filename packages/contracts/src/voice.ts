@@ -1,7 +1,7 @@
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Schema from "effect/Schema";
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const VOICE_TRANSCRIBE_PATH = "/api/voice/transcribe" as const;
@@ -14,6 +14,61 @@ export const VOICE_TRANSCRIPTION_MAX_PROMPT_CHARS = 16_384;
 export const VOICE_TRANSCRIPTION_MAX_REQUEST_BODY_BYTES = 22 * 1024 * 1024;
 export const VOICE_PREWARM_MAX_REQUEST_BODY_BYTES = 16 * 1024;
 export const VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES = 1024 * 1024;
+export const VOICE_STREAM_SAMPLE_RATE_HZ = 16_000;
+export const VOICE_STREAM_MAX_AUDIO_BYTES = 9_600_000;
+export const VOICE_STREAM_MAX_CHUNK_BYTES = 32 * 1024;
+export const VOICE_STREAM_MAX_CHUNK_BASE64_CHARS = Math.ceil(VOICE_STREAM_MAX_CHUNK_BYTES / 3) * 4;
+export const SPEECH_STREAM_WS_METHODS = {
+  start: "speech.stream.start",
+  feed: "speech.stream.feed",
+  finish: "speech.stream.finish",
+  cancel: "speech.stream.cancel",
+  events: "speech.stream.events",
+} as const;
+
+export const SpeechStreamFeed = Schema.Struct({
+  streamId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  sequence: NonNegativeInt,
+  audioBase64: Schema.String.check(
+    Schema.isMinLength(4),
+    Schema.isMaxLength(VOICE_STREAM_MAX_CHUNK_BASE64_CHARS),
+    Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u),
+  ),
+});
+export type SpeechStreamFeed = typeof SpeechStreamFeed.Type;
+export const SpeechStreamId = Schema.Struct({
+  streamId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export const SpeechStreamStart = Schema.Struct({
+  locale: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+});
+export const SpeechStreamErrorCode = Schema.Literals([
+  "busy",
+  "unsupported",
+  "expired",
+  "invalid-audio",
+  "failed",
+  "cancelled",
+]);
+export class SpeechStreamRpcError extends Schema.TaggedError<SpeechStreamRpcError>()(
+  "SpeechStreamRpcError",
+  { code: SpeechStreamErrorCode },
+) {}
+export const SpeechStreamEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("ready") }),
+  Schema.Struct({
+    type: Schema.Literal("partial"),
+    revision: NonNegativeInt,
+    committed: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+    tentative: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("final"),
+    text: Schema.String.check(Schema.isMaxLength(VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES)),
+  }),
+  Schema.Struct({ type: Schema.Literal("error"), code: SpeechStreamErrorCode }),
+]);
+export type SpeechStreamEvent = typeof SpeechStreamEvent.Type;
 
 export const VoiceTranscriptionRouteKind = Schema.Literals(["opencodex", "chatgpt-session"]);
 export type VoiceTranscriptionRouteKind = typeof VoiceTranscriptionRouteKind.Type;

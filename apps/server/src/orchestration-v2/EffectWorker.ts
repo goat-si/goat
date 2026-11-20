@@ -1,10 +1,13 @@
+import { makeRestartEffect } from "./goat/RestartEffect.ts";
 import * as OwnedEffectDeadline from "./OwnedEffectDeadline.ts";
+import { makeStartEffect } from "./goat/StartEffect.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import {
   OrchestrationEffectExecutionError,
   hasCloudTrackingFailure,
   workspaceLeaseBusy,
   boundExecution,
+  exhaustedEffectAttempts,
 } from "./goat/EffectExecution.ts";
 import { CommandId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -17,7 +20,6 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-
 import {
   increment,
   metricAttributes,
@@ -77,6 +79,12 @@ export const layerExecutor: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
     const providerTurnStart = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
+    const startEffect = makeStartEffect(providerTurnStart);
+    const restartEffect = makeRestartEffect({
+      provider: providerTurnStart,
+      control: providerTurnControl,
+      sessions: providerSessions,
+    });
     const runtimeRequests = yield* RuntimeRequestService.RuntimeRequestServiceV2;
     const threadTitleRegeneration =
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
@@ -93,7 +101,16 @@ export const layerExecutor: Layer.Layer<
             return stopComputerUse(effect);
           case "provider-runtime.continue": {
             const sourceRunId = effect.request.sourceRunId;
-            return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(
+            return continueRestartedRun({
+              threadId: effect.threadId,
+              sourceRunId,
+              ...(String(effect.commandId).startsWith("command:restart-prepare:")
+                ? { plannedRestart: true }
+                : {}),
+              ...(effect.request.processLossCount === undefined
+                ? {}
+                : { processLossCount: effect.request.processLossCount }),
+            }).pipe(
               Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
               Effect.provideService(ServerSettings.ServerSettingsService, settings),
               Effect.tapError(() =>
@@ -150,22 +167,21 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "provider-turn.start":
-            return providerTurnStart
-              .start({
-                threadId: effect.threadId,
-                runId: effect.request.runId,
-                willRetry,
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+            return startEffect({
+              effectId: effect.id,
+              threadId: effect.threadId,
+              runId: effect.request.runId,
+              willRetry,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "provider-turn.interrupt": {
             const request = effect.request;
             return providerTurnControl
@@ -255,6 +271,7 @@ export const layerExecutor: Layer.Layer<
                 providerThreadId: effect.request.providerThreadId,
                 providerTurnId: effect.request.providerTurnId,
                 messageId: effect.request.messageId,
+                modelSelection: effect.request.modelSelection,
               })
               .pipe(
                 Effect.tap(() =>
@@ -280,7 +297,7 @@ export const layerExecutor: Layer.Layer<
                   Effect.gen(function* () {
                     if (
                       !isProviderTurnControlError(error) ||
-                      (!error.turnCompleted && !error.steerDeclined) ||
+                      (!error.missedBeforeSubmit && !error.steerDeclined) ||
                       effect.request.type !== "provider-turn.steer"
                     ) {
                       return yield* error;
@@ -294,7 +311,12 @@ export const layerExecutor: Layer.Layer<
                     const message = projection.messages.find((item) => item.id === messageId);
                     const run = projection.runs.find((item) => item.id === message?.runId);
                     if (message === undefined || run === undefined) return yield* error;
-                    // Notifications must be queued messages.
+                    const modelSelection =
+                      effect.request.pinnedScheduleSelection ??
+                      (error.steerDeclined && message.followsThreadSelection !== true
+                        ? effect.request.modelSelection
+                        : undefined) ??
+                      (message.delegatedCompletion === undefined ? undefined : run.modelSelection);
                     const queued =
                       message.delegatedCompletion !== undefined ||
                       message.notification !== undefined ||
@@ -318,11 +340,7 @@ export const layerExecutor: Layer.Layer<
                         text: message.text,
                         ...(message.context ? { context: message.context } : {}),
                         attachments: message.attachments,
-                        ...(error.steerDeclined && effect.request.modelSelection !== undefined
-                          ? { modelSelection: effect.request.modelSelection }
-                          : message.delegatedCompletion === undefined
-                            ? {}
-                            : { modelSelection: run.modelSelection }),
+                        ...(modelSelection === undefined ? {} : { modelSelection }),
                         dispatchMode: {
                           type: queued ? "queue_after_active" : "start_immediately",
                         },
@@ -368,52 +386,7 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "provider-turn.restart":
-            return providerTurnControl
-              .interruptAndAwaitTerminal({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                interruptedAttemptId: effect.request.interruptedAttemptId,
-                ...(effect.request.sessionTransition?.type === "replace"
-                  ? {
-                      replacementProviderSessionId:
-                        effect.request.sessionTransition.replacementProviderSessionId,
-                    }
-                  : {}),
-              })
-              .pipe(
-                Effect.andThen(
-                  effect.request.sessionTransition?.type === "replace"
-                    ? providerSessions.detach({
-                        providerSessionId: effect.request.providerSessionId,
-                        threadId: effect.threadId,
-                        detail: "Selection change requires a provider session restart.",
-                      })
-                    : effect.request.sessionTransition?.type === "detach"
-                      ? providerSessions.detach({
-                          providerSessionId: effect.request.providerSessionId,
-                          threadId: effect.threadId,
-                          detail: "Provider thread handoff replaced this session binding.",
-                        })
-                      : Effect.void,
-                ),
-                Effect.andThen(
-                  providerTurnStart.start({
-                    threadId: effect.threadId,
-                    runId: effect.request.runId,
-                    willRetry,
-                  }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+            return restartEffect({ ...effect, request: effect.request }, willRetry);
           case "runtime-request.respond": {
             const requestId = effect.request.requestId;
             return runtimeRequests
@@ -884,7 +857,7 @@ export const layerWithOptions = (
                     ? yield* outbox
                         .succeed({ effectId: effect.id, workerId })
                         .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
-                    : effect.attemptCount >= maxAttempts
+                    : exhaustedEffectAttempts(effect, maxAttempts)
                       ? yield* outbox
                           .fail({ effectId: effect.id, workerId, error })
                           .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))

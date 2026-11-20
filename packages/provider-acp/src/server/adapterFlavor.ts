@@ -32,10 +32,12 @@ export interface AcpAdapterV2RuntimeInput {
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
   readonly sessionLaunch?: unknown;
   readonly resumeSessionId?: string;
+  readonly requireSessionLoadResponse?: true;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
@@ -108,6 +110,7 @@ export interface AcpAdapterV2ExtensionContext {
  * the agent's reply stays on `cause`.
  */
 export interface AcpAdapterV2Flavor {
+  readonly preferHttpMcp?: boolean;
   readonly buildPrompt?: (input: {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
@@ -125,6 +128,11 @@ export interface AcpAdapterV2Flavor {
    */
   readonly watchPromptOutcome?: (
     sessionId: string,
+    session: {
+      readonly recordedEnvironment: NodeJS.ProcessEnv | undefined;
+      readonly runtimeEnvironment: NodeJS.ProcessEnv | undefined;
+      readonly sessionLaunch: unknown;
+    },
   ) => Effect.Effect<
     (
       result: EffectAcpSchema.PromptResponse,
@@ -148,7 +156,11 @@ export interface AcpAdapterV2Flavor {
   >["_meta"];
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
+    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => EffectAcpSchema.SessionNotification;
+  readonly releaseRuntime?: (
+    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+  ) => Effect.Effect<void>;
   readonly onAvailableCommandsUpdate?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
   ) => Effect.Effect<void>;
@@ -199,6 +211,7 @@ export interface AcpAdapterV2Flavor {
     readonly modelSelection: ModelSelection;
   }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
   readonly ownedModelOptionIds?: ReadonlyArray<string>;
+  readonly lockSessionModeToPolicy?: true;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
@@ -225,6 +238,9 @@ export interface AcpAdapterV2Flavor {
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => AcpPermissionDisposition;
+  readonly answerablePermissionOptions?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+  ) => ReadonlyArray<EffectAcpSchema.PermissionOption>;
   readonly approvalOptions?: (
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => ReadonlyArray<ProviderApprovalOption>;
@@ -300,6 +316,7 @@ export interface AcpAdapterV2Flavor {
   readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
   readonly preserveRuntimeOnSettledInterrupt?: boolean;
   readonly enablePostSettleContinuation?: boolean;
+  readonly requireForegroundWakeTransition?: boolean;
   /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */
   readonly followAgentWorkState?: boolean;
   /**
@@ -354,11 +371,7 @@ export interface AcpAdapterV2Options {
     readonly shellCommands?: boolean;
   };
   readonly nativeLogging?: (threadId: ThreadId) => AcpAdapterV2NativeLogging;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
   readonly testHooks?: {
     readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
     /** Wire signal is set; the completion callback has not requested its permit yet. */

@@ -50,6 +50,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { type ChatMessage } from "../../types";
 import { AlarmClockIcon, CircleCheckIcon as CheckCircle2Icon } from "~/components/solar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { titleRegenerationToast } from "../threadTitleRegenerationToast";
 import { newMessageId } from "~/lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { composerDraftHasUserContent, useComposerDraftStore } from "../../composerDraftStore";
@@ -65,6 +66,7 @@ import {
 import { environmentShell } from "../../state/shell";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
+import { resolveSideChatOpen } from "../sideChat/sideChat.logic";
 import { ThreadStatusLine } from "./ThreadStatusLine";
 import { useApprovalBanners } from "./ApprovalDockBanners";
 
@@ -198,6 +200,9 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
   });
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
@@ -527,7 +532,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     }
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
+      params: buildThreadRouteParams(resolveSideChatOpen(threadRef, shell)),
       ...(options?.sentFrom ? { state: { sentFrom: options.sentFrom } } : {}),
     });
   };
@@ -711,10 +716,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       if (!activeThreadShell || !activeThreadRef || activeThreadShell.titleRegeneration != null)
         return;
       if (!readEnvironmentSupportsTitleRegeneration(activeThreadRef.environmentId)) return;
-      void updateThreadMetadata({
+      void regenerateThreadTitle({
         environmentId: activeThreadRef.environmentId,
-        input: { threadId: activeThreadRef.threadId, regenerateTitle: true },
-      }).then(toastThreadActionFailure("Failed to regenerate thread title"));
+        input: { threadId: activeThreadRef.threadId },
+      }).then((result) => {
+        const toast = titleRegenerationToast([result]);
+        if (toast) toastManager.add(toast);
+      });
     },
     "thread.settle": () => {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;

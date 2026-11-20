@@ -1,4 +1,5 @@
 import { CommandId, ProviderTurnId, RunId, ThreadId } from "@goat/contracts";
+import { MAX_RECOVERY_RESENDS } from "./goat/RecoveryResendLimits.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
@@ -87,9 +88,21 @@ export interface EffectOutboxV2Shape {
   readonly listByCommandId: (
     commandId: CommandId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly hasDelegatedStop: (
+    parentThreadId: ThreadId,
+    childThreadId: ThreadId,
+    childRunId: RunId,
+  ) => Effect.Effect<boolean, EffectOutboxError>;
   readonly listNeverAttemptedStarts: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly findOriginalStart: (
+    threadId: ThreadId,
+    runId: RunId,
+  ) => Effect.Effect<
+    Option.Option<{ readonly commandId: CommandId; readonly resendCount: number }>,
+    EffectOutboxError
+  >;
   readonly continuationSourceRunIds: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<RunId>, EffectOutboxError>;
@@ -485,6 +498,56 @@ export const layer = Layer.effect(
               : new EffectOutboxError({ operation: "list", cause }),
           ),
         ),
+      hasDelegatedStop: (parentThreadId, childThreadId, childRunId) =>
+        sql<{ readonly found: number }>`SELECT 1 AS found
+          FROM orchestration_v2_effect_outbox AS stop INDEXED BY orchestration_v2_effect_outbox_thread_status_idx
+          WHERE stop.thread_id = ${parentThreadId}
+            AND stop.status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+            AND stop.effect_type = 'delegated-tasks.stop'
+            AND stop.rowid > COALESCE((SELECT original.rowid FROM orchestration_v2_effect_outbox AS original INDEXED BY orchestration_v2_effect_outbox_thread_status_idx
+              WHERE original.thread_id = ${childThreadId}
+                AND original.status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+                AND original.effect_type = 'provider-turn.start'
+                AND CASE WHEN json_valid(original.payload_json) THEN json_extract(original.payload_json, '$.runId') = ${childRunId} ELSE 0 END
+              ORDER BY original.rowid ASC LIMIT 1), -1)
+            AND CASE WHEN json_valid(stop.payload_json) THEN
+              json_type(stop.payload_json, '$.childThreadIds') IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(stop.payload_json, '$.childThreadIds') WHERE value = ${childThreadId}
+              ) ELSE 0 END
+          LIMIT 1`.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.map((rows) => rows.length > 0),
+          Effect.mapError(
+            (cause) => new EffectOutboxError({ operation: "has-delegated-stop", cause }),
+          ),
+        ),
+      findOriginalStart: (threadId, runId) => {
+        const prefix = `effect:recovery-resend:${runId}:`;
+        return sql<{ readonly command_id: string; readonly resend_count: number }>`
+          SELECT original.command_id, (SELECT COUNT(*) FROM (
+            SELECT effect_id FROM orchestration_v2_effect_outbox
+            WHERE thread_id = ${threadId} AND substr(effect_id, 1, length(${prefix})) = ${prefix}
+            LIMIT ${MAX_RECOVERY_RESENDS}
+          )) AS resend_count
+          FROM orchestration_v2_effect_outbox AS original
+          WHERE original.thread_id = ${threadId} AND original.effect_type = 'provider-turn.start'
+            AND CASE WHEN json_valid(original.payload_json) THEN json_extract(original.payload_json, '$.runId') = ${runId} ELSE 0 END
+          ORDER BY original.rowid ASC LIMIT 1
+        `.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.map((rows) =>
+            rows[0] === undefined
+              ? Option.none()
+              : Option.some({
+                  commandId: CommandId.make(rows[0].command_id),
+                  resendCount: rows[0].resend_count,
+                }),
+          ),
+          Effect.mapError(
+            (cause) => new EffectOutboxError({ operation: "find-original-start", cause }),
+          ),
+        );
+      },
       hasUnsettledInterrupt: Effect.fn("EffectOutbox.hasUnsettledInterrupt")(
         function* (threadId, providerTurnIds) {
           if (providerTurnIds.length === 0) return false;
@@ -833,6 +896,21 @@ export const layer = Layer.effect(
             FROM orchestration_v2_effect_outbox
             WHERE status IN ('succeeded', 'cancelled')
               AND completed_at < ${cutoff}
+              AND NOT (effect_type = 'provider-runtime.continue' AND EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs AS recovery_run
+                WHERE recovery_run.thread_id = orchestration_v2_effect_outbox.thread_id
+                  AND recovery_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                  AND CASE WHEN json_valid(recovery_run.payload_json) AND json_valid(orchestration_v2_effect_outbox.payload_json)
+                    THEN json_extract(recovery_run.payload_json, '$.restartContinuationOfRunId') = json_extract(orchestration_v2_effect_outbox.payload_json, '$.sourceRunId')
+                    ELSE 0 END
+              ))
+              AND NOT (effect_type = 'provider-turn.start' AND EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs AS recovery_run
+                WHERE recovery_run.thread_id = orchestration_v2_effect_outbox.thread_id
+                  AND recovery_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                  AND recovery_run.run_id = CASE WHEN json_valid(orchestration_v2_effect_outbox.payload_json)
+                    THEN json_extract(orchestration_v2_effect_outbox.payload_json, '$.runId') ELSE NULL END
+              ))
             LIMIT ${PRUNE_BATCH_SIZE}
           )
           RETURNING effect_id

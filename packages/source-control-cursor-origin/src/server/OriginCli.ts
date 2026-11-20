@@ -20,6 +20,7 @@ import { parseGitRemoteHost } from "@goat/source-control-core/shared/definition"
 import { CURSOR_ORIGIN_GIT_HOST } from "../shared/definition.ts";
 import { retryAtFromHeader } from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import type { SourceControlProviderContext } from "@goat/source-control-core/server/SourceControlProvider";
 import { repositoryPathFromRemoteUrl } from "@goat/source-control-core/server/SourceControlProvider";
 
@@ -465,7 +466,7 @@ const make = Effect.gen(function* () {
     const remoteUrl =
       input.context?.remoteUrl ??
       (yield* host.git.resolvePrimaryRemoteName(input.cwd).pipe(
-        Effect.flatMap((remote) => host.git.readConfigValue(input.cwd, `remote.${remote}.url`)),
+        Effect.flatMap((remote) => readFirstFetchUrl(host.git, input.cwd, remote)),
         Effect.orElseSucceed(() => null),
       ));
     const repository =

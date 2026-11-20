@@ -5,6 +5,7 @@ import type {
   ReviewDiffPreviewInput,
   ReviewDiffPreviewSource,
 } from "@goat/contracts";
+import { reviewFileChangeType } from "@goat/contracts";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Option from "effect/Option";
 import * as Atom from "effect/reactivity/Atom";
@@ -113,11 +114,12 @@ export function useReviewFilePatches({
           );
           if (loaded.length > 0) return loaded;
         }
+        const changeType = reviewFileChangeType(file);
         return [
           {
             name: file.path,
             ...(file.previousPath ? { prevName: file.previousPath } : {}),
-            type: file.previousPath ? "rename-changed" : "change",
+            type: changeType === "unknown" ? "change" : changeType,
             hunks: [],
             additionLines: [],
             deletionLines: [],
@@ -147,6 +149,7 @@ export function useReviewFilePatches({
                   (candidate) => resolveFileDiffPath(candidate) === file.path,
                 ))),
           truncated: patch?._tag === "Success" && patch.value.source.truncated,
+          unknownChangeType: reviewFileChangeType(file) === "unknown",
         },
       ] as const;
     }),

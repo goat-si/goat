@@ -100,6 +100,13 @@ function getDesktopUpdateActionTooltip(state: DesktopUpdateState): string {
   ) {
     return `Update ${state.notAppliedVersion} did not apply. Click to retry.`;
   }
+  if (
+    (state.status === "available" || state.status === "error") &&
+    state.errorContext === "download" &&
+    state.availableVersion
+  ) {
+    return `Download failed for ${state.availableVersion}. Click to retry.`;
+  }
   if (state.status === "available") {
     return `Update ${state.availableVersion ?? "available"} ready to download`;
   }
@@ -116,9 +123,6 @@ function getDesktopUpdateActionTooltip(state: DesktopUpdateState): string {
     return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.${waiting}`;
   }
   if (state.status === "error") {
-    if (state.errorContext === "download" && state.availableVersion) {
-      return `Download failed for ${state.availableVersion}. Click to retry.`;
-    }
     if (state.errorContext === "install" && state.downloadedVersion) {
       return `Install failed for ${state.downloadedVersion}. Click to retry.`;
     }
@@ -142,6 +146,12 @@ export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): 
   if (typeof result.state.message !== "string") return null;
   const message = result.state.message.trim();
   return message.length > 0 ? message : null;
+}
+
+export function getDesktopUpdateInstallError(result: DesktopUpdateActionResult): string | null {
+  if (result.completed || result.state.errorContext !== "install")
+    return getDesktopUpdateActionError(result);
+  return result.state.message?.trim() || null;
 }
 
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {

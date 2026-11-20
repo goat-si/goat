@@ -10,3 +10,11 @@ export function resolveWorktreeSetupSnapshot(
   const previous = held?.threadId === threadId ? held : null;
   return current && (!previous || current.sequence >= previous.sequence) ? current : previous;
 }
+
+export function worktreeSetupPresentation(input: {
+  hasSetup: boolean;
+  preparing: boolean;
+}): "setup" | "preparing" | "none" {
+  if (input.hasSetup) return "setup";
+  return input.preparing ? "preparing" : "none";
+}
