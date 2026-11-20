@@ -1,13 +1,6 @@
 import { isCompactionCommandMessage } from "@goat/contracts";
 import { LIVE_ACTIVITY_ROW_ID, type ThreadFeedEntry } from "../../lib/threadActivity";
-import type { PendingThreadFeedEntry } from "./pending-thread-feed";
-
-export interface PendingFoldFeedEntry {
-  readonly type: "pending-fold";
-  readonly id: string;
-  readonly createdAt: string;
-  readonly messageId: string;
-}
+import type { PendingFoldFeedEntry, PendingThreadFeedEntry } from "./pending-thread-feed";
 
 export function createPendingTurnAppender() {
   let fold: PendingFoldFeedEntry | null = null;

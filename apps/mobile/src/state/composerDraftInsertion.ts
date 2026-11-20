@@ -1,6 +1,11 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@goat/contracts";
 import { readComposerDraftSelection } from "./composerDraftSelection";
-import type { ComposerDraftInsertion } from "./use-composer-drafts";
+
+export interface ComposerDraftInsertion {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
 
 function mapTextRange(
   captured: ComposerDraftInsertion,

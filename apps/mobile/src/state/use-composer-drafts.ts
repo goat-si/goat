@@ -4,6 +4,7 @@ import {
   mapCapturedRange,
   registerComposerDraftInsertion,
   completeComposerDraftInsertion,
+  type ComposerDraftInsertion,
 } from "./composerDraftInsertion";
 import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
 import { deduplicateComposerAttachments } from "./composerAttachmentDedup";
@@ -95,6 +96,7 @@ export {
   rememberComposerDraftSelection,
   useComposerDraftSelection,
 } from "./composerDraftSelection";
+export type { ComposerDraftInsertion } from "./composerDraftInsertion";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
@@ -110,12 +112,6 @@ export function setComposerContextImporting(draftKey: string, importing: boolean
   if (importing) next[draftKey] = true;
   else delete next[draftKey];
   appAtomRegistry.set(composerContextImportsAtom, next);
-}
-
-export interface ComposerDraftInsertion {
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
 }
 
 export function captureComposerDraftInsertion(

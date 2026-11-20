@@ -1101,5 +1101,3 @@ function ThreadRouteContent(
     </>
   );
 }
-
-export { FullscreenThreadRouteScreen } from "./FullscreenThreadRouteScreen";
