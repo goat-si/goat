@@ -10,6 +10,9 @@ import {
 } from "@goat/contracts";
 import {
   type MemoryUpdateItem,
+  type CodexComparison,
+  canShowCodexComparison,
+  readCodexComparison,
   importScopeMatches,
   memoryImportFormatLabels,
   memoryImportFormats,
@@ -97,11 +100,14 @@ export function MemoryImportSettings({
     AsyncResult.isSuccess(grants) &&
     sessionGrantsScope(grants.value, "memory:read");
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
-  const [comparison, setComparison] = useState<{
-    item: MemoryUpdateItem;
-    sourceText: string;
-    savedText: string;
-  } | null>(null);
+  const exposureAtom = memory.exposureAtom({
+    environmentId: params.environmentId,
+    input: { memorySpaceId },
+  });
+  const exposure = useAtomValue(exposureAtom);
+  const [comparison, setComparison] = useState<CodexComparison | null>(null);
+  if (comparison && !canShowCodexComparison(comparison.item, comparison.exposure, exposure))
+    setComparison(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [destinationConfirmed, setDestinationConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -402,16 +408,15 @@ export function MemoryImportSettings({
                 <>
                   <Action
                     label="Compare versions"
-                    disabled={!writable}
+                    disabled={!writable || !canShowCodexComparison(item, exposure, exposure)}
                     onPress={() =>
                       void run(async () => {
-                        const result = await workflow.compareCodex(item);
-                        if (result && mounted.current)
-                          setComparison({
-                            item,
-                            sourceText: result.sourceText,
-                            savedText: result.savedText,
-                          });
+                        const result = await readCodexComparison(
+                          item,
+                          () => registry.get(exposureAtom),
+                          () => workflow.compareCodex(item),
+                        );
+                        if (mounted.current) setComparison(result);
                       })
                     }
                   />

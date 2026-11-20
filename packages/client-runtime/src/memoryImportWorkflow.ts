@@ -19,6 +19,7 @@ import {
   type MemoryOperationId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import type { MemoryExposure } from "./state/memory.ts";
 import type { MemoryImportDestination, MemoryImportRecoveryStore } from "./memoryImportRecovery.ts";
 
 const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
@@ -238,6 +239,30 @@ export type MemoryUpdateItem = MemoryImportPreviewItem & {
   originalScope?: MemoryScope;
   change?: "New" | "Changed in Codex" | "Changed in both" | "Missing from Codex";
 };
+type CodexComparisonResult = Extract<MemoryImportProviderResult, { action: "compareCodex" }>;
+export type CodexComparison = Omit<CodexComparisonResult, "action"> & {
+  readonly item: MemoryUpdateItem;
+  readonly exposure: MemoryExposure;
+};
+export function canShowCodexComparison(
+  item: MemoryUpdateItem,
+  before: MemoryExposure,
+  now: MemoryExposure,
+) {
+  return before === now && now.ready && !!item.memoryId && !now.forgotten.has(item.memoryId);
+}
+export async function readCodexComparison(
+  item: MemoryUpdateItem,
+  current: () => MemoryExposure,
+  read: () => Promise<CodexComparisonResult | undefined>,
+): Promise<CodexComparison | null> {
+  const exposure = current();
+  if (!canShowCodexComparison(item, exposure, exposure)) return null;
+  const result = await read();
+  return result && canShowCodexComparison(item, exposure, current())
+    ? { item, exposure, sourceText: result.sourceText, savedText: result.savedText }
+    : null;
+}
 const sameScope = Schema.toEquivalence(MemoryScope);
 export function importScopeMatches(item: MemoryUpdateItem, scope?: MemoryScope | null): boolean {
   return !item.originalScope || (!!scope && sameScope(item.originalScope, scope));
