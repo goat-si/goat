@@ -8,6 +8,7 @@ import {
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateReleaseUrl,
   shouldToastDesktopUpdateActionResult,
+  translateDesktopUpdateMessage,
 } from "./desktopUpdate.logic";
 import type { ReportLocalUpdateError } from "./sidebar/useUpdateEverything";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -90,7 +91,7 @@ export async function downloadLocalUpdate(
       showDesktopUpdateDownloadedToast(bridge, result.state, gt);
     }
     const actionError = shouldToastDesktopUpdateActionResult(result)
-      ? getDesktopUpdateActionError(result)
+      ? translateDesktopUpdateMessage(getDesktopUpdateActionError(result), gt)
       : null;
     if (actionError) reportError(gt("Could not download update"), actionError);
     return result.completed;
