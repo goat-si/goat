@@ -1,3 +1,4 @@
+import { makeReleaseUnattendedHolds } from "./goat/ReleaseUnattendedHolds.ts";
 import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
 import { makeNotificationTasks } from "./goat/NotificationTasks.ts";
 import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
@@ -1989,53 +1990,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
   });
 
-  // A hold waits for a person to review what they queued. Nobody reviews messages from agents,
-  // the server or scheduled tasks, so a later completed run releases those unless it was stopped.
-  const releaseUnattendedHolds = Effect.fn("Orchestrator.releaseUnattendedHolds")(function* (
-    threadId: ThreadId,
-    completedRunId: RunId,
-  ) {
-    const held = yield* projectionStore.getHeldQueuedRuns(threadId);
-    if (held.length === 0) return;
-    const completedMessage = yield* projectionStore.getRunMessage(threadId, completedRunId);
-    if (completedMessage !== undefined && isBufferedProviderNotification(completedMessage)) return;
-    const projection = yield* projectionStore.getThreadRecords(
-      threadId,
-      ["runs", "messages", "turnItems"],
-      {
-        messageIds: held.map((run) => run.userMessageId),
-        turnItemTypes: ["run_interrupt_request"],
-        turnItemRunIds: [completedRunId],
-      },
-    );
-    // Only the newest run completing shows the thread moved past the hold; a late or
-    // bookkeeping update to an older run, overtaken by a failure or Stop, does not.
-    if (
-      latestExecutedRun(projection.runs)?.id !== completedRunId ||
-      projection.turnItems.length > 0 ||
-      worktreeSetupPending(projection)
-    )
-      return;
-    const { messages } = projection;
-    const unattended = new Set(
-      messages
-        .filter((message) => message.createdBy !== "user" || message.scheduledTaskId !== undefined)
-        .map((message) => message.id),
-    );
-    const now = yield* DateTime.now;
-    const released = held.filter((run) => unattended.has(run.userMessageId));
-    if (released.length === 0) return;
-    yield* writeSystemEvents(
-      released.map((run) => ({
-        type: "run.updated" as const,
-        threadId,
-        runId: run.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...run, queueHeld: false },
-      })),
-    );
-  });
+  const releaseUnattendedHolds = makeReleaseUnattendedHolds({ projectionStore, writeSystemEvents });
 
   const resumeQueuedRuns = Effect.gen(function* () {
     const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
