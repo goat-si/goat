@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useCommandPaletteSettingsItems } from "./useCommandPaletteSettingsItems";
 import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
 import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
@@ -265,7 +267,6 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog } from "./ui/command";
@@ -439,6 +440,7 @@ function OpenCommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
   readonly clearOpenIntent: () => void;
 }) {
+  const gt = useGT();
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const paletteRouteTarget = useThreadRouteTarget();
@@ -1770,26 +1772,11 @@ function OpenCommandPaletteDialog(props: {
     });
   }
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  // Settings use the same word-start and typo matching as threads.
-  const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
+  const settingsSearchItems = useCommandPaletteSettingsItems(
     availableSettingsSearchItems,
-  ).map((item) => ({
-    kind: "action",
-    value: `setting:${item.id}`,
-    searchTerms: [item.title, SETTINGS_SECTION_LABELS[item.to], ...(item.searchTerms ?? [])],
-    title: item.title,
-    description: `Settings · ${SETTINGS_SECTION_LABELS[item.to]}`,
-    ...(item.secondary ? { secondary: true } : {}),
-    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({
-        to: item.to,
-        hash: item.targetId ?? item.id,
-        replace: pathname === item.to,
-        hashScrollIntoView: false,
-      });
-    },
-  }));
+    pathname,
+    <SettingsIcon className={ITEM_ICON_CLASS} />,
+  );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -1824,6 +1811,7 @@ function OpenCommandPaletteDialog(props: {
     projectSearchItems: projectSearchItems,
     botSearchItems: goatBotItems.search,
     settingsSearchItems,
+    settingsSearchLabel: gt("Settings"),
     threadSearchItems:
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({

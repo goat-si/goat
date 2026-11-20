@@ -183,14 +183,14 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
 export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "decision-inbox",
-    title: "Decision inbox",
+    title: msg("Decision inbox"),
     to: "/settings/decision-inbox",
     searchTerms: ["decisions approvals questions pending answers"],
   },
   ...HUB_SETTINGS_SEARCH_ITEMS,
   {
     id: "memory-records",
-    title: "Memory",
+    title: msg("Memory"),
     to: "/settings/memory",
     requiresMemory: true,
     searchTerms: [
@@ -208,7 +208,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
-    title: "Keep worktrees with local changes",
+    title: msg("Keep worktrees with local changes"),
     to: "/settings/storage",
     scope: "project-defaults",
     searchTerms: [
@@ -217,14 +217,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "storage-delete-now",
-    title: "Delete now",
+    title: msg("Delete now"),
     to: "/settings/storage",
     scope: "environment-defaults",
     searchTerms: ["storage cleanup run now results report removed kept failed"],
   },
   {
     id: "storage-worktrees",
-    title: "Worktree cleanup",
+    title: msg("Worktree cleanup"),
     to: "/settings/storage",
     scope: "project-defaults",
     searchTerms: [
@@ -233,14 +233,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "storage-worktrees-location",
-    title: "Worktree location",
+    title: msg("Worktree location"),
     to: "/settings/storage",
     scope: "environment-defaults",
     searchTerms: ["worktree location folder directory path drive external disk"],
   },
   {
     id: "storage-artifacts",
-    title: "Artifacts and logs",
+    title: msg("Artifacts and logs"),
     to: "/settings/storage",
     scope: "environment-defaults",
     searchTerms: [
@@ -256,7 +256,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "project-overview",
-    title: "Project overview",
+    title: msg("Project overview"),
     to: "/settings/projects",
     searchTerms: ["name icon emoji image checkout remove delete"],
   },
@@ -287,94 +287,94 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "color-scheme",
-    title: "Color scheme",
+    title: msg("Color scheme"),
     to: "/settings/appearance",
     searchTerms: ["appearance light dark system mode"],
   },
   {
     id: "theme",
-    title: "Theme",
+    title: msg("Theme"),
     to: "/settings/appearance",
     searchTerms: ["themes appearance colors palette custom create import duplicate export"],
   },
   {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
     id: "setting-appearance-contrast",
-    title: "Contrast",
+    title: msg("Contrast"),
     to: "/settings/appearance",
     searchTerms: ["colors borders interface"],
   },
   ...GLASS_SETTINGS_SEARCH_ITEMS,
   {
     id: "diff-color-scheme",
-    title: "Diff colors",
+    title: msg("Diff colors"),
     to: "/settings/appearance",
     searchTerms: ["red green blue orange additions deletions changes counts palette colorblind"],
   },
   {
     id: "chat-width",
-    title: "Chat width",
+    title: msg("Chat width"),
     to: "/settings/appearance",
     searchTerms: ["wide full width column layout messages composer monitor"],
   },
   {
     id: "math-rendering",
-    title: "Render math",
+    title: msg("Render math"),
     to: "/settings/appearance",
     searchTerms: ["latex tex katex equations formulas markdown"],
   },
   {
     id: "panel-animations",
-    title: "Panel animations",
+    title: msg("Panel animations"),
     to: "/settings/appearance",
   },
   {
     id: "environment-identification",
-    title: "Environment identification",
+    title: msg("Environment identification"),
     to: "/settings/appearance",
     searchTerms: ["dev nightly artwork pill label hide none"],
     targetId: "appearance-interface",
   },
   {
     id: "interface-font",
-    title: "Interface font",
+    title: msg("Interface font"),
     to: "/settings/appearance",
     searchTerms: ["typography family size system sans"],
   },
   {
     id: "prompt-font",
-    title: "Prompt font",
+    title: msg("Prompt font"),
     to: "/settings/appearance",
     searchTerms: ["typography family size composer input"],
   },
   {
     id: "code-font",
-    title: "Code font",
+    title: msg("Code font"),
     to: "/settings/appearance",
     searchTerms: ["typography family size monospace code blocks diffs file previews"],
   },
   {
     id: "terminal-font",
-    title: "Terminal font",
+    title: msg("Terminal font"),
     to: "/settings/appearance",
     searchTerms: ["typography family size monospace output"],
   },
   {
     id: "font-smoothing",
-    title: "Font smoothing",
+    title: msg("Font smoothing"),
     to: "/settings/appearance",
     searchTerms: ["typography text grayscale anti aliasing macos thin"],
     macOnly: true,
   },
   {
     id: "word-wrap",
-    title: "Word wrap",
+    title: msg("Word wrap"),
     to: "/settings/appearance",
     searchTerms: ["long lines code blocks diffs file previews"],
   },
   {
     id: "composer-context",
-    title: "Composer context",
+    title: msg("Composer context"),
     to: "/settings/appearance",
   },
   {
@@ -433,7 +433,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "guest-links",
-    title: "Guest links",
+    title: msg("Guest links"),
     to: "/settings/beta",
     scope: "environment",
     searchTerms: ["beta share guest invite link teammate watch goat connect tunnel"],
@@ -738,7 +738,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "telemetry-export",
-    title: "OpenTelemetry export",
+    title: msg("OpenTelemetry export"),
     to: "/settings/diagnostics",
     targetId: "telemetry-export",
     scope: "environment",
@@ -775,20 +775,20 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "keybindings",
-    title: "Keybindings",
+    title: msg("Keybindings"),
     to: "/settings/keybindings",
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
   },
   ...KEYBINDING_SEARCH_ITEMS,
   {
     id: "snap-shot-enabled",
-    title: "SnapShots",
+    title: msg("SnapShots"),
     searchTerms: ["window capture screenshot"],
     to: "/settings/snap-shot",
   },
   {
     id: "snap-shot-accessibility",
-    title: "Include app text",
+    title: msg("Include app text"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
     searchTerms: [
@@ -797,31 +797,31 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "snap-shot-shortcut",
-    title: "Capture shortcut",
+    title: msg("Capture shortcut"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-sound",
-    title: "Capture sound",
+    title: msg("Capture sound"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-flash",
-    title: "Capture flash",
+    title: msg("Capture flash"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-animations",
-    title: "Capture animations",
+    title: msg("Capture animations"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "providers",
-    title: "Providers",
+    title: msg("Providers"),
     to: "/settings/providers",
     searchTerms: [
       "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
@@ -830,7 +830,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "usage-providers",
-    title: "Usage providers",
+    title: msg("Usage providers"),
     to: "/settings/providers",
     searchTerms: [
       "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
@@ -839,7 +839,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cursor-keychain-usage",
-    title: "Cursor account usage",
+    title: msg("Cursor account usage"),
     to: "/settings/providers",
     searchTerms: ["cursor macOS keychain usage tokens cost limits permission"],
     providerSettingsOnly: true,
@@ -847,7 +847,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "provider-health-check-interval",
-    title: "Health check interval",
+    title: msg("Health check interval"),
     to: "/settings/providers",
     searchTerms: ["refresh availability versions auth state models background probes seconds off"],
     providerSettingsOnly: true,
@@ -855,27 +855,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...AGENT_SETTINGS_SEARCH_ITEMS,
   {
     id: "device-hosts",
-    title: "Device hosts",
+    title: msg("Device hosts"),
     to: "/settings/integrations",
     searchTerms: ["ssh remote simulator emulator ios android mac mini identity key connection"],
   },
   {
     id: "agent-device-access",
-    title: "Agent device access",
+    title: msg("Agent device access"),
     to: "/settings/integrations",
     targetId: "devices",
     searchTerms: ["allow simulator emulator ios android drive tools sessions"],
   },
   {
     id: "device-hub",
-    title: "Simulators and emulators",
+    title: msg("Simulators and emulators"),
     to: "/settings/integrations",
     targetId: "devices",
     searchTerms: ["device hub simulator emulator ios android install start"],
   },
   {
     id: "device-platform-support",
-    title: "Simulator support",
+    title: msg("Simulator support"),
     to: "/settings/integrations",
     targetId: "devices",
     searchTerms: ["xcode android studio sdk avd runtime"],
@@ -886,14 +886,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...BROWSER_SETTINGS_SEARCH_ITEMS,
   {
     id: "automatic-pull",
-    title: "Automatically pull",
+    title: msg("Automatically pull"),
     to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: ["auto pull default branch current checkout fast forward upstream"],
   },
   {
     id: "remove-agent-credits-on-merge",
-    title: "Remove agent credits when merging",
+    title: msg("Remove agent credits when merging"),
     to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: [
@@ -902,14 +902,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "pull-request-merge-method",
-    title: "Default merge method",
+    title: msg("Default merge method"),
     to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: ["pull request merge squash rebase last selected"],
   },
   {
     id: "source-control",
-    title: "Source control",
+    title: msg("Source control"),
     to: "/settings/source-control",
     scope: "environment-defaults",
     searchTerms: [
@@ -918,7 +918,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "git-fetch-interval",
-    title: "Git fetch interval",
+    title: msg("Git fetch interval"),
     to: "/settings/source-control",
     searchTerms: [
       "automatic remote branch refresh background credentials security keys seconds off",
@@ -928,7 +928,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "worktree-branch-naming",
-    title: "Worktree branch naming",
+    title: msg("Worktree branch naming"),
     to: "/settings/source-control",
     searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
     environmentOnly: true,
@@ -937,7 +937,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...sourceControlHostSearchItems(sourceControlClients.definitions),
   {
     id: "source-control-writing-style",
-    title: "Commit and pull request writing",
+    title: msg("Commit and pull request writing"),
     to: "/settings/source-control",
     searchTerms: [
       "repository conventions conventional commits custom instructions commit messages change pr pull request merge request titles descriptions body style prompt write my own",
@@ -946,14 +946,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "follow-change-request-templates",
-    title: "Follow pull request templates",
+    title: msg("Follow pull request templates"),
     to: "/settings/source-control",
     searchTerms: ["repository pr pull request merge request change request description structure"],
     environmentOnly: true,
   },
   {
     id: "source-control-writer-model",
-    title: "Source control writer model",
+    title: msg("Source control writer model"),
     to: "/settings/source-control",
     searchTerms: [
       "override generated commit change request pr titles descriptions branch bookmark",
@@ -963,14 +963,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "review-guides",
-    title: "Review guides (beta)",
+    title: msg("Review guides (beta)"),
     to: "/settings/source-control",
     searchTerms: ["pull request pr guided review guide tour beta experimental"],
     environmentOnly: true,
   },
   {
     id: "review-guide-model",
-    title: "Review guide model",
+    title: msg("Review guide model"),
     to: "/settings/source-control",
     // Hidden until review guides are on, so a search lands on the switch that shows it.
     targetId: "review-guides",
@@ -980,7 +980,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "review-guide-instructions",
-    title: "Review guide instructions",
+    title: msg("Review guide instructions"),
     to: "/settings/source-control",
     targetId: "review-guides",
     searchTerms: ["pull request pr guided review guide preferences taste prompt custom"],
@@ -989,7 +989,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "project-actions",
-    title: "Actions",
+    title: msg("Actions"),
     to: "/settings/projects",
     searchTerms: [
       "commands scripts setup run dev server checkout worktree goat.json t3.json import",
@@ -997,14 +997,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "environment-icon",
-    title: "Environment icon",
+    title: msg("Environment icon"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["machine glyph sidebar mac mini studio laptop desktop server cloud vm"],
   },
   {
     id: "local-environment",
-    title: "Local environment",
+    title: msg("Local environment"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["turn off on disable enable local server agents remote only restart"],
@@ -1012,7 +1012,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "headless-server",
-    title: "Headless server on this computer",
+    title: msg("Headless server on this computer"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [
@@ -1022,7 +1022,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "network-access",
-    title: "Network access",
+    title: msg("Network access"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["expose backend remote pairing phone qr local machine interfaces host restart"],
@@ -1030,7 +1030,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-device",
-    title: "Connect your phone",
+    title: msg("Connect your phone"),
     to: "/settings/connections",
     searchTerms: [
       "use this device as a hub",
@@ -1039,7 +1039,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "tailscale-https",
-    title: "Tailscale HTTPS",
+    title: msg("Tailscale HTTPS"),
     to: "/settings/connections",
     targetId: "hub-device",
     searchTerms: ["serve magicdns endpoint remote secure network"],
@@ -1048,7 +1048,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "wsl-backend",
-    title: "WSL backend",
+    title: msg("WSL backend"),
     to: "/settings/connections",
     searchTerms: [
       "windows subsystem linux distro second server projects stop windows backend restart wsl only",
@@ -1067,7 +1067,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "goat-connect",
     localEnvironmentOnly: true,
-    title: "GOAT Connect",
+    title: msg("GOAT Connect"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["managed tunnel cloud other devices remote"],
@@ -1077,7 +1077,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "hold-webhooks-while-offline",
     localEnvironmentOnly: true,
-    title: "Hold webhooks while offline",
+    title: msg("Hold webhooks while offline"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["webhook automations offline queue mailbox goat connect"],
@@ -1087,7 +1087,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "publish-agent-activity",
     localEnvironmentOnly: true,
-    title: "Publish agent activity",
+    title: msg("Publish agent activity"),
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["mobile push notifications live activities cloud tunnel"],
@@ -1095,7 +1095,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "connections-environment",
-    title: "This machine",
+    title: msg("This machine"),
     to: "/settings/connections",
     searchTerms: [
       "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
@@ -1103,7 +1103,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "remote-environments",
-    title: "Environments",
+    title: msg("Environments"),
     to: "/settings/connections",
     searchTerms: [
       "add device environment pair backend host code ssh config agent tunnel saved goat connect tailscale server",
@@ -1111,7 +1111,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "provider-host-matrix",
-    title: "Providers on your machines",
+    title: msg("Providers on your machines"),
     to: "/settings/connections",
     searchTerms: [
       "hosts ssh sync install sign in codex claude cursor grok fx opencode pi versions",
@@ -1119,7 +1119,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hosts",
-    title: "Hosts",
+    title: msg("Hosts"),
     to: "/settings/connections",
     searchTerms: [
       "host status ssh machines reachable cpu memory disk load average threads running queued quota usage limits",
@@ -1127,19 +1127,19 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "remote-launches",
-    title: "Remote launches",
+    title: msg("Remote launches"),
     to: "/settings/connections",
     searchTerms: ["ssh dispatch launched threads other machines hosts cross-host import open"],
   },
   {
     id: "cloud-machines",
-    title: "Cloud machines",
+    title: msg("Cloud machines"),
     to: "/settings/connections",
     searchTerms: ["boat vm sandbox cloud machine create stop resume delete ssh api key"],
   },
   {
     id: "load-balancing",
-    title: "Load balancing",
+    title: msg("Load balancing"),
     to: "/settings/connections",
     searchTerms: [
       "automatic machine environment resources cpu memory capacity preference weight shared projects",
@@ -1147,7 +1147,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "pull-request-routing",
-    title: "Pull request sharing",
+    title: msg("Pull request sharing"),
     to: "/settings/connections",
     searchTerms: [
       `pull request routing trusted environments shared credentials permissions read actions source control ${SOURCE_CONTROL_HOST_LABELS}`,
@@ -1155,7 +1155,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "archive",
-    title: "Archived threads",
+    title: msg("Archived threads"),
     to: "/settings/archived",
     searchTerms: ["restore reopen deleted history projects"],
   },
