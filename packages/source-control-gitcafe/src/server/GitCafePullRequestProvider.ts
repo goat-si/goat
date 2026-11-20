@@ -1,3 +1,4 @@
+import * as ListingTrace from "./GitCafeListingTrace.ts";
 import { chunk } from "./gitCafeChunk.ts";
 import { gitCafeActionSummary } from "./gitCafeActionSummary.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
@@ -788,6 +789,7 @@ export const make = Effect.gen(function* () {
     listChangeRequests: Effect.fn("GitCafePullRequestProvider.listChangeRequests")(
       function* (input) {
         const base = yield* repositoryPath("listChangeRequests", input);
+        yield* ListingTrace.start(input);
         const involved = input.involvement === "authored" || input.involvement === "reviewing";
         let actorId: string | undefined;
         if (involved) {
@@ -810,8 +812,10 @@ export const make = Effect.gen(function* () {
             }),
           );
           if (Option.isSome(principal)) {
-            if (principal.value.handle.toLowerCase() !== input.viewer.toLowerCase())
+            if (principal.value.handle.toLowerCase() !== input.viewer.toLowerCase()) {
+              yield* ListingTrace.outcome(0, 0, false);
               return { items: [], truncated: false, continues: false };
+            }
             actorId = principal.value.actorId;
           }
         }
@@ -819,23 +823,18 @@ export const make = Effect.gen(function* () {
           { ...input, authorNarrowed: actorId !== undefined && input.involvement === "authored" },
           base,
         );
+        yield* ListingTrace.filters(actorId !== undefined, unresolvedAuthor !== null);
         const readPage = Effect.fn("readPage")(function (rows: number, after: string | null) {
-          const query = new URLSearchParams({ limit: String(rows), sort: "newest" });
-          if (input.state !== "all") query.set("state", input.state);
-          if (input.query?.trim()) query.set("q", input.query.trim());
-          for (const [key, value] of filterParams) query.set(key, value);
-          if (actorId !== undefined)
-            query.set(
-              input.involvement === "reviewing" ? "reviewers" : "authors",
-              encodeIds([actorId]),
-            );
-          if (after !== null) query.set("after", after);
+          const query = ListingTrace.query(input, filterParams, actorId, rows, after);
           return read(
             "listChangeRequests",
             input,
             { path: `${base}/pulls?${query}` },
             Json.GitCafePulls,
-          ).pipe(Effect.tap((page) => Effect.sync(() => learnAuthors(input.host, page.items))));
+          ).pipe(
+            Effect.tap((page) => Effect.sync(() => learnAuthors(input.host, page.items))),
+            Effect.tap((page) => ListingTrace.page(rows, page.items.length)),
+          );
         });
         if (unresolvedAuthor !== null) {
           // Rows are only ever handed out narrowed by actor, so a continuation always carries on
@@ -848,35 +847,36 @@ export const make = Effect.gen(function* () {
             pages += 1;
             after = page.items.length === 0 ? null : page.next;
           } while (!knownAuthors.has(key) && after !== null && pages < AUTHOR_DISCOVERY_PAGES);
+          yield* Effect.annotateCurrentSpan("gitcafe.list.author_discovery_pages", pages);
           const found = knownAuthors.get(key);
-          if (found === undefined)
+          if (found === undefined) {
+            yield* ListingTrace.outcome(0, 0, after !== null);
             return { items: [], truncated: after !== null, continues: false };
+          }
           filterParams.push(["authors", encodeIds([found])]);
         }
+        yield* Effect.annotateCurrentSpan("gitcafe.list.filtered", filterParams.length > 0);
         const limit = Math.max(1, input.limit);
         const items: Array<Json.GitCafePull> = [];
         // GitCafe pages by an opaque token and orders by creation, so a continuation reads from the
-        // top and keeps only the rows created after the last one delivered. A count of rows would
-        // skip one for every row above it that closed in between.
+        // top and keeps rows older than the last delivered, so closed rows cannot cause skips.
         const resume = parsePosition(input.cursor?.resumeAfter);
-        const isNew = (pull: Json.GitCafePull) => {
-          if (resume === null) return true;
-          const created = Date.parse(pull.createdAt);
-          return (
-            created < resume.created || (created === resume.created && pull.number < resume.number)
-          );
-        };
+        const isNew = (pull: Json.GitCafePull) => ListingTrace.isNew(pull, resume);
         let next: string | null = null;
+        let listingPages = 0;
         do {
           const page: typeof Json.GitCafePulls.Type = yield* readPage(
             resume === null ? Math.min(PAGE_SIZE, limit - items.length) : PAGE_SIZE,
             next,
           );
+          listingPages += 1;
           items.push(...page.items.filter(isNew));
           next = page.items.length === 0 ? null : page.next;
         } while (next !== null && items.length < limit);
         const delivered = items.slice(0, limit);
         const last = delivered.at(-1);
+        const truncated = next !== null || items.length > limit;
+        yield* ListingTrace.outcome(listingPages, delivered.length, truncated);
         return {
           ...(last === undefined ? {} : { resumeAfter: `${last.createdAt}~${last.number}` }),
           items: delivered.map((pull) => {
@@ -888,7 +888,7 @@ export const make = Effect.gen(function* () {
                 }
               : item;
           }),
-          truncated: next !== null || items.length > limit,
+          truncated,
           continues: true,
         };
       },
