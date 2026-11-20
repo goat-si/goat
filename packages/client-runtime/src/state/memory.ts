@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  type TurnMemoryInput,
+  type TurnMemoryResult,
   type MemoryChangeSignal,
   type MemoryId,
   type MemoryItem,
@@ -12,6 +14,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import { memoryLocalSpace } from "../memoryPresentation.ts";
 import { createMemoryImportWorkflow } from "../memoryImportWorkflow.ts";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
@@ -380,6 +383,8 @@ export function createMemoryEnvironmentAtoms<R, E>(
             tag !== WS_METHODS.siteNotesDelete &&
             tag !== WS_METHODS.siteNotesRestoreSeed) ||
             config.environment.capabilities.memory?.siteNotes === true) &&
+          (tag !== WS_METHODS.memoryTurnInspect ||
+            config.environment.capabilities.memory?.turnMemory === true) &&
           (tag !== WS_METHODS.memoryMove ||
             config.environment.capabilities.memory?.scopeMoves === true) &&
           (!tag.startsWith("memory.suggestions.") ||
@@ -555,6 +560,36 @@ export function createMemoryEnvironmentAtoms<R, E>(
     });
   }
   const read = bodyQuery(WS_METHODS.memoryRead);
+  const turnMemory = bodyQuery(WS_METHODS.memoryTurnInspect);
+  const canInspectTurnMemory = command(WS_METHODS.memoryTurnInspect).permissionAtom;
+  const syncStatus = command(WS_METHODS.memorySyncStatus);
+  const spaceForTurn = Atom.family((environmentId: EnvironmentId) =>
+    runtime
+      .atom((get) => {
+        if (Option.isNone(get(sessions.preparedConnectionValueAtom(environmentId))))
+          return Effect.succeed(null);
+        return Effect.promise(() =>
+          syncStatus.run(get.registry, { environmentId, input: {} }),
+        ).pipe(
+          Effect.map((status) =>
+            status._tag === "Success" ? memoryLocalSpace(status.value) : null,
+          ),
+        );
+      })
+      .pipe(Atom.setIdleTTL(0)),
+  );
+  type TurnTarget = { environmentId: EnvironmentId; input: Omit<TurnMemoryInput, "memorySpaceId"> };
+  const turnForRun = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [EnvironmentId, TurnTarget["input"]];
+    return Atom.make((get): Option.Option<TurnMemoryResult> | null => {
+      if (!get(canInspectTurnMemory(environmentId))) return Option.none();
+      const status = get(spaceForTurn(environmentId));
+      if (status._tag === "Initial") return null;
+      const memorySpaceId = status._tag === "Success" ? status.value : null;
+      if (memorySpaceId === null) return Option.none();
+      return get(turnMemory.reply({ environmentId, input: { ...input, memorySpaceId } }));
+    }).pipe(Atom.setIdleTTL(0));
+  });
 
   const drafts = Atom.family((key: string) => {
     const [environmentId, input, draftId] = JSON.parse(key) as [
@@ -652,6 +687,9 @@ export function createMemoryEnvironmentAtoms<R, E>(
     list: bodyQuery(WS_METHODS.memoryList),
     search: bodyQuery(WS_METHODS.memorySearch),
     read,
+    turnMemory,
+    turnMemoryForRun: (target: TurnTarget) => turnForRun(environmentRpcKey(target)),
+    canInspectTurnMemory,
     history: bodyQuery(WS_METHODS.memoryHistory),
     resetReportAttempts: command(WS_METHODS.memoryResetReportAttempts),
     hubDiagnostics: command(WS_METHODS.memoryHubDiagnostics),
@@ -670,7 +708,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
     hubSettingsUpdate: command(WS_METHODS.memoryHubSettingsUpdate),
     ownerSourceReadPolicyGet: command(WS_METHODS.memoryOwnerSourceReadPolicyGet),
     ownerSourceReadPolicyUpdate: command(WS_METHODS.memoryOwnerSourceReadPolicyUpdate),
-    syncStatus: command(WS_METHODS.memorySyncStatus),
+    syncStatus,
     importProvider,
     createImportWorkflow: (
       registry: AtomRegistry.AtomRegistry,

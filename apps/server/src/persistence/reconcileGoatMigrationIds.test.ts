@@ -156,6 +156,7 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
             .slice(count)
             .map((name, index) => [159 + count + index, name] as const),
           [165, "MemorySuggestionQuota"],
+          [166, "TurnMemoryReceipts"],
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -660,6 +661,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
           [163, "MemoryCompactMoveReceipts"],
           [164, "MemoryOriginCatchup"],
           [165, "MemorySuggestionQuota"],
+          [166, "TurnMemoryReceipts"],
         ],
       );
       const sql = yield* SqlClient.SqlClient;

@@ -2827,23 +2827,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           // Native workspace commands accept file parts only, so snapshots stay on prompts.
           if (!command) {
-            const snapshot =
-              memoryInput === undefined
-                ? undefined
-                : memoryInput.refreshMemoryContext
-                  ? yield* memoryInput.refreshMemoryContext()
-                  : memoryInput.memoryContext;
-            const memory =
-              snapshot === undefined
-                ? undefined
-                : yield* Effect.try({
-                    try: () => MemoryContext.memoryContextText(snapshot),
-                    catch: () =>
-                      new ProviderAdapter.ProviderAdapterProtocolError({
-                        driver: OPENCODE_PROVIDER,
-                        detail: "Invalid memory context frame",
-                      }),
-                  });
+            const { text: memory, receipt } = yield* MemoryContext.promptMemory(
+              memoryInput,
+              OPENCODE_PROVIDER,
+            );
             const availability = McpProviderSession.memoryToolAvailability(
               !connection.external &&
                 currentMcp?.authorizationHeader === installedMcpSession?.authorizationHeader &&
@@ -2874,7 +2861,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),
-            ).pipe(Effect.asVoid);
+            ).pipe(Effect.andThen(receipt));
           }
           const receipt = Deferred.makeUnsafe<void>();
           commandReceipts.set(payload.messageID, receipt);

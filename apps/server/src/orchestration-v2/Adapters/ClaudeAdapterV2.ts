@@ -2238,11 +2238,6 @@ function formatClaudeUsageLimitWait(waitMs: number): string {
 
 const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryContextSnapshot));
 
-const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
-  const { memoryContext: _body, ...rest } = input;
-  return rest;
-};
-
 interface ActiveClaudeTurnContext {
   readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
@@ -9567,12 +9562,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           message: SDKUserMessage,
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
         ) {
-          const snapshot = turnInput.refreshMemoryContext
-            ? yield* turnInput.refreshMemoryContext()
-            : turnInput.memoryContext;
-          if (snapshot === undefined) return message;
+          const snapshot = yield* MemoryContext.refreshSnapshot(turnInput);
+          if (snapshot === undefined) return { message, receipt: Effect.void };
           const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          return appendClaudeUserText(message, text);
+          return {
+            message: appendClaudeUserText(message, text),
+            receipt: MemoryContext.deliveryReceipt(turnInput, snapshot),
+          };
         });
 
         const withCuaNotice = (
@@ -9696,7 +9692,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
               input:
                 turnInput.refreshMemoryContext || nativeControl || promptUuid === null
-                  ? withoutMemoryBody(turnInput)
+                  ? MemoryContext.withoutMemoryBody(turnInput)
                   : { ...turnInput },
               queryPolicy: querySession.queryPolicy,
               nativeThreadId,
@@ -9816,18 +9812,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               });
             });
             if (userMessage !== null) {
+              const admitted = nativeControl
+                ? { message: userMessage, receipt: Effect.void }
+                : yield* withFreshMemory(userMessage, turnInput);
               const admittedMessage = nativeControl
-                ? userMessage
-                : yield* withFreshMemory(userMessage, turnInput).pipe(
-                    Effect.flatMap((m) => withCuaNotice(m, querySession, turnInput.threadId)),
-                  );
+                ? admitted.message
+                : yield* withCuaNotice(admitted.message, querySession, turnInput.threadId);
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
                   .retain({
                     bytes: new TextEncoder().encode(encodeMemorySnapshot(body)).length,
                     release: Effect.sync(() => {
-                      context.input = withoutMemoryBody(context.input);
+                      context.input = MemoryContext.withoutMemoryBody(context.input);
                     }),
                   })
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
@@ -9847,6 +9844,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ),
                 ),
               );
+              yield* admitted.receipt;
               return;
             }
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
@@ -10230,10 +10228,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // The PDF budget is spent once the message is queued, even if the steer is later refused.
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
-                existing.query.offer(admitted, () => {
+                existing.query.offer(admitted.message, () => {
                   pdfReservation.commit();
                 }),
               ).pipe(
+                Effect.tap(() => admitted.receipt),
                 Effect.tap(() =>
                   Effect.sync(() => {
                     pdfReservation.commit();

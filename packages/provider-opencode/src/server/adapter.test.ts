@@ -20,9 +20,6 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type AuthEnvironmentScope,
-  MemoryId,
-  MemoryRevisionId,
-  MemorySpaceId,
   EnvironmentId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -51,7 +48,7 @@ import {
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
-import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
+import { memoryContextText } from "@goat/provider-core/server/memoryContext";
 import {
   OPEN_CODE_TEST_SETTINGS,
   promiseGate,
@@ -61,23 +58,8 @@ import {
   permissionAction,
   providerTurn,
   makeOpenCodeRuntimeHarness,
+  wp4Snapshot,
 } from "./adapter.harness.testkit.ts";
-
-const wp4Snapshot = () =>
-  packMemoryContext({
-    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <instruction> 'data'",
-      },
-    ],
-  })!;
 
 const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
 
@@ -2372,6 +2354,8 @@ describe("OpenCodeAdapterV2", () => {
         const nativeEvents = asyncEventStream();
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         const suffix = `memory-${external}`;
+        let refusePrompt = false;
+        const delivered: Array<typeof snapshot> = [];
         const config = {
           environmentId: EnvironmentId.make("fixture"),
           threadId: ThreadId.make(`thread-opencode-${suffix}`),
@@ -2402,6 +2386,7 @@ describe("OpenCodeAdapterV2", () => {
               get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
               promptAsync: async (input: { system?: string; messageID: string }) => {
                 payloads.push(input);
+                if (refusePrompt) throw new Error("prompt refused");
                 return { data: true };
               },
               abort: async () => ({ data: true }),
@@ -2409,7 +2394,14 @@ describe("OpenCodeAdapterV2", () => {
           },
           {
             external,
-            memory: { memoryContext: snapshot, refreshMemoryContext: () => Effect.succeed(memory) },
+            memory: {
+              memoryContext: snapshot,
+              refreshMemoryContext: () => Effect.succeed(memory),
+              onMemoryDelivered: (accepted) =>
+                Effect.sync(() => {
+                  delivered.push(accepted);
+                }),
+            },
           },
         );
         const finish = () =>
@@ -2503,6 +2495,13 @@ describe("OpenCodeAdapterV2", () => {
           Exit.isFailure(yield* harness.startTurn("invalid", resumedAgain).pipe(Effect.exit)),
         );
         assert.equal(payloads.length, 5);
+        memory = snapshot;
+        refusePrompt = true;
+        assert.isTrue(
+          Exit.isFailure(yield* harness.startTurn("refused", resumedAgain).pipe(Effect.exit)),
+        );
+        assert.include(payloads[5]?.system ?? "", memoryContextText(snapshot));
+        assert.deepStrictEqual(delivered, [snapshot, snapshot, snapshot]);
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),

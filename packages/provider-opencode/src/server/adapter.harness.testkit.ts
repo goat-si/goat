@@ -1,4 +1,9 @@
+import { packMemoryContext } from "@goat/provider-core/server/memoryContext";
 import {
+  EnvironmentId,
+  MemoryId,
+  MemoryRevisionId,
+  MemorySpaceId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -125,7 +130,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
     readonly modelOptions?: ReadonlyArray<ProviderOptionSelection>;
     readonly memory?: Pick<
       ProviderAdapter.ProviderAdapterV2TurnInput,
-      "memoryContext" | "refreshMemoryContext"
+      "memoryContext" | "refreshMemoryContext" | "onMemoryDelivered"
     >;
   } = {},
   host: Partial<ProviderHost.ProviderHost["Service"]> = {},
@@ -228,3 +233,22 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
     threadId,
   };
 });
+
+export const wp4Snapshot = () => {
+  const snapshot = packMemoryContext({
+    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
+    projectionWatermark: 1,
+    items: [
+      {
+        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000001"),
+        revisionId: MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
+        scope: { kind: "user" },
+        provenance: { environmentId: EnvironmentId.make("fixture") },
+        assertionKind: "fact",
+        text: "& <instruction> 'data'",
+      },
+    ],
+  });
+  if (!snapshot) throw new Error("Expected a nonempty memory snapshot");
+  return snapshot;
+};

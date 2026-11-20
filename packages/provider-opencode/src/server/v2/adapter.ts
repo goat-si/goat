@@ -3316,20 +3316,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state: ThreadState,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
     ) {
-      const snapshot = turnInput.refreshMemoryContext
-        ? yield* turnInput.refreshMemoryContext()
-        : turnInput.memoryContext;
-      const value =
-        snapshot === undefined
-          ? ""
-          : yield* Effect.try({
-              try: () => MemoryContext.memoryContextText(snapshot),
-              catch: () =>
-                new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver: OPENCODE_PROVIDER,
-                  detail: "Invalid memory context frame",
-                }),
-            });
+      const { text: memory, receipt } = yield* MemoryContext.promptMemory(
+        turnInput,
+        OPENCODE_PROVIDER,
+      );
+      const value = memory ?? "";
       // Always replace, including empty clear; no local body survives this admission.
       yield* client.session.instructions.entry.put({
         sessionID: Session.ID.make(sessionId),
@@ -3339,6 +3330,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.memoryDigest = Hex.encode(
         yield* crypto.digest(Digest.sha256, new TextEncoder().encode(value)),
       );
+      return receipt;
     });
 
     const listSkills = (location: { readonly directory: string }) =>
@@ -3404,7 +3396,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
           yield* markBefore(sessionId, newest.data[0]?.id ?? null);
           if (state.active !== turn || turn.interrupted) return;
-          yield* prepareMemory(sessionId, state, turnInput);
+          const receipt = yield* prepareMemory(sessionId, state, turnInput);
           if (!sending()) return;
           if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
             yield* client.session
@@ -3412,13 +3404,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          return yield* client.session.command({ sessionID, ...command }).pipe(Effect.asVoid);
+          return yield* client.session
+            .command({ sessionID, ...command })
+            .pipe(Effect.andThen(receipt));
         }
       }
       const mentions = skillMentions(text);
       const skills = mentions.length === 0 ? [] : yield* skillsMentioned(location, mentions);
       if (state.active !== turn || turn.interrupted) return;
-      yield* prepareMemory(sessionId, state, turnInput);
+      const receipt = yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = yield* promptText(turnInput);
       if (!sending()) return;
@@ -3432,7 +3426,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ? {}
             : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
         })
-        .pipe(Effect.asVoid);
+        .pipe(Effect.andThen(receipt));
     });
 
     const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {

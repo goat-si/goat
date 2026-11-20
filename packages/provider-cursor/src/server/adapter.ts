@@ -1683,7 +1683,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
-            return { message: "/compress", prompt: undefined };
+            return { message: "/compress", prompt: undefined, receipt: Effect.void };
           }
           const newText = yield* providerMessageTextWithAttachmentPaths({
             text: yield* resolveCursorSkillText(
@@ -1739,20 +1739,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const snapshot = turnInput.refreshMemoryContext
-            ? yield* turnInput.refreshMemoryContext()
-            : turnInput.memoryContext;
-          const memory =
-            snapshot === undefined
-              ? undefined
-              : yield* Effect.try({
-                  try: () => MemoryContext.memoryContextText(snapshot),
-                  catch: () =>
-                    new ProviderAdapter.ProviderAdapterProtocolError({
-                      driver: CursorAgentSdk.CURSOR_PROVIDER,
-                      detail: "Invalid memory context frame",
-                    }),
-                });
+          const { text: memory, receipt } = yield* MemoryContext.promptMemory(
+            turnInput,
+            CursorAgentSdk.CURSOR_PROVIDER,
+          );
           const agent = yield* Ref.get(liveAgent);
           const availability = McpProviderSession.memoryToolAvailability(config);
           const hasMemoryTools = availability.read || availability.write || availability.source;
@@ -1781,6 +1771,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .filter((part) => part !== undefined)
             .join("\n\n");
           return {
+            receipt,
             message: images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage),
             prompt,
           };
@@ -1817,12 +1808,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const interrupted = yield* Ref.get(interruptedPrompt);
             const previous =
               interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
-            const { message, prompt } = yield* resolveUserMessage(
+            const { message, prompt, receipt } = yield* resolveUserMessage(
               turnInput,
               mcpSession,
               memoryClaim,
               previous,
             );
+            let delivery = receipt;
             const compacted = prompt === undefined;
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
@@ -1833,9 +1825,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 prepareMessage: () =>
                   Effect.gen(function* () {
                     const config = yield* mcpSessions.read(turnInput.threadId);
+                    const prepared = yield* resolveUserMessage(
+                      turnInput,
+                      config,
+                      memoryClaim,
+                      previous,
+                    );
+                    delivery = prepared.receipt;
                     return {
-                      message: (yield* resolveUserMessage(turnInput, config, memoryClaim, previous))
-                        .message,
+                      message: prepared.message,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },
                     };
                   }).pipe(
@@ -1865,6 +1863,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 },
               })
               .pipe(Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)));
+            yield* delivery;
             if (!compacted) yield* Ref.set(interruptedPrompt, null);
             const startedAt = yield* DateTime.now;
             const completed = yield* Deferred.make<void, never>();

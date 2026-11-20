@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off
+import { crashOnPrompt } from "./acp-mock-prompt-crash.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Effect from "effect/Effect";
@@ -1063,12 +1064,7 @@ const program = Effect.gen(function* () {
         );
         return {};
       }
-      if (
-        process.env.GOAT_ACP_CRASH_PROMPT === "1" &&
-        request.prompt.some((part) => part.type === "text" && part.text === "crash now")
-      ) {
-        return yield* Effect.sync(() => process.exit(23));
-      }
+      if (process.env.GOAT_ACP_CRASH_PROMPT) yield* crashOnPrompt(request, agent);
 
       if (clientFsProbePath !== undefined && clientFsProbeLogPath !== undefined) {
         const probes = [

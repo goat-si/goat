@@ -37,7 +37,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), [165, "MemorySuggestionQuota"]);
+      assert.deepStrictEqual(migrationManifest.at(-1), [166, "TurnMemoryReceipts"]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

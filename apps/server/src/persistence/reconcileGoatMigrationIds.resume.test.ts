@@ -391,7 +391,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      currentRow("MemorySuggestionQuota")[0],
+      currentRow("TurnMemoryReceipts")[0],
     ],
     [
       "a ledger from before the shift that lost row 72",

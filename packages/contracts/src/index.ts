@@ -168,6 +168,7 @@ export * from "./memory.ts";
 export * from "./memoryStoreBudget.ts";
 export * from "./siteNotes.ts";
 export * from "./memoryRecall.ts";
+export * from "./turnMemory.ts";
 export * from "./memoryRemember.ts";
 export * from "./memoryForget.ts";
 export * from "./memorySuggestions.ts";

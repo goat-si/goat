@@ -95,6 +95,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import { sendPromptWhenIdle } from "./promptDelivery.ts";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -197,37 +198,6 @@ const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
  * This avoids quadratic output; scheduled flushes can run late under host load.
  */
 const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
-const ACP_BUSY_PROMPT_RETRY_INTERVAL: Duration.Input = "1 second";
-
-// pi-agent-core agents (oh-my-pi) end a turn while background work runs and reject
-// prompts until it finishes; the prompt is resent rather than failing the turn.
-function isAgentBusyPromptError(error: EffectAcpErrors.AcpError): boolean {
-  return (
-    error._tag === "AcpRequestError" && error.errorMessage.startsWith("Agent is already processing")
-  );
-}
-
-function sendPromptWhenIdle<A>(
-  turn: { readonly interrupted: boolean; readonly finalized: boolean },
-  prompt: () => Effect.Effect<A, EffectAcpErrors.AcpError>,
-): Effect.Effect<A, EffectAcpErrors.AcpError> {
-  // A Stop can land during the wait, so the flags are rechecked before each resend.
-  const stopped = () => turn.interrupted || turn.finalized;
-  return prompt().pipe(
-    Effect.catchIf(
-      (error) => isAgentBusyPromptError(error) && !stopped(),
-      (error) =>
-        Effect.sleep(ACP_BUSY_PROMPT_RETRY_INTERVAL).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              stopped() ? Effect.fail(error) : sendPromptWhenIdle(turn, prompt),
-            ),
-          ),
-        ),
-    ),
-  );
-}
-
 // Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
 class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>()(
@@ -448,6 +418,7 @@ interface ActiveAcpTurn {
   lastProgressAt: number;
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
+  confirmMemory?: Effect.Effect<void>;
   /** Frees the runtime for the next prompt while the agent still holds this one's response. */
   readonly foregroundIdle: Deferred.Deferred<void>;
 }
@@ -4418,6 +4389,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             update.sessionUpdate !== "plan_removed" &&
             acpRootSessionUpdateIngestsOutput(notification)
           ) {
+            // Only post-dispatch output already attributed to the foreground root can acknowledge its prompt.
+            if (
+              context.confirmMemory &&
+              !context.promptSettled &&
+              acpPostSettleWakeEvidence(notification, flavor) &&
+              (yield* Deferred.isDone(context.promptDispatched))
+            ) {
+              yield* context.confirmMemory;
+              delete context.confirmMemory;
+            }
             yield* emitProviderRetry(context, "completed");
           }
           if (
@@ -7463,27 +7444,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ? undefined
                 : yield* flavor.watchPromptOutcome(requestedSessionId);
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
-            const prompt = yield* Effect.gen(function* () {
-              const snapshot =
+            const { prompt, receipt } = yield* Effect.gen(function* () {
+              const skipMemory =
                 isAppOwnedWakeTurn ||
                 (compactsContext &&
                   turnInput.message.text.trim() === "/compact" &&
-                  turnInput.message.attachments.length === 0)
-                  ? undefined
-                  : turnInput.refreshMemoryContext
-                    ? yield* turnInput.refreshMemoryContext()
-                    : turnInput.memoryContext;
-              const memory =
-                snapshot === undefined
-                  ? undefined
-                  : yield* Effect.try({
-                      try: () => MemoryContext.memoryContextText(snapshot),
-                      catch: () =>
-                        new ProviderAdapter.ProviderAdapterProtocolError({
-                          driver,
-                          detail: "Invalid memory context frame",
-                        }),
-                    });
+                  turnInput.message.attachments.length === 0);
+              const { text: memory, receipt } = yield* MemoryContext.promptMemory(
+                skipMemory ? undefined : turnInput,
+                driver,
+              );
               const config = yield* mcpSessions.read(turnInput.threadId);
               // Only the attachment installed on this native session can advertise tools.
               const attached = terminalEnvironmentBySessionId.get(requestedSessionId);
@@ -7499,18 +7469,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 hasMemoryTools || memoryToolClaims.has(requestedSessionId);
               if (hasMemoryTools) memoryToolClaims.add(requestedSessionId);
               else memoryToolClaims.delete(requestedSessionId);
-              return [
-                ...promptParts!.prompt,
-                ...(announceMemoryTools
-                  ? [
-                      {
-                        type: "text" as const,
-                        text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
-                      },
-                    ]
-                  : []),
-                ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
-              ];
+              return {
+                receipt,
+                prompt: [
+                  ...promptParts!.prompt,
+                  ...(announceMemoryTools
+                    ? [
+                        {
+                          type: "text" as const,
+                          text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
+                        },
+                      ]
+                    : []),
+                  ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
+                ],
+              };
             }).pipe(Effect.tapError(() => finalizeTurn(context, "failed")));
             if (promptInactivityTimeoutMillis !== undefined) {
               context.inactivityWatchdog = yield* watchPromptInactivity(
@@ -7519,12 +7492,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 promptInactivityTimeoutMillis,
               ).pipe(Effect.forkIn(sessionScope));
             }
+            const confirm = yield* Effect.cached(receipt);
+            context.confirmMemory = confirm;
             yield* sendPromptWhenIdle(context, () =>
               runtime.prompt(
                 { prompt },
                 { dispatched: context.promptDispatched, released: context.foregroundIdle },
               ),
             ).pipe(
+              Effect.tap(() => confirm),
               Effect.tap(() =>
                 Ref.update(promptInstructionStates, (current) => {
                   if (promptParts?.instructionState === undefined) return current;

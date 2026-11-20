@@ -1,3 +1,4 @@
+import { makeTurnMemoryReader } from "./TurnMemoryReceipts.ts";
 import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
@@ -267,6 +268,10 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<M.MemoryPage, MemoryServiceError>;
+    readonly inspectTurn: (
+      input: M.TurnMemoryInput,
+      permit: Permit,
+    ) => Effect.Effect<M.TurnMemoryResult, MemoryServiceError>;
     readonly read: (
       input: M.MemoryReadInput,
       permit: Permit,
@@ -2515,6 +2520,7 @@ const make = Effect.fnUntraced(function* (
         return yield* (yield* ProviderMemoryImportRuntime).run(input, permit);
       }),
     commitLocalIntent,
+    inspectTurn: makeTurnMemoryReader(sql, store, read),
     readSource,
     prepareSourceRead,
     validateSourceOutcome,

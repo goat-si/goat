@@ -235,6 +235,7 @@ const handlers = {
         yield* decodeRecall(input),
         yield* invocationPermit("read"),
         yield* callerThread,
+        (yield* McpInvocationContext.McpInvocationContext).thread?.runId,
       );
     }).pipe(Effect.catch(memoryFailure("memory_recall"))),
   ),

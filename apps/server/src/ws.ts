@@ -1341,6 +1341,16 @@ export const layerWsRpc = (
           memory.list(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryRead]: (input) =>
           memory.read(input, memoryRead).pipe(Effect.mapError(memoryError)),
+        [WS_METHODS.memoryTurnInspect]: (input) => {
+          const ready = memorySync.requireBootstrap(input.memorySpaceId);
+          return memorySource.pipe(
+            Effect.andThen(ready),
+            Effect.andThen(memory.inspectTurn(input, memorySource)),
+            Effect.tap(() => ready),
+            Effect.tap(() => memorySource),
+            Effect.mapError(memoryError),
+          );
+        },
         [WS_METHODS.memoryHistory]: (input) =>
           memory.history(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubDiagnostics]: (input) =>

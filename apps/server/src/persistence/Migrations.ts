@@ -176,6 +176,7 @@ import Migration0161 from "./Migrations/161_MemoryHubFloor.ts";
 import Migration0162 from "./Migrations/162_MemoryScopeVersion.ts";
 import Migration0163 from "./Migrations/163_MemoryCompactMoveReceipts.ts";
 import Migration0164 from "./Migrations/164_MemoryOriginCatchup.ts";
+import Migration0166 from "./Migrations/166_TurnMemoryReceipts.ts";
 import Migration0165 from "./Migrations/165_MemorySuggestionQuota.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
@@ -352,6 +353,7 @@ export const migrationEntries = [
   [163, "MemoryCompactMoveReceipts", Migration0163],
   [164, "MemoryOriginCatchup", Migration0164],
   [165, "MemorySuggestionQuota", Migration0165],
+  [166, "TurnMemoryReceipts", Migration0166],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

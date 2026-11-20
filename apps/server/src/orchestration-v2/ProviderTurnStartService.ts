@@ -131,7 +131,7 @@ export const layer: Layer.Layer<
     const explainOpenFailure = yield* openFailureExplainer;
     const makeRunControls = makeProviderRunControls(projectionStore, idAllocator);
 
-    const makeRefreshMemoryContext = yield* makeMemoryRefreshFactory;
+    const memoryHooks = yield* makeMemoryRefreshFactory;
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -1387,11 +1387,7 @@ export const layer: Layer.Layer<
           ? {}
           : { cloudLaunchSource: cloudSource.launchSource }),
         reattach: observeOnly,
-        ...(observeOnly
-          ? {}
-          : {
-              refreshMemoryContext: makeRefreshMemoryContext(input.threadId, runId),
-            }),
+        ...(observeOnly ? {} : memoryHooks(input.threadId, runId)),
         providerThread: runningProviderThread,
         attempt: runningAttempt,
         attemptId: attempt.id,
