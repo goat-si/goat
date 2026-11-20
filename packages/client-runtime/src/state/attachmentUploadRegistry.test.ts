@@ -1,8 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Data from "effect/Data";
 import * as Fiber from "effect/Fiber";
 import { createAttachmentUploadRegistry } from "./attachmentUploadRegistry.ts";
+
+class TestUploadError extends Data.TaggedError("TestUploadError")<{ readonly message: string }> {}
 
 it.effect("shares an in-flight transfer across holders while isolating environments", () =>
   Effect.gen(function* () {
@@ -18,7 +21,8 @@ it.effect("shares an in-flight transfer across holders while isolating environme
       key: (request: { environmentId: string; attachmentId: string }) =>
         JSON.stringify([request.environmentId, request.attachmentId]),
       upload,
-      error: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      concurrency: { type: "global", limit: 3 },
+      error: (cause) => new TestUploadError({ message: String(cause) }),
       onChange: () => {},
     });
     const first = { environmentId: "one", attachmentId: "file" };

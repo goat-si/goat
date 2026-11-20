@@ -149,6 +149,7 @@ export function createComposerAttachmentUploadQueue(options: {
 }) {
   const registry = createAttachmentUploadRegistry({
     ...options,
+    concurrency: { type: "global", limit: 3 },
     key: (request: ComposerAttachmentUploadRequest) =>
       composerAttachmentUploadKey(request.environmentId, request.attachment.id),
     error: uploadError,
