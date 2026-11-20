@@ -27,6 +27,10 @@ import {
   type ThemePreferenceMode,
 } from "../themePalette";
 import { applyThemeCss } from "../themeCss";
+import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
+import { setThemeCssRejected } from "../themeCssRejection";
+
+let themeValidationRevision = 0;
 
 type Theme = ThemePreference;
 type ThemeSnapshot = {
@@ -310,7 +314,10 @@ export function syncBrowserChromeTheme() {
   }
 }
 
-function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview = true } = {}) {
+function applyTheme(
+  theme: Theme,
+  { suppressTransitions = false, preservePreview = true, validated = false } = {},
+) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   if (preservePreview && document.documentElement.dataset?.themeId === THEME_PREVIEW_ID) {
     return;
@@ -330,9 +337,6 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     return;
   }
 
-  if (suppressTransitions) {
-    document.documentElement.classList.add("no-transitions");
-  }
   const resolvedAppearance = resolveThemeAppearance(
     theme,
     systemDark,
@@ -341,6 +345,28 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     themeHalves,
   );
   const resolvedTheme = resolveThemeHalf(theme, themeHalves, resolvedAppearance);
+  const css = getThemeDefinition(resolvedTheme)?.css;
+  if (css && !validated) {
+    const revision = ++themeValidationRevision;
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision) return;
+        setThemeCssRejected(false);
+        applyTheme(theme, { suppressTransitions, preservePreview, validated: true });
+      })
+      .catch((error: unknown) => {
+        if (revision !== themeValidationRevision) return;
+        const previous = lastAppliedTheme?.theme ?? "system";
+        lastAppliedTheme = null;
+        setThemeValidated(previous);
+        setThemeCssRejected(isThemeCssResourceError(error));
+      });
+    return;
+  }
+  if (suppressTransitions) {
+    document.documentElement.classList.add("no-transitions");
+  }
   applyThemePalette(resolvedTheme, resolvedAppearance);
   void applyThemeCss(getThemeDefinition(resolvedTheme)?.css).catch((error: unknown) => {
     console.error("Could not apply theme CSS", safeErrorLogAttributes(error));
@@ -527,6 +553,27 @@ export function useRenderedAppearance() {
 
 export function setTheme(next: Theme): boolean {
   if (typeof window === "undefined") return false;
+  const css = getThemeDefinition(next)?.css;
+  const revision = ++themeValidationRevision;
+  if (css) {
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision) return;
+        setThemeCssRejected(false);
+        setThemeValidated(next);
+      })
+      .catch((error: unknown) => {
+        if (revision === themeValidationRevision)
+          setThemeCssRejected(isThemeCssResourceError(error));
+      });
+    return true;
+  }
+  setThemeCssRejected(false);
+  return setThemeValidated(next);
+}
+
+function setThemeValidated(next: Theme): boolean {
   try {
     // Save the current mode first; inferring it from the new theme can switch dark to light.
     writeAppearanceModePreference(readAppearanceModePreference(getStored()));
@@ -597,6 +644,27 @@ export function setAppearanceMode(nextAppearanceMode: ThemePreferenceMode): bool
 
 function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): boolean {
   if (typeof window === "undefined") return false;
+  const css = themeId === null ? undefined : getThemeDefinition(themeId)?.css;
+  const revision = ++themeValidationRevision;
+  if (css) {
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision) return;
+        setThemeCssRejected(false);
+        setThemeHalfValidated(appearance, themeId);
+      })
+      .catch((error: unknown) => {
+        if (revision === themeValidationRevision)
+          setThemeCssRejected(isThemeCssResourceError(error));
+      });
+    return true;
+  }
+  setThemeCssRejected(false);
+  return setThemeHalfValidated(appearance, themeId);
+}
+
+function setThemeHalfValidated(appearance: ThemeAppearance, themeId: string | null): boolean {
   try {
     const current = readStoredThemeHalvesRaw();
     const next: { light?: string; dark?: string } = { ...current };

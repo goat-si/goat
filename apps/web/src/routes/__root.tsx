@@ -1,6 +1,7 @@
 import { CheckIcon, CopyIcon } from "~/components/solar";
 import { DesktopWindowMaterialSync } from "../desktop/DesktopWindowMaterialSync";
 import { LiquidGlassBackdrop } from "../appearance/LiquidGlassBackdrop";
+import { ThemeCssRejectionNotice } from "../themeCssRejection";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { type ServerLifecycleWelcomePayload } from "@goat/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
@@ -209,6 +210,7 @@ function RootRouteBranch() {
         <EnvironmentThemeSync />
         <DesktopWindowMaterialSync />
         <LiquidGlassBackdrop />
+        <ThemeCssRejectionNotice />
         {/* A pair link opened during setup must still reach its confirmation. */}
         {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
           <DesktopWebLinkCoordinator />
@@ -248,6 +250,7 @@ function RootRouteBranch() {
       <EnvironmentThemeSync />
       <DesktopWindowMaterialSync />
       <LiquidGlassBackdrop />
+      <ThemeCssRejectionNotice />
       <ChatGptWelcomeCoordinator />
       <FirstRunGate
         enabled={primaryEnvironmentAuthenticated}

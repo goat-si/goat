@@ -237,10 +237,10 @@
         };
         const findCustomTheme = (themeId) => {
           if (RESERVED_THEME_IDS.includes(themeId)) return null;
-          return (
+          const theme =
             findStoredTheme(CUSTOM_THEMES_STORAGE_KEY, themeId) ??
-            findStoredTheme(ENVIRONMENT_THEMES_STORAGE_KEY, themeId)
-          );
+            findStoredTheme(ENVIRONMENT_THEMES_STORAGE_KEY, themeId);
+          return theme?.css ? null : theme;
         };
 
         try {
