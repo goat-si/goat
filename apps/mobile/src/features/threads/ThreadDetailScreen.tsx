@@ -558,11 +558,6 @@ function ThreadDetailBody(
         },
       };
     }
-    if (props.isCompacting && contentPresentationKind === "ready") {
-      return { kind: "compacting" };
-    }
-    const working = workingFloatingStatus(props.activeWorkStartedAt, props.activityRun);
-    if (working !== null && contentPresentationKind === "ready") return working;
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {
         kind: "background",
@@ -623,21 +618,12 @@ function ThreadDetailBody(
     return null;
   })();
   const showWorkingControl = floatingStatus !== null;
-  const worktreeSetupInFeed =
-    props.worktreeSetup?.snapshot.phase === "running" ||
-    (props.creationState?.kind === "preparing" && props.creationState.preparingWorktree);
   const showFloatingStatus =
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
     devicePreviews.length > 0 ||
-    browserTabs.tabs.length > 0 ||
-    props.connectionStateLabel !== "connected" ||
-    (!worktreeSetupInFeed &&
-      (props.queuedMessages.length > 0 ||
-        props.selectedThreadFeed.some(
-          (entry) => "acknowledged" in entry && entry.acknowledged === true,
-        )));
+    browserTabs.tabs.length > 0;
   const selectedThreadFeed = props.selectedThreadFeed;
   const { jumpMessageId, jumpMessageLoaded } = useThreadMessageJumpLoading({
     threadKey: selectedThreadKey,
@@ -1319,7 +1305,8 @@ function ThreadDetailBody(
                     });
                   }}
                 />
-                {floatingStatus?.kind === "working" && props.activityRun?.survivingRestartNotice ? (
+                {workingFloatingStatus(props.activeWorkStartedAt, props.activityRun) !== null &&
+                props.activityRun?.survivingRestartNotice ? (
                   <Text className="px-3 text-xs text-foreground-muted">
                     {props.activityRun.survivingRestartNotice}
                   </Text>
