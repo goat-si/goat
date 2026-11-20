@@ -1,3 +1,4 @@
+import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
 import { makeReleaseUnattendedHolds } from "./goat/ReleaseUnattendedHolds.ts";
@@ -198,6 +199,7 @@ import {
   goalCommandStopsActiveRun,
   isNativeMaintenanceCommand,
   resolveMessageDispatchIntent,
+  providerTurnCapabilities,
   shouldClearActiveOrder,
 } from "./CommandPolicy.ts";
 import {
@@ -5443,6 +5445,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         generation: delivery.generation,
         taskIds: delivery.taskIds,
       };
+    }
+    if (
+      dispatchMode.type === "steer_active" &&
+      command.modelSelection !== undefined &&
+      !isNativeMaintenanceCommand(command)
+    ) {
+      const targetRunId = dispatchMode.targetRunId;
+      const target = projection.runs.find((run) => run.id === targetRunId);
+      if (
+        target !== undefined &&
+        isBlockingRun(target) &&
+        target.providerInstanceId !== command.modelSelection.instanceId &&
+        !(yield* stopReachedRun(command, command.threadId, target.id))
+      ) {
+        const turns =
+          providerTurnCapabilities(projection, target) ??
+          (yield* providerAdapters.get(target.providerInstanceId).pipe(
+            Effect.flatMap((adapter) => adapter.getCapabilities()),
+            mapDispatchError(command),
+          )).turns;
+        if (providerSwitchWaitsForTurn(turns)) dispatchMode = { type: "queue_after_active" };
+      }
     }
     // A provider that can stop a turn but not restart it with new input runs a
     // restart as the next turn: first in the queue, with the running turn stopped.
