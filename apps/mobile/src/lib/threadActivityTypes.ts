@@ -170,6 +170,7 @@ type ThreadFeedEntryContent =
   | {
       readonly type: "run-fold";
       readonly deferredWorkItemIds?: ReadonlyArray<string>;
+      readonly workingSince?: string;
       readonly id: string;
       readonly createdAt: string;
       readonly runId: RunId;
