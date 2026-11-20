@@ -47,9 +47,13 @@ vi.mock("../../../../../web/src/hooks/useTheme", () => ({
   setAppearanceMode: () => true,
   getThemeSnapshot: () => ({ appearanceMode: state.appearanceMode }),
 }));
-import { appAtomRegistry } from "../../../../../web/src/rpc/atomRegistry";
-import { themeServerSettingsAtom } from "../../../../../web/src/state/server";
-import { startDefaultThemeAdoption } from "../../../../../web/src/hooks/useDefaultTheme";
+// Load the client with its own Vite module resolution, not the server's NodeNext typecheck.
+const webRoot = new URL("../../../../../web/src/", import.meta.url).pathname;
+const { appAtomRegistry } = await import(/* @vite-ignore */ `${webRoot}rpc/atomRegistry.ts`);
+const { themeServerSettingsAtom } = await import(/* @vite-ignore */ `${webRoot}state/server.ts`);
+const { startDefaultThemeAdoption } = await import(
+  /* @vite-ignore */ `${webRoot}hooks/useDefaultTheme.ts`
+);
 
 it.layer(NodeServices.layer)("agent stock reset adoption", (it) => {
   it.effect("adopts the agent's real reset once and keeps a later local choice", () =>
