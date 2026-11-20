@@ -3,6 +3,7 @@ const MAX_RELEASE_BASE_URL_LENGTH = 2048;
 export function validatedReleaseBaseUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || trimmed.length > MAX_RELEASE_BASE_URL_LENGTH) return undefined;
+  if (/^https?:\/\/[^/?#]*@/i.test(trimmed)) return undefined;
   try {
     const url = new URL(trimmed);
     const loopback =

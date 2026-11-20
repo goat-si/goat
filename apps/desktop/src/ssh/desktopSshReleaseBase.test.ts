@@ -40,6 +40,7 @@ it.each([
   "http://example.com/releases",
   "file:///tmp/releases",
   "https://user:pass@example.com/releases",
+  "https://@example.com/releases",
   "https://example.com/path?token=secret",
   "x".repeat(2049),
   "not a URL",
