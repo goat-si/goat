@@ -87,6 +87,7 @@ export function changeQuestionAttachmentPreparation(key: DraftId, delta: number)
 export function clearQuestionAttachmentDraft(
   key: DraftId,
   retained?: Pick<ComposerThreadDraftState, "images" | "files"> | null,
+  environmentId?: EnvironmentId,
 ): void {
   const store = useComposerDraftStore.getState();
   const draft = store.getComposerDraft(key);
@@ -104,7 +105,10 @@ export function clearQuestionAttachmentDraft(
               existing.uploadEnvironmentId === attachment.uploadEnvironmentId),
         ),
     );
-    if (abandoned.length > 0) releaseDraftAttachments(abandoned);
+    if (abandoned.length > 0) {
+      if (environmentId === undefined) releaseDraftAttachments(abandoned);
+      else releaseDraftAttachments(abandoned, environmentId);
+    }
     for (const image of draft.images) {
       if (
         image.previewUrl.startsWith("blob:") &&
@@ -136,7 +140,7 @@ function pruneResolvedQuestionAttachmentDrafts(
   ]);
   const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
   for (const key of resolvedQuestionDraftKeys(keys, prefix, pendingRequestIds)) {
-    clearQuestionAttachmentDraft(DraftId.make(key), retained);
+    clearQuestionAttachmentDraft(DraftId.make(key), retained, environmentId);
   }
 }
 

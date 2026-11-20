@@ -23,6 +23,7 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
     .filter(([, draftKey]) => draftKey === key)
     .map(([logicalProjectKey]) => logicalProjectKey);
   const discardsSession = typeof target === "string";
+  const environmentId = typeof target === "string" ? session?.environmentId : target.environmentId;
 
   const claim = ThreadUndo.begin("discard", key);
   // The composer may key attachments by the target or by its resolved draft id; a late
@@ -36,7 +37,7 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
   }
 
   const releaseDiscardedDraft = () => {
-    releaseDraftAttachments([...draft.images, ...draft.files]);
+    releaseDraftAttachments([...draft.images, ...draft.files], environmentId);
     // Draft-session removal already revoked these previews.
     if (!discardsSession) {
       for (const image of draft.images) {

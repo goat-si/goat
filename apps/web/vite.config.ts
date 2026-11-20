@@ -140,6 +140,8 @@ const browserTestProject = {
       "vite-plus/test/browser",
       "@base-ui/react/autocomplete",
       "@effect/vitest",
+      "effect/Hash",
+      "effect/RcMap",
       "@legendapp/list/react-native",
       "zustand/vanilla",
       "saxes",

@@ -238,7 +238,7 @@ export function useMultipleModelSend(
         );
       }
       if (failedSelections.length === 0 && usesAttachmentUploads) {
-        releaseDraftAttachments(attachmentsSnapshot);
+        releaseDraftAttachments(attachmentsSnapshot, environmentId);
       }
     });
     if (sendResult._tag === "Failure") {

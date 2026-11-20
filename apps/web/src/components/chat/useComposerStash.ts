@@ -600,12 +600,12 @@ export function useComposerStash(input: {
         removeComposerDraftReviewComment(stashTarget, comment.id);
       }
       for (const annotation of composerPreviewAnnotations) {
-        releaseAttachmentUpload(annotation.id);
+        releaseAttachmentUpload(annotation.id, environmentId);
         removeComposerDraftPreviewAnnotation(stashTarget, annotation.id);
       }
       setComposerDraftPrompt(stashTarget, "");
       for (const image of images) {
-        releaseAttachmentUpload(image.id);
+        releaseAttachmentUpload(image.id, environmentId);
       }
       setComposerCursor(0);
       setComposerTrigger(null);

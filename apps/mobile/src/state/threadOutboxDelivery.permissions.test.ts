@@ -10,8 +10,8 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { composerAttachmentUploadKey as uploadKey } from "../lib/composerAttachmentUploadQueue";
 import { threadOutboxRetryDelayMs, type QueuedThreadMessage } from "./thread-outbox-model";
-
 const state = vi.hoisted(() => ({
   draftText: "Keep this draft separate",
   cleanups: [] as Array<() => void>,
@@ -165,7 +165,6 @@ import { createThreadOutboxDelivery } from "./threadOutboxDelivery";
 import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import { workspaceConnections } from "./workspace";
 import { queuedMessageWaitReasonsAtom } from "./threadOutboxWaitReasons";
-
 const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMessage => ({
   environmentId: EnvironmentId.make("secondary"),
   threadId: ThreadId.make("thread"),
@@ -798,8 +797,9 @@ describe("queued delivery timing", () => {
       previewUri: "file:///photo.png",
       fileUri: "file:///photo.png",
     };
+    const key = uploadKey(message().environmentId, "photo-1");
     appAtomRegistry.set(composerAttachmentUploadsAtom, {
-      "secondary:photo-1": { status: "uploading", progress: 0.5 },
+      [key]: { status: "uploading", progress: 0.5 },
     });
     state.cleanups.push(() => appAtomRegistry.set(composerAttachmentUploadsAtom, {}));
     await state.manager.enqueue(message({ attachments: [photo] }));
@@ -808,7 +808,7 @@ describe("queued delivery timing", () => {
 
     await deliveryAfter(() =>
       appAtomRegistry.set(composerAttachmentUploadsAtom, {
-        "secondary:photo-1": { status: "ready" },
+        [key]: { status: "ready" },
       }),
     );
     expect(state.prepare).toHaveBeenCalledOnce();

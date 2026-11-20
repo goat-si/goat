@@ -263,6 +263,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/attachmentUploadRegistry": {
+      "types": "./src/state/attachmentUploadRegistry.ts",
+      "default": "./src/state/attachmentUploadRegistry.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
