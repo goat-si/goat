@@ -1,3 +1,4 @@
+import { applyMemoryChange, emptyMemoryExposure } from "./state/memory.ts";
 import * as M from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -191,11 +192,24 @@ describe("Codex source updates", () => {
     expect(importScopeMatches(changes[0]!)).toBe(true);
     expect(importScopeMatches(changes[1]!)).toBe(false);
     expect(importScopeMatches(changes[1]!, { kind: "user" })).toBe(true);
+    const thread = {
+      environmentId: M.EnvironmentId.make("test-device"),
+      threadId: M.ThreadId.make("source-thread"),
+    };
+    const withProject = {
+      ...changes[1]!,
+      originalScope: {
+        kind: "thread" as const,
+        thread,
+        projectKey: { kind: "explicit" as const, sharedProjectId: "imported-project" },
+      },
+    };
+    expect(importScopeMatches(withProject, { kind: "thread", thread })).toBe(true);
+    expect(importScopeMatches(withProject, { kind: "user" })).toBe(false);
   });
 });
 
 it("retires an open Codex comparison and rejects a delayed reply when another client forgets the memory", async () => {
-  const { applyMemoryChange, emptyMemoryExposure } = await import("./state/memory.ts");
   const memoryId = M.MemoryId.make("00000000-0000-4000-8000-000000000007");
   const memorySpaceId = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
   const item = { sourceItemKey: "note", byteCount: 12, mappingRequired: false, memoryId };

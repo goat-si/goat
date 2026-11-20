@@ -265,7 +265,14 @@ export async function readCodexComparison(
 }
 const sameScope = Schema.toEquivalence(MemoryScope);
 export function importScopeMatches(item: MemoryUpdateItem, scope?: MemoryScope | null): boolean {
-  return !item.originalScope || (!!scope && sameScope(item.originalScope, scope));
+  const original = item.originalScope;
+  if (!original) return true;
+  if (original.kind === "thread" && scope?.kind === "thread")
+    return (
+      original.thread.environmentId === scope.thread.environmentId &&
+      original.thread.threadId === scope.thread.threadId
+    );
+  return !!scope && sameScope(original, scope);
 }
 export function codexImportChanges(
   items: readonly MemoryImportPreviewItem[],

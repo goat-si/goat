@@ -457,8 +457,10 @@ export function MemoryImportSettings({
                   .map((item) => ({
                     sourceItemKey: item.sourceItemKey,
                     sourceFingerprint: item.sourceFingerprint!,
-                    scope,
-                    ...(scope.kind !== "user" && params.project ? { project: params.project } : {}),
+                    scope: item.originalScope ?? scope,
+                    ...(scope.kind === "project" && params.project
+                      ? { project: params.project }
+                      : {}),
                   })),
               );
             }}

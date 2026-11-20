@@ -443,6 +443,7 @@ export function MemoryImportSettings({
                         sourceItemKey: item.sourceItemKey,
                         sourceFingerprint: item.sourceFingerprint!,
                         ...scope,
+                        scope: item.originalScope ?? scope.scope,
                       })),
                   );
                 } catch {
