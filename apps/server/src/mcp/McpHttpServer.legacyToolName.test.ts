@@ -105,28 +105,30 @@ const callStateless = Effect.fnUntraced(function* (name: string, nameHeader: str
   return { status: response.status, answer };
 });
 
-it.effect("runs a legacy tool name over MCP 2026-07-28 and refuses a mismatched Mcp-Name", () =>
-  Effect.gen(function* () {
-    yield* serveCatalogOverHttp({ thread }, "full");
-    const byListed = yield* callStateless(listed, listed);
-    expect(byListed.status).toBe(200);
-    expect(byListed.answer.error).toBeUndefined();
-    expect(byListed.answer.result?._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
-    // Before the fix these were refused with HTTP 400 / -32020: the body was rewritten to the
-    // listed name while the header still named the legacy one.
-    for (const header of [legacy, base64(legacy)]) {
-      const byLegacy = yield* callStateless(legacy, header);
-      expect(byLegacy.status, header).toBe(200);
-      expect(byLegacy.answer.error, header).toBeUndefined();
-      expect(byLegacy.answer.result?._meta?.[DEPRECATED_META_KEY], header).toBe(listed);
-      expect(byLegacy.answer.result?.content, header).toEqual(byListed.answer.result?.content);
-    }
-    // Before the fix a header naming the listed tool was accepted with a legacy body, because the
-    // rewritten body then matched it. Header and body must agree as sent.
-    for (const header of [listed, "goat_task_create"]) {
-      const mismatched = yield* callStateless(legacy, header);
-      expect(mismatched.status, header).toBe(400);
-      expect(mismatched.answer.error?.code, header).toBe(-32020);
-    }
-  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+it.effect(
+  "runs a legacy tool name over MCP 2026-07-28 and refuses a mismatched Mcp-Name (#3778)",
+  () =>
+    Effect.gen(function* () {
+      yield* serveCatalogOverHttp({ thread }, "full");
+      const byListed = yield* callStateless(listed, listed);
+      expect(byListed.status).toBe(200);
+      expect(byListed.answer.error).toBeUndefined();
+      expect(byListed.answer.result?._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
+      // Before the fix these were refused with HTTP 400 / -32020: the body was rewritten to the
+      // listed name while the header still named the legacy one.
+      for (const header of [legacy, base64(legacy)]) {
+        const byLegacy = yield* callStateless(legacy, header);
+        expect(byLegacy.status, header).toBe(200);
+        expect(byLegacy.answer.error, header).toBeUndefined();
+        expect(byLegacy.answer.result?._meta?.[DEPRECATED_META_KEY], header).toBe(listed);
+        expect(byLegacy.answer.result?.content, header).toEqual(byListed.answer.result?.content);
+      }
+      // Before the fix a header naming the listed tool was accepted with a legacy body, because the
+      // rewritten body then matched it. Header and body must agree as sent.
+      for (const header of [listed, "goat_task_create"]) {
+        const mismatched = yield* callStateless(legacy, header);
+        expect(mismatched.status, header).toBe(400);
+        expect(mismatched.answer.error?.code, header).toBe(-32020);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
