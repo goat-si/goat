@@ -88,6 +88,27 @@ function adoptThemeSelection(): void {
     return;
   }
 
+  if (definition.css) {
+    const css = definition.css;
+    setTheme(defaultTheme, {
+      canApply: () => {
+        const current = appAtomRegistry.get(themeServerSettingsAtom);
+        return (
+          appAtomRegistry.get(themeEnvironmentIdAtom) === environmentId &&
+          defaultThemeGeneration(current.defaultTheme, current.defaultThemeSetAt) === generation &&
+          getThemeDefinition(defaultTheme)?.css === css
+        );
+      },
+      onResult: (applied) => {
+        if (!applied) return;
+        const half = singleAppearanceOf(definition);
+        if (half !== null && !setAppearanceMode(half)) return;
+        writeAppliedGeneration(storageKey, generation);
+      },
+    });
+    return;
+  }
+
   // A single-appearance theme needs both preference and appearance writes to take effect.
   if (!setTheme(defaultTheme)) return;
   const half = singleAppearanceOf(definition);

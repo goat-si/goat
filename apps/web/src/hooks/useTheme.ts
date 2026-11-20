@@ -605,7 +605,10 @@ export function useRenderedAppearance() {
   return previewAppearance ?? resolvedTheme;
 }
 
-export function setTheme(next: Theme): boolean {
+export function setTheme(
+  next: Theme,
+  pending?: { canApply: () => boolean; onResult: (applied: boolean) => void },
+): boolean {
   if (typeof window === "undefined") return false;
   const css = getThemeDefinition(next)?.css;
   const revision = ++themeValidationRevision;
@@ -613,18 +616,25 @@ export function setTheme(next: Theme): boolean {
     void import("@goat/shared/themeCssSanitizer")
       .then(({ sanitizeThemeCss }) => {
         sanitizeThemeCss(css);
-        if (revision !== themeValidationRevision) return;
+        if (revision !== themeValidationRevision || (pending && !pending.canApply())) {
+          pending?.onResult(false);
+          return;
+        }
         setThemeCssRejected(false);
-        setThemeValidated(next);
+        pending?.onResult(setThemeValidated(next));
+        if (!pending) setThemeValidated(next);
       })
       .catch((error: unknown) => {
         if (revision === themeValidationRevision)
           setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
+        pending?.onResult(false);
       });
     return true;
   }
   setThemeCssRejected(false);
-  return setThemeValidated(next);
+  const applied = setThemeValidated(next);
+  pending?.onResult(applied);
+  return applied;
 }
 
 function setThemeValidated(next: Theme): boolean {
