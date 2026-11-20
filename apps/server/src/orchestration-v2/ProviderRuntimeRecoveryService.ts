@@ -30,7 +30,6 @@ import {
   isOrchestrationV2WorkActive,
   type ThreadId,
 } from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -64,38 +63,12 @@ import {
   mergeRestartCancelledBackgroundWork,
 } from "./RestartBackgroundNote.ts";
 
-export interface ProviderRuntimeRecoverySummary {
-  readonly terminalizedRuns: number;
-  readonly stoppedSessions: number;
-  readonly closedRequests: number;
-  readonly retiredEffects: number;
-  readonly requeuedEffects: number;
-}
-
-export interface ProviderRuntimeReconciliationSummary {
-  readonly terminalizedRuns: number;
-  readonly stoppedSessions: number;
-  readonly closedRequests: number;
-  readonly retiredEffects: number;
-  readonly requeuedEffects: number;
-}
-
-type ShutdownPreparation = Effect.Effect<
-  ProviderRuntimeShutdown.ShutdownContinuationSummary,
-  ProviderRuntimeRecoveryError
->;
-
-export class ProviderRuntimeRecoveryService extends Context.Service<
+export { ProviderRuntimeRecoveryService } from "./goat/RecoveryServiceTypes.ts";
+import {
   ProviderRuntimeRecoveryService,
-  {
-    readonly reconcile: (
-      trigger: "startup" | "shutdown",
-    ) => Effect.Effect<ProviderRuntimeReconciliationSummary, ProviderRuntimeRecoveryError>;
-    readonly prepareForShutdown: ShutdownPreparation;
-    readonly prepareForShutdownWithStopKind: (stopKind: "restart" | "quit") => ShutdownPreparation;
-    readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
-  }
->()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
+  type ProviderRuntimeRecoverySummary,
+  type ProviderRuntimeReconciliationSummary,
+} from "./goat/RecoveryServiceTypes.ts";
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
