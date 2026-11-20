@@ -67,7 +67,6 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
-
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   // As served: ToolAdmission reserves keys and goat_eval journals steps in the database.
@@ -77,7 +76,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding and force stop, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list, preview stop.
-  expect(entries).toHaveLength(310);
+  expect(entries).toHaveLength(311);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -395,6 +394,7 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   // A sampled patch names no setting, which is refused before access matters.
   "environment.settings_read": {},
   "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
+  "theme.set": { themeId: "" },
   // A sampled cursor without its query is refused before access matters.
   "surface.describe": { query: "thread" },
 };
@@ -450,6 +450,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "environment.settings_update": { reason: "grantChecked", fullClient: "denied" },
+  "theme.set": { reason: "grantChecked", fullClient: "denied" },
   "hub.child_prepare": {
     reason: "childSetupOnly",
     thread: "denied",

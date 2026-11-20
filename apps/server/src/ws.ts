@@ -143,6 +143,8 @@ import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegis
 import * as RelayClient from "@goat/shared/relayClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { issueThemeBackgroundUrl } from "./assets/themeBackgroundAsset.ts";
+import { ThemeBackgroundUrlError } from "@goat/contracts/themeRpc";
 import { issueNoteFileUrl } from "./assets/noteFileAsset.ts";
 import * as AttachmentFileLeases from "./assets/AttachmentFileLeases.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -2840,6 +2842,14 @@ export const layerWsRpc = (
         [WS_METHODS.agentSessionsScan]: (input) => agentSessionScanner.scan(input),
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),
+        [WS_METHODS.themeValidateCss]: (input) =>
+          environmentTheme.validateCss(input.css).pipe(Effect.map((css) => ({ css }))),
+        [WS_METHODS.themeBackgroundUrl]: (input) =>
+          issueThemeBackgroundUrl(input.themeId, input.revision).pipe(
+            Effect.mapError(
+              () => new ThemeBackgroundUrlError({ message: "Cannot sign theme background." }),
+            ),
+          ),
         [WS_METHODS.assetsCreateUrl]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {

@@ -1,14 +1,18 @@
 import { DownloadIcon, PlusIcon } from "~/components/solar";
 import type { ChangeEvent, DragEvent, UIEvent } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useMessages } from "gt-react";
+import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
+import { formatBytes } from "../../lib/formatBytes";
+import { validateThemeCssForSave } from "../../validateThemeCssForSave";
+import { renameTheme } from "../../themeCopy";
+import { THEME_CSS_RESOURCE_MESSAGE } from "../../themeCssMessages";
 import { cn } from "../../lib/utils";
 import {
   getCustomThemes,
   installCustomTheme,
-  parseThemeFile,
   removeCustomTheme,
-  THEME_FILE_VERSION,
   updateCustomTheme,
   type ThemeDefinition,
 } from "../../themePalette";
@@ -30,18 +34,17 @@ import { ThemeSearchSection } from "./ThemeSearchSection";
  */
 const MAX_THEME_FILE_BYTES = 256 * 1024;
 
+async function validateThemeCss(theme: ThemeDefinition): Promise<ThemeDefinition> {
+  if (theme.css === undefined) return theme;
+  return { ...theme, css: await validateThemeCssForSave(theme.css) };
+}
+
 /** Highlighting rebuilds markup per keystroke; fall back to plain text for oversized pastes. */
 const MAX_HIGHLIGHTED_JSON_LENGTH = 20_000;
 
-function formatByteSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} bytes`;
-}
-
 function describeOversizedThemeFile(bytes: number): string | null {
   if (bytes <= MAX_THEME_FILE_BYTES) return null;
-  return `That file is ${formatByteSize(bytes)}. Theme files are only a few KB, so this one was not read (limit ${formatByteSize(MAX_THEME_FILE_BYTES)}).`;
+  return `That file is ${formatBytes(bytes)}. Theme files are only a few KB, so this one was not read (limit ${formatBytes(MAX_THEME_FILE_BYTES)}).`;
 }
 
 function escapeJsonHtml(value: string): string {
@@ -166,6 +169,18 @@ export function ThemeImportDialog({
     session.controller.abort();
     onOpenChange(false);
   };
+  const { controller } = session;
+  const mountedController = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- abort installs when the page unmounts
+  useEffect(() => {
+    mountedController.current = controller;
+    return () => {
+      mountedController.current = null;
+      queueMicrotask(() => {
+        if (mountedController.current !== controller) controller.abort();
+      });
+    };
+  }, [controller]);
 
   return (
     <Dialog
@@ -201,6 +216,8 @@ function ThemeImportBody({
   onClose: () => void;
 }) {
   const { signal } = session;
+  const m = useMessages();
+  const resourceErrorMessage = m(THEME_CSS_RESOURCE_MESSAGE);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -257,11 +274,11 @@ function ThemeImportBody({
       try {
         parsed.push({
           sourceName: file.name,
-          theme: parseThemeImport(await file.text()),
+          theme: await validateThemeCss(parseThemeImport(await file.text())),
         });
       } catch (cause) {
         failures.push(
-          `${file.name}: ${cause instanceof Error ? cause.message : "not a theme file"}`,
+          `${file.name}: ${isThemeCssResourceError(cause) ? resourceErrorMessage : cause instanceof Error ? cause.message : "not a theme file"}`,
         );
       }
     }
@@ -331,25 +348,14 @@ function ThemeImportBody({
     preferredName?: string | null,
   ): ThemeDefinition => {
     if (preferredName && preferredName.toLowerCase() !== theme.label.toLowerCase()) {
-      const candidate = parseThemeFile({
-        version: THEME_FILE_VERSION,
-        name: preferredName.slice(0, 48),
-        appearance: theme.appearance,
-        colors: theme.colors,
-        ...(theme.variants ? { variants: theme.variants } : {}),
-        ...(theme.managed ? { managed: true } : {}),
-      });
+      const candidate = renameTheme(theme, preferredName.slice(0, 48));
       if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
     }
     for (let copy = 1; copy < 100; copy += 1) {
-      const candidate = parseThemeFile({
-        version: THEME_FILE_VERSION,
-        name: `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
-        appearance: theme.appearance,
-        colors: theme.colors,
-        ...(theme.variants ? { variants: theme.variants } : {}),
-        ...(theme.managed ? { managed: true } : {}),
-      });
+      const candidate = renameTheme(
+        theme,
+        `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
+      );
       if (getCustomThemes().some((existing) => existing.id === candidate.id)) continue;
       return candidate;
     }
@@ -388,14 +394,16 @@ function ThemeImportBody({
     else if (!error) onClose();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const oversized = describeOversizedThemeFile(json.length);
     if (oversized) {
       setError(oversized);
       return;
     }
     try {
-      const theme = parseThemeImport(json);
+      const requestId = ++importRequestRef.current;
+      const theme = await validateThemeCss(parseThemeImport(json));
+      if (!isCurrentRequest(requestId)) return;
       if (getCustomThemes().some((existing) => existing.id === theme.id)) {
         setError(null);
         setConflicts([theme]);
@@ -411,7 +419,13 @@ function ThemeImportBody({
       }
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "That theme file is invalid.");
+      setError(
+        isThemeCssResourceError(cause)
+          ? resourceErrorMessage
+          : cause instanceof Error
+            ? cause.message
+            : "That theme file is invalid.",
+      );
     }
   };
 
@@ -524,7 +538,7 @@ function ThemeImportBody({
               <Button variant="ghost" onClick={() => onClose()}>
                 Cancel
               </Button>
-              <Button disabled={!json.trim() || isReading} onClick={handleSubmit}>
+              <Button disabled={!json.trim() || isReading} onClick={() => void handleSubmit()}>
                 <PlusIcon />
                 Add theme
               </Button>

@@ -1,4 +1,5 @@
 import { VCS_STATUS_WS_METHODS, VcsStatusRpcs } from "./vcsStatusRpc.ts";
+import { THEME_WS_METHODS, WsThemeValidateCssRpc, WsThemeBackgroundUrlRpc } from "./themeRpc.ts";
 import { PULL_REQUEST_WS_METHODS } from "./pullRequestMethods.ts";
 import {
   SOURCE_CONTROL_STAR_METHODS,
@@ -531,7 +532,6 @@ export const WS_METHODS = {
   ...StorageCleanupRpcs.STORAGE_CLEANUP_WS_METHODS,
   ...MEMORY_WS_METHODS,
   ...BROWSER_CLAIMS_WS_METHODS,
-
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -545,18 +545,16 @@ export const WS_METHODS = {
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
   projectsCreateFromThread: "projects.createFromThread",
-
   shellOpenInEditor: "shell.openInEditor",
-
   filesystemBrowse: "filesystem.browse",
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  ...THEME_WS_METHODS,
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
-
   mcpAppsCallTool: "mcpApps.callTool",
   mcpAppsToolInfo: "mcpApps.toolInfo",
   mcpAppsReadResource: "mcpApps.readResource",
@@ -2595,6 +2593,8 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsThemeValidateCssRpc,
+  WsThemeBackgroundUrlRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,

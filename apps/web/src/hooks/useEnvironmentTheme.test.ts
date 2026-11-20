@@ -21,6 +21,24 @@ afterEach(() => {
 });
 
 describe("environment themes", () => {
+  it("removes the cached published palette after an authoritative empty update", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => store.set(key, value),
+      },
+    });
+    try {
+      setEnvironmentThemes([environmentThemeDefinition(NIGHTFALL_THEME)]);
+      expect(getThemeDefinition("nightfall")?.id).toBe("nightfall");
+      setEnvironmentThemes([]);
+      expect(getThemeDefinition("nightfall")).toBeNull();
+      expect(store.get("goat:environment-themes:v1")).toBe("[]");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("drops published themes with reserved ids", () => {
     const definitions = publishedThemeDefinitions([
       NIGHTFALL_THEME,

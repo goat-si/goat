@@ -69,6 +69,17 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("theme files", () => {
+  it("retains custom CSS when importing and storing a theme", () => {
+    const css = '[data-slot="sidebar"]{color:red}';
+    const theme = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "CSS",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css,
+    });
+    expect(theme.css).toBe(css);
+  });
   it("gives non-Latin theme names distinct stable ids", () => {
     const file = {
       version: THEME_FILE_VERSION,
@@ -107,6 +118,34 @@ describe("theme files", () => {
         expect(distance(colors.searchMatchActiveBackground, background)).toBeGreaterThan(0.08);
       }
     }
+  });
+
+  it("derives an imported palette from top-level canvas and accent like a published theme", () => {
+    const theme = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "Teal",
+      appearance: "dark",
+      canvas: "#0b1a1e",
+      accent: "#f08a2c",
+      colors: { sidebar: "#0f2126" },
+    });
+
+    expect(theme.colors.canvas).toBe(canonical("#0b1a1e"));
+    expect(theme.colors.accent).toBe(canonical("#f08a2c"));
+    expect(theme.colors.sidebar).toBe(canonical("#0f2126"));
+  });
+
+  it("rejects non-literal top-level seed colors when both are provided", () => {
+    expect(() =>
+      parseThemeFile({
+        version: THEME_FILE_VERSION,
+        name: "Bad",
+        appearance: "dark",
+        canvas: "var(--canvas)",
+        accent: "#ffffff",
+        colors: { sidebar: "#112233" },
+      }),
+    ).toThrow("Theme canvas and accent must be literal CSS colors.");
   });
 
   it("round-trips custom search colours and fills them in for older theme files", () => {

@@ -59,6 +59,24 @@ const writeSettings = (baseDir: string, settings: Record<string, unknown>) => {
 };
 
 describe("goat theme", () => {
+  it.effect("rejects unsafe CSS before writing a published theme", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      const themeFile = NodePath.join(baseDir, "unsafe.json");
+      NodeFS.writeFileSync(
+        themeFile,
+        JSON.stringify({
+          ...JSON.parse(NIGHTFALL_THEME_JSON),
+          css: '@import "https://evil.example/x.css";',
+        }),
+      );
+      const failure = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir]).pipe(
+        Effect.flip,
+      );
+      assert.include(String(failure), "not a valid theme file");
+      assert.equal(NodeFS.existsSync(NodePath.join(baseDir, "userdata", "themes")), false);
+    }),
+  );
   it.effect("preserves settings it does not recognise", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();

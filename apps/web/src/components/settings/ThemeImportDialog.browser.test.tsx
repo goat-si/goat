@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
   getCustomThemes,
@@ -12,7 +12,7 @@ import {
   themeColorToHex,
   THEME_FILE_VERSION,
 } from "../../themePalette";
-import type { OpenVsxThemeExtension } from "../../openVsxThemes";
+import { importOpenVsxThemeExtension, type OpenVsxThemeExtension } from "../../openVsxThemes";
 import { ThemeImportDialog } from "./ThemeImportDialog";
 
 const searchOpenVsxThemes = vi.hoisted(() => vi.fn());
@@ -128,6 +128,29 @@ function isolateThemes() {
   };
 }
 
+it("sizes an oversized theme file just under 1 MB as 1.00 MB", async () => {
+  using _themes = isolateThemes();
+  await using _screen = await render(
+    <ThemeImportDialog
+      open
+      onOpenChange={() => {}}
+      onImported={() => true}
+      onImportedMany={() => {}}
+    />,
+  );
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await userEvent.upload(
+    input,
+    new File(["x".repeat(1_048_100)], "huge.json", { type: "application/json" }),
+  );
+
+  await expect
+    .element(page.getByText(/^That file is/))
+    .toHaveTextContent(
+      "That file is 1.00 MB. Theme files are only a few KB, so this one was not read (limit 256 KB).",
+    );
+});
+
 function themeJsonc(name: string, background: string) {
   return `{
     // VS Code themes use JSONC even with a .json extension.
@@ -140,6 +163,63 @@ function themeJsonc(name: string, background: string) {
 }
 
 describe("ThemeImportDialog JSONC imports", () => {
+  it("rejects an imported theme containing unsafe CSS", async () => {
+    using _themes = isolateThemes();
+    await using _screen = await render(
+      <ThemeImportDialog
+        open
+        onOpenChange={() => {}}
+        onImported={() => true}
+        onImportedMany={() => {}}
+      />,
+    );
+    const json = JSON.stringify({
+      version: THEME_FILE_VERSION,
+      name: "Unsafe",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css: '@import "https://evil.example/x.css";',
+    });
+    await page.getByRole("textbox", { name: "Theme JSON" }).fill(json);
+    await page.getByRole("button", { name: "Add theme", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "Images in theme CSS are not supported. Use the background setting instead.",
+        ),
+      )
+      .toBeVisible();
+    expect(getCustomThemes()).toEqual([]);
+  });
+
+  it("explains that imported CSS image URLs need the background setting", async () => {
+    using _themes = isolateThemes();
+    await using _screen = await render(
+      <ThemeImportDialog
+        open
+        onOpenChange={() => {}}
+        onImported={() => true}
+        onImportedMany={() => {}}
+      />,
+    );
+    const json = JSON.stringify({
+      version: THEME_FILE_VERSION,
+      name: "Image",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css: '[data-slot="sidebar"]{background:url(data:image/png;base64,AA==)}',
+    });
+    await page.getByRole("textbox", { name: "Theme JSON" }).fill(json);
+    await page.getByRole("button", { name: "Add theme", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "Images in theme CSS are not supported. Use the background setting instead.",
+        ),
+      )
+      .toBeVisible();
+    expect(getCustomThemes()).toEqual([]);
+  });
   it.each(["paste", "file"])("imports a VS Code JSONC theme from %s", async (source) => {
     using _themes = isolateThemes();
     await using _screen = await render(
@@ -192,4 +272,37 @@ describe("ThemeImportDialog JSONC imports", () => {
       "#fdf6e3",
     ]);
   });
+});
+
+it("does not install a pending community theme after leaving Appearance", async () => {
+  using _themes = isolateThemes();
+  searchOpenVsxThemes.mockReset();
+  searchOpenVsxThemes.mockResolvedValue([extension]);
+  const download = Promise.withResolvers<ReturnType<typeof parseThemeFile>[]>();
+  vi.mocked(importOpenVsxThemeExtension).mockReset();
+  vi.mocked(importOpenVsxThemeExtension).mockReturnValue(download.promise);
+  await using screen = await render(
+    <ThemeImportDialog
+      open
+      onOpenChange={() => {}}
+      onImported={() => true}
+      onImportedMany={() => {}}
+    />,
+  );
+  await userEvent.fill(page.getByLabelText("Search Open VSX themes"), "night");
+  await page.getByRole("button", { name: "Install Nightfall" }).click();
+  await screen.unmount();
+  await act(async () => {
+    download.resolve([
+      {
+        ...parseThemeFile(theme("Nightfall")),
+        collection: { id: extension.collectionId, label: extension.name },
+      },
+    ]);
+    await download.promise;
+  });
+  expect(
+    getCustomThemes(),
+    "expect leaving Appearance to cancel its pending theme installation",
+  ).toEqual([]);
 });

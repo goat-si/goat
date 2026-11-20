@@ -1,4 +1,5 @@
 import * as Usage from "../usage/UsageService.ts";
+import * as ThemePublication from "../themePublication.ts";
 import * as Processes from "../diagnostics/ProcessResourceMonitor.ts";
 import * as Telemetry from "../resourceTelemetry/ResourceTelemetry.ts";
 import * as Review from "../review/ReviewService.ts";
@@ -197,6 +198,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,
   Layer.mock(DecisionService.DecisionService)({}),
+  Layer.mock(ThemePublication.ThemePublicationService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),

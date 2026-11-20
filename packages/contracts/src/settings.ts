@@ -1289,6 +1289,11 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BACKGROUND_ACTIVITY_PROFILE)),
   ),
   defaultTheme: DefaultThemePreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  enableAgentThemeWrites: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  defaultAppearance: DefaultThemePreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  defaultAppearanceSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
   /** Distinguishes repeated sets of the same theme so clients apply each one. */
   defaultThemeSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
@@ -1700,6 +1705,7 @@ const ServerSettingsPatchFields = Schema.Struct({
     ),
   ),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
+  enableAgentThemeWrites: Schema.optionalKey(Schema.Boolean),
   agentToolListing: Schema.optionalKey(AgentToolListing),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
   ...CuaSettingsPatchFields,

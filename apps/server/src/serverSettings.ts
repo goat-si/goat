@@ -45,6 +45,7 @@ import {
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { makeDefaultThemeSetter, type DefaultThemeSetter } from "./serverSettingsTheme.ts";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
   applyServerSettingsPatch,
@@ -721,6 +722,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly setDefaultTheme?: DefaultThemeSetter;
     readonly committedPolicy?: CuaCommittedPolicyRead;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
@@ -925,6 +927,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    setDefaultTheme: makeDefaultThemeSetter(updateTestSettings),
     committedPolicy: cuaPolicy.read,
     blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
       Effect.map((settings) => settings.blockedBrowserHosts),
@@ -2126,6 +2129,7 @@ const make = Effect.gen(function* () {
     committedOwnerPolicy: ownerServices.committed,
     ownerPolicyAdministration: ownerServices.administration,
     start,
+    setDefaultTheme: makeDefaultThemeSetter(updateAndPersistSettings),
     ready: Deferred.await(startedDeferred),
     committedPolicy: cuaPolicy.read,
     getSettings: getSettingsFromCache.pipe(

@@ -10,6 +10,7 @@ import {
   canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
+  getThemeDefinition,
   getThemePreviewAppearance,
   parseThemeHalves,
   resolveDesktopTheme,
@@ -25,6 +26,11 @@ import {
   type ThemeHalves,
   type ThemePreferenceMode,
 } from "../themePalette";
+import { applyThemeCss } from "../themeCss";
+import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
+import { setThemeCssRejected } from "../themeCssRejection";
+
+let themeValidationRevision = 0;
 
 type Theme = ThemePreference;
 type ThemeSnapshot = {
@@ -39,6 +45,7 @@ type ThemeSnapshot = {
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
 
 const STORAGE_KEY = "goat:theme";
+const LAST_VALID_THEME_STORAGE_KEY = "goat:theme-last-valid:v1";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
@@ -130,7 +137,37 @@ let lastSnapshot: ThemeSnapshot | null = null;
 let snapshotStale = true;
 let lastDesktopTheme: "light" | "dark" | "system" | null = null;
 let lastAppliedTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = null;
+let lastValidTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = readLastValidTheme();
 let themeStorageReadFailure: ThemeStorageError | null = null;
+
+function readLastValidTheme(): Omit<ThemeSnapshot, "resolvedTheme"> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = migratingStorage(window.localStorage).getItem(LAST_VALID_THEME_STORAGE_KEY);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (value === null || typeof value !== "object") return null;
+    const selection = value as Record<string, unknown>;
+    if (typeof selection.theme !== "string" || !isKnownThemePreference(selection.theme))
+      return null;
+    if (
+      typeof selection.appearanceMode !== "string" ||
+      !isThemePreferenceMode(selection.appearanceMode)
+    )
+      return null;
+    const themeHalves = parseThemeHalves(JSON.stringify(selection.themeHalves));
+    const followSystem = selection.appearanceMode === "system";
+    return {
+      theme: canonicalThemePreference(selection.theme),
+      appearanceMode: selection.appearanceMode,
+      followSystem,
+      systemDark: followSystem && getSystemDark(),
+      themeHalves,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function emitChange() {
   snapshotStale = true;
@@ -308,7 +345,15 @@ export function syncBrowserChromeTheme() {
   }
 }
 
-function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview = true } = {}) {
+function applyTheme(
+  theme: Theme,
+  {
+    suppressTransitions = false,
+    preservePreview = true,
+    validated = false,
+    preserveRejection = false,
+  } = {},
+) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   if (preservePreview && document.documentElement.dataset?.themeId === THEME_PREVIEW_ID) {
     return;
@@ -328,9 +373,6 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     return;
   }
 
-  if (suppressTransitions) {
-    document.documentElement.classList.add("no-transitions");
-  }
   const resolvedAppearance = resolveThemeAppearance(
     theme,
     systemDark,
@@ -338,9 +380,64 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     appearanceMode,
     themeHalves,
   );
-  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
+  const resolvedTheme = resolveThemeHalf(theme, themeHalves, resolvedAppearance);
+  const css = getThemeDefinition(resolvedTheme)?.css;
+  if (css && !validated) {
+    const revision = ++themeValidationRevision;
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision) return;
+        if (!preserveRejection) setThemeCssRejected(false);
+        applyTheme(theme, {
+          suppressTransitions,
+          preservePreview,
+          validated: true,
+          preserveRejection,
+        });
+      })
+      .catch((error: unknown) => {
+        if (revision !== themeValidationRevision) return;
+        const previous = lastValidTheme;
+        lastAppliedTheme = null;
+        if (previous === null) {
+          setThemeValidated("system");
+        } else {
+          try {
+            writeThemePreference(previous.theme);
+            writeAppearanceModePreference(previous.appearanceMode);
+            const storage = migratingStorage(window.localStorage);
+            if (previous.themeHalves === null) storage.removeItem(THEME_HALVES_STORAGE_KEY);
+            else storage.setItem(THEME_HALVES_STORAGE_KEY, JSON.stringify(previous.themeHalves));
+            lastValidTheme = null;
+            applyTheme(previous.theme, { suppressTransitions: true, preserveRejection: true });
+            emitChange();
+          } catch (cause) {
+            console.error("Could not restore the previous theme", safeErrorLogAttributes(cause));
+          }
+        }
+        setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
+      });
+    return;
+  }
+  if (suppressTransitions) {
+    document.documentElement.classList.add("no-transitions");
+  }
+  applyThemePalette(resolvedTheme, resolvedAppearance);
+  void applyThemeCss(getThemeDefinition(resolvedTheme)?.css).catch((error: unknown) => {
+    console.error("Could not apply theme CSS", safeErrorLogAttributes(error));
+  });
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
+  lastValidTheme = lastAppliedTheme;
+  try {
+    migratingStorage(window.localStorage).setItem(
+      LAST_VALID_THEME_STORAGE_KEY,
+      JSON.stringify({ theme, appearanceMode, themeHalves }),
+    );
+  } catch (cause) {
+    console.error("Could not save the last valid theme", safeErrorLogAttributes(cause));
+  }
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
@@ -434,6 +531,10 @@ function getSnapshot(): ThemeSnapshot {
   return lastSnapshot;
 }
 
+export function getThemeSnapshot(): ThemeSnapshot {
+  return getSnapshot();
+}
+
 function getServerSnapshot() {
   return DEFAULT_THEME_SNAPSHOT;
 }
@@ -515,8 +616,39 @@ export function useRenderedAppearance() {
   return previewAppearance ?? resolvedTheme;
 }
 
-export function setTheme(next: Theme): boolean {
+export function setTheme(
+  next: Theme,
+  pending?: { canApply: () => boolean; onResult: (applied: boolean) => void },
+): boolean {
   if (typeof window === "undefined") return false;
+  const css = getThemeDefinition(next)?.css;
+  const revision = ++themeValidationRevision;
+  if (css) {
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision || (pending && !pending.canApply())) {
+          pending?.onResult(false);
+          return;
+        }
+        setThemeCssRejected(false);
+        pending?.onResult(setThemeValidated(next));
+        if (!pending) setThemeValidated(next);
+      })
+      .catch((error: unknown) => {
+        if (revision === themeValidationRevision)
+          setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
+        pending?.onResult(false);
+      });
+    return true;
+  }
+  setThemeCssRejected(false);
+  const applied = setThemeValidated(next);
+  pending?.onResult(applied);
+  return applied;
+}
+
+function setThemeValidated(next: Theme): boolean {
   try {
     // Save the current mode first; inferring it from the new theme can switch dark to light.
     writeAppearanceModePreference(readAppearanceModePreference(getStored()));
@@ -587,6 +719,27 @@ export function setAppearanceMode(nextAppearanceMode: ThemePreferenceMode): bool
 
 function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): boolean {
   if (typeof window === "undefined") return false;
+  const css = themeId === null ? undefined : getThemeDefinition(themeId)?.css;
+  const revision = ++themeValidationRevision;
+  if (css) {
+    void import("@goat/shared/themeCssSanitizer")
+      .then(({ sanitizeThemeCss }) => {
+        sanitizeThemeCss(css);
+        if (revision !== themeValidationRevision) return;
+        setThemeCssRejected(false);
+        setThemeHalfValidated(appearance, themeId);
+      })
+      .catch((error: unknown) => {
+        if (revision === themeValidationRevision)
+          setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
+      });
+    return true;
+  }
+  setThemeCssRejected(false);
+  return setThemeHalfValidated(appearance, themeId);
+}
+
+function setThemeHalfValidated(appearance: ThemeAppearance, themeId: string | null): boolean {
   try {
     const current = readStoredThemeHalvesRaw();
     const next: { light?: string; dark?: string } = { ...current };

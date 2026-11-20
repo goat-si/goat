@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { SettingsPageShell } from "./SettingsPageShell";
 import { ThemeEditorPanel } from "./ThemeEditorPanel";
 
 function dragHeader(panel: HTMLElement, toX: number, toY: number) {
@@ -74,7 +83,74 @@ async function renderPanel() {
   };
 }
 
+async function renderBesideSettings() {
+  const onEditorOpenChange = vi.fn();
+  const stack = new AsyncDisposableStack();
+  const root = createRootRoute({ component: Outlet });
+  const settings = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/appearance",
+    component: () => (
+      <SettingsPageShell pathname="/settings/appearance">
+        <button type="button">Settings page</button>
+        <ThemeEditorPanel
+          open
+          onOpenChange={onEditorOpenChange}
+          onSaved={() => true}
+          editingTheme={null}
+          initialAppearance="light"
+          restoreTheme={() => {}}
+        />
+      </SettingsPageShell>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settings, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/appearance"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  stack.use(await render(<RouterProvider router={router} />, { router: false }));
+  return {
+    router,
+    onEditorOpenChange,
+    [Symbol.asyncDispose]: () => stack.disposeAsync(),
+  };
+}
+
+async function editorElement(selector: string) {
+  const query = () => document.querySelector<HTMLElement>(`[data-theme-editor-panel] ${selector}`);
+  await expect.poll(query).toBeTruthy();
+  return query()!;
+}
+
 describe("ThemeEditorPanel", () => {
+  it("rejects unsafe CSS before saving the theme", async () => {
+    const onSaved = vi.fn(() => true);
+    await using _screen = await render(
+      <ThemeEditorPanel
+        open
+        onOpenChange={() => {}}
+        onSaved={onSaved}
+        editingTheme={null}
+        initialAppearance="light"
+        restoreTheme={() => {}}
+      />,
+    );
+    await userEvent.fill(page.getByLabelText("Theme name"), "CSS test");
+    await userEvent.fill(
+      page.getByLabelText("Custom CSS"),
+      '@import "https://evil.example/x.css";',
+    );
+    await page.getByRole("button", { name: "Create theme" }).click();
+    await expect.element(page.getByRole("alert")).toBeVisible();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
   it("keeps its left edge when resized after the window shrank", async () => {
     await using view = await renderPanel();
     dragHeader(view.panel, 700, 40);
@@ -147,5 +223,35 @@ describe("ThemeEditorPanel", () => {
       pointerAt(hueSlider, "pointerup", 0.75);
     });
     expect((hex.element() as HTMLInputElement).value).toBe(original);
+  });
+
+  it("closes on Escape without closing Settings", async () => {
+    await using view = await renderBesideSettings();
+    const windowKeys = vi.fn();
+    window.addEventListener("keydown", windowKeys);
+    using _windowKeys = {
+      [Symbol.dispose]: () => window.removeEventListener("keydown", windowKeys),
+    };
+    (await editorElement("input")).focus();
+    await userEvent.keyboard("{Escape}");
+
+    expect(view.onEditorOpenChange).toHaveBeenCalledWith(false);
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
+    expect(windowKeys).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Settings page" }));
+    await userEvent.keyboard("{Escape}");
+    expect(windowKeys).toHaveBeenCalled();
+    await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
+  });
+
+  it("leaves inspection on Escape without closing the editor or Settings", async () => {
+    await using view = await renderBesideSettings();
+    (await editorElement('[aria-label="Inspect app colors"]')).click();
+    await editorElement('[aria-label="Cancel inspecting app colors"]');
+    await userEvent.keyboard("{Escape}");
+
+    await editorElement('[aria-label="Inspect app colors"]');
+    expect(view.onEditorOpenChange).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
   });
 });

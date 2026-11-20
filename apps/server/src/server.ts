@@ -72,7 +72,6 @@ import * as Effect from "effect/Effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
-
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -111,6 +110,7 @@ import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as ThemePublication from "./themePublication.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
@@ -275,7 +275,6 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
 import { layerDisposableAttach } from "./hub/disposable/layer.ts";
 import * as PenServer from "./pen/PenServerLayers.ts";
-
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
@@ -791,6 +790,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.mergeAll(
       Keybindings.layer,
       EnvironmentTheme.layer,
+      ThemePublication.layer.pipe(Layer.provide(layerServerSettings)),
       // Above the provider registries it reads, below the thread launches that capture it.
       ProviderCliGate.layer.pipe(Layer.provide(layerServerSettings)),
     ),

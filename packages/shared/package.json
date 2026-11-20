@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./themeCssErrors": {
+      "types": "./src/themeCssErrors.ts",
+      "import": "./src/themeCssErrors.ts"
+    },
+    "./themeCssSanitizer": {
+      "types": "./src/themeCssSanitizer.ts",
+      "import": "./src/themeCssSanitizer.ts"
+    },
     "./pairingCode": {
       "types": "./src/pairingCode.ts",
       "import": "./src/pairingCode.ts"
@@ -824,6 +832,7 @@
     "@goat/contracts": "workspace:*",
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
+    "css-tree": "3.2.1",
     "effect": "catalog:",
     "get-east-asian-width": "^1.6.0",
     "jose": "catalog:",
@@ -847,6 +856,7 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@types/css-tree": "3.2.0",
     "@types/mdast": "^4.0.4",
     "@types/node": "catalog:",
     "micromark-util-types": "catalog:",

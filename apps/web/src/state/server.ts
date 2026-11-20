@@ -203,8 +203,14 @@ const themeServerConfigAtom = Atom.make((get) => {
 }).pipe(Atom.withLabel("web-theme-server-config"));
 
 export const primaryServerEnvironmentThemesAtom = Atom.make(
-  (get): ReadonlyArray<EnvironmentTheme> =>
-    get(themeServerConfigAtom)?.environmentThemes ?? EMPTY_ENVIRONMENT_THEMES,
+  (get): ReadonlyArray<EnvironmentTheme> | null => {
+    const config = get(themeServerConfigAtom);
+    if (config === null) return null;
+    if (config.environmentThemes !== undefined) return config.environmentThemes;
+    return config.environment.capabilities.environmentThemes === true
+      ? null
+      : EMPTY_ENVIRONMENT_THEMES;
+  },
 ).pipe(Atom.withLabel("web-server-environment-themes"));
 
 export const themeServerSettingsAtom = Atom.make(

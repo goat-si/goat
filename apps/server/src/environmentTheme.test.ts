@@ -71,6 +71,87 @@ const currentThemes = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("environment theme", (it) => {
+  it.effect("exposes a revision only for a valid published background image", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-theme-background-" });
+      yield* fs.writeFileString(path.join(dir, "nightfall.json"), encodeThemeFile(NIGHTFALL_THEME));
+      const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+      yield* fs.writeFile(path.join(dir, "nightfall.png"), png);
+      const themes = yield* EnvironmentTheme.readPublishedThemes(dir);
+      assert.equal(themes.length, 1);
+      assert.match(themes[0]?.background ?? "", /^png:[a-f0-9]{64}$/);
+      yield* fs.writeFile(path.join(dir, "nightfall.png"), new TextEncoder().encode("not a PNG"));
+      const invalid = yield* EnvironmentTheme.readPublishedThemes(dir);
+      assert.isUndefined(invalid[0]?.background);
+    }).pipe(Effect.scoped),
+  );
+  it.effect.each([
+    '@import "https://evil.example/x.css";',
+    '[data-slot="sidebar"]{background:url(https://evil.example/x)}',
+    '[data-slot="sidebar"]{background:image-set("https://evil.example/x" 1x)}',
+    '[data-slot="sidebar"]{background:-webkit-image-set("https://evil.example/x" 1x)}',
+    '[data-slot="sidebar"]{background:image("https://evil.example/x")}',
+    '[data-slot="sidebar"]{background:cross-fade(url(https://evil.example/x),red)}',
+    '[data-slot="sidebar"]{background:element(#x)}',
+    '[data-slot="sidebar"]{background:src("https://evil.example/x")}',
+    '[data-slot="sidebar"]{background:"https://evil.example/x"}',
+  ])("rejects resource-loading CSS at the server boundary", (css) =>
+    withEnvironmentThemes(
+      {},
+      Effect.gen(function* () {
+        const service = yield* EnvironmentTheme.EnvironmentThemeService;
+        const failure = yield* service.validateCss(css).pipe(Effect.flip);
+        assert.equal(failure._tag, "ThemeCssValidationError");
+      }),
+    ),
+  );
+  it.effect("refuses a theme directory beyond its bounded entry scan", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-theme-overflow-" });
+      for (let index = 0; index < 257; index++)
+        yield* fs.writeFileString(path.join(dir, `junk-${index}`), "");
+      yield* fs.writeFileString(path.join(dir, "valid.json"), encodeThemeFile(NIGHTFALL_THEME));
+      assert.deepEqual(yield* EnvironmentTheme.readPublishedThemes(dir), []);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("validates CSS submitted by clients with the same publication policy", () =>
+    withEnvironmentThemes(
+      {},
+      Effect.gen(function* () {
+        const service = yield* EnvironmentTheme.EnvironmentThemeService;
+        const safe = yield* service.validateCss('[data-slot="sidebar"]{color:red}');
+        assert.include(safe, "[data-goat-theme-root]");
+        const failure = yield* service
+          .validateCss('@import "https://evil.example/x.css";')
+          .pipe(Effect.flip);
+        assert.equal(failure._tag, "ThemeCssValidationError");
+      }),
+    ),
+  );
+  it.effect("publishes only scoped CSS and rejects a theme with unsafe CSS", () =>
+    withEnvironmentThemes(
+      {
+        "safe.json": JSON.stringify({
+          ...NIGHTFALL_THEME,
+          css: '[data-slot="sidebar"]{color:red}',
+        }),
+        "unsafe.json": JSON.stringify({
+          ...NIGHTFALL_THEME,
+          css: '@import "https://evil.example/x.css";',
+        }),
+      },
+      Effect.gen(function* () {
+        const themes = yield* currentThemes;
+        assert.equal(themes.length, 1);
+        assert.equal(themes[0]?.id, "safe");
+        assert.include(themes[0]?.css ?? "", "[data-goat-theme-root]");
+      }),
+    ),
+  );
   it.effect("reattaches themes before resyncing and stops watching when its scope closes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

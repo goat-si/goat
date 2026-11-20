@@ -43,6 +43,7 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import {
   getInitialWindowBackgroundColor,
   getWindowTitleBarOptions,
+  materialOptionsWithTitleBar,
   MACOS_WORKSPACE_TOPBAR_HEIGHT,
   MACOS_WINDOW_BUTTON_RADIUS,
 } from "./DesktopWindowAppearance.ts";
@@ -358,9 +359,8 @@ export const make = Effect.gen(function* () {
       yield* electronWindow.destroyAll;
       return Option.none();
     }
-
     yield* material
-      .attach(window, materialOptions)
+      .attach(window, materialOptionsWithTitleBar(materialOptions, environment.platform))
       .pipe(Effect.provideService(Scope.Scope, materialScope));
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
@@ -1068,8 +1068,8 @@ export const make = Effect.gen(function* () {
     }),
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-      yield* electronWindow.syncAllAppearance((window) =>
-        material.syncAppearance(window, shouldUseDarkColors),
+      yield* electronWindow.syncAllAppearance((window, { titleBarOverlay }) =>
+        material.syncAppearance(window, shouldUseDarkColors, titleBarOverlay),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
   });
