@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
@@ -23,6 +24,9 @@ it.effect(
       Effect.gen(function* () {
         const base = makeLocalCommandHarness({ text: "Work" }).projection();
         const ids = yield* IdAllocator.IdAllocatorV2;
+        const outbox = yield* EffectOutbox.EffectOutboxV2.pipe(
+          Effect.provide(Layer.mock(EffectOutbox.EffectOutboxV2)({})),
+        );
         const locks = yield* ThreadCommandExecutor.ThreadCommandExecutor;
         const sent: string[] = [];
         const logs: unknown[] = [];
@@ -46,7 +50,15 @@ it.effect(
                 };
                 return Effect.succeed({
                   ...base,
-                  thread: { ...base.thread, id: threadId },
+                  thread: {
+                    ...base.thread,
+                    id: threadId,
+                    lineage: {
+                      parentThreadId: null,
+                      relationshipToParent: null,
+                      rootThreadId: threadId,
+                    },
+                  },
                   runs: [run],
                   attempts: [
                     { ...base.attempts[0]!, runId: run.id, inputDelivery: "unsent" as const },
@@ -80,7 +92,7 @@ it.effect(
         );
         const stage = (names: string[]) =>
           Effect.gen(function* () {
-            const deferred = makeDeferredRecoveryResends({ projections, sink, ids });
+            const deferred = makeDeferredRecoveryResends({ projections, sink, ids, outbox });
             for (const name of names) {
               const threadId = ThreadId.make(name);
               const run = {
@@ -150,6 +162,9 @@ it.effect("interrupting the drain does not process later candidates", () =>
     Effect.gen(function* () {
       const base = makeLocalCommandHarness({ text: "Work" }).projection();
       const ids = yield* IdAllocator.IdAllocatorV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2.pipe(
+        Effect.provide(Layer.mock(EffectOutbox.EffectOutboxV2)({})),
+      );
       const locks = yield* ThreadCommandExecutor.ThreadCommandExecutor;
       const entered = yield* Deferred.make<void>();
       const reads: string[] = [];
@@ -173,7 +188,7 @@ it.effect("interrupting the drain does not process later candidates", () =>
           }),
         ),
       );
-      const deferred = makeDeferredRecoveryResends({ projections, sink, ids });
+      const deferred = makeDeferredRecoveryResends({ projections, sink, ids, outbox });
       for (const name of ["first", "second"]) {
         const threadId = ThreadId.make(name);
         const run = {

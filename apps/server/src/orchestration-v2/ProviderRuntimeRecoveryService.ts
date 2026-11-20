@@ -82,7 +82,12 @@ export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
-  const deferredResends = makeDeferredRecoveryResends({ projections, sink: eventSink, ids });
+  const deferredResends = makeDeferredRecoveryResends({
+    projections,
+    sink: eventSink,
+    ids,
+    outbox,
+  });
   let protectedThreads: ReadonlySet<ThreadId> = new Set();
   let blockedThreads: ReadonlySet<ThreadId> = new Set();
   let survivorBindings: ReadonlyArray<CodexSurvivors.CodexSurvivorBinding> = [];

@@ -361,7 +361,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       )
     )
       return;
-    if (yield* parentTaskStopped(threads.getThreadRecords, projection, source)) return;
+    if (yield* parentTaskStopped(threads, projection, source)) return;
     const sourceMessage = sourceRecords.messages.find(
       (message) => message.id === source.userMessageId,
     );

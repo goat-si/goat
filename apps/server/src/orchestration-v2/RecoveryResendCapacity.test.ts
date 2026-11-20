@@ -41,7 +41,11 @@ it.effect("recovery defers at most 64 unsent runs and visibly parks the overflow
           threadId,
           {
             ...base,
-            thread: { ...base.thread, id: threadId },
+            thread: {
+              ...base.thread,
+              id: threadId,
+              lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            },
             runs: [run],
             attempts: [attempt],
             nodes: base.nodes.map((node) => ({ ...node, runId })),

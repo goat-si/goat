@@ -13,9 +13,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type { EventSinkV2 } from "../EventSink.ts";
+import type { EffectOutboxV2 } from "../EffectOutbox.ts";
 import type { ProjectionStoreV2 } from "../ProjectionStore.ts";
 import type { ThreadCommandExecutor } from "../ThreadCommandExecutor.ts";
 import { MAX_DEFERRED_RECOVERY_RESENDS } from "./RecoveryResendLimits.ts";
+import { parentTaskStopped } from "./ParentTaskStop.ts";
 
 type Candidate = {
   readonly threadId: ThreadId;
@@ -30,6 +32,7 @@ export function makeDeferredRecoveryResends(input: {
   readonly projections: ProjectionStoreV2["Service"];
   readonly sink: EventSinkV2["Service"];
   readonly ids: IdAllocatorV2["Service"];
+  readonly outbox: EffectOutboxV2["Service"];
 }) {
   const candidates = new Map<string, Candidate>();
   const reserve = (candidate: Candidate) => {
@@ -79,6 +82,12 @@ export function makeDeferredRecoveryResends(input: {
               projection.providerTurns.some((turn) => turn.runAttemptId === attempt.id) ||
               projection.turnItems.some(
                 (item) => item.runId === run.id && item.type === "run_interrupt_request",
+              )
+            )
+              return;
+            if (
+              yield* parentTaskStopped(input.projections, projection, run, true, (parentId) =>
+                input.outbox.hasDelegatedStop(parentId, candidate.threadId, run.id),
               )
             )
               return;

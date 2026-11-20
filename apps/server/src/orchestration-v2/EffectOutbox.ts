@@ -88,6 +88,11 @@ export interface EffectOutboxV2Shape {
   readonly listByCommandId: (
     commandId: CommandId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly hasDelegatedStop: (
+    parentThreadId: ThreadId,
+    childThreadId: ThreadId,
+    childRunId: RunId,
+  ) => Effect.Effect<boolean, EffectOutboxError>;
   readonly listNeverAttemptedStarts: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
@@ -491,6 +496,29 @@ export const layer = Layer.effect(
             isEffectOutboxError(cause)
               ? cause
               : new EffectOutboxError({ operation: "list", cause }),
+          ),
+        ),
+      hasDelegatedStop: (parentThreadId, childThreadId, childRunId) =>
+        sql<{ readonly found: number }>`SELECT 1 AS found
+          FROM orchestration_v2_effect_outbox AS stop INDEXED BY orchestration_v2_effect_outbox_thread_status_idx
+          WHERE stop.thread_id = ${parentThreadId}
+            AND stop.status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+            AND stop.effect_type = 'delegated-tasks.stop'
+            AND stop.rowid > COALESCE((SELECT original.rowid FROM orchestration_v2_effect_outbox AS original INDEXED BY orchestration_v2_effect_outbox_thread_status_idx
+              WHERE original.thread_id = ${childThreadId}
+                AND original.status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+                AND original.effect_type = 'provider-turn.start'
+                AND CASE WHEN json_valid(original.payload_json) THEN json_extract(original.payload_json, '$.runId') = ${childRunId} ELSE 0 END
+              ORDER BY original.rowid ASC LIMIT 1), -1)
+            AND CASE WHEN json_valid(stop.payload_json) THEN
+              json_type(stop.payload_json, '$.childThreadIds') IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(stop.payload_json, '$.childThreadIds') WHERE value = ${childThreadId}
+              ) ELSE 0 END
+          LIMIT 1`.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.map((rows) => rows.length > 0),
+          Effect.mapError(
+            (cause) => new EffectOutboxError({ operation: "has-delegated-stop", cause }),
           ),
         ),
       findOriginalStart: (threadId, runId) => {
