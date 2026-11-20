@@ -21,8 +21,16 @@ function layerPairingOnboarding(
   credentialWrites: string[],
 ) {
   const dependencies = Layer.mergeAll(
-    Layer.mock(ClientCapabilities.ClientPresentation)({}),
-    Layer.mock(HttpClient.HttpClient)({}),
+    Layer.succeed(
+      ClientCapabilities.ClientPresentation,
+      ClientCapabilities.ClientPresentation.of({
+        metadata: { label: "Fixture", deviceType: "desktop" },
+      }),
+    ),
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Unexpected HTTP request")),
+    ),
     Layer.mock(Persistence.ConnectionTargetStore)({
       list: Effect.succeed([]),
       listDisabled: Effect.succeed([]),
