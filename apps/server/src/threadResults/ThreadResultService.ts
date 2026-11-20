@@ -2,8 +2,10 @@ import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
+  isGoatBotSessionThreadId,
   type OrchestrationV2AppThread,
   type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   type RunId,
   type ThreadId,
   type ThreadResult,
@@ -11,6 +13,12 @@ import {
   type ThreadResultPullRequest,
   ThreadResultReport,
 } from "@goat/contracts";
+import {
+  botReportAwaitsDelegates,
+  clearBotReportDue,
+  markBotReportDue,
+  settlementReportRun,
+} from "./delegatedBotReports.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -25,11 +33,13 @@ import { readObservedCheck, readObservedCheckState } from "./ObservedCheckServic
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
   {
-    reason: Schema.Literals(["run_not_found", "run_mismatch", "storage"]),
+    reason: Schema.Literals(["run_not_found", "run_mismatch", "delegates_pending", "storage"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.reason === "delegates_pending")
+      return "Delegated results are outstanding. Wait for their notifications or read the results with task.status, then report what each task returned.";
     return this.reason === "run_not_found"
       ? "The thread has no run to report on."
       : this.reason === "run_mismatch"
@@ -151,6 +161,7 @@ const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
 export const readThreadResult = Effect.fn("ThreadResultService.readThreadResult")(function* (
   thread: Pick<OrchestrationV2AppThread, "id" | "branch" | "pullRequests" | "linkedPullRequest">,
   run: Pick<OrchestrationV2Run, "id" | "status">,
+  reportRunId: RunId | null = run.id,
 ) {
   const checkState = yield* readObservedCheckState(thread.id, run.id).pipe(
     Effect.catch((cause) =>
@@ -165,12 +176,35 @@ export const readThreadResult = Effect.fn("ThreadResultService.readThreadResult"
     ...buildThreadResult({
       thread,
       run,
-      stored: yield* readStoredThreadResultReport(thread.id, run.id),
+      stored:
+        reportRunId === null ? null : yield* readStoredThreadResultReport(thread.id, reportRunId),
       observedCheck: checkState.check,
     }),
     observedCheckPending: run.status === "completed" && checkState.pending,
   };
 });
+
+export const readWorkerSettlement = Effect.fn("ThreadResultService.readWorkerSettlement")(
+  function* (
+    thread: Parameters<typeof readThreadResult>[0],
+    run: OrchestrationV2Run,
+    ownedRuns: ReadonlyArray<OrchestrationV2Run>,
+    delegates?: ReadonlyArray<OrchestrationV2Subagent>,
+  ) {
+    if (!delegates || run.status !== "completed")
+      return { result: yield* readThreadResult(thread, run), finalReportDue: false };
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const reportRun = yield* settlementReportRun(sql, thread.id, run, ownedRuns, delegates);
+        return {
+          result: yield* readThreadResult(thread, run, reportRun),
+          finalReportDue: reportRun === null,
+        };
+      }),
+    );
+  },
+);
 
 const make = Effect.gen(function* () {
   const reports = yield* PubSub.unbounded<ThreadId>();
@@ -220,15 +254,28 @@ const make = Effect.gen(function* () {
     if (input.runId !== undefined && run === undefined)
       return yield* new ThreadResultError({ reason: "run_mismatch" });
     if (run === undefined) return yield* new ThreadResultError({ reason: "run_not_found" });
+    const bot = isGoatBotSessionThreadId(threadId);
+    if (
+      bot &&
+      (yield* botReportAwaitsDelegates(threads, sql, threadId, records.runs, run).pipe(
+        Effect.mapError(storage),
+      ))
+    ) {
+      yield* markBotReportDue(sql, run.id).pipe(Effect.mapError(storage));
+      return yield* new ThreadResultError({ reason: "delegates_pending" });
+    }
     const reportedAt = DateTime.formatIso(yield* DateTime.now);
     const reportJson = yield* encodeReport(input).pipe(Effect.mapError(storage));
-    yield* sql`
+    const write = sql`
       INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
       VALUES (${threadId}, ${run.id}, ${reportJson}, ${reportedAt})
       ON CONFLICT (thread_id, run_id) DO UPDATE SET
         report_json = excluded.report_json,
         reported_at = excluded.reported_at
-    `.pipe(Effect.mapError(storage));
+    `;
+    yield* (
+      bot ? sql.withTransaction(write.pipe(Effect.andThen(clearBotReportDue(sql, run.id)))) : write
+    ).pipe(Effect.mapError(storage));
     yield* PubSub.publish(reports, threadId);
     return buildThreadResult({
       thread: records.thread,
