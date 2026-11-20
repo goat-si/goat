@@ -229,12 +229,13 @@ export function ProviderModelsSection({
         { slug: normalized, name: normalized, capabilities: null },
       ]);
     } catch {
-      if (attempt === addAttemptRef.current)
+      if (attempt === addAttemptRef.current) {
         setError("Could not save the custom model. Try again.");
+        setIsSaving(false);
+      }
       return;
-    } finally {
-      if (attempt === addAttemptRef.current) setIsSaving(false);
     }
+    if (attempt === addAttemptRef.current) setIsSaving(false);
     if (saved !== true || attempt !== addAttemptRef.current) return;
     scrollToSlugRef.current = normalized;
     setFilter("");
