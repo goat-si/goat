@@ -149,6 +149,10 @@ function workflowFixture(count = 65) {
   function result(input: M.MemoryImportProviderInput): M.MemoryImportProviderResult {
     if (input.action === "discover") return { action: "discover", sources: [] };
     if (input.action === "preview") return preview;
+    if (input.action === "codexBaseline")
+      return { action: input.action, sourceId, items: [], next: null };
+    if (input.action === "compareCodex")
+      return { action: input.action, savedText: "saved", sourceText: "source" };
     return {
       action: input.action,
       receipt: {
@@ -876,5 +880,45 @@ describe("import subscription isolation and admission", () => {
     await Promise.resolve();
     expect(removedBeforeFlush).not.toHaveBeenCalled();
     expect(snapshots.at(-1)).toBe(f.workflow.getSnapshot());
+  });
+});
+
+describe("checking Codex source updates", () => {
+  it("reads all baseline pages without applying anything, and applies only confirmed changes", async () => {
+    const f = workflowFixture(3);
+    const [first, second, third] = f.items;
+    if (!first || !second || !third) throw new Error("fixture");
+    f.setRespond(async (input) => {
+      if (input.action !== "codexBaseline") return f.result(input);
+      const item = input.after ? second : first;
+      return {
+        action: input.action,
+        sourceId,
+        items: [
+          {
+            ...item,
+            sourceFingerprint: input.after ? item.sourceFingerprint : "b".repeat(64),
+            locallyEdited: true,
+          },
+        ],
+        next: input.after ? null : first.sourceItemKey,
+      };
+    });
+    const check = await f.workflow.checkCodexUpdates();
+    expect(check?.items.map((r) => r.change)).toEqual(["Changed in both", "New"]);
+    expect(await f.workflow.compareCodex(check!.items[0]!)).toEqual({
+      action: "compareCodex",
+      savedText: "saved",
+      sourceText: "source",
+    });
+    expect(f.calls.map((c) => c.action)).toEqual([
+      "codexBaseline",
+      "codexBaseline",
+      "preview",
+      "compareCodex",
+    ]);
+    f.workflow.select([third]);
+    await f.workflow.apply();
+    expect(f.calls.filter((i) => i.action === "apply").map((i) => i.items)).toEqual([[third]]);
   });
 });

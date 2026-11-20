@@ -1,6 +1,8 @@
 import * as M from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  codexImportChanges,
+  importScopeMatches,
   initialMemoryImportWorkflowState,
   memoryImportFormats,
   memoryImportIssueReason,
@@ -153,5 +155,39 @@ describe("memoryImportIssueReason", () => {
         }),
       ),
     ).toMatch(/^Memory storage limit reached: 100\.0 MiB of 100\.0 MiB used\. Automatic cleanup/);
+  });
+});
+
+describe("Codex source updates", () => {
+  it("keeps absent rows unselectable, shows rejected rows, and omits unchanged and forgotten notes", () => {
+    const keys = ["both", "changed", "same", "missing", "rejected", "forgotten"];
+    const baseline = keys.map((sourceItemKey) => ({
+      sourceItemKey,
+      sourceFingerprint: "old",
+      locallyEdited: sourceItemKey === "both",
+      scope: { kind: "user" as const },
+    }));
+    const rows = ["new", "same", "changed", "both", "rejected", "forgotten"].map(
+      (sourceItemKey) => ({
+        sourceItemKey,
+        sourceFingerprint: sourceItemKey === "same" ? "old" : "fresh",
+        byteCount: 10,
+        mappingRequired: false,
+        ...(sourceItemKey === "rejected" ? { issue: "invalid_utf8" as const } : {}),
+        ...(sourceItemKey === "forgotten" ? { priorOutcome: "suppressed" as const } : {}),
+      }),
+    );
+    const changes = codexImportChanges(rows, baseline);
+    expect(changes.map((row) => [row.sourceItemKey, row.change, row.issue])).toEqual([
+      ["new", "New", undefined],
+      ["changed", "Changed in Codex", undefined],
+      ["both", "Changed in both", undefined],
+      ["rejected", undefined, "invalid_utf8"],
+      ["missing", "Missing from Codex", undefined],
+    ]);
+    expect(changes.at(-1)?.sourceFingerprint).toBeUndefined();
+    expect(importScopeMatches(changes[0]!)).toBe(true);
+    expect(importScopeMatches(changes[1]!)).toBe(false);
+    expect(importScopeMatches(changes[1]!, { kind: "user" })).toBe(true);
   });
 });

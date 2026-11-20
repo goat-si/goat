@@ -441,13 +441,23 @@ export const makeMemoryImportHandlers = <E>(
       "memory:write",
       "filesystem:read",
     ]);
+    const comparePermit = memorySessionPermit(liveScopes, capturedScopes, [
+      "memory:read",
+      "memory:write",
+      "filesystem:read",
+    ]);
     const memory = yield* MemoryService.MemoryService;
     const runtime = yield* Effect.serviceOption(ProviderMemoryImportRuntime);
     return WsMemoryImportRpcGroup.middleware(RpcInstrumentation).of({
       [WS_METHODS.memoryImportProvider]: (input) =>
         (runtime._tag === "Some"
           ? memory
-              .importProvider(input, permit)
+              .importProvider(
+                input,
+                input.action === "codexBaseline" || input.action === "compareCodex"
+                  ? comparePermit
+                  : permit,
+              )
               .pipe(Effect.provideService(ProviderMemoryImportRuntime, runtime.value))
           : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" }))
         ).pipe(

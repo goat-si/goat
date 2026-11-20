@@ -3,6 +3,9 @@ import {
   MEMORY_STORE_FULL_LABEL,
   MemoryImportRpcError,
   isMemoryStoreBudgetCapacity,
+  MemoryScope,
+  type CodexImportBaseline,
+  type MemoryImportPreviewItem,
   type MemoryCapacityDimension,
   type MemoryCapacityExceeded,
   type MemoryImportIssue,
@@ -230,6 +233,48 @@ export const memoryImportFormats = (
   capabilities?.memory?.asideImport === true
     ? ["codex", "claude", "omo", "aside"]
     : ["codex", "claude", "omo"];
+
+export type MemoryUpdateItem = MemoryImportPreviewItem & {
+  originalScope?: MemoryScope;
+  change?: "New" | "Changed in Codex" | "Changed in both" | "Missing from Codex";
+};
+const sameScope = Schema.toEquivalence(MemoryScope);
+export function importScopeMatches(item: MemoryUpdateItem, scope?: MemoryScope | null): boolean {
+  return !item.originalScope || (!!scope && sameScope(item.originalScope, scope));
+}
+export function codexImportChanges(
+  items: readonly MemoryImportPreviewItem[],
+  baseline: ReadonlyArray<CodexImportBaseline>,
+): MemoryUpdateItem[] {
+  const saved = new Map(baseline.map((item) => [item.sourceItemKey, item]));
+  const changes: MemoryUpdateItem[] = [];
+  for (const item of items) {
+    const before = saved.get(item.sourceItemKey);
+    saved.delete(item.sourceItemKey);
+    if (item.priorOutcome === "suppressed") continue;
+    // Omitted saved entries can be quarantined, moved away, or awaiting a forget.
+    if (!before && item.memoryId && item.priorOutcome !== "rejected") continue;
+    if (item.issue || !item.sourceFingerprint) {
+      changes.push(item);
+      continue;
+    }
+    if (!before) changes.push({ ...item, change: "New" });
+    else if (before.sourceFingerprint !== item.sourceFingerprint)
+      changes.push({
+        ...item,
+        originalScope: before.scope,
+        change: before.locallyEdited ? "Changed in both" : "Changed in Codex",
+      });
+  }
+  for (const { sourceItemKey } of saved.values())
+    changes.push({
+      sourceItemKey,
+      mappingRequired: false,
+      byteCount: 0,
+      change: "Missing from Codex",
+    });
+  return changes;
+}
 
 type Apply = Extract<MemoryImportProviderInput, { action: "apply" }>;
 type Preview = Extract<MemoryImportProviderResult, { action: "preview" }>;
@@ -654,6 +699,78 @@ export function createMemoryImportWorkflow(options: {
           throw new Error("Unexpected import preview");
         preview = { ...result, items: result.items.map((item) => ({ ...item })) };
         setState({ phase: "selecting" });
+        return result;
+      }),
+    checkCodexUpdates: () =>
+      exclusive(async (token) => {
+        preview = null;
+        chunks = [];
+        setState({ phase: "previewing", stopped: false, receipt: null, message: null });
+        const previous: CodexImportBaseline[] = [];
+        let after: string | undefined;
+        let sourceId: MemoryImportSourceId | null = null;
+        do {
+          const page = await request({
+            action: "codexBaseline",
+            memorySpaceId: fence.memorySpaceId,
+            ...(after ? { after } : {}),
+          });
+          if (!current(token)) return;
+          if (
+            page.action !== "codexBaseline" ||
+            (sourceId && page.sourceId !== sourceId) ||
+            (page.next && page.next === after)
+          )
+            throw new Error("Unexpected import baseline");
+          sourceId = page.sourceId;
+          previous.push(...page.items);
+          after = page.next ?? undefined;
+        } while (after);
+        if (!sourceId) {
+          setState({ phase: "discovered" });
+          return {
+            items: [] as MemoryUpdateItem[],
+            message: "No previously imported Codex memories on this device.",
+          };
+        }
+        let result: MemoryImportProviderResult;
+        try {
+          result = await request({
+            action: "preview",
+            sourceId,
+            memorySpaceId: fence.memorySpaceId,
+          });
+        } catch (error) {
+          if (!current(token)) return;
+          if (!isMemoryImportRpcError(error) || error.issue !== "source_missing") throw error;
+          setState({ phase: "discovered" });
+          return {
+            items: [] as MemoryUpdateItem[],
+            message: "Codex source unavailable. Saved GOAT memories are kept.",
+          };
+        }
+        if (!current(token)) return;
+        if (result.action !== "preview" || result.sourceId !== sourceId)
+          throw new Error("Unexpected import preview");
+        const items = codexImportChanges(result.items, previous);
+        preview = result;
+        setState({ phase: "selecting" });
+        return { items, message: items.length ? null : "Codex memories are up to date." };
+      }),
+    compareCodex: (item: MemoryUpdateItem) =>
+      exclusive(async (token) => {
+        if (!preview || item.change !== "Changed in both" || !item.sourceFingerprint)
+          throw new Error("Check source updates again");
+        const result = await request({
+          action: "compareCodex",
+          memorySpaceId: fence.memorySpaceId,
+          sourceId: preview.sourceId,
+          sessionId: preview.sessionId,
+          sourceItemKey: item.sourceItemKey,
+          sourceFingerprint: item.sourceFingerprint,
+        });
+        if (!current(token)) return;
+        if (result.action !== "compareCodex") throw new Error("Unexpected source comparison");
         return result;
       }),
     /** Confirm once. Any later selection/scope change must invalidate and preview again. */

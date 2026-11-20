@@ -47,8 +47,10 @@ function fixture(
   }));
   let nextId = 10;
   let allowed = true;
-  const respond = (input: M.MemoryImportProviderInput): M.MemoryImportProviderResult =>
-    input.action === "discover"
+  const respond = (input: M.MemoryImportProviderInput): M.MemoryImportProviderResult => {
+    if (input.action === "codexBaseline" || input.action === "compareCodex")
+      throw new Error("Unexpected source update request");
+    return input.action === "discover"
       ? { action: "discover", sources: [] }
       : input.action === "preview"
         ? {
@@ -71,6 +73,7 @@ function fixture(
             },
             syncStatus: memorySyncFixture,
           };
+  };
   let request = async (input: M.MemoryImportProviderInput) => respond(input);
   const create = () =>
     createMemoryImportWorkflow({
