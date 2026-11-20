@@ -45,6 +45,7 @@ type ThemeSnapshot = {
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
 
 const STORAGE_KEY = "goat:theme";
+const LAST_VALID_THEME_STORAGE_KEY = "goat:theme-last-valid:v1";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
@@ -136,7 +137,37 @@ let lastSnapshot: ThemeSnapshot | null = null;
 let snapshotStale = true;
 let lastDesktopTheme: "light" | "dark" | "system" | null = null;
 let lastAppliedTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = null;
+let lastValidTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = readLastValidTheme();
 let themeStorageReadFailure: ThemeStorageError | null = null;
+
+function readLastValidTheme(): Omit<ThemeSnapshot, "resolvedTheme"> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = migratingStorage(window.localStorage).getItem(LAST_VALID_THEME_STORAGE_KEY);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (value === null || typeof value !== "object") return null;
+    const selection = value as Record<string, unknown>;
+    if (typeof selection.theme !== "string" || !isKnownThemePreference(selection.theme))
+      return null;
+    if (
+      typeof selection.appearanceMode !== "string" ||
+      !isThemePreferenceMode(selection.appearanceMode)
+    )
+      return null;
+    const themeHalves = parseThemeHalves(JSON.stringify(selection.themeHalves));
+    const followSystem = selection.appearanceMode === "system";
+    return {
+      theme: canonicalThemePreference(selection.theme),
+      appearanceMode: selection.appearanceMode,
+      followSystem,
+      systemDark: followSystem && getSystemDark(),
+      themeHalves,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function emitChange() {
   snapshotStale = true;
@@ -357,9 +388,23 @@ function applyTheme(
       })
       .catch((error: unknown) => {
         if (revision !== themeValidationRevision) return;
-        const previous = lastAppliedTheme?.theme ?? "system";
+        const previous = lastValidTheme;
         lastAppliedTheme = null;
-        setThemeValidated(previous);
+        if (previous === null) {
+          setThemeValidated("system");
+        } else {
+          try {
+            writeThemePreference(previous.theme);
+            writeAppearanceModePreference(previous.appearanceMode);
+            const storage = migratingStorage(window.localStorage);
+            if (previous.themeHalves === null) storage.removeItem(THEME_HALVES_STORAGE_KEY);
+            else storage.setItem(THEME_HALVES_STORAGE_KEY, JSON.stringify(previous.themeHalves));
+            applyTheme(previous.theme, { suppressTransitions: true });
+            emitChange();
+          } catch (cause) {
+            console.error("Could not restore the previous theme", safeErrorLogAttributes(cause));
+          }
+        }
         setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
       });
     return;
@@ -373,6 +418,15 @@ function applyTheme(
   });
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
+  lastValidTheme = lastAppliedTheme;
+  try {
+    migratingStorage(window.localStorage).setItem(
+      LAST_VALID_THEME_STORAGE_KEY,
+      JSON.stringify({ theme, appearanceMode, themeHalves }),
+    );
+  } catch (cause) {
+    console.error("Could not save the last valid theme", safeErrorLogAttributes(cause));
+  }
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
