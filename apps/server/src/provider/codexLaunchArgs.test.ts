@@ -10,6 +10,20 @@ import {
 } from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
+  it("preserves an escaped trailing space in the GOAT environment override", () => {
+    const args = resolveCodexLaunchArgs("--strict-config", {
+      GOAT_CODEX_LAUNCH_ARGS: "--cloud-skills-snapshot skills.json\\ ",
+    });
+    NodeAssert.deepStrictEqual(codexAppServerArgs(args), [
+      "app-server",
+      "--cloud-skills-snapshot",
+      "skills.json ",
+    ]);
+    NodeAssert.equal(
+      resolveCodexLaunchArgs("--strict-config", { GOAT_CODEX_LAUNCH_ARGS: " \t " }),
+      "--strict-config",
+    );
+  });
   it("requests immediate unload while allowing an explicit override", () => {
     NodeAssert.deepStrictEqual(codexAppServerArgs("-c thread_unload_delay_secs=1800", [], true), [
       "app-server",
