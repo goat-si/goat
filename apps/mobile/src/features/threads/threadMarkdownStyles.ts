@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import type { MarkdownStyleSet } from "./AssistantMarkdownBlocks";
-import { flattenThemeColor, type MobileThemeVariables } from "../../lib/mobileTheme";
+import {
+  flattenThemeColor,
+  themeColorWithContrast,
+  type MobileThemeVariables,
+} from "../../lib/mobileTheme";
 import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -30,6 +34,10 @@ export function useMarkdownStyles(theme: MobileThemeVariables): MarkdownStyleSet
     theme["--color-user-bubble"],
   );
   const markdownUserBodyColor = theme["--color-user-bubble-foreground"];
+  const markdownUserLinkColor = themeColorWithContrast(
+    markdownLinkColor,
+    theme["--color-user-bubble"],
+  );
   const markdownUserCodeBg = theme["--color-md-user-code-bg"];
   const markdownUserCodeText = theme["--color-md-user-code-text"];
   const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
@@ -44,7 +52,7 @@ export function useMarkdownStyles(theme: MobileThemeVariables): MarkdownStyleSet
           color: markdownUserBodyColor,
           strongColor: markdownUserBodyColor,
           mutedColor: markdownUserBodyColor,
-          linkColor: markdownUserBodyColor,
+          linkColor: markdownUserLinkColor,
           inlineCodeColor: markdownUserInlineCodeText,
           codeColor: markdownUserCodeText,
           codeBackgroundColor: markdownUserCodeBg,
@@ -92,6 +100,7 @@ export function useMarkdownStyles(theme: MobileThemeVariables): MarkdownStyleSet
     markdownCodeBg,
     markdownCodeText,
     markdownHrColor,
+    markdownUserLinkColor,
     markdownInlineCodeText,
     markdownLinkColor,
     markdownStrongColor,
