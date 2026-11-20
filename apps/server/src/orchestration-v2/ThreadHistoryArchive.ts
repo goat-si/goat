@@ -1,3 +1,4 @@
+import { RECOVERY_PARK_MARKER_PREFIX } from "./goat/RecoveryParkMarker.ts";
 // @effect-diagnostics nodeBuiltinImport:off - zstd frames, SHA-256 and directory fsync have no Effect API.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -226,14 +227,26 @@ const make = Effect.gen(function* () {
         readonly updated_at: string;
         readonly status: string;
         readonly type: string;
+        readonly recovery_parked: number;
       }>`
-        SELECT turn_item_id, ordinal, updated_at, status, type FROM orchestration_v2_projection_turn_items
-        WHERE thread_id = ${threadId} AND (ordinal, turn_item_id) > (${afterOrdinal}, ${afterId})
-        ORDER BY ordinal, turn_item_id LIMIT ${PAGE_ROWS}
+        SELECT item.turn_item_id, item.ordinal, item.updated_at, item.status, item.type,
+          CASE WHEN item.type = 'system_notice' AND item.status = 'waiting' AND substr(item.turn_item_id, 1, length(${RECOVERY_PARK_MARKER_PREFIX})) = ${RECOVERY_PARK_MARKER_PREFIX}
+            THEN EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
+              WHERE run.thread_id = item.thread_id AND run.run_id = substr(item.turn_item_id, length(${RECOVERY_PARK_MARKER_PREFIX}) + 1)
+                AND run.status = 'queued' AND CASE WHEN json_valid(run.payload_json)
+                  THEN json_extract(run.payload_json, '$.queueHeld') IS 1 ELSE 0 END)
+            ELSE 0 END AS recovery_parked
+        FROM orchestration_v2_projection_turn_items AS item
+        WHERE item.thread_id = ${threadId} AND (item.ordinal, item.turn_item_id) > (${afterOrdinal}, ${afterId})
+        ORDER BY item.ordinal, item.turn_item_id LIMIT ${PAGE_ROWS}
       `;
       observation?.onPage("items", page.length);
       for (const row of page) {
-        if (LIVE_ITEM_STATUSES.has(row.status) && LIVE_ITEM_TYPES.has(row.type)) return undefined;
+        if (
+          row.recovery_parked === 1 ||
+          (LIVE_ITEM_STATUSES.has(row.status) && LIVE_ITEM_TYPES.has(row.type))
+        )
+          return undefined;
         keys.push({ id: row.turn_item_id, updatedAt: row.updated_at });
       }
       yield* Effect.yieldNow;

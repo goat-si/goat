@@ -42,6 +42,7 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as ThreadCommandExecutor from "./orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
@@ -101,12 +102,24 @@ type CommandReadinessState = "pending" | "ready" | ServerRuntimeStartupError;
 
 interface CommandGate {
   readonly awaitCommandReady: Effect.Effect<void, ServerRuntimeStartupError>;
+  readonly awaitQueuedCommandsDrained: Effect.Effect<void, ServerRuntimeStartupError>;
   readonly signalCommandReady: Effect.Effect<void>;
   readonly failCommandReady: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
   readonly enqueueCommand: <A, E>(
     effect: Effect.Effect<A, E>,
   ) => Effect.Effect<A, E | ServerRuntimeStartupError>;
 }
+
+export const releaseDeferredRecovery = Effect.fn("serverRuntimeStartup.releaseDeferredRecovery")(
+  function* (input: {
+    readonly gate: Pick<CommandGate, "awaitQueuedCommandsDrained">;
+    readonly recovery: ProviderRuntimeRecovery.ProviderRuntimeRecoveryService["Service"];
+    readonly locks: ThreadCommandExecutor.ThreadCommandExecutor["Service"];
+  }) {
+    yield* input.gate.awaitQueuedCommandsDrained;
+    yield* input.recovery.drainDeferredResends(input.locks);
+  },
+);
 
 const settleQueuedCommand = <A, E>(deferred: Deferred.Deferred<A, E>, exit: Exit.Exit<A, E>) =>
   Exit.isSuccess(exit)
@@ -125,6 +138,7 @@ export const makeCommandGate = Effect.gen(function* () {
       Effect.mapError((cause) => new ServerRuntimeStartupError({ ...errorContext, cause })),
     ) ?? Effect.void;
   const commandReady = yield* Deferred.make<void, ServerRuntimeStartupError>();
+  const queuedCommandsDrained = yield* Deferred.make<void, ServerRuntimeStartupError>();
   const pending = new Map<symbol, QueuedCommand>();
   let readiness: CommandReadinessState = "pending";
 
@@ -141,6 +155,7 @@ export const makeCommandGate = Effect.gen(function* () {
         const abandoned = Array.from(pending.values());
         pending.clear();
         Deferred.doneUnsafe(commandReady, error);
+        Deferred.doneUnsafe(queuedCommandsDrained, error);
         for (const command of abandoned) command.fail(error);
       }),
   );
@@ -167,6 +182,7 @@ export const makeCommandGate = Effect.gen(function* () {
         }),
       step: () => {},
     });
+    yield* Deferred.succeed(queuedCommandsDrained, undefined);
   }).pipe(Effect.ignore);
   yield* Effect.forkScoped(commandWorker);
   yield* Effect.addFinalizer(() =>
@@ -224,6 +240,7 @@ export const makeCommandGate = Effect.gen(function* () {
 
   return {
     awaitCommandReady,
+    awaitQueuedCommandsDrained: Deferred.await(queuedCommandsDrained),
     signalCommandReady: Effect.sync(() => {
       if (readiness !== "pending") return;
       readiness = "ready";
@@ -555,6 +572,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+  const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const codexDetached = yield* CodexDetachedAppServerLive.CodexDetachedAppServers;
@@ -855,6 +873,16 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
+    yield* releaseDeferredRecovery({
+      gate: commandGate,
+      recovery: providerRuntimeRecovery,
+      locks: threadCommands,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logError("Failed to release deferred recovery starts", { errorTag: error._tag }),
+      ),
+      Effect.forkScoped,
+    );
     const receiver = yield* Effect.serviceOption(DesktopTelemetryReceiver);
     if (Option.isSome(receiver)) {
       yield* receiver.value.announceServerReady.pipe(
@@ -920,7 +948,9 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 });
 
 export const layerWithOptions = (options?: StartupOptions) =>
-  Layer.effect(ServerRuntimeStartup, make(options));
+  Layer.effect(ServerRuntimeStartup, make(options)).pipe(
+    Layer.provide(ThreadCommandExecutor.layer),
+  );
 
 /** Shares the Codex process service with the provider factory, so cleanup and shutdown see one state. */
 export const layerLiveWithOptions = (options?: StartupOptions) =>

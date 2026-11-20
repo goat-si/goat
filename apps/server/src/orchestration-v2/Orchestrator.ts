@@ -1,3 +1,7 @@
+import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
+import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
+import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
+import { makeReleaseUnattendedHolds } from "./goat/ReleaseUnattendedHolds.ts";
 import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
 import { makeNotificationTasks } from "./goat/NotificationTasks.ts";
 import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
@@ -195,6 +199,7 @@ import {
   goalCommandStopsActiveRun,
   isNativeMaintenanceCommand,
   resolveMessageDispatchIntent,
+  providerTurnCapabilities,
   shouldClearActiveOrder,
 } from "./CommandPolicy.ts";
 import {
@@ -711,6 +716,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* Ref.update(events, (existing) => [...existing, withId]);
         return withId;
       });
+
+  const settleRecoveryParkNotice = makeSettleRecoveryParkNotice({
+    projectionStore,
+    OrchestratorProjectionError,
+    emit,
+  });
 
   const sessionHasBackgroundWork = makeSessionHasBackgroundWork(providerSessions);
 
@@ -1970,6 +1981,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const delayMs = continuationStartRetryDelayMs(run, projection);
     if (delayMs === undefined) return;
     const commandId = CommandId.make(`command:restart-continuation-retry:${run.id}`);
+    const processLossCount = yield* priorContinuationCrashCount(effectOutbox, run);
     yield* writeSystemEvents(
       [],
       [
@@ -1977,60 +1989,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           id: `effect:restart-continuation:${run.id}`,
           commandId,
           threadId,
-          request: { type: "provider-runtime.continue", sourceRunId: run.id },
+          request: {
+            type: "provider-runtime.continue",
+            sourceRunId: run.id,
+            ...(processLossCount === undefined ? {} : { processLossCount }),
+          },
           availableAt: DateTime.add(yield* DateTime.now, { milliseconds: delayMs }),
         },
       ],
     );
   });
 
-  // A hold waits for a person to review what they queued. Nobody reviews messages from agents,
-  // the server or scheduled tasks, so a later completed run releases those unless it was stopped.
-  const releaseUnattendedHolds = Effect.fn("Orchestrator.releaseUnattendedHolds")(function* (
-    threadId: ThreadId,
-    completedRunId: RunId,
-  ) {
-    const held = yield* projectionStore.getHeldQueuedRuns(threadId);
-    if (held.length === 0) return;
-    const completedMessage = yield* projectionStore.getRunMessage(threadId, completedRunId);
-    if (completedMessage !== undefined && isBufferedProviderNotification(completedMessage)) return;
-    const projection = yield* projectionStore.getThreadRecords(
-      threadId,
-      ["runs", "messages", "turnItems"],
-      {
-        messageIds: held.map((run) => run.userMessageId),
-        turnItemTypes: ["run_interrupt_request"],
-        turnItemRunIds: [completedRunId],
-      },
-    );
-    // Only the newest run completing shows the thread moved past the hold; a late or
-    // bookkeeping update to an older run, overtaken by a failure or Stop, does not.
-    if (
-      latestExecutedRun(projection.runs)?.id !== completedRunId ||
-      projection.turnItems.length > 0 ||
-      worktreeSetupPending(projection)
-    )
-      return;
-    const { messages } = projection;
-    const unattended = new Set(
-      messages
-        .filter((message) => message.createdBy !== "user" || message.scheduledTaskId !== undefined)
-        .map((message) => message.id),
-    );
-    const now = yield* DateTime.now;
-    const released = held.filter((run) => unattended.has(run.userMessageId));
-    if (released.length === 0) return;
-    yield* writeSystemEvents(
-      released.map((run) => ({
-        type: "run.updated" as const,
-        threadId,
-        runId: run.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...run, queueHeld: false },
-      })),
-    );
-  });
+  const releaseUnattendedHolds = makeReleaseUnattendedHolds({ projectionStore, writeSystemEvents });
 
   const resumeQueuedRuns = Effect.gen(function* () {
     const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
@@ -5476,6 +5446,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         taskIds: delivery.taskIds,
       };
     }
+    if (
+      dispatchMode.type === "steer_active" &&
+      command.modelSelection !== undefined &&
+      !isNativeMaintenanceCommand(command)
+    ) {
+      const targetRunId = dispatchMode.targetRunId;
+      const target = projection.runs.find((run) => run.id === targetRunId);
+      if (
+        target !== undefined &&
+        isBlockingRun(target) &&
+        target.providerInstanceId !== command.modelSelection.instanceId &&
+        !(yield* stopReachedRun(command, command.threadId, target.id))
+      ) {
+        const turns =
+          providerTurnCapabilities(projection, target) ??
+          (yield* providerAdapters.get(target.providerInstanceId).pipe(
+            Effect.flatMap((adapter) => adapter.getCapabilities()),
+            mapDispatchError(command),
+          )).turns;
+        if (providerSwitchWaitsForTurn(turns)) dispatchMode = { type: "queue_after_active" };
+      }
+    }
     // A provider that can stop a turn but not restart it with new input runs a
     // restart as the next turn: first in the queue, with the running turn stopped.
     if (dispatchMode.type === "restart_active" && !isNativeMaintenanceCommand(command)) {
@@ -5740,6 +5732,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : [];
     const releasedAt = yield* DateTime.now;
     for (const held of heldRunsToRelease) {
+      yield* settleRecoveryParkNotice(command, events, held.id, releasedAt, "sent");
       yield* emit(
         events,
         command,
@@ -8840,6 +8833,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     yield* emitQueuedRunCancellation({ command, events, projection, run: queuedRun, now, cause });
+    yield* settleRecoveryParkNotice(command, events, queuedRun.id, now, "discarded");
     const emitEvent = emit(events, command);
     const guest = queuedMessage?.context?.guest;
     if (guest !== undefined) {
@@ -12427,6 +12421,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const now = yield* DateTime.now;
         const queued = projection.runs.filter((run) => run.status === "queued");
         for (const run of queued) {
+          yield* settleRecoveryParkNotice(command, events, run.id, now, "sent");
           yield* emit(
             events,
             command,

@@ -1,4 +1,12 @@
 import {
+  latestStartedRun,
+  providerThreadHasPendingBackgroundTasks,
+  resolveStaleBackgroundItemProviderInstanceId,
+} from "./goat/RecoveryBackground.ts";
+import { continuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
+import { makeDeferredRecoveryResends } from "./goat/DeferredRecoveryResends.ts";
+import { selectRecoveryResends } from "./goat/SelectRecoveryResends.ts";
+import {
   nonterminalRuns,
   isNonterminalTurnItemStatus,
   isNonterminalNodeStatus,
@@ -12,7 +20,6 @@ import {
   drainOutboxError,
 } from "./ProviderRuntimeRecoveryErrors.ts";
 export { ProviderRuntimeRecoveryError } from "./ProviderRuntimeRecoveryErrors.ts";
-import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   CommandId,
@@ -25,7 +32,6 @@ import {
   isOrchestrationV2WorkActive,
   type ThreadId,
 } from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -57,88 +63,18 @@ import {
   cancelledRosterTaskWork,
   cancelledTurnItemWork,
   mergeRestartCancelledBackgroundWork,
-  neverStarted,
 } from "./RestartBackgroundNote.ts";
 
-export interface ProviderRuntimeRecoverySummary {
-  readonly terminalizedRuns: number;
-  readonly stoppedSessions: number;
-  readonly closedRequests: number;
-  readonly retiredEffects: number;
-  readonly requeuedEffects: number;
-}
-
-export interface ProviderRuntimeReconciliationSummary {
-  readonly terminalizedRuns: number;
-  readonly stoppedSessions: number;
-  readonly closedRequests: number;
-  readonly retiredEffects: number;
-  readonly requeuedEffects: number;
-}
-
-type ShutdownPreparation = Effect.Effect<
-  ProviderRuntimeShutdown.ShutdownContinuationSummary,
-  ProviderRuntimeRecoveryError
->;
-
-export class ProviderRuntimeRecoveryService extends Context.Service<
+export {
   ProviderRuntimeRecoveryService,
-  {
-    readonly reconcile: (
-      trigger: "startup" | "shutdown",
-    ) => Effect.Effect<ProviderRuntimeReconciliationSummary, ProviderRuntimeRecoveryError>;
-    readonly prepareForShutdown: ShutdownPreparation;
-    readonly prepareForShutdownWithStopKind: (stopKind: "restart" | "quit") => ShutdownPreparation;
-    readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
-  }
->()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
-
-function providerThreadHasPendingBackgroundTasks(
-  providerThread: OrchestrationV2ThreadProjection["providerThreads"][number],
-): boolean {
-  return (providerThread.pendingBackgroundTasks?.length ?? 0) > 0;
-}
-
-function resolveStaleBackgroundItemProviderInstanceId(
-  item: OrchestrationV2ThreadProjection["turnItems"][number],
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
-): OrchestrationV2ThreadProjection["thread"]["providerInstanceId"] {
-  if (item.runId !== null) {
-    const run = projection.runs.find((candidate) => candidate.id === item.runId);
-    if (run !== undefined) {
-      return run.providerInstanceId;
-    }
-  }
-  if (item.type === "subagent") {
-    return item.providerInstanceId;
-  }
-  if (item.providerThreadId !== null && item.providerThreadId !== undefined) {
-    const providerThread = projection.providerThreads.find(
-      (candidate) => candidate.id === item.providerThreadId,
-    );
-    if (providerThread !== undefined) {
-      return providerThread.providerInstanceId;
-    }
-  }
-  return projection.providerThreads[0]?.providerInstanceId ?? projection.thread.providerInstanceId;
-}
-
-function latestStartedRun(
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
-  providerThreadId: ProviderThreadId,
-) {
-  return projection.runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
-    (latest, run) =>
-      run.providerThreadId === providerThreadId &&
-      run.status !== "queued" &&
-      run.status !== "rolled_back" &&
-      !neverStarted(run) &&
-      (latest === undefined || runRanAfter(run, latest))
-        ? run
-        : latest,
-    undefined,
-  );
-}
+  type ProviderRuntimeRecoverySummary,
+  type ProviderRuntimeReconciliationSummary,
+} from "./goat/RecoveryServiceTypes.ts";
+import {
+  ProviderRuntimeRecoveryService,
+  type ProviderRuntimeRecoverySummary,
+  type ProviderRuntimeReconciliationSummary,
+} from "./goat/RecoveryServiceTypes.ts";
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -146,6 +82,12 @@ export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
+  const deferredResends = makeDeferredRecoveryResends({
+    projections,
+    sink: eventSink,
+    ids,
+    outbox,
+  });
   let protectedThreads: ReadonlySet<ThreadId> = new Set();
   let blockedThreads: ReadonlySet<ThreadId> = new Set();
   let survivorBindings: ReadonlyArray<CodexSurvivors.CodexSurvivorBinding> = [];
@@ -232,13 +174,36 @@ export const make = Effect.gen(function* () {
       );
       const preservedRunIds = new Set(
         pendingStarts.flatMap((effect) =>
-          effect.request.type === "provider-turn.start" && startingIds.has(effect.request.runId)
+          effect.request.type === "provider-turn.start" &&
+          !effect.id.startsWith("effect:recovery-resend:") &&
+          startingIds.has(effect.request.runId)
             ? [effect.request.runId]
             : [],
         ),
       );
+      const selected =
+        trigger === "startup"
+          ? yield* selectRecoveryResends({
+              projection,
+              projections,
+              outbox,
+              deferred: deferredResends,
+              preservedRunIds,
+              enabled: continueAfterRestart,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderRuntimeRecoveryError({
+                    operation: "read-projections",
+                    threadId: projection.thread.id,
+                    cause,
+                  }),
+              ),
+            )
+          : { deferred: new Set<RunId>(), accepted: new Set<RunId>() };
       let runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
+        if (selected.deferred.has(run.id)) continue;
         if (run.status === "starting" && preservedRunIds.has(run.id)) continue;
         if (run.status === "waiting") {
           const checkpointEffects = yield* outbox
@@ -356,6 +321,7 @@ export const make = Effect.gen(function* () {
         projection,
         runs,
         projections,
+        acceptedRunIds: selected.accepted,
         now,
         allocateEventId,
         readError: (cause) =>
@@ -727,7 +693,20 @@ export const make = Effect.gen(function* () {
               id: `effect:restart-continuation:${continuationRun.id}`,
               commandId,
               threadId: projection.thread.id,
-              request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
+              request: {
+                type: "provider-runtime.continue",
+                sourceRunId: continuationRun.id,
+                processLossCount: yield* continuationCrashCount(outbox, continuationRun).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderRuntimeRecoveryError({
+                        operation: "reconcile",
+                        threadId: projection.thread.id,
+                        cause,
+                      }),
+                  ),
+                ),
+              },
             },
           ]
         : [];
@@ -796,6 +775,17 @@ export const make = Effect.gen(function* () {
           );
         retiredEffects = result.cancelledEffectCount;
       }
+      if (selected.deferred.size > 0)
+        yield* deferredResends.captureSequence(projection.thread.id).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderRuntimeRecoveryError({
+                operation: "reconcile",
+                threadId: projection.thread.id,
+                cause,
+              }),
+          ),
+        );
       return {
         terminalizedRuns: runs.length,
         stoppedSessions,
@@ -987,6 +977,16 @@ export const make = Effect.gen(function* () {
     prepareForShutdown: prepareForShutdownWithStopKind("quit"),
     prepareForShutdownWithStopKind,
     recover,
+    drainDeferredResends: Effect.fn("ProviderRuntimeRecoveryService.drainDeferredResends")(
+      (locks) =>
+        deferredResends
+          .drain(locks)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ProviderRuntimeRecoveryError({ operation: "reconcile", cause }),
+            ),
+          ),
+    ),
   });
 });
 

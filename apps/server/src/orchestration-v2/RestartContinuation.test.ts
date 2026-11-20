@@ -20,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ServerSettings from "../serverSettings.ts";
 import { restartContinuationRun, continueRestartedRun } from "./RestartContinuation.ts";
-import { continuationStartRetryDelayMs } from "./RestartBackgroundNote.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -291,6 +290,7 @@ it.effect.each([
         assert.deepEqual(committed!.effects[0]?.request, {
           type: "provider-runtime.continue",
           sourceRunId: runId,
+          processLossCount: 1,
         });
     }),
 );
@@ -423,7 +423,7 @@ it.effect.each(["running", "waiting"])(
       ]);
       assert.deepEqual(
         committed?.effects.map((effect) => effect.request),
-        [{ type: "provider-runtime.continue", sourceRunId: runId }],
+        [{ type: "provider-runtime.continue", sourceRunId: runId, processLossCount: 1 }],
       );
     }),
 );
@@ -666,7 +666,15 @@ it.effect.each([
         const recorded = [...writes.flatMap((write) => write.effects), ...commits[0]!.effects];
         assert.deepEqual(
           recorded.map((effect) => effect.request),
-          wakes ? [{ type: "provider-runtime.continue", sourceRunId: runId }] : [],
+          wakes
+            ? [
+                {
+                  type: "provider-runtime.continue",
+                  sourceRunId: runId,
+                  ...(trigger === "startup" ? { processLossCount: 1 } : {}),
+                },
+              ]
+            : [],
         );
         assert.lengthOf(commits, 1);
         const events = commits[0]!.events;
@@ -952,45 +960,6 @@ it.effect("continues a resumed queued run that ran after an earlier continuation
     ]);
   }),
 );
-
-it("backs off twice from a continuation the provider never took, then lets it fail", () => {
-  const base = makeProjection();
-  const failedStart = (id: string, of: RunId) => ({
-    ...base.runs[0]!,
-    id: RunId.make(id),
-    activeAttemptId: RunAttemptId.make(`attempt:${id}`),
-    status: "failed" as const,
-    restartContinuationOfRunId: of,
-  });
-  const first = failedStart("run:retry-1", runId);
-  const second = failedStart("run:retry-2", first.id);
-  const third = failedStart("run:retry-3", second.id);
-  const projection = (failureClass = "provider_error", inputDelivery = "unsent") =>
-    ({
-      runs: [{ ...base.runs[0]!, status: "cancelled" }, first, second, third],
-      attempts: [first, second, third].map((run) => ({ id: run.activeAttemptId, inputDelivery })),
-      turnItems: [first, second, third].map((run) => ({
-        id: `error:${run.id}`,
-        type: "error",
-        status: "failed",
-        runId: run.id,
-        nodeId: run.rootNodeId,
-        ordinal: 1,
-        updatedAt: now,
-        failure: { class: failureClass, message: "Failed.", code: null, retryable: null },
-      })),
-    }) as unknown as Parameters<typeof continuationStartRetryDelayMs>[1];
-  assert.deepEqual(
-    [first, second, third].map((run) => continuationStartRetryDelayMs(run, projection())),
-    [60_000, 180_000, undefined],
-  );
-  for (const failureClass of ["usage_limit", "permission_error", "validation_error"])
-    assert.isUndefined(continuationStartRetryDelayMs(first, projection(failureClass)));
-  // Once the provider took the prompt, starting again would repeat the turn.
-  assert.isUndefined(
-    continuationStartRetryDelayMs(first, projection("provider_error", "accepted")),
-  );
-});
 
 it.effect("continues again after a continuation fails before its prompt", () =>
   Effect.gen(function* () {

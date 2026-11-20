@@ -108,6 +108,14 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getMessagesById: (_threadId, ids) =>
+              Effect.succeed(
+                new Map(
+                  projection.messages
+                    .filter((message) => ids.includes(message.id))
+                    .map((message) => [message.id, message]),
+                ),
+              ),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {

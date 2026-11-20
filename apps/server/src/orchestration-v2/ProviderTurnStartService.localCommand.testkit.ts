@@ -533,7 +533,11 @@ export function makeLocalCommandHarness(input: {
       : "historyReadFailureAfterFallback" in input || "resumeFailure" in input
         ? Effect.succeed(resumeFallbackSession as never)
         : "ensureThreadFailure" in input
-          ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
+          ? Effect.succeed({
+              driver: providerThread.driver,
+              providerSession: { capabilities: CodexProviderCapabilitiesV2 },
+              ensureThread,
+            } as never)
           : "openFailure" in input
             ? Effect.sync(() => {
                 if (input.interruptRunBeforeOpenFailure === true) interruptRun();

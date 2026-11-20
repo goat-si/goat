@@ -1,0 +1,3 @@
+export const MAX_RECOVERY_RESENDS = 3;
+export const MAX_DEFERRED_RECOVERY_RESENDS = 64;
+export const MAX_RECOVERY_ATTEMPTS = 64;

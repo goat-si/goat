@@ -1,3 +1,5 @@
+import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
+import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
 import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
 import { hasPendingHandoff, missingProviderSession } from "./goat/ProviderHandoffPending.ts";
@@ -67,7 +69,6 @@ import { openFailureExplainer } from "../provider/ProviderCliGate.ts";
 import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
-import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
@@ -77,7 +78,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapters from "./ProviderAdapterRegistry.ts";
 import * as CloudSource from "./CloudTaskSourceService.ts";
-import { cloudTaskResultText, isCloudExecution } from "@goat/provider-core/server/cloudTask";
+import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
   ContextHandoffBackgroundWorkError,
@@ -152,6 +153,7 @@ export const layer: Layer.Layer<
       readonly reattach?: boolean;
       /** Called once this start attaches a registered cloud task instead of submitting. */
       readonly onAttach?: () => void;
+      readonly onStarting?: (run: OrchestrationV2Run) => void;
     }) {
       const { runId } = input;
       const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
@@ -163,6 +165,7 @@ export const layer: Layer.Layer<
       if (run.status !== expectedStartStatus) {
         return;
       }
+      if (run.status === "starting") input.onStarting?.(run);
       const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -657,6 +660,9 @@ export const layer: Layer.Layer<
         return;
       }
       const session = sessionResult.success;
+      if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
+      if (session.providerSession === undefined)
+        return yield* missingProviderSession(runId, session.driver);
       if (
         nativeResume &&
         (session.resumeInterruptedTurn === undefined ||
@@ -847,8 +853,6 @@ export const layer: Layer.Layer<
             }),
           );
         }
-        if (session.providerSession === undefined)
-          return yield* missingProviderSession(runId, session.driver);
         const uncertainDelivery = hasPendingHandoff(projection, providerThread);
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
@@ -1396,6 +1400,20 @@ export const layer: Layer.Layer<
       });
     });
     return ProviderTurnStartServiceV2.of({
+      getStartingRunIdentity: Effect.fn("ProviderTurnStartService.getStartingRunIdentity")(
+        function* ({ threadId, runId }) {
+          const projection = yield* projectionStore.getTurnStartContext(threadId, runId);
+          const run = projection.runs.find((candidate) => candidate.id === runId);
+          return run?.status === "starting" &&
+            run.activeAttemptId !== null &&
+            run.rootNodeId !== null
+            ? { attemptId: run.activeAttemptId, rootNodeId: run.rootNodeId }
+            : undefined;
+        },
+        (effect, { runId }) =>
+          effect.pipe(Effect.mapError((cause) => new ProviderTurnStartError({ runId, cause }))),
+      ),
+      failStartingRun: makeFailedStartSettlement({ projectionStore, eventSink, idAllocator }),
       start: Effect.fn("ProviderTurnStartService.start")(
         function* (input) {
           const originalAttemptId =
@@ -1405,120 +1423,38 @@ export const layer: Layer.Layer<
                 )?.activeAttemptId
               : undefined;
           let attaching = false;
+          let startingRun: OrchestrationV2Run | undefined;
           // The scope holds the turn-start reservation until startup ends.
-          const startup = start({ ...input, onAttach: () => void (attaching = true) });
+          const startup = start({
+            ...input,
+            onAttach: () => void (attaching = true),
+            onStarting: (run) => void (startingRun = run),
+          });
           return yield* Effect.scoped(startup).pipe(
             // A start that ends before its turn registers must not keep holding the process.
             Effect.ensuring(providerSessions.settleTurnStart(input)),
-            Effect.catch((cause) =>
-              Effect.gen(function* () {
-                // A retried start finds the attach run already running and returns, so an
-                // attach settles on its first failure.
-                if (input.reattach === true ? input.willRetry === true : !attaching)
-                  return yield* Effect.fail(cause);
-                const current = yield* projectionStore.getTurnStartContext(
-                  input.threadId,
-                  input.runId,
-                );
-                const run = current.runs.find((candidate) => candidate.id === input.runId);
-                const thread = current.providerThreads.find(
-                  (candidate) => candidate.id === run?.providerThreadId,
-                );
-                const attempt = current.attempts.find(
-                  (candidate) => candidate.id === run?.activeAttemptId,
-                );
-                const root = current.nodes.find((candidate) => candidate.id === run?.rootNodeId);
-                const attached =
-                  input.reattach !== true &&
-                  thread?.cloudTask?.attach === "registered" &&
-                  thread.cloudTask.acceptedAppRunId === input.runId &&
-                  thread.firstRunOrdinal === run?.ordinal;
-                if (
-                  (input.reattach !== true && !attached) ||
-                  run?.status !== "running" ||
-                  (input.reattach === true && run.activeAttemptId !== originalAttemptId) ||
-                  !thread?.cloudTask ||
-                  !attempt ||
-                  !root
-                ) {
-                  return yield* Effect.fail(cause);
-                }
-                const now = yield* DateTime.now;
-                const reason = attached
-                  ? "This environment's sign-in cannot follow this cloud run, so GOAT keeps only its link. Open the link for its progress."
-                  : "Cloud tracking could not be reattached. Open the task link; remote work may continue.";
-                const updated = {
-                  ...thread,
-                  status: "idle" as const,
-                  updatedAt: now,
-                  cloudTask: attached
-                    ? {
-                        ...thread.cloudTask,
-                        tracking: "link-only" as const,
-                        error: reason,
-                        updatedAt: DateTime.formatIso(now),
-                      }
-                    : {
-                        ...thread.cloudTask,
-                        status: "unknown" as const,
-                        error: reason,
-                        updatedAt: DateTime.formatIso(now),
-                      },
-                };
-                // A link-only registration ends its attach run without claiming a result.
-                const settled = attached ? ("completed" as const) : ("failed" as const);
-                const allocateEventId = () =>
-                  idAllocator.allocate.event({ threadId: input.threadId });
-                const cloudResultEvents = yield* makeCloudResultEvents({
-                  run,
-                  nodeId: root.id,
-                  providerThreadId: thread.id,
-                  providerTurnId:
-                    latestProviderTurnForAttempt(current.providerTurns, attempt.id)?.id ?? null,
-                  text: cloudTaskResultText({ ...updated.cloudTask, summary: reason }),
-                  completedAt: now,
-                  allocateEventId,
-                });
-                yield* eventSink.writeIfRunCurrent({
-                  threadId: input.threadId,
-                  runId: run.id,
-                  activeAttemptId: attempt.id,
-                  expectedStatus: "running",
-                  events: [
-                    ...(yield* Effect.forEach(
-                      [
-                        { type: "provider-thread.updated" as const, payload: updated },
-                        {
-                          type: "run.updated" as const,
-                          payload: { ...run, status: settled, completedAt: now },
-                        },
-                        {
-                          type: "run-attempt.updated" as const,
-                          payload: { ...attempt, status: settled, completedAt: now },
-                        },
-                        {
-                          type: "node.updated" as const,
-                          payload: { ...root, status: settled, completedAt: now },
-                        },
-                      ],
-                      (event) =>
-                        allocateEventId().pipe(
-                          Effect.map((id) => ({
-                            ...event,
-                            id,
-                            threadId: input.threadId,
-                            runId: run.id,
-                            providerInstanceId: run.providerInstanceId,
-                            occurredAt: now,
-                          })),
-                        ),
-                    )),
-                    ...cloudResultEvents,
-                  ],
-                });
-                return yield* Effect.fail(cause);
+            Effect.catch(
+              makeCloudStartFailureHandler({
+                input,
+                isAttaching: () => attaching,
+                originalAttemptId,
+                projectionStore,
+                idAllocator,
+                eventSink,
               }),
             ),
+            Effect.mapError((cause) => {
+              if (startingRun?.activeAttemptId == null || startingRun.rootNodeId == null)
+                return cause;
+              const error = new ProviderTurnStartError({
+                runId: input.runId,
+                cause: isProviderTurnStartError(cause) ? cause.cause : cause,
+                attemptId: startingRun.activeAttemptId,
+                rootNodeId: startingRun.rootNodeId,
+              });
+              if (isProviderTurnStartError(cause)) error.message = cause.message;
+              return error;
+            }),
           );
         },
         (effect, input) =>

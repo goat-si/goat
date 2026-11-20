@@ -1,3 +1,4 @@
+import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -193,10 +194,7 @@ export function resolveMessageDispatchIntent(
     target === undefined || !isActiveRun(target)
       ? undefined
       : providerTurnCapabilities(projection, target);
-  return turns !== undefined &&
-    !turns.supportsActiveSteering &&
-    !(turns.supportsInterrupt && turns.supportsSteeringByInterruptRestart) &&
-    turns.supportsQueuedMessages
+  return turns !== undefined && !turns.supportsActiveSteering && providerSwitchWaitsForTurn(turns)
     ? { type: "queue_after_active" }
     : mode;
 }
@@ -210,7 +208,7 @@ function isActiveRun(run: OrchestrationV2Run): boolean {
   );
 }
 
-function providerTurnCapabilities(
+export function providerTurnCapabilities(
   projection: Pick<OrchestrationV2ThreadProjection, "providerThreads" | "providerSessions">,
   run: OrchestrationV2Run,
 ) {
