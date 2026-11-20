@@ -17,7 +17,7 @@ import {
 } from "@goat/contracts";
 import { useRouter } from "@tanstack/react-router";
 
-import { pickSnoozePreset, resolveSnoozePresets } from "../components/Sidebar.snooze";
+import { useSidebarSnooze } from "../components/Sidebar.snooze";
 import { canPromoteThread } from "../components/Sidebar.logic";
 import { usePromoteThread } from "../components/promoteThread";
 import {
@@ -113,6 +113,8 @@ export function useThreadActionMenu(input: {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const { pickSnoozePreset, resolveSnoozePresets, snoozeLabels } =
+    useSidebarSnooze(timestampFormat);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -152,7 +154,7 @@ export function useThreadActionMenu(input: {
         titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
-      const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
+      const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
       const items = buildThreadActionMenuItems({
         canOpenSshHandoff: true,
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
@@ -171,6 +173,7 @@ export function useThreadActionMenu(input: {
         }),
         supports,
         snoozePresets,
+        snoozeLabels,
         globalAgent,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
@@ -196,7 +199,6 @@ export function useThreadActionMenu(input: {
             : pickSnoozePreset(
                 snoozePresets,
                 action.slice("snooze:".length),
-                timestampFormat,
                 threadRef.environmentId,
               );
         if (!preset) return;
