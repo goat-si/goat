@@ -1,4 +1,12 @@
+import { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
+export { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
+import { REMOTE_WAIT_READY_SCRIPT } from "./remoteWaitReadyScript.ts";
 import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
+import {
+  REMOTE_HOME_OWNER_WAIT,
+  REMOTE_HOME_OWNER_WAIT_MARKER,
+  REMOTE_HOME_OWNER_WAIT_SECONDS,
+} from "./remoteHomeOwnerWait.ts";
 import {
   EXACT_ARCHIVE_VERSION,
   SshInvalidArchiveVersionError,
@@ -34,6 +42,7 @@ import {
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
   SERVER_EXIT_CODE_DATABASE_AHEAD,
+  SERVER_EXIT_CODE_STATE_DIR_OWNED,
 } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { describeReadinessCause } from "@goat/shared/httpReadiness";
@@ -200,6 +209,8 @@ const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
+const REMOTE_OWNER_WAIT_TIMEOUT_MS =
+  REMOTE_LAUNCH_TIMEOUT_MS + 3 * REMOTE_HOME_OWNER_WAIT_SECONDS * 1_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;
@@ -408,105 +419,6 @@ export type {
   SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 
-export const REMOTE_PICK_PORT_SCRIPT = `const fs = require("node:fs");
-const net = require("node:net");
-const filePath = process.argv[2] ?? "";
-const defaultPort = Number.parseInt(process.argv[3] ?? "", 10);
-const scanWindow = Number.parseInt(process.argv[4] ?? "", 10);
-const raw = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8").trim() : "";
-const preferred = Number.parseInt(raw, 10);
-const start = Number.isInteger(preferred) ? preferred : defaultPort;
-const end = start + scanWindow;
-
-function canBind(port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
-      server.close((error) => resolve(!error));
-    });
-  });
-}
-
-// macOS lets the bind above succeed while another process listens on
-// *:<port>, so also skip any port that already answers on loopback.
-function answersOnLoopback(port) {
-  return new Promise((resolve) => {
-    const socket = net.connect({ port, host: "127.0.0.1" });
-    socket.setTimeout(1000);
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("timeout", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-  });
-}
-
-(async () => {
-  for (let port = start; port < end; port += 1) {
-    const available = (await canBind(port)) && !(await answersOnLoopback(port));
-    if (available) {
-      process.stdout.write(String(port));
-      return;
-    }
-  }
-  process.exit(1);
-})().catch(() => process.exit(1));
-`;
-
-const REMOTE_WAIT_READY_SCRIPT = `const http = require("node:http");
-const port = Number.parseInt(process.argv[2] ?? "", 10);
-const timeoutMs = Number.parseInt(process.argv[3] ?? "", 10);
-const probeTimeoutMs = Number.parseInt(process.argv[4] ?? "", 10);
-if (!Number.isInteger(port) || !Number.isInteger(timeoutMs) || !Number.isInteger(probeTimeoutMs)) {
-  process.exit(1);
-}
-const deadline = Date.now() + timeoutMs;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function probe() {
-  return new Promise((resolve) => {
-    const request = http.get(
-      {
-        hostname: "127.0.0.1",
-        port,
-        path: "/",
-        timeout: probeTimeoutMs,
-      },
-      (response) => {
-        response.resume();
-        response.once("end", () => {
-          resolve(response.statusCode >= 200 && response.statusCode < 300);
-        });
-      },
-    );
-    request.once("timeout", () => {
-      request.destroy();
-      resolve(false);
-    });
-    request.once("error", () => resolve(false));
-  });
-}
-
-(async () => {
-  while (Date.now() < deadline) {
-    if (await probe()) {
-      process.exit(0);
-    }
-    await sleep(100);
-  }
-  process.exit(1);
-})().catch(() => process.exit(1));
-`;
-
 const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@GOAT_SHARED_HOME_UPDATE_WAIT@@cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
@@ -525,7 +437,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$" "$STATE_DIR/server-log-next.$$"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
@@ -762,9 +674,14 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
-@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  recheck_selected_before_use
+@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  wait_for_home_owner
+  recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
-    printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
+    if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" = 1 ]; then
+      reuse_live_server
+      break
+    fi
+    printf 'A server appeared before launch but is not compatible; reconnect without replacing it.\\n' >&2; exit 1
   fi
   if database_ahead_marked; then database_ahead_exit; fi
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
@@ -774,6 +691,9 @@ while [ -z "$REMOTE_PORT" ]; do
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
   touch "$LOG_FILE"
+  LAUNCH_LOG_RETAIN_BYTES=1048576
+  tail -c "$LAUNCH_LOG_RETAIN_BYTES" "$LOG_FILE" >"$STATE_DIR/server-log-next.$$" &&
+    mv "$STATE_DIR/server-log-next.$$" "$LOG_FILE" || rm -f "$STATE_DIR/server-log-next.$$" || :
   LAUNCH_LOG_OFFSET="$(wc -c <"$LOG_FILE")"
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
     # Windows OpenSSH ends every process left in the session, so the server starts outside it.
@@ -782,7 +702,7 @@ while [ -z "$REMOTE_PORT" ]; do
     export GOAT_RUNTIME_ORIGIN=ssh; REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
     if ! valid_positive "$REMOTE_PID"; then
       printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
-      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+      tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | tail -n 80 >&2 || true
       exit 1
     fi
   else
@@ -814,6 +734,48 @@ while [ -z "$REMOTE_PORT" ]; do
     if ! launch_server_alive "$REMOTE_PID"; then
       launch_exit=0
       if [ "$GOAT_HOST_WINDOWS" = 0 ]; then wait "$REMOTE_PID" 2>/dev/null || launch_exit=$?; fi
+      if [ "$launch_exit" = ${SERVER_EXIT_CODE_STATE_DIR_OWNED} ] ||
+         { [ "$GOAT_HOST_WINDOWS" = 1 ] && tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | grep -q 'Another GOAT server is using '; }; then
+        if fact_file_is "$PID_FILE" "$REMOTE_PID" && fact_file_is "$PORT_FILE" "$REMOTE_PORT" &&
+           fact_file_is "$MANAGED_FILE" managed &&
+           fact_file_is "$STATE_DIR/identity" "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"; then
+          rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+        fi
+        successor_waited=0
+        successor_deadline=$(($(date +%s) + HOME_OWNER_WAIT_LIMIT))
+        while [ "$successor_waited" -lt "$HOME_OWNER_WAIT_LIMIT" ] && [ "$(date +%s)" -lt "$successor_deadline" ]; do
+          successor_owner_status=0
+          successor_owner="$(home_probe "$successor_deadline" "$RUNNER_CANDIDATE_FILE.pin" __ssh-helper home-owned "$DEFAULT_SERVER_HOME")" || successor_owner_status=$?
+          if [ "$successor_owner_status" -eq 1 ] && [ -n "$successor_owner" ]; then home_inspection_failed; exit 1; fi
+          if { [ "$successor_owner_status" -ne 0 ] && [ "$successor_owner_status" -ne 1 ]; } || [ "$successor_owner" = timeout ] || [ "$successor_owner" = inspection-error ]; then
+            home_inspection_failed; exit 1
+          fi
+          if [ "$successor_owner_status" -eq 0 ]; then
+            case "$successor_owner" in ''|updating) : ;; *) home_inspection_failed; exit 1 ;; esac
+          fi
+          if [ "$successor_owner" != updating ] && successor="$(HOME_PROBE_DEADLINE="$successor_deadline" live_fact "$RUNNER_CANDIDATE_FILE.pin" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
+            case "$successor" in
+              'live '*)
+                recheck_selected_before_use
+                if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" = 1 ]; then
+                  reuse_live_server
+                  break 2
+                fi ;;
+            esac
+          else
+            successor_status=$?; { [ "$successor_status" -ne 124 ] && [ "$successor_status" -le 125 ]; } || { home_inspection_failed; exit 1; }
+          fi
+          successor_waited=$((successor_waited + 1))
+          [ "$successor_waited" -ne 1 ] || printf '${REMOTE_HOME_OWNER_WAIT_MARKER}\\n' >&2
+          sleep 1
+        done
+        if [ "$successor_owner" = updating ]; then
+          printf 'Remote GOAT is updating; retry after the update finishes.\\n' >&2
+        else
+          printf 'Another GOAT server owns this home but did not become ready; reconnect after it starts.\\n' >&2
+        fi
+        exit 1
+      fi
       # Windows launches and runtimes that predate the exit code only leave these errors in the log.
       if [ "$launch_exit" = ${SERVER_EXIT_CODE_DATABASE_AHEAD} ] ||
          tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null |
@@ -823,7 +785,11 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     printf 'Remote GOAT server did not become ready with its own listener on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
-      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+      if [ "$(wc -c <"$LOG_FILE")" -gt "$LAUNCH_LOG_OFFSET" ]; then
+        tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null | tail -n 80 >&2 || true
+      else
+        printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
+      fi
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
@@ -895,6 +861,8 @@ function buildRemoteRunnerSetupScript(
 ): string {
   const preserve = selection.source === "retained";
   return applyScriptPlaceholders(withForcedReplacement(REMOTE_RUNNER_SETUP_SCRIPT, input), {
+    GOAT_HOME_OWNER_WAIT: verifyOwnedBeforePublication ? REMOTE_HOME_OWNER_WAIT : "",
+    GOAT_HOME_OWNER_WAIT_CALL: verifyOwnedBeforePublication ? "wait_for_home_owner\n" : "",
     GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
     GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
     GOAT_DRAIN_AUTOMATIC:
@@ -1245,6 +1213,9 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
             timeoutStage: "runtime-launch",
             timeoutMs: isNodeScriptRunner(selected.runner)
               ? REMOTE_LAUNCH_TIMEOUT_MS
+              : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+            ownerWaitTimeoutMs: isNodeScriptRunner(selected.runner)
+              ? REMOTE_OWNER_WAIT_TIMEOUT_MS
               : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
             ...input,
           });

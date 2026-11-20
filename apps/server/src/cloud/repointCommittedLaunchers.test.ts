@@ -4,9 +4,37 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import { repointCommittedLaunchers } from "./repointCommittedLaunchers.ts";
 
 it.layer(NodeServices.layer)("goat command after a committed remote update", (it) => {
+  it.effect("writes an absolute script when the committed runtime advertises support", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-repoint-format-" });
+      const versions = path.join(root, "runtime/goat/versions");
+      const old = path.join(versions, "1.0.0/goat");
+      const current = path.join(versions, "1.1.0/goat");
+      for (const file of [old, current])
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+      yield* fs.writeFileString(old, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      yield* fs.writeFileString(current, "#!/bin/sh\nprintf 'script-launcher\\n'\n", {
+        mode: 0o755,
+      });
+      const launcher = path.join(root, "bin/goat");
+      yield* fs.makeDirectory(path.dirname(launcher));
+      yield* fs.symlink(old, launcher);
+      yield* fs.writeFileString(path.join(root, "runtime/launchers"), `${launcher}\n`);
+      yield* repointCommittedLaunchers({ baseDir: root, targetVersion: "1.1.0" }).pipe(
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.HomeDirectory, root),
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      );
+      assert.isTrue(Option.isNone(yield* fs.readLink(launcher).pipe(Effect.option)));
+      assert.include(yield* fs.readFileString(launcher), `exec '${current}'`);
+    }),
+  );
   it.effect("moves recorded and default goat links into this home to the new runtime", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

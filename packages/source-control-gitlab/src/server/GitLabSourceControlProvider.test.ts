@@ -1,3 +1,4 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { normalizeGitRemoteUrl } from "@goat/shared/git";
 import { refineUnknownRemoteProvider } from "@goat/source-control-core/server/discovery";
@@ -333,14 +334,14 @@ it.effect.each([
             "--raw-field",
             "title=Fix remote flow",
             "--field",
-            "description=@/tmp/body.md",
+            "description=@-",
           ]);
           return Effect.succeed(processOutput("{}"));
         },
       },
     });
     const provider = yield* GitLabSourceControlProvider.make.pipe(
-      Effect.provide(Layer.merge(host, GitLabCli.layer.pipe(Layer.provide(host)))),
+      Effect.provide(Layer.merge(host, TestGitLabCli.layer.pipe(Layer.provide(host)))),
     );
     yield* provider.createChangeRequest({
       cwd: "/repo",

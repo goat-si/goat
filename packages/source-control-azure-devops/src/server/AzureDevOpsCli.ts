@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
@@ -14,6 +15,7 @@ import {
 
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
+import { AzureBodyReadError, prepareAzureBody } from "./azureDevOpsBoundedBody.ts";
 import { azureCliNeedsScope, scopeAzureCliArgs } from "./azureCliScope.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
@@ -93,6 +95,7 @@ export class AzureDevOpsCommandFailedError extends Schema.TaggedError<AzureDevOp
   azureDevOpsCommandErrorFields,
 ) {
   get detail(): string {
+    if (this.cause instanceof AzureBodyReadError) return this.cause.message;
     return "Azure DevOps CLI command failed.";
   }
 
@@ -226,6 +229,7 @@ export class AzureDevOpsCli extends Context.Service<
       readonly maxOutputBytes?: number;
       readonly remoteUrl?: string;
       readonly resolveRemoteScope?: boolean;
+      readonly stdin?: string;
     }) => Effect.Effect<SourceControlHost.SourceControlProcessOutput, AzureDevOpsCliError>;
 
     readonly listPullRequests: (input: {
@@ -412,9 +416,19 @@ export const azureCliInvocation = Effect.fn("AzureDevOpsCli.invocation")(functio
       } satisfies AzureCliInvocation);
 });
 
+/**
+ * `--option=value` for free text. az replaces a value starting with `@` by that file's
+ * contents; `@-` reads it from stdin instead, which reaches az wherever it runs (WSL included).
+ */
+export const textOption = (option: string, value: string) =>
+  value.startsWith("@")
+    ? { arg: `${option}=@-`, stdin: value }
+    : { arg: `${option}=${value}`, stdin: undefined };
+
 /** @public */
 export const make = Effect.gen(function* () {
   const { process, git } = yield* SourceControlHost.SourceControlHost;
+  const fileSystem = yield* FileSystem.FileSystem;
   const invocation = yield* azureCliInvocation();
 
   const execute: AzureDevOpsCli["Service"]["execute"] = Effect.fn("AzureDevOpsCli.execute")(
@@ -491,6 +505,7 @@ export const make = Effect.gen(function* () {
           ],
           cwd: input.cwd,
           ...(invocation.env === undefined ? {} : { env: invocation.env }),
+          ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
           classifyFailure: classifyAzFailure,
           notFoundDetail: "Pull request not found.",
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -656,8 +671,23 @@ export const make = Effect.gen(function* () {
         Effect.map(normalizeRepositoryCloneUrls),
       );
     }),
-    createPullRequest: Effect.fn("AzureDevOpsCli.createPullRequest")(function (input) {
-      return execute({
+    createPullRequest: Effect.fn("AzureDevOpsCli.createPullRequest")(function* (input) {
+      const bodyFile = yield* prepareAzureBody(fileSystem, input.bodyFile).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AzureDevOpsCommandFailedError({
+              operation: "execute",
+              command: "az",
+              cwd: input.cwd,
+              argumentCount: 0,
+              cause,
+            }),
+        ),
+      );
+      // A full ref keeps a branch named `@...` from reading as a file; az accepts either form.
+      const branch = (name: string) => (name.startsWith("@") ? `refs/heads/${name}` : name);
+      const title = textOption("--title", input.title);
+      yield* execute({
         cwd: input.cwd,
         resolveRemoteScope: true,
         ...(input.remoteUrl === undefined ? {} : { remoteUrl: input.remoteUrl }),
@@ -668,17 +698,15 @@ export const make = Effect.gen(function* () {
           "--only-show-errors",
           "--detect",
           "true",
-          "--target-branch",
-          input.target?.refName ?? input.baseBranch,
-          "--source-branch",
-          SourceControlProvider.sourceBranch(input),
-          "--title",
-          input.title,
-          "--description",
-          `@${input.bodyFile}`,
+          `--target-branch=${branch(input.target?.refName ?? input.baseBranch)}`,
+          `--source-branch=${branch(SourceControlProvider.sourceBranch(input))}`,
+          title.arg,
+          // Joined: az expands a separate `@file` value again, so a body of `@path` read that file.
+          `--description=@${bodyFile}`,
         ],
-      }).pipe(Effect.asVoid);
-    }),
+        ...(title.stdin === undefined ? {} : { stdin: title.stdin }),
+      });
+    }, Effect.scoped),
     getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
       const project = input.project ?? repository.project;

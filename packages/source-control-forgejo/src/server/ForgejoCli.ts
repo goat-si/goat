@@ -16,6 +16,9 @@ import * as SourceControlHost from "@goat/source-control-core/server/SourceContr
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import type { SourceControlProviderContext } from "@goat/source-control-core/server/SourceControlProvider";
 
+// A Gitea list page can hold 50 pull request bodies; tea's output is otherwise capped at 1 MB.
+const API_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 const encodeApiBody = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 export class ForgejoCliError extends Schema.TaggedError<ForgejoCliError>()("ForgejoCliError", {
@@ -176,13 +179,13 @@ export function parseForgejoRemote(value: string) {
     : null;
 }
 
-export function matchForgejoLogin(
+function matchingForgejoLogins(
   logins: ReturnType<typeof parseForgejoLogins>,
   remote: NonNullable<ReturnType<typeof parseForgejoRemote>>,
   requestedHost?: string,
   hostOnly = false,
 ) {
-  const matches = [
+  let matches = [
     ...new Map(
       logins
         .filter((login) => {
@@ -202,12 +205,48 @@ export function matchForgejoLogin(
         .map((login) => [login.name, login]),
     ).values(),
   ];
-  return matches.length === 1
-    ? matches[0]
-    : new Set(matches.map((login) => login.url)).size === 1
-      ? matches.find((login) => login.default === "true")
-      : undefined;
+  if (!remote.ssh && remote.path) {
+    // A root login matches every path on its host; the instance mounted deepest owns the remote.
+    const depth = (login: (typeof matches)[number]) =>
+      parseForgejoRemote(login.url)?.path.length ?? 0;
+    const deepest = Math.max(...matches.map(depth));
+    matches = matches.filter((login) => depth(login) === deepest);
+  }
+  return matches;
 }
+
+export function matchForgejoLogin(
+  logins: ReturnType<typeof parseForgejoLogins>,
+  remote: NonNullable<ReturnType<typeof parseForgejoRemote>>,
+  requestedHost?: string,
+  hostOnly = false,
+) {
+  return chooseForgejoLogin(matchingForgejoLogins(logins, remote, requestedHost, hostOnly));
+}
+
+function chooseForgejoLogin(matches: ReturnType<typeof parseForgejoLogins>) {
+  if (matches.length === 1) return matches[0];
+  const defaults = matches.filter((login) => login.default === "true");
+  return new Set(matches.map((login) => login.url)).size === 1 && defaults.length === 1
+    ? defaults[0]
+    : undefined;
+}
+
+const MAX_AMBIGUOUS_LOGIN_NAMES = 8;
+const MAX_LOGIN_NAME_LENGTH = 80;
+const ambiguousLoginDetail = (
+  command: "fj" | "tea",
+  logins: ReturnType<typeof parseForgejoLogins>,
+) => {
+  const names = logins
+    .slice(0, MAX_AMBIGUOUS_LOGIN_NAMES)
+    .map((login) => login.name.slice(0, MAX_LOGIN_NAME_LENGTH).replace(/[\p{Cc}]/gu, " "));
+  const suffix =
+    logins.length > MAX_AMBIGUOUS_LOGIN_NAMES
+      ? ` and ${logins.length - MAX_AMBIGUOUS_LOGIN_NAMES} more`
+      : "";
+  return `Multiple ${command} logins match: ${names.join(", ")}${suffix}. Set a tea default for logins on the same server, or specify the full server URL.`;
+};
 
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
@@ -586,8 +625,7 @@ export const make = Effect.gen(function* () {
     const selectLogin = (logins: ReturnType<typeof parseForgejoLogins>) =>
       remote
         ? matchForgejoLogin(logins, remote, remote.ssh ? requestedHost : undefined, matchHostOnly)
-        : (logins.find((item) => item.default === "true") ??
-          (new Set(logins.map((item) => item.name)).size === 1 ? logins[0] : undefined));
+        : chooseForgejoLogin([...new Map(logins.map((item) => [item.name, item])).values()]);
     let login = selectLogin(fjLogins);
     let command: "fj" | "tea" = "fj";
     if (
@@ -606,7 +644,17 @@ export const make = Effect.gen(function* () {
           command: "fj",
           cwd: input.cwd,
           reason: "authentication",
-          detail: "Multiple fj logins match this repository. Specify its full server URL.",
+          detail: ambiguousLoginDetail(
+            "fj",
+            remote
+              ? matchingForgejoLogins(
+                  fjLogins,
+                  remote,
+                  remote.ssh ? requestedHost : undefined,
+                  matchHostOnly,
+                )
+              : fjLogins,
+          ),
         });
       if (available.failure.reason !== "missing-cli") return yield* available.failure;
     }
@@ -619,7 +667,23 @@ export const make = Effect.gen(function* () {
     }
     if (!login) {
       command = "tea";
-      login = selectLogin(yield* listLogins({ cwd: input.cwd, command: "tea" }));
+      const teaLogins = yield* listLogins({ cwd: input.cwd, command: "tea" });
+      login = selectLogin(teaLogins);
+      const matches = remote
+        ? matchingForgejoLogins(
+            teaLogins,
+            remote,
+            remote.ssh ? requestedHost : undefined,
+            matchHostOnly,
+          )
+        : teaLogins;
+      if (!login && matches.length > 1)
+        return yield* new ForgejoCliError({
+          command,
+          cwd: input.cwd,
+          reason: "authentication",
+          detail: ambiguousLoginDetail(command, matches),
+        });
     }
     if (!login)
       return yield* new ForgejoCliError({
@@ -717,6 +781,7 @@ export const make = Effect.gen(function* () {
         `${repository.baseUrl}/api/v1/${path}`,
       ],
       ...(stdin === undefined ? {} : { stdin }),
+      maxOutputBytes: API_MAX_OUTPUT_BYTES,
     });
     // tea reports HTTP failures with exit code zero; use its response status.
     const status = Number(/^HTTP\/\S+ (\d{3})/m.exec(result.stderr)?.[1]);
@@ -749,6 +814,13 @@ export const make = Effect.gen(function* () {
                     : `Forgejo API request failed (HTTP ${status}).`,
       });
     }
+    if (result.stdoutTruncated)
+      return yield* new ForgejoCliError({
+        command: "tea",
+        cwd: input.cwd,
+        reason: "invalid-response",
+        detail: "Forgejo API response exceeded the output size limit.",
+      });
     return result;
   });
   return ForgejoCli.of({ execute, listLogins, getAccount, resolveRepository, api });

@@ -479,7 +479,7 @@ it.effect("serializes branch reads with detailed refresh publication", () => {
     state.branchRead = () => Effect.succeed("new");
     const result = yield* b.getStatus({ cwd: "/repo" });
     assert.equal(result.refName, "new");
-    assert.equal(state.localStatusCalls, 1);
+    assert.equal(state.localStatusCalls, 2);
   }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
 });
 

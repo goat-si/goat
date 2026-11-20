@@ -1,10 +1,10 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 import { VcsProcessExitError } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 
-import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 
@@ -13,7 +13,7 @@ it.effect("reports activity as rate limited when only the reactions endpoint is"
     const provider = yield* GitLabPullRequestProvider.make.pipe(
       Effect.provide(
         GitLabPullRequestCli.layer.pipe(
-          Layer.provide(GitLabCli.layer),
+          Layer.provide(TestGitLabCli.layer),
           Layer.provide(
             TestSourceControlHost.layer({
               process: {

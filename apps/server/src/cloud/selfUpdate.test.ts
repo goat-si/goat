@@ -53,6 +53,8 @@ interface HarnessOptions {
   readonly desktopAppUpdate?: DesktopAppUpdate.DesktopAppUpdate["Service"];
 }
 
+const FAKE_LAUNCHER_PID = 4242;
+const FAKE_LAUNCHER_START = "fixture-launcher-start";
 const archiveBytes = new TextEncoder().encode("not really a tarball");
 const releaseHttpClient = (
   order: string[],
@@ -173,7 +175,9 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     Effect.provide(MaintenanceAudit.layer),
     Effect.provideService(ServerConfig.ServerConfig, config),
   );
-  const selfUpdate = yield* ServerSelfUpdate.make().pipe(
+  const selfUpdate = yield* ServerSelfUpdate.make({
+    launcherIdentity: () => Promise.resolve({ pid: FAKE_LAUNCHER_PID, start: FAKE_LAUNCHER_START }),
+  }).pipe(
     Effect.provideService(RuntimeAdmission.RuntimeAdmission, admission),
     Effect.provideService(MaintenanceAudit.MaintenanceAudit, audit),
     Effect.provide(
@@ -326,6 +330,43 @@ it.effect.each([
 );
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self update", (it) => {
+  it.effect("records the launcher identity before completing an accepted handoff", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* makeHarness();
+      const baseDir = path.dirname(path.dirname(h.journal));
+      const marker = path.join(baseDir, "runtime", "service-update-handoff.json");
+      let value: unknown;
+      const result = yield* h.selfUpdate.update({ targetVersion: "1.1.0" }, undefined, () =>
+        fs.readFileString(marker).pipe(
+          Effect.orDie,
+          Effect.map((contents) => {
+            value = JSON.parse(contents);
+          }),
+        ),
+      );
+      expect(value).toMatchObject({ generation: result.updateId, launcherPid: FAKE_LAUNCHER_PID });
+    }),
+  );
+  it.effect("continues the accepted handoff if the marker cannot be written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const h = yield* makeHarness();
+      const baseDir = path.dirname(path.dirname(h.journal));
+      const next = path.join(baseDir, "runtime", `service-update-handoff.json.${process.pid}.next`);
+      yield* fs.makeDirectory(next, { recursive: true });
+      let handoffCalled = false;
+      const result = yield* h.selfUpdate.update({ targetVersion: "1.1.0" }, undefined, () =>
+        Effect.sync(() => {
+          handoffCalled = true;
+        }),
+      );
+      expect(result.updateId).toBe("launcher-id");
+      expect(handoffCalled).toBe(true);
+    }),
+  );
   it.effect.each([
     { asset: "checksums", status: 504 },
     { asset: "archive", status: 503 },
@@ -816,6 +857,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self upda
       const releaseDownload = yield* Deferred.make<void>();
       const sawDownloading = yield* Deferred.make<void>();
       const accepted = yield* Deferred.make<void>();
+      const settled = yield* Deferred.make<void>();
       const { selfUpdate, order } = yield* makeHarness({
         beforeDownload: Deferred.await(releaseDownload),
         requestUpdate: () =>
@@ -824,7 +866,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self upda
           }).pipe(Effect.andThen(Deferred.succeed(accepted, undefined)), Effect.as("launcher-id")),
       });
 
-      const consumed = yield* ServerSelfUpdate.updateProgressStream(selfUpdate, {
+      const tracked = ServerSelfUpdate.ServerSelfUpdate.of({
+        ...selfUpdate,
+        update: (...args) =>
+          selfUpdate.update(...args).pipe(Effect.ensuring(Deferred.succeed(settled, undefined))),
+      });
+      const consumed = yield* ServerSelfUpdate.updateProgressStream(tracked, {
         targetVersion: "1.1.0",
       }).pipe(
         Stream.tap((event) =>
@@ -844,6 +891,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self upda
 
       yield* Deferred.succeed(releaseDownload, undefined);
       yield* Deferred.await(accepted);
+      yield* Deferred.await(settled);
       expect(order).toEqual(["download", "extract", "preflight", "accept"]);
       expect((yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason).toBe(
         "A server update is already in progress.",

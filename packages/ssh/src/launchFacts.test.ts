@@ -41,8 +41,8 @@ const launchFor = (ownRuntimeVersion: string) => {
   };
   const steps = between('\npin_runner "$RUNNER_NEXT"\n', "\npublish_selected_runner() {");
   const hooked = steps.replace(
-    "\ncheck_candidate_protocol\ncheck_live_protocol\n",
-    '\ncheck_candidate_protocol\n[ ! -f "$HOME/between.sh" ] || . "$HOME/between.sh"\ncheck_live_protocol\n',
+    "\ncheck_candidate_protocol\nwait_for_home_owner\ncheck_live_protocol\n",
+    '\ncheck_candidate_protocol\nwait_for_home_owner\n[ ! -f "$HOME/between.sh" ] || . "$HOME/between.sh"\ncheck_live_protocol\n',
   );
   assert.notEqual(hooked, steps);
   return {

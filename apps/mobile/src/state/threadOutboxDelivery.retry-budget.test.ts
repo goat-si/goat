@@ -236,7 +236,198 @@ afterEach(() => {
   state.cleanups.splice(0).forEach((cleanup) => cleanup());
 });
 
+it("waits for a removed message's in-flight send before sending the next message", async () => {
+  setOperateGrant("secondary", true);
+  const first = message();
+  const second = message({
+    messageId: MessageId.make("second"),
+    commandId: CommandId.make("second"),
+  });
+  const other = message({
+    threadId: ThreadId.make("other"),
+    messageId: MessageId.make("other"),
+    commandId: CommandId.make("other"),
+  });
+  appAtomRegistry.set(state.threadShells, [state.thread, { ...state.thread, id: "other" }]);
+  const held = Promise.withResolvers<ReturnType<typeof AsyncResult.success>>();
+  state.start.mockImplementationOnce(() => held.promise);
+  await state.manager.enqueue(first);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledTimes(1));
+    await state.manager.remove(first);
+    await state.manager.enqueue(second);
+    await state.manager.enqueue(other);
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledTimes(2));
+    expect(state.start.mock.calls.map((call) => call[0].input.message.messageId)).toEqual([
+      first.messageId,
+      other.messageId,
+    ]);
+    held.resolve(AsyncResult.success({}));
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledTimes(3));
+    expect(state.start.mock.calls[2]?.[0].input.message.messageId).toBe(second.messageId);
+  } finally {
+    held.resolve(AsyncResult.success({}));
+  }
+});
+
+it("does not charge a late upload failure to a removed message's replacement", async () => {
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const first = message();
+  const upload = Promise.withResolvers<never>();
+  state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+  state.prepare.mockImplementationOnce(() => upload.promise);
+  await state.manager.enqueue(first);
+  startDelivery();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(state.prepare).toHaveBeenCalledTimes(1);
+  await state.manager.remove(first);
+  upload.reject(new Error("Socket is not connected"));
+  await vi.advanceTimersByTimeAsync(0);
+  await state.manager.enqueue(message());
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(state.prepare).toHaveBeenCalledTimes(6);
+  expect(remaining()).toHaveLength(1);
+});
+
+it("releases a removed thread's delivery slot for a newly queued message", async () => {
+  setOperateGrant("secondary", true);
+  const first = message();
+  await state.manager.enqueue(first);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockImplementationOnce(() => upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+    await state.manager.remove(first);
+    await state.manager.enqueue(
+      message({
+        messageId: MessageId.make("replacement-message"),
+        commandId: CommandId.make("replacement-command"),
+      }),
+    );
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledOnce());
+    expect(state.start.mock.calls[0]?.[0].input.message.messageId).toBe("replacement-message");
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
+it("prevents editing either message while two threads are delivering", async () => {
+  const { editPendingThreadMessage } = await import("./edit-pending-thread-message");
+  setOperateGrant("secondary", true);
+  const first = message();
+  const second = message({
+    threadId: ThreadId.make("other-thread"),
+    messageId: MessageId.make("other-message"),
+    commandId: CommandId.make("other-command"),
+  });
+  appAtomRegistry.set(state.threadShells, [state.thread, { ...state.thread, id: "other-thread" }]);
+  await state.manager.enqueue(first);
+  await state.manager.enqueue(second);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockReturnValue(upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.prepare).toHaveBeenCalledTimes(2));
+    expect(await editPendingThreadMessage(first)).toBe(false);
+    expect(await editPendingThreadMessage(second)).toBe(false);
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
+it("delivers same-thread messages in order after the first upload finishes", async () => {
+  setOperateGrant("secondary", true);
+  const first = message();
+  const second = message({
+    messageId: MessageId.make("second-message"),
+    commandId: CommandId.make("second-command"),
+  });
+  await state.manager.enqueue(first);
+  await state.manager.enqueue(second);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockImplementationOnce(() => upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+    expect(state.start).not.toHaveBeenCalled();
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledTimes(2));
+    expect(state.start.mock.calls.map((call) => call[0].input.message.messageId)).toEqual([
+      first.messageId,
+      second.messageId,
+    ]);
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
 describe("upload retry budget across deferrals", () => {
+  it("keeps its retry budget when a removed environment is added again", async () => {
+    const { workspaceConnections } = await import("./workspace");
+    const environments = workspaceConnections.environmentsAtom as unknown as Atom.Writable<
+      ReadonlyArray<{ environmentId: string; connectionState: string }>
+    >;
+    const connected = [{ environmentId: "secondary", connectionState: "connected" }];
+    state.cleanups.push(() => appAtomRegistry.set(environments, connected));
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    const queued = message();
+    await state.manager.enqueue(queued);
+    state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+    await runDrain();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(state.prepare).toHaveBeenCalledTimes(4);
+    appAtomRegistry.set(environments, [
+      { environmentId: "secondary", connectionState: "disconnected" },
+    ]);
+    appAtomRegistry.set(environments, []);
+    appAtomRegistry.set(environments, connected);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(state.prepare).toHaveBeenCalledTimes(5);
+    expect(remaining()).toEqual([queued]);
+    expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+  });
+
   it.each(["missing", "editor"] as const)(
     "keeps failed upload attempts across a %s deferral",
     async (kind) => {

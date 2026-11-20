@@ -399,7 +399,11 @@ live_fact() {
     fi
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fi
-  fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  if [ -n "\${HOME_PROBE_DEADLINE:-}" ]; then
+    fact_out="$(home_probe "$HOME_PROBE_DEADLINE" "$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return $?
+  else
+    fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  fi
   if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
      live_none_absent "$2" "$3" "$4" && exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$live_none_key" ]; then
     case "$live_none_key$fact_out" in

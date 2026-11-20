@@ -1,3 +1,4 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 import { assert, it, afterEach, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -11,7 +12,9 @@ import * as GitLabCli from "./GitLabCli.ts";
 
 const mockedRun = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>();
 const layer = it.layer(
-  GitLabCli.layer.pipe(Layer.provide(TestSourceControlHost.layer({ process: { run: mockedRun } }))),
+  TestGitLabCli.layer.pipe(
+    Layer.provide(TestSourceControlHost.layer({ process: { run: mockedRun } })),
+  ),
 );
 
 function processOutput(stdout: string): SourceControlHost.SourceControlProcessOutput {

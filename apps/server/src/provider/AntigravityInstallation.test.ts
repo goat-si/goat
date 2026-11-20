@@ -51,6 +51,21 @@ const expectPreviousRelease = Effect.fn("test.expectPreviousAntigravityRelease")
 });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity installation", (it) => {
+  it.effect("finds a CLI in a POSIX PATH directory with literal quotes and trailing space", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-literal-path-" });
+      const directory = path.join(baseDir, '"quoted" ');
+      yield* fs.makeDirectory(directory);
+      const executable = path.join(directory, "agy");
+      yield* fs.writeFileString(executable, "cli", { mode: 0o755 });
+      const { installation } = yield* makeHarness({ baseDir, platform: "linux" });
+      expect(yield* installation.resolve("agy", { PATH: directory })).toMatchObject({
+        executablePath: executable,
+      });
+    }),
+  );
   it.effect.each(["downloaded", "existing", "concurrent"] as const)(
     "reports a verification timeout for a %s runtime without changing the active release",
     (source) =>

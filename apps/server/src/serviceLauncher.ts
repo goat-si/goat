@@ -47,6 +47,9 @@ import {
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
 import { stateDirOwner } from "./serviceLauncherOwner.ts";
+import { acquireServiceServingLock } from "./serviceServingLock.ts";
+import { removeServiceUpdateHandoff, SERVICE_PREPARED_TIMEOUT_MS } from "./serviceUpdateHandoff.ts";
+import { repointRegisteredPosixLaunchers } from "./cloud/posixLauncher.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
@@ -59,11 +62,6 @@ import {
 export { databaseBackupBlocker, type BackupSpaceProbe } from "./serviceLauncherDatabase.ts";
 
 const HANDOFF_DELAY_MS = 2_000;
-/**
- * Migrations count toward it and can scale with the database: tens of GB on a cold page cache
- * take minutes. A missed window rolls back the database, so the next attempt pays the same cost.
- */
-const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
@@ -235,6 +233,7 @@ export class Launcher {
   #stateDirFreeProbes = 0;
   #ownerBusySince: number | undefined;
   #snapshot: DatabaseSnapshot | undefined;
+  #releaseServing: (() => void) | undefined;
 
   constructor(
     baseDir: string,
@@ -279,6 +278,11 @@ export class Launcher {
       });
       await this.#completion.promise;
     } finally {
+      if (this.#state.update?.status === "pending") {
+        await this.#clearHandoff(this.#state.update.id);
+      }
+      this.#releaseServing?.();
+      this.#releaseServing = undefined;
       clearInterval(logTimer);
       process.off("SIGTERM", onSigterm);
       process.off("SIGINT", onSigint);
@@ -337,6 +341,16 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
+  async #clearHandoff(generation: string): Promise<void> {
+    try {
+      await removeServiceUpdateHandoff(this.#baseDir, generation);
+    } catch (error) {
+      process.stderr.write(
+        `[service-launcher] Could not remove the service update handoff marker: ${String(error)}\n`,
+      );
+    }
+  }
+
   // Local installs replace the selection and clear its update record; an old launcher must not
   // write its own selection back over theirs.
   async #selectState(next: ServiceState): Promise<void> {
@@ -364,6 +378,7 @@ export class Launcher {
   }
 
   async #recover(): Promise<void> {
+    this.#releaseServing = acquireServiceServingLock(this.#baseDir);
     // Clear old stop markers to preserve future tunnels; clear restart-pending only for the awaited version to avoid CLI races.
     await NodeFSP.rm(stopMarkerPath(this.#baseDir), { force: true }).catch(() => undefined);
     await this.#clearRestartPending();
@@ -501,7 +516,7 @@ export class Launcher {
     if (role === "trial") {
       this.#timer = setTimeout(
         () => this.#enqueue(() => this.#handlePreparedTimeout(managed)),
-        PREPARED_TIMEOUT_MS,
+        SERVICE_PREPARED_TIMEOUT_MS,
       );
     }
   }
@@ -636,6 +651,7 @@ export class Launcher {
       probation: { dbPath: pending.dbPath, deadline: this.#now() + this.#probationMs },
     };
     await this.#selectState(next);
+    await this.#clearHandoff(committed.id);
     child.role = "active";
     await this.#resumeProbation();
     try {
@@ -758,6 +774,8 @@ export class Launcher {
   // another server owns is probed until it frees; a database a newer build wrote fails a pending
   // update at once, without restoring over that build's writes.
   async #idleWhileRefused(reason: "state-dir-owned" | "database-ahead"): Promise<void> {
+    this.#releaseServing?.();
+    this.#releaseServing = undefined;
     this.#clearTimer();
     const pending = this.#state.update;
     if (pending?.status === "pending" && reason === "database-ahead") {
@@ -838,6 +856,7 @@ export class Launcher {
     if (this.#stateDirFreeProbes < 2) return;
     this.#clearTimer();
     this.#ownerBusySince = undefined;
+    this.#releaseServing = acquireServiceServingLock(this.#baseDir);
     process.stderr.write("[service-launcher] The GOAT home is free again. Starting the server.\n");
     if (pending === undefined) {
       const probation = this.#state.probation;
@@ -879,6 +898,7 @@ export class Launcher {
       probation !== undefined,
       () => this.#selectState(next),
     );
+    if (selection !== "busy") await this.#clearHandoff(pending.id);
     if (selection === "busy") {
       if (!this.#stopRequested) {
         this.#timer = setTimeout(
@@ -890,6 +910,12 @@ export class Launcher {
     }
     this.#snapshot = undefined;
     try {
+      // oxlint-disable-next-line goat/no-global-process-runtime -- The standalone launcher has no Effect runtime.
+      if (process.platform !== "win32")
+        await repointRegisteredPosixLaunchers(
+          this.#baseDir,
+          runtimePaths(this.#baseDir, next.activeVersion).entryPath,
+        );
       await this.#startChild(next.activeVersion, "active", outcome);
     } finally {
       await this.#repointServiceUnit(next.activeVersion);

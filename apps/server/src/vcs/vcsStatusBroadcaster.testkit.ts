@@ -59,6 +59,7 @@ export function layerTestFor(state: {
   localInvalidationCalls: number;
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  localStatusBranchChanges?: Array<boolean>;
   remoteStatusError?: GitManagerError;
   backgroundWorkEnabled?: boolean;
   automaticFetchInterval?: Effect.Effect<Duration.Duration>;
@@ -95,9 +96,13 @@ export function layerTestFor(state: {
             state.headPathCalls = (state.headPathCalls ?? 0) + 1;
             return state.headPath ?? null;
           }),
-        localStatus: () =>
+        localStatus: (_input, options) =>
           Effect.suspend(() => {
             state.localStatusCalls += 1;
+            const includeBranchChanges = options?.includeBranchChanges !== false;
+            state.localStatusBranchChanges?.push(includeBranchChanges);
+            const { branchChanges: _branchChanges, ...withoutBranchChanges } =
+              state.currentLocalStatus;
             if (state.failLocalStatus) {
               return (state.onLocalStatusFailure ?? Effect.void).pipe(
                 Effect.andThen(
@@ -112,7 +117,7 @@ export function layerTestFor(state: {
               );
             }
             return (state.beforeLocalStatus ?? Effect.void).pipe(
-              Effect.as(state.currentLocalStatus),
+              Effect.as(includeBranchChanges ? state.currentLocalStatus : withoutBranchChanges),
             );
           }),
         currentBranch: () =>
