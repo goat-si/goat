@@ -1,10 +1,11 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import type {
   EnvironmentId,
   UserInputAttachmentAnswerPayload,
   UserInputAttachments,
 } from "@goat/contracts";
 import { Image } from "expo-image";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import {
   getQuestionAnswerText,
   getQuestionAnswerAttribution,
@@ -25,7 +26,7 @@ function AnswerFile(props: {
       accessibilityLabel={props.attachment.name}
       disabled={!url}
       onPress={() => {
-        if (url) void Linking.openURL(url);
+        if (url) void tryOpenExternalUrl(url);
       }}
       className="gap-1"
     >

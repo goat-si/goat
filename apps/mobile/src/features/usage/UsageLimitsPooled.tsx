@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { getProviderClient } from "../../lib/providerClients";
@@ -18,7 +19,7 @@ import {
   type LimitBoardSection,
 } from "@goat/shared/usageLimitsBoard";
 import { Fragment, type ReactNode, useState } from "react";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -311,7 +312,7 @@ export function UsageLimitsSection({
           <Pressable
             accessibilityRole="link"
             className="min-h-11 justify-center"
-            onPress={() => void Linking.openURL(link.url).catch(() => undefined)}
+            onPress={() => void tryOpenExternalUrl(link.url)}
           >
             <Text className="text-sm font-goat-medium text-primary">Manage usage</Text>
           </Pressable>

@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import * as Dialog from "../../components/ui/Dialog";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
@@ -9,7 +10,7 @@ import {
 import type { EnvironmentId, PullRequestAction } from "@goat/contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { use, useRef, useState } from "react";
-import { Linking, Platform } from "react-native";
+import { Platform } from "react-native";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -128,7 +129,7 @@ export function usePullRequestListActions(
       return;
     }
     if (action === "provider") {
-      void Linking.openURL(entry.url);
+      void tryOpenExternalUrl(entry.url);
       return;
     }
     if (action === "share") {

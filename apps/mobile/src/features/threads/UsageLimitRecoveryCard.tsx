@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { Button } from "../../components/ui/Button";
 import { limitRecoveryOwnsSnooze } from "@goat/client-runtime/state/thread-execution";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -13,7 +14,7 @@ import {
 import * as Clipboard from "expo-clipboard";
 import * as DateTime from "effect/DateTime";
 import { useState } from "react";
-import { Linking, View } from "react-native";
+import { View } from "react-native";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useDeadlinePassed } from "../../lib/clock";
@@ -116,11 +117,8 @@ export function UsageLimitRecoveryCard({
                   )
                   .finally(() => setActionPending(false));
               else
-                void Linking.openURL(CHATGPT_USAGE_URL)
-                  .then(
-                    () => setStatus(null),
-                    () => setStatus("open-failed"),
-                  )
+                void tryOpenExternalUrl(CHATGPT_USAGE_URL)
+                  .then((opened) => setStatus(opened ? null : "open-failed"))
                   .finally(() => setActionPending(false));
             }}
           />
