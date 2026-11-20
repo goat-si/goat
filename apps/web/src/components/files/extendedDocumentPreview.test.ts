@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { openRtf } from "./extendedDocumentPreview";
+import { openNotebook, openRtf } from "./extendedDocumentPreview";
+
+it("removes terminal colors from saved notebook text outputs", () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: "code",
+          source: "",
+          outputs: [{ output_type: "stream", text: ["\u001b[", "32m42\u001b[0m\n"] }],
+        },
+      ],
+    }),
+  );
+  const result = openNotebook(bytes.buffer as ArrayBuffer);
+  if (result.type !== "notebook") throw new Error("Expected notebook");
+  expect(result.cells[0]?.outputs[0]?.text).toBe("42\n");
+});
 
 const html = (rtf: string) => {
   const result = openRtf(new TextEncoder().encode(rtf).buffer as ArrayBuffer);
