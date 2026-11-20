@@ -282,7 +282,7 @@ function UpdateTabRows({
               : "No runtime updates."}
         </p>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul aria-label={`${TAB_LABELS[name]} updates`} className="divide-y divide-border">
           {tab.rows.map((row) => (
             <li key={row.id}>
               <UpdateRow
@@ -343,6 +343,9 @@ function UpdateRowState({ row }: { readonly row: UpdateDialogRow }) {
   if (row.runningThreads > 0) {
     return (
       <span className="shrink-0 text-right text-warning text-xs">
+        {row.toVersion !== null ? (
+          <span className="sr-only">Update to {row.toVersion}. </span>
+        ) : null}
         {row.runningThreads} running
         <span className="block text-muted-foreground">waits for idle</span>
       </span>
@@ -350,8 +353,14 @@ function UpdateRowState({ row }: { readonly row: UpdateDialogRow }) {
   }
   if (row.toVersion === null) return null;
   return (
-    <span className="min-w-0 max-w-[45%] shrink truncate text-right text-muted-foreground text-xs tabular-nums max-sm:hidden">
-      → <span className="text-foreground">{row.toVersion}</span>
-    </span>
+    <>
+      <span className="sr-only">Update to {row.toVersion}</span>
+      <span
+        aria-hidden
+        className="min-w-0 max-w-[45%] shrink truncate text-right text-muted-foreground text-xs tabular-nums max-sm:hidden"
+      >
+        → <span className="text-foreground">{row.toVersion}</span>
+      </span>
+    </>
   );
 }

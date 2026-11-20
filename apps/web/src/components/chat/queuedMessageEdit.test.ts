@@ -1,6 +1,6 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, MessageId, ThreadId, TurnItemId } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { threadContextRecord } from "../../lib/composerContextRecords";
+import { responseContextRecord, threadContextRecord } from "../../lib/composerContextRecords";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   DraftId,
@@ -8,7 +8,11 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
-import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
+import {
+  prepareQueuedEditAttachments,
+  recoverQueuedMessageEdit,
+  queuedEditContextSnapshot,
+} from "./queuedMessageEdit";
 
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));
@@ -110,6 +114,50 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(editTarget)).toBeNull();
     expect(store.getComposerDraft(threadTarget)?.threadContexts).toEqual([mention]);
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe(prompt);
+  });
+
+  it("preserves the reply when recovering an edited queued message", async () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(editTarget, "Edited");
+    const reply = responseContextRecord({
+      citation: {
+        version: 1,
+        environmentId,
+        threadId: ThreadId.make("thread:edit"),
+        messageId: MessageId.make("answer"),
+        text: "Done",
+        start: 0,
+        end: 4,
+        prefix: "",
+        suffix: "",
+      },
+      itemId: TurnItemId.make("item"),
+      subagents: [],
+    });
+    store.setReplyTo(editTarget, reply);
+    expect(
+      await recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original" }),
+    ).toBe("kept");
+    expect(store.getComposerDraft(threadTarget)?.replyTo).toEqual(reply);
+  });
+
+  it("keeps a file to reattach when its upload belongs to another environment", async () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(editTarget, "Edited");
+    const elsewhere = {
+      ...file,
+      file: null,
+      uploadedAttachmentId: "upload",
+      uploadEnvironmentId: EnvironmentId.make("elsewhere"),
+    };
+    store.addFiles(editTarget, [elsewhere]);
+    expect(
+      await recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original" }),
+    ).toBe("kept");
+    expect(store.getComposerDraft(threadTarget)?.files).toMatchObject([
+      { id: file.id, file: null },
+    ]);
+    expect(store.getComposerDraft(threadTarget)?.files[0]?.uploadedAttachmentId).toBeUndefined();
   });
 
   it("recovers text and the remaining original attachment when a run starts after removal", async () => {
@@ -214,4 +262,51 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Separate draft");
     expect(store.getComposerDraft(editTarget)).toBeNull();
   });
+});
+
+describe("queued edit context changes", () => {
+  it.each(["reply-only", "unchanged", "text-and-reply"] as const)(
+    "handles %s when the run starts",
+    async (scenario) => {
+      useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(editTarget, "Original message");
+      const reply = responseContextRecord({
+        citation: {
+          version: 1,
+          environmentId,
+          threadId: ThreadId.make("thread:edit"),
+          messageId: MessageId.make("answer"),
+          text: "Done",
+          start: 0,
+          end: 4,
+          prefix: "",
+          suffix: "",
+        },
+        itemId: TurnItemId.make("item"),
+        subagents: [],
+      });
+      if (scenario === "unchanged") store.setReplyTo(editTarget, reply);
+      const initial = store.getComposerDraft(editTarget);
+      if (scenario !== "unchanged") store.setReplyTo(editTarget, reply);
+      if (scenario === "text-and-reply") store.setPrompt(editTarget, "Edited message");
+      const outcome = await recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        originalContext: queuedEditContextSnapshot(initial),
+      });
+      if (scenario === "unchanged") {
+        expect(outcome).toBe("clean");
+        expect(store.getComposerDraft(threadTarget)).toBeNull();
+      } else {
+        expect(outcome).toBe("kept");
+        expect(store.getComposerDraft(threadTarget)?.replyTo).toEqual(reply);
+        expect(store.getComposerDraft(threadTarget)?.prompt).toBe(
+          scenario === "reply-only" ? "Original message" : "Edited message",
+        );
+      }
+      expect(store.getComposerDraft(editTarget)).toBeNull();
+    },
+  );
 });

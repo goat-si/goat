@@ -1,3 +1,4 @@
+import { isTrailingLineAfterRule } from "./composerTrailingRule";
 import { parseListPrefix, type ListLinePrefix } from "./composer-list-prefix";
 import { listNormalizationPlugin } from "./composer-list-normalization";
 import { atomJsonForSegment } from "./composerAtomJson";
@@ -530,17 +531,6 @@ const ComposerHorizontalRuleExtension = HorizontalRule.extend({
   },
 });
 
-function isTrailingLineAfterRule(doc: ProseMirrorNode, index: number): boolean {
-  const block = doc.child(index);
-  return (
-    index === doc.childCount - 1 &&
-    index > 0 &&
-    block.type.name === "paragraph" &&
-    block.content.size === 0 &&
-    doc.child(index - 1).type.name === "horizontalRule"
-  );
-}
-
 const ComposerHeadingExtension = Heading.extend({
   addAttributes() {
     return { ...this.parent?.(), space: { default: " " } };
@@ -808,7 +798,12 @@ export function buildTiptapContent(
     });
     openQuote = null;
   };
-  for (const entry of entries) {
+  const isProseLine = (entry: (typeof entries)[number] | undefined, empty: boolean) =>
+    entry !== undefined &&
+    "line" in entry &&
+    !entry.line.list &&
+    (entry.line.inline.length === 0) === empty;
+  for (const [entryIndex, entry] of entries.entries()) {
     if ("quote" in entry) {
       flushLists();
       if (openQuote && openQuote.prefix !== entry.quote.prefix) flushQuote();
@@ -816,7 +811,11 @@ export function buildTiptapContent(
       openQuote.content.push(entry.quote.inline);
       continue;
     }
+    // The serializer separates a quote from the prose after it with one blank line; it is not an empty paragraph.
+    const quoteSeparator =
+      openQuote !== null && isProseLine(entry, true) && isProseLine(entries[entryIndex + 1], false);
     flushQuote();
+    if (quoteSeparator) continue;
     if ("code" in entry) {
       flushLists();
       blocks.push(entry.code);

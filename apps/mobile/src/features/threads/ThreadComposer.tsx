@@ -1,3 +1,4 @@
+import { mobileComposerDraftIsLocal } from "./composerLocalCommand";
 import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
 export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
 import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
@@ -250,15 +251,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       serverConfig: props.serverConfig,
       states: uploadStates,
     });
-  const sendPresentation = resolveComposerSendPresentation({
-    editingQueuedMessage: queuedEdit !== null,
-    running: props.activeThreadBusy,
-    canSteer: props.canSteerActiveTurn,
-    followUpBehavior: props.followUpBehavior,
-    deliveryDeferred:
-      props.connectionState !== "connected" || props.queueCount > 0 || attachmentsUploading,
-  });
-  const sendLabel = sendPresentation.label;
   const currentModelSelection = props.selectedThread.modelSelection;
   const modelMentions = useModelMentionOptions(props, currentModelSelection);
   const currentRuntimeMode = props.selectedThread.runtimeMode;
@@ -323,6 +315,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     enabled: !props.isDraft && queuedEdit === null,
     canOperate: props.canOperateThread,
   });
+  const sendPresentation = resolveComposerSendPresentation({
+    editingQueuedMessage: queuedEdit !== null,
+    running: props.activeThreadBusy,
+    localCommand:
+      queuedEdit === null &&
+      mobileComposerDraftIsLocal(draftMessage, props, draftAttachments, composerFork),
+    canSteer: props.canSteerActiveTurn,
+    followUpBehavior: props.followUpBehavior,
+    deliveryDeferred:
+      props.connectionState !== "connected" || props.queueCount > 0 || attachmentsUploading,
+  });
+  const sendLabel = sendPresentation.label;
   const composerMenu = useComposerCommandMenu({
     draftMessage: draftMessage,
     ownerKey: composerDraftKey,

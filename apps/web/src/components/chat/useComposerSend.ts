@@ -1,3 +1,5 @@
+import { usePendingApprovalRefs } from "./usePendingApprovalRefs";
+import { usePreviewAnnotationLimit } from "./usePreviewAnnotationLimit";
 import {
   mergeDirectPreviewAnnotation,
   shouldDockDraftHeroForSubmission,
@@ -25,7 +27,7 @@ import {
 import { parseCodexFeedbackCommand, submitCodexFeedback } from "@goat/client-runtime/state/threads";
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { createModelSelection } from "@goat/shared/model";
-import { useLayoutEffect, useRef } from "react";
+import { useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
@@ -142,6 +144,7 @@ const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
  * when it fails.
  */
 export function useComposerSend(input: ComposerSendInput) {
+  const exceedsAnnotationLimit = usePreviewAnnotationLimit();
   const {
     isCloudThread,
     activeThreadRef,
@@ -273,12 +276,10 @@ export function useComposerSend(input: ComposerSendInput) {
   const composerSendGenerationRef = useRef(0);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   // A send awaits uploads before it declines, so it reads the approvals pending by then.
-  const pendingApprovalsRef = useRef(pendingApprovals);
-  const respondingRequestIdsRef = useRef(respondingRequestIds);
-  useLayoutEffect(() => {
-    pendingApprovalsRef.current = pendingApprovals;
-    respondingRequestIdsRef.current = respondingRequestIds;
-  }, [pendingApprovals, respondingRequestIds]);
+  const { pendingApprovalsRef, respondingRequestIdsRef } = usePendingApprovalRefs(
+    pendingApprovals,
+    respondingRequestIds,
+  );
 
   // Built when a send runs: the SSH ports read refs, which render must not.
   const ssh = () =>
@@ -340,6 +341,8 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
+    if (exceedsAnnotationLimit(sendCtx?.previewAnnotations ?? [], directAnnotation?.annotation))
+      return;
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       const sideChat = {
         progress: activePendingProgress,
@@ -1247,9 +1250,12 @@ export function useComposerSend(input: ComposerSendInput) {
       : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
-    promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    // The prompt ref and cursor belong to the thread on screen, which may no longer be this one.
+    if (currentRouteThreadKeyRef.current === routeThreadKey) {
+      promptRef.current = "";
+      composerRef.current?.resetCursorState();
+    }
 
     const title = deriveThreadTitleSeed({
       text: messageTextForSend,

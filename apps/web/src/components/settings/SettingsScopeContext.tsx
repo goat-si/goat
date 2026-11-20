@@ -5,14 +5,20 @@ import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { createContext, type ReactNode, useContext } from "react";
+import { createContext, type ReactNode, useContext, useEffect } from "react";
 
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { getProjectFileQueryAtom, optimisticFileAtom } from "../files/projectFilesQueryState";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { resolveScopedSettingsTargets, selectScopedSettingsEnvironments } from "./scopedSettings";
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
+import {
+  applyPendingScopedWrites,
+  pendingScopedWritesAtom,
+  reconcilePendingScopedWrites,
+} from "./scopedSettingsOptimistic";
 
 type ProjectFileMember = readonly [
   environmentId: EnvironmentId,
@@ -83,6 +89,14 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironm
     : rawSearch;
   const scope = resolveSettingsScope(search, groups, availableEnvironments);
   const projectFiles = useMemberProjectFiles(scope);
+  const pendingWrites = useAtomValue(pendingScopedWritesAtom);
+  // oxlint-disable-next-line goat/react-effect-budget -- A server echo retires the matching optimistic save.
+  useEffect(() => {
+    if (pendingWrites.length === 0) return;
+    appAtomRegistry.update(pendingScopedWritesAtom, (writes) =>
+      reconcilePendingScopedWrites(writes, availableEnvironments),
+    );
+  }, [availableEnvironments, pendingWrites]);
   const selected = selectScopedSettingsEnvironments(
     scope,
     availableEnvironments,
@@ -90,7 +104,7 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironm
   );
   const targets = resolveScopedSettingsTargets(
     scope,
-    selected.connectedEnvironments,
+    applyPendingScopedWrites(selected.connectedEnvironments, pendingWrites),
     projectFiles.files,
     projectFiles.paths,
   );

@@ -11,6 +11,7 @@ import {
   getProviderOptionDescriptors,
   readCustomModelEntries,
   modelSelectionsEqual,
+  pickModelSelection,
   withImplicitFastModeDefault,
 } from "./model.ts";
 
@@ -226,6 +227,29 @@ describe("provider-reported option display", () => {
     { ...selection, options: [{ id: "variant", value: "none" }] },
   ])("ignores reports after changing the model, instance, or option: %j", (selected) => {
     expect(getProviderOptionCurrentLabel(descriptor, selected, reported)).toBe("Unknown");
+  });
+});
+
+it("retains traits only for the same model and provider instance", () => {
+  const instanceId = ProviderInstanceId.make("codex");
+  const selection = createModelSelection(instanceId, "model-a", [
+    { id: "reasoningEffort", value: "high" },
+  ]);
+  expect(pickModelSelection(selection, instanceId, "model-a")).toEqual(selection);
+  expect(pickModelSelection(selection, instanceId, "model-b")).toEqual({
+    instanceId,
+    model: "model-b",
+  });
+  const other = ProviderInstanceId.make("other");
+  expect(pickModelSelection(selection, other, "model-a")).toEqual({
+    instanceId: other,
+    model: "model-a",
+  });
+  expect(pickModelSelection(null, instanceId, "model-a")).toEqual({ instanceId, model: "model-a" });
+  expect(pickModelSelection(null, instanceId, "model-a", selection)).toEqual(selection);
+  expect(pickModelSelection(selection, other, "model-a", selection)).toEqual({
+    instanceId: other,
+    model: "model-a",
   });
 });
 

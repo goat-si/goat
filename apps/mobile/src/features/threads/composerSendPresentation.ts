@@ -27,6 +27,7 @@ const ACTION_LABEL: Record<ActiveTurnComposerAction, string> = {
 export function resolveComposerSendPresentation(input: {
   readonly editingQueuedMessage: boolean;
   readonly running: boolean;
+  readonly localCommand?: boolean;
   readonly canSteer: boolean;
   readonly followUpBehavior: FollowUpBehavior;
   readonly deliveryDeferred: boolean;
@@ -40,10 +41,10 @@ export function resolveComposerSendPresentation(input: {
       offersFollowUpChoice: false,
     };
   }
-  if (!input.running) {
+  if (!input.running || input.localCommand) {
     return {
-      label: input.deliveryDeferred ? "Queue" : "Send",
-      icon: input.deliveryDeferred ? "tray.and.arrow.up" : "arrow.up",
+      label: input.deliveryDeferred && !input.localCommand ? "Queue" : "Send",
+      icon: input.deliveryDeferred && !input.localCommand ? "tray.and.arrow.up" : "arrow.up",
       action: null,
       alternate: null,
       offersFollowUpChoice: false,

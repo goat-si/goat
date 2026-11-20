@@ -19,6 +19,7 @@ const MAX_CHILDREN_PER_WORKER = 64;
 const MAX_STDIO_DESCRIPTORS = 32;
 const MAX_STREAM_CHUNK_BYTES = 8 * 1024 * 1024;
 const SPAWN_LOCK_WAIT_MS = 30_000;
+const TASKKILL_TIMEOUT_MS = 5_000;
 
 type ToWorker =
   | {
@@ -538,7 +539,7 @@ class SpawnWorker {
   }
 }
 
-class SpawnWorkerPool {
+export class SpawnWorkerPool {
   readonly workers = new Set<SpawnWorker>();
   readonly platform: NodeJS.Platform;
   readonly maxWorkers: number;
@@ -596,19 +597,34 @@ class SpawnWorkerPool {
       return;
     }
     let settled = false;
+    const taskkill = this.spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    // @effect-diagnostics-next-line globalTimers:off -- This Node worker callback owns and clears its watchdog.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      // @effect-diagnostics-next-line globalConsole:off -- The Node callback reports the single fallback directly.
+      console.warn("Windows taskkill timed out; killing the direct child.");
+      const stopTaskkill = () => {
+        if (taskkill.pid === undefined) return;
+        try {
+          process.kill(taskkill.pid, "SIGKILL");
+        } catch {}
+      };
+      if (taskkill.pid === undefined) taskkill.once("spawn", stopTaskkill);
+      else stopTaskkill();
+      finish(false);
+    }, TASKKILL_TIMEOUT_MS);
     const finish = (killed: boolean) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       // As Effect's own kill does when taskkill fails, end at least the direct child.
       if (!killed) killPid();
       done();
     };
-    this.spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    })
-      .on("error", () => finish(false))
-      .on("exit", (code) => finish(code === 0));
+    taskkill.on("error", () => finish(false)).on("exit", (code) => finish(code === 0));
   }
 
   #add(): SpawnWorker {

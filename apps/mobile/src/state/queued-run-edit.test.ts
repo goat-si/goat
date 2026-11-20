@@ -3,10 +3,15 @@ import { Atom } from "effect/reactivity";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   restoreAttachmentOnlyBootstrapPrompt,
+  formatComposerContextReference,
+  collectComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
 import {
   ChatAttachmentId,
   ComposerContextId,
+  EnvironmentId,
+  ThreadId,
+  TurnItemId,
   MessageId,
   RunId,
   type ChatAttachment,
@@ -31,6 +36,7 @@ import {
   flushComposerDrafts,
   getComposerDraftSnapshot,
   setComposerDraftText,
+  setComposerDraftContext,
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 
@@ -354,4 +360,94 @@ it("redirects a settings callback after the queued edit ends", () => {
   setActiveComposerDraftText(threadKey, editKey, "updated in settings");
   expect(getComposerDraftSnapshot(threadKey).text).toBe("updated in settings");
   expect(getComposerDraftSnapshot(editKey).text).toBe("");
+});
+
+describe("queued edit context changes", () => {
+  it.each(["reply-only", "unchanged", "text-and-reply", "already-referenced"] as const)(
+    "handles %s when the run starts",
+    async (scenario) => {
+      await waitForComposerDraftsLoaded();
+      const threadKey = `env-exit:context-${scenario}`;
+      const runId = RunId.make("run-1");
+      const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>(
+        [{ id: runId, status: "queued" }],
+      );
+      const reply = {
+        version: 1 as const,
+        kind: "response" as const,
+        contextId: ComposerContextId.make("response_answer"),
+        label: "Done",
+        citation: {
+          version: 1 as const,
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("thread"),
+          messageId: MessageId.make("answer"),
+          text: "Done",
+          start: 0,
+          end: 4,
+          prefix: "",
+          suffix: "",
+        },
+        itemId: TurnItemId.make("item"),
+      };
+      beginQueuedRunEdit(
+        threadKey,
+        scenario === "unchanged"
+          ? { ...edit([]), context: { version: 1, records: [reply] } }
+          : edit([]),
+        runs,
+      );
+      const target = queuedEditDraftKey(threadKey, runId);
+      if (scenario === "text-and-reply") setComposerDraftText(target, "Edited message");
+      if (scenario === "already-referenced")
+        setComposerDraftText(target, `${formatComposerContextReference(reply)} original`);
+      if (scenario !== "unchanged")
+        setComposerDraftContext(target, { version: 1, records: [reply] });
+      appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
+      await flushComposerDrafts();
+      if (scenario === "unchanged") {
+        expect(getComposerDraftSnapshot(threadKey).text).toBe("");
+        expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBeUndefined();
+      } else {
+        expect(getComposerDraftSnapshot(threadKey).context?.records).toContainEqual(reply);
+        const recovered = getComposerDraftSnapshot(threadKey);
+        const message = scenario === "text-and-reply" ? "Edited message" : "original";
+        expect(recovered.text).toBe(`${formatComposerContextReference(reply)} ${message}`);
+        expect(
+          collectComposerContextReferences(recovered.text).filter(
+            (ref) => ref.contextId === reply.contextId,
+          ),
+        ).toHaveLength(1);
+        setComposerDraftText(threadKey, `${recovered.text} continued`);
+        expect(getComposerDraftSnapshot(threadKey).context?.records).toContainEqual(reply);
+      }
+      expect(getQueuedRunEdit(threadKey)).toBeNull();
+    },
+  );
+});
+
+it("does not add a reference for an unchanged reply when only the text changed", async () => {
+  const { queuedReplySnapshot, recoverQueuedReplyText } = await import("./recoverQueuedReply");
+  const reply = {
+    version: 1 as const,
+    kind: "response" as const,
+    contextId: ComposerContextId.make("response_unchanged"),
+    label: "Done",
+    citation: {
+      version: 1 as const,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("answer"),
+      text: "Done",
+      start: 0,
+      end: 4,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item"),
+  };
+  const context = { version: 1 as const, records: [reply] };
+  expect(recoverQueuedReplyText("Edited message", context, queuedReplySnapshot(context))).toBe(
+    "Edited message",
+  );
 });

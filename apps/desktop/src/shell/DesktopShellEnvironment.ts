@@ -1,3 +1,4 @@
+import { validatedReleaseBaseUrl } from "./desktopReleaseBaseUrl.ts";
 import { DesktopShellEnvironmentSnapshot, ShellEnvironmentPatch } from "@goat/contracts";
 import { appendWellKnownCliDirs, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "@goat/shared/cliPath";
 import {
@@ -110,12 +111,18 @@ const LOGIN_SHELL_ENV_NAMES = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
+  "GOAT_RELEASE_BASE_URL",
   "GOAT_TELEMETRY_ENABLED",
   "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
   "__MISE_DIFF",
   "JAVA_HOME",
 ] as const;
-const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
+const WINDOWS_PROFILE_ENV_NAMES = [
+  "PATH",
+  "FNM_DIR",
+  "FNM_MULTISHELL_PATH",
+  "GOAT_RELEASE_BASE_URL",
+] as const;
 const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
 const FALLBACK_LC_CTYPE = "en_US.UTF-8";
@@ -392,6 +399,10 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (Option.isSome(mergedPath)) {
       setWindowsPath(config.env, mergedPath.value);
     }
+    if (profile.GOAT_RELEASE_BASE_URL !== undefined) {
+      config.env.GOAT_RELEASE_BASE_URL =
+        validatedReleaseBaseUrl(profile.GOAT_RELEASE_BASE_URL) ?? "";
+    }
     if (!config.env.FNM_DIR && profile.FNM_DIR) {
       config.env.FNM_DIR = profile.FNM_DIR;
     }
@@ -440,6 +451,12 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
     }
     if (!config.env.SSH_AUTH_SOCK && shellEnvironment.SSH_AUTH_SOCK) {
       config.env.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
+    }
+
+    const shellReleaseBase = shellEnvironment.GOAT_RELEASE_BASE_URL;
+    if (shellReleaseBase !== undefined) {
+      const valid = validatedReleaseBaseUrl(shellReleaseBase);
+      config.env.GOAT_RELEASE_BASE_URL = valid ?? "";
     }
 
     const shellPreferredEnvNames = [
@@ -591,8 +608,12 @@ export const make = Effect.gen(function* () {
   ) {
     // Added here and not in refresh, so the cache keeps only what the shell answered.
     const { platform, homeDirectory } = environment;
-    const path = appendWellKnownCliDirs(shellPatch.PATH, platform, homeDirectory);
-    const patch = path ? { ...shellPatch, PATH: path } : shellPatch;
+    const invalidMirror =
+      typeof shellPatch.GOAT_RELEASE_BASE_URL === "string" &&
+      validatedReleaseBaseUrl(shellPatch.GOAT_RELEASE_BASE_URL) === undefined;
+    const safePatch = invalidMirror ? { ...shellPatch, GOAT_RELEASE_BASE_URL: null } : shellPatch;
+    const path = appendWellKnownCliDirs(safePatch.PATH, platform, homeDirectory);
+    const patch = path ? { ...safePatch, PATH: path } : safePatch;
     applyShellEnvironment(env, patch, environment.platform);
     const message: DesktopShellEnvironmentSnapshot = {
       version: 1,

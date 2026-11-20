@@ -232,6 +232,18 @@ describe("a redirect that changes the access mode", () => {
       return true as const;
     });
 
+  it("opens a side chat while leaving a pending approval alone", async () => {
+    state.draft = { ...state.draft, text: "/side question" };
+    state.sideChat.mockResolvedValue(true);
+    const decline = declineAfterSave();
+    expect(await useThreadComposerState().onSendMessage(undefined, decline)).toBeNull();
+    expect(state.sideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "/side question" }),
+    );
+    expect(decline).not.toHaveBeenCalled();
+    expect(state.pendingRequests.approvals).toHaveLength(1);
+  });
+
   it("declines nothing and keeps the draft when the server refuses the mode change", async () => {
     state.draft = { ...state.draft, runtimeMode: "approval-required" } as typeof state.draft;
     state.setRuntimeMode.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error(refusal))));

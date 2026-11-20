@@ -172,3 +172,29 @@ it.each([
     expect((await picked.promise).elements[0]?.rect).toEqual(rect);
   },
 );
+
+it("shows the annotation comment limit while retaining a comment at the boundary", () => {
+  const shadowRoot = startAnnotation();
+  const comment = shadowRoot.querySelector("textarea");
+  if (!comment) throw new Error("comment textarea not found");
+  expect(comment.maxLength).toBe(8000);
+  comment.value = "x".repeat(8000);
+  comment.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(comment.value).toHaveLength(8000);
+  expect(shadowRoot.textContent).toContain("8000 / 8000");
+});
+
+it("keeps an oversized inserted annotation and shows its count", () => {
+  const shadowRoot = startAnnotation();
+  const comment = shadowRoot.querySelector("textarea");
+  const attach = Array.from(shadowRoot.querySelectorAll("button")).find(
+    (button) => button.textContent === "Attach",
+  );
+  if (!comment || !attach) throw new Error("annotation editor not found");
+  comment.value = "x".repeat(8001);
+  comment.dispatchEvent(new Event("input", { bubbles: true }));
+  attach.click();
+  expect(comment.value).toHaveLength(8001);
+  expect(shadowRoot.textContent).toContain("8001 / 8000");
+  expect(shadowRoot.host.isConnected).toBe(true);
+});

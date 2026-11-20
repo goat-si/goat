@@ -918,6 +918,8 @@ export function BranchToolbarBranchSelector({
             }
             className="min-w-0 max-w-full active:scale-100"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
+            // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
+            aria-label={`Branch: ${triggerLabel}`}
           >
             <GitBranchIcon
               className={cn(
@@ -930,6 +932,7 @@ export function BranchToolbarBranchSelector({
                 value={triggerLabel}
                 variant={displayMode === "panel" ? "cap-aligned" : "default"}
                 className="w-full"
+                aria-hidden
               />
             </ComposerContextLabel>
             {displayMode !== "panel" ? <ChevronDownIcon className="size-3 shrink-0" /> : null}

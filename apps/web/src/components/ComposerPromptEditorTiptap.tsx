@@ -1,3 +1,5 @@
+import { revealComposerCaret } from "./revealComposerCaret";
+import { caretLineRect } from "./composerCaretLineRect";
 import {
   CHIP_NODE_SELECTION_CLASS_NAME,
   ComposerChipSelectionExtension,
@@ -140,6 +142,10 @@ import {
 } from "./composerInlineTokenPaste";
 import { fingerprintSnapshotPng } from "./snapshotClipboardFingerprint";
 import { didComposerSelectionChangeVisibly } from "./composerSelection";
+import {
+  captureComposerAttachmentInsertion,
+  type ComposerAttachmentInsertion,
+} from "./composerAttachmentInsertion";
 import type { ComposerDraftContextRecords } from "./composerContextPresentation";
 
 export interface ComposerPromptEditorHandle {
@@ -147,6 +153,7 @@ export interface ComposerPromptEditorHandle {
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
+  captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   readSnapshot: () => {
     value: string;
@@ -1380,6 +1387,12 @@ function ComposerPromptEditorTiptapInner(
     selectMarkdownOffset(mountedEditor, normalizedExpandedCursor);
     const map = serializeEditorDoc(mountedEditor.state.doc);
     if (isFocused) scrollTiptapCaretIntoView(mountedEditor);
+    else if (initialSelection) {
+      window.requestAnimationFrame(() => {
+        const view = mountedEditorView(mountedEditor);
+        if (view) revealComposerCaret(view);
+      });
+    }
     if (pendingCitation) {
       citationRequestRef.current = null;
       const target = map.runs.find(
@@ -1495,6 +1508,8 @@ function ComposerPromptEditorTiptapInner(
         readSnapshot();
         return selectionRangeRef.current;
       },
+      captureAttachmentInsertion: () =>
+        editor ? captureComposerAttachmentInsertion(editor) : undefined,
       requestCitationComment: (request) => {
         citationRequestRef.current = request;
         if (!editor) return;
@@ -1738,49 +1753,4 @@ function useMountedEditor(editor: TiptapEditor | null): TiptapEditor | null {
     };
   };
   return useSyncExternalStore(subscribe, () => (mountedEditorView(editor) ? editor : null));
-}
-
-function caretLineRect(range: Range, edge: "start" | "end"): DOMRect | null {
-  const collapsedRects = Array.from(range.getClientRects()).filter((rect) => rect.height > 0);
-  const collapsedRect = edge === "start" ? collapsedRects.at(-1) : collapsedRects[0];
-  if (collapsedRect) return collapsedRect;
-
-  const container = range.startContainer;
-  if (container.nodeType === 3) {
-    const textNode = container as Text;
-    if (textNode.data.length === 0) return null;
-    const probeStart = Math.max(
-      0,
-      Math.min(
-        edge === "start" ? range.startOffset : range.startOffset - 1,
-        textNode.data.length - 1,
-      ),
-    );
-    const probeRange = document.createRange();
-    probeRange.setStart(textNode, probeStart);
-    probeRange.setEnd(textNode, probeStart + 1);
-    const probeRect = Array.from(probeRange.getClientRects()).find((rect) => rect.height > 0);
-    if (probeRect) return probeRect;
-    const boundingRect = probeRange.getBoundingClientRect();
-    return boundingRect.height > 0 ? boundingRect : null;
-  }
-
-  if (!(container instanceof HTMLElement)) return null;
-  const neighbour =
-    container.childNodes[Math.max(0, range.startOffset - 1)] ??
-    container.childNodes[range.startOffset];
-  if (neighbour instanceof HTMLElement) {
-    const neighbourRect = neighbour.getBoundingClientRect();
-    if (neighbourRect.height > 0) return neighbourRect;
-  } else if (neighbour instanceof Text && neighbour.data.length > 0) {
-    const isBeforeCaret = neighbour === container.childNodes[range.startOffset - 1];
-    const probeStart = isBeforeCaret ? neighbour.data.length - 1 : 0;
-    const probeRange = document.createRange();
-    probeRange.setStart(neighbour, probeStart);
-    probeRange.setEnd(neighbour, probeStart + 1);
-    const probeRect = Array.from(probeRange.getClientRects()).find((rect) => rect.height > 0);
-    if (probeRect) return probeRect;
-  }
-  const containerRect = container.getBoundingClientRect();
-  return containerRect.height > 0 ? containerRect : null;
 }

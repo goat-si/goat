@@ -246,6 +246,52 @@ function setupHiddenWriter(separate: boolean) {
   return selection;
 }
 
+it("keeps writer traits when selecting the same model again", async () => {
+  const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
+  const selection = createModelSelection(codex.instanceId, "gpt-6-luna", [
+    { id: "reasoningEffort", value: "high" },
+  ]);
+  state.updateSettings.mockReset();
+  state.styles = [];
+  state.providers = [codex];
+  state.scopedSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    sourceControlWriterModelSelection: selection,
+  };
+  await using screen = await render(content());
+  await userEvent.click(
+    screen.getByRole("button", { name: "Source control writer model", exact: true }),
+  );
+  await userEvent.click(page.getByRole("option", { name: /gpt-6-luna/i }));
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    sourceControlWriterModelSelection: selection,
+  });
+});
+
+it("does not copy one environment's writer traits when selections are mixed", async () => {
+  const codex = provider({ instanceId: "codex", models: ["gpt-6-luna"] });
+  state.updateSettings.mockReset();
+  state.styles = [
+    { ...DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle, customInstructions: "first" },
+    { ...DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle, customInstructions: "second" },
+  ];
+  state.providers = [codex];
+  state.scopedSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    sourceControlWriterModelSelection: createModelSelection(codex.instanceId, "gpt-6-luna", [
+      { id: "reasoningEffort", value: "high" },
+    ]),
+  };
+  await using screen = await render(content());
+  await userEvent.click(
+    screen.getByRole("button", { name: "Source control writer model", exact: true }),
+  );
+  await userEvent.click(page.getByRole("option", { name: /gpt-6-luna/i }));
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    sourceControlWriterModelSelection: { instanceId: codex.instanceId, model: "gpt-6-luna" },
+  });
+});
+
 it("shows the saved source control writer model while hiding it from the menu", async () => {
   setupHiddenWriter(true);
   await using screen = await render(content());
