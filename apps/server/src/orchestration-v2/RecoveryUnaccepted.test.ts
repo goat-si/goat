@@ -147,7 +147,21 @@ it.effect("recovery resends confirmed-unsent unattended work in its original run
       ...message,
       creationSource: "mcp" as const,
     }));
-    const projection = { ...base, runs: [run], attempts: [attempt], messages, providerTurns: [] };
+    const projection = {
+      ...base,
+      thread: {
+        ...base.thread,
+        lineage: {
+          parentThreadId: null,
+          relationshipToParent: null,
+          rootThreadId: harness.threadId,
+        },
+      },
+      runs: [run],
+      attempts: [attempt],
+      messages,
+      providerTurns: [],
+    };
     let enqueued: Parameters<EventSink.EventSinkV2["Service"]["writeIfRunCurrent"]>[0]["effects"];
     let committed: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | undefined;
     const recovery = yield* ProviderRuntimeRecovery.make.pipe(
