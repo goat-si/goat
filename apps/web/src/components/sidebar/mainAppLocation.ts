@@ -1,4 +1,4 @@
-import { useNavigate, type AnyRouter } from "@tanstack/react-router";
+import { useNavigate, useRouter, type AnyRouter } from "@tanstack/react-router";
 
 import { GUEST_PAGE_PATH } from "../../guestPage";
 import { withoutAssistantCitationHash } from "../../lib/assistantCitationNavigation";
@@ -27,10 +27,13 @@ const SHELL_LESS_PATHS = new Set(["/pair", "/connect", "/connect-agent", GUEST_P
 
 let mainAppHref: string | null = null;
 let appModalReturnHref: string | null = null;
+let appModalReturnHistoryIndex: number | null = null;
 let appModalReturnThreadTarget: ThreadRouteTarget | null = null;
+let initialHistoryIndex = 0;
 
 /** Remembers where Settings, Usage, and the utility pages lead back to. */
 export function startMainAppLocationTracking(router: AnyRouter): () => void {
+  initialHistoryIndex = router.state.location.state.__TSR_index;
   const record = () => {
     const { pathname } = router.state.location;
     if (isAppModalPage(pathname) || isSettingsPage(pathname) || SHELL_LESS_PATHS.has(pathname)) {
@@ -38,6 +41,8 @@ export function startMainAppLocationTracking(router: AnyRouter): () => void {
     }
     const href = withoutAssistantCitationHash(router.state.location.href);
     appModalReturnHref = href;
+    appModalReturnHistoryIndex =
+      href === router.state.location.href ? router.state.location.state.__TSR_index : null;
     appModalReturnThreadTarget = resolveThreadRouteTarget(
       router.state.matches.at(-1)?.params ?? {},
     );
@@ -63,10 +68,20 @@ function appPageReturnHref() {
 
 /** Leaves Settings or Usage for the page that opened it. */
 export function useCloseAppModal() {
-  const navigate = useNavigate();
-  return () => navigate({ href: appPageReturnHref() });
+  const router = useRouter();
+  return () => closeAppPage(router);
 }
 
 export function closeAppPage(router: AnyRouter) {
-  return router.navigate({ href: appPageReturnHref() });
+  const href = appPageReturnHref();
+  const returnIndex = appModalReturnHistoryIndex ?? 0;
+  const steps = router.state.location.state.__TSR_index - returnIndex;
+  if (!(returnIndex > initialHistoryIndex && steps > 0)) {
+    return router.navigate({ href, replace: true });
+  }
+  const unsubscribe = router.history.subscribe(() => {
+    unsubscribe();
+    void router.navigate({ href });
+  });
+  router.history.go(-(steps + 1));
 }

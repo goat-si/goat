@@ -172,9 +172,11 @@ const layerDesktopSshEnvironment = Layer.unwrap(
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const config = yield* DesktopConfig.DesktopConfig;
     const releaseBaseUrl = Option.getOrUndefined(config.cliReleaseBaseUrl);
+    const shellEnvironment = yield* HostProcess.Environment;
     return DesktopSshEnvironment.layer({
-      resolveCliRunner: Effect.succeed(
-        resolveDesktopSshCliRunner(
+      resolveCliRunner: Effect.gen(function* () {
+        const notices: Array<{ level: "info" | "warn"; message: string }> = [];
+        const runner = resolveDesktopSshCliRunner(
           environment,
           {
             archiveDirectory: Option.getOrElse(config.sshRuntimeArchiveDir, () =>
@@ -197,8 +199,14 @@ const layerDesktopSshEnvironment = Layer.unwrap(
           },
           serverPackageJson,
           DESKTOP_BUILD_COMMIT_TIME,
-        ),
-      ),
+          shellEnvironment,
+          (level, message) => notices.push({ level, message }),
+        );
+        for (const { level, message } of notices) {
+          yield* level === "info" ? Effect.logInfo(message) : Effect.logWarning(message);
+        }
+        return runner;
+      }),
     });
   }),
 );

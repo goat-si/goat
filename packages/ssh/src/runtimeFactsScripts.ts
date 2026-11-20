@@ -551,8 +551,8 @@ lacks_memory_scopes() {
 # Sets RUNNER_DIGEST to the SHA-256 of file $1.
 runner_digest() {
   RUNNER_DIGEST=
-  if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 "$1")" || return 1
-  elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$1")" || return 1
+  if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 < "$1")" || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum < "$1")" || return 1
   else printf 'Install shasum or sha256sum to verify the retained GOAT runner.\\n' >&2; return 1; fi
   digest="\${digest%% *}"
   case "$digest" in *[!0123456789abcdef]*) return 1 ;; esac

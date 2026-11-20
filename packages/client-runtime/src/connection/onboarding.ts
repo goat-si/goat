@@ -358,10 +358,10 @@ const registerSshConnection = Effect.fn(
         detail: "The Pen member list changed before this machine was saved.",
       });
     }
-    yield* registry.register(
-      registration,
-      input.pen === undefined ? undefined : { unlessSameAddress: true },
-    );
+    yield* registry.register(registration, {
+      knownAddressOnly: input.expectedEnvironmentId === undefined,
+      ...(input.pen === undefined ? {} : { unlessSameAddress: true }),
+    });
   }).pipe(Effect.uninterruptible);
   return registration.target.environmentId;
 });

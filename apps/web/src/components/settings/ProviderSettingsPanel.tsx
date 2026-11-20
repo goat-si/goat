@@ -128,6 +128,9 @@ import {
 import {
   buildProviderEnvironmentOptions,
   buildProviderInstanceOverridePatch,
+  modelListChanges,
+  providerConfigString,
+  configuredBinaryPath,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
   type ProviderEnvironmentAccess,
@@ -155,29 +158,10 @@ async function confirmProviderInstanceRemoval(
   return confirmed._tag === "Success" && confirmed.value;
 }
 
-function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<string>) {
-  const currentSet = new Set(current);
-  const nextSet = new Set(next.map((model) => model.trim()).filter(Boolean));
-  return [...new Set([...currentSet, ...nextSet])]
-    .filter((model) => currentSet.has(model) !== nextSet.has(model))
-    .map((model) => ({ model, selected: nextSet.has(model) }));
-}
-
-function providerConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
 const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
   provider: definition.driverKind,
   hasDefaultInstance: definition.hasDefaultInstance !== false,
 }));
-
-function configuredBinaryPath(config: unknown): string {
-  if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
-  return typeof config.binaryPath === "string" ? config.binaryPath.trim() : "";
-}
 
 // Subscribe only in the label because every status push restamps all providers' checkedAt.
 function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }) {
@@ -897,6 +881,7 @@ export function EnvironmentProviderSettings({
         description: error instanceof Error ? error.message : "The settings update failed.",
       });
     }
+    return result._tag !== "Failure";
   };
 
   const updateInstance = useStableCallback(
@@ -910,7 +895,7 @@ export function EnvironmentProviderSettings({
         isDisabling &&
         resolveAppModelSelectionState(settings, serverProviders).instanceId === instanceId &&
         readEnvironmentScope(environmentId, AuthSettingsWriteScope);
-      void persistInstance(
+      return persistInstance(
         instanceId,
         next,
         shouldClearTextGen
@@ -922,7 +907,7 @@ export function EnvironmentProviderSettings({
 
   const enableInstance = useStableCallback(
     (instanceId: ProviderInstanceId, next: ProviderInstanceConfig) =>
-      persistInstance(instanceId, next),
+      persistInstance(instanceId, next).then(() => undefined),
   );
 
   const deleteInstance = useStableCallback(
@@ -1335,7 +1320,7 @@ interface ProviderInstanceRowActions {
     instanceId: ProviderInstanceId,
     previous: ProviderInstanceConfig,
     next: ProviderInstanceConfig,
-  ) => void;
+  ) => Promise<boolean> | void;
   readonly enableInstance: (
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,

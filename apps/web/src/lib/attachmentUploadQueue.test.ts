@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, ProjectId } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -669,6 +669,42 @@ describe("attachmentUploadQueue", () => {
       },
       expect.anything(),
     );
+  });
+
+  it("restores file ownership metadata when returning to its upload environment", async () => {
+    const draftId = DraftId.make("draft-environment-roundtrip");
+    const store = useComposerDraftStore.getState();
+    const file = makeFile("file-move");
+    const moveDraftTo = (environmentId: EnvironmentId) => {
+      store.setProjectDraftThreadId(
+        { environmentId, projectId: ProjectId.make("project") },
+        draftId,
+      );
+      startAttachmentUpload({ environmentId, image: file, draftTarget: draftId });
+    };
+    try {
+      store.addFiles(draftId, [file]);
+      moveDraftTo(firstEnvironment);
+      await Promise.resolve();
+      let settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+      moveDraftTo(secondEnvironment);
+      await Promise.resolve();
+      settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[1]!.complete(500);
+      await settled;
+      moveDraftTo(firstEnvironment);
+      expect(store.getComposerDraft(draftId)?.files).toMatchObject([
+        {
+          id: file.id,
+          uploadedAttachmentId: `pending-environment-1-${file.name}`,
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
+    } finally {
+      store.clearDraftThread(draftId);
+    }
   });
 
   it("restores the previous environment after a replacement upload fails", async () => {

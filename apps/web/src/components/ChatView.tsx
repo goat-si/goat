@@ -362,6 +362,7 @@ import {
   noopHeldRevert,
   noopHeldAttachment,
   ignoreComposerFocus,
+  hasCompactableConversation,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -542,8 +543,7 @@ export default function ChatView(props: ChatViewProps) {
   const serverThreadHistory = useThreadHistory(routeThreadDetailRef);
   const threadHistoryControls = useThreadHistoryControls(routeThreadDetailRef, serverThreadHistory);
   const committedServerMessageIds = deriveCommittedServerUserMessageIds(serverVisibleTurnItems);
-  // Queued messages have no turn item until starting, so cancellation must retire their optimistic rows
-  // separately.
+  // Cancellation separately retires optimistic rows: queued messages have no turn item until starting.
   const serverAcknowledgedUserMessageIds = (() => {
     const ids = new Set(committedServerMessageIds);
     for (const message of serverProjection?.messages ?? []) {
@@ -707,7 +707,6 @@ export default function ChatView(props: ChatViewProps) {
   const getTimelineScrollableNode = () => legendListRef.current?.getScrollableNode() ?? null;
   const getTimelineScrollableNodeStable = useStableCallback(getTimelineScrollableNode);
   const conversationArea = workspaceAreaProps("conversation", 1, "Conversation");
-  const composerArea = workspaceAreaProps("composer", 2, "Message input");
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
   const [composerTimelineInset, setComposerTimelineInset] = useState(0);
   const composerTimelineInsetRef = useRef(0);
@@ -1849,6 +1848,7 @@ export default function ChatView(props: ChatViewProps) {
   // composer and its strips. Its approvals and questions are asked on the
   // top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
+  const composerArea = workspaceAreaProps("composer", 2, isProviderSubagent ? "Subagent" : "");
   const composerMounted = !showProviderSubagentBar;
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report dated model ids or aliases.
@@ -2568,11 +2568,11 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     persistThreadSettingsForNextTurn,
   });
-  const activeThreadHasCompactableConversation = serverVisibleTurnItems.some(
-    ({ item }) =>
-      item.type === "user_message" &&
-      (item.text.trim().toLowerCase() !== "/compact" || item.attachments.length > 0),
-  );
+  const activeThreadHasCompactableConversation = hasCompactableConversation({
+    visibleTurnItems: serverVisibleTurnItems,
+    hasMoreHistory: serverThreadHistory.hasMoreHistory,
+    latestUserMessageAt: serverThread?.latestUserMessageAt ?? null,
+  });
   const pendingHandoffSelection =
     (selectedProviderByThreadId ? modelSelectionByProvider[selectedProviderByThreadId] : null) ??
     activeThread?.modelSelection;

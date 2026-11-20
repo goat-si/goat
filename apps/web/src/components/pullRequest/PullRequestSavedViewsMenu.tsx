@@ -279,15 +279,7 @@ export function PullRequestSavedViewsMenu({
             <Button
               onClick={() => {
                 setViews([]);
-                try {
-                  const saved = getLocalStorageItem(
-                    PULL_REQUEST_SAVED_VIEWS_KEY,
-                    PullRequestSavedViews,
-                  );
-                  if (saved?.length !== 0) throw new Error("Clear failed");
-                  setSelectedId(null);
-                  setClearing(false);
-                } catch {
+                const showError = () =>
                   toastManager.add({
                     type: "error",
                     title: m(msg("Could not save PR views")),
@@ -297,7 +289,23 @@ export function PullRequestSavedViewsMenu({
                       ),
                     ),
                   });
+                let cleared: boolean;
+                try {
+                  const saved = getLocalStorageItem(
+                    PULL_REQUEST_SAVED_VIEWS_KEY,
+                    PullRequestSavedViews,
+                  );
+                  cleared = saved?.length === 0;
+                } catch {
+                  showError();
+                  return;
                 }
+                if (!cleared) {
+                  showError();
+                  return;
+                }
+                setSelectedId(null);
+                setClearing(false);
               }}
             >
               {m(msg("Clear saved views"))}

@@ -67,7 +67,7 @@ function parseSshConfigLine(line: string) {
 }
 
 function expandHomePath(input: string, homeDir: string): string {
-  return input.replace(/^~(?=$|\/|\\)/u, homeDir);
+  return input.replace(/^~(?=$|\/|\\)/u, () => homeDir);
 }
 
 const resolveSshConfigIncludePattern = Effect.fnUntraced(function* (
@@ -146,7 +146,12 @@ const expandGlob = Effect.fnUntraced(function* (
       }
     }
   }
-  return matchedPaths.toSorted();
+  // OpenSSH's glob sorts matches by UTF-8 bytes, not UTF-16 code units.
+  return matchedPaths.toSorted((left, right) => {
+    const leftBytes = globBytes(left);
+    const rightBytes = globBytes(right);
+    return leftBytes < rightBytes ? -1 : leftBytes > rightBytes ? 1 : 0;
+  });
 });
 
 type HostCondition = ReadonlyArray<string> | null;

@@ -419,3 +419,128 @@ it("keeps a replacement checkout's pull request off a single-model send already 
   });
   expect(changeLink).not.toHaveBeenCalled();
 });
+
+it("does not clear the visible composer after navigating during an upload", async () => {
+  await using fixture = await setupSshComposer();
+  const { EnvironmentId, ProjectId } = await import("@goat/contracts");
+  const { scopeProjectRef } = await import("@goat/client-runtime/environment");
+  const { AsyncResult } = await import("effect/reactivity");
+  const { DraftId, useComposerDraftStore } = await import("~/composerDraftStore");
+  const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+  const { environmentPresentations } = await import("~/state/presentation");
+  const { makeThreadFixture } = await import("~/test-fixtures");
+  const { usePullRequestLinking } = await import("../../hooks/usePullRequestLinking");
+  const { runAttachmentUploadCycle } = await import("@goat/client-runtime/state/attachments");
+  const environmentId = EnvironmentId.make("redirect-env");
+  const projectId = ProjectId.make("project");
+  const threadId = ThreadId.make("redirect-thread");
+  const draftId = DraftId.make("navigation-upload");
+  const store = useComposerDraftStore.getState();
+  store.setProjectDraftThreadId(scopeProjectRef(environmentId, projectId), draftId, {
+    threadId,
+    branch: "feature",
+  });
+  const linking = vi.mocked(usePullRequestLinking);
+  linking.mockReturnValue({
+    mode: "multiple",
+    canLink: () => true,
+    isLinked: () => false,
+    changeLink: vi.fn(),
+  });
+  using _linking = { [Symbol.dispose]: () => linking.mockRestore() };
+  const uploadStarted = deferred<void>();
+  const upload = deferred<AttachmentUploadCycleResult>();
+  const uploadCycle = vi.mocked(runAttachmentUploadCycle).mockImplementation(() => {
+    uploadStarted.resolve();
+    return upload.promise;
+  });
+  using _upload = {
+    [Symbol.dispose]() {
+      upload.resolve({ status: "cancelled", attachmentId: null });
+      uploadCycle.mockRestore();
+    },
+  };
+  const get = vi.mocked(appAtomRegistry.get);
+  const prior = get.getMockImplementation()!;
+  get.mockImplementation(((atom: unknown) =>
+    atom === environmentPresentations.presentationsAtom
+      ? new Map([
+          [
+            environmentId,
+            { serverConfig: { environment: { capabilities: { attachmentUploads: true } } } },
+          ],
+        ])
+      : prior(atom as never)) as never);
+  using _registry = { [Symbol.dispose]: () => get.mockImplementation(prior) };
+  const file = new File(["image"], "picture.png", { type: "image/png" });
+  const route = { current: String(draftId) };
+  const promptRef = { current: "original" };
+  const resetCursorState = vi.fn();
+  const composerRef = {
+    current: {
+      getSendContext: () => ({
+        providerAvailable: true,
+        multipleModelSelections: null,
+        images: [
+          {
+            type: "image",
+            id: "navigation-image",
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            file,
+            previewUrl: "blob:navigation-image",
+          },
+        ],
+        files: [],
+        terminalContexts: [],
+        previewAnnotations: [],
+        reviewComments: [],
+        threadContexts: [],
+        previewTabs: [],
+        selectedProvider: "codex",
+        selectedModel: "gpt-5.4",
+        selectedProviderModels: [],
+        selectedPromptEffort: null,
+        selectedModelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        interactionMode: "default",
+        interactionModeEnabled: false,
+        shownPendingApprovalIds: [],
+        answeringPendingUserInput: false,
+      }),
+      validateProviderInput: () => true,
+      hasPendingAttachments: () => false,
+      resetCursorState,
+    },
+  };
+  const sender = await renderCheckoutSend(fixture, {
+    input: {
+      activeThread: makeThreadFixture({
+        id: threadId,
+        environmentId,
+        projectId,
+        branch: "feature",
+      }),
+      activeProject: { id: projectId, environmentId, workspaceRoot: "/repo" },
+      draftId,
+      draftThread: store.getDraftSession(draftId),
+      composerDraftTarget: draftId,
+      routeThreadKey: draftId,
+      currentRouteThreadKeyRef: route,
+      activeThreadBranch: "feature",
+      promptRef,
+      composerRef,
+    },
+    sendContext: {},
+  });
+  state.normal.mockResolvedValue(AsyncResult.success({ sequence: 1 }));
+  const sending = sender.send();
+  await Promise.race([uploadStarted.promise, sending]);
+  expect(uploadCycle).toHaveBeenCalledOnce();
+  route.current = "another-thread";
+  promptRef.current = "new draft";
+  upload.resolve({ status: "uploaded", attachmentId: "uploaded-picture" });
+  await sending;
+  expect(promptRef.current).toBe("new draft");
+  expect(resetCursorState).not.toHaveBeenCalled();
+});

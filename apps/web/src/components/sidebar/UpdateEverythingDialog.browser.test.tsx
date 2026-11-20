@@ -83,6 +83,27 @@ async function renderDialog(onConfirm = vi.fn()) {
   return { screen, onConfirm };
 }
 
+it("exposes each update and its state to screen readers on a narrow screen", async () => {
+  await page.viewport(360, 820);
+  const { screen } = await renderDialog();
+  await using _screen = screen;
+  const updates = page.getByRole("list", { name: "App & servers updates" });
+  await expect
+    .element(updates.getByRole("checkbox", { name: /build-box.*SSH runtime.*231/ }))
+    .toBeVisible();
+  await expect
+    .element(updates.getByRole("checkbox", { name: /mac-studio.*2 running.*waits for idle/ }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("tab", { name: /Runtimes/ }));
+  await expect
+    .element(
+      page
+        .getByRole("list", { name: "Runtimes updates" })
+        .getByRole("checkbox", { name: /ci-server.*Codex.*Claude/ }),
+    )
+    .toBeVisible();
+});
+
 it("names machines whose provider check failed instead of reporting no runtime updates", async () => {
   const empty = buildRuntimesTab({ providerMachines: [], opencodex: null });
   await using _screen = await render(

@@ -346,3 +346,62 @@ it("a plan follow-up with a reply that fails to send puts the reply back with it
   expect(draft?.prompt).toBe("Stop that and list the files instead.");
   expect(draft?.replyTo?.contextId).toBe("response_m9");
 });
+
+it("opens a side chat without declining the pending approval", async () => {
+  await using fixture = await setupSshComposer();
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: { sideChatAvailable: true },
+  });
+  const { useSideChatStore } = await import("../sideChat/sideChatStore");
+  redirect.promptRef.current = "/side question";
+  await redirect.send();
+  expect(useSideChatStore.getState().pendingPrompts["redirect"]).toBe("question");
+  expect(redirect.calls).toEqual([]);
+});
+
+it.each([8000, 8001] as const)(
+  "handles an annotation comment of length %i when sending",
+  async (length) => {
+    await using fixture = await setupSshComposer();
+    const { boundaryAnnotation } = await import("./annotationBoundary.testkit");
+    const { EnvironmentId, ThreadId } = await import("@goat/contracts");
+    const { useComposerDraftStore } = await import("~/composerDraftStore");
+    const { render } = await import("../../../test/render");
+    const { page } = await import("vite-plus/test/browser");
+    const { ToastProvider, toastManager } =
+      await vi.importActual<typeof import("../ui/toast")>("../ui/toast");
+    state.toast.mockImplementation((toast) => toastManager.add(toast));
+    const target = {
+      environmentId: EnvironmentId.make("redirect-env"),
+      threadId: ThreadId.make("redirect-thread"),
+    };
+    const store = useComposerDraftStore.getState();
+    const annotation = boundaryAnnotation(length);
+    store.setPrompt(target, "Keep this prompt");
+    store.addPreviewAnnotation(target, annotation);
+    using _draft = { [Symbol.dispose]: () => store.clearComposerContent(target) };
+    await using _toasts = await render(<ToastProvider timeout={0}>{null}</ToastProvider>);
+    const redirect = await redirectSend(fixture, {
+      composerMode: "full-access",
+      refuse: false,
+      sendContext: { previewAnnotations: [annotation] },
+    });
+    redirect.promptRef.current = "Keep this prompt";
+    await redirect.send();
+    if (length === 8000) {
+      expect(state.normal).toHaveBeenCalledOnce();
+    } else {
+      await expect
+        .element(page.getByText("Annotation comments must be 8,000 characters or fewer."))
+        .toBeVisible();
+      expect(state.normal).not.toHaveBeenCalled();
+      expect(redirect.calls).toEqual([]);
+      expect(store.getComposerDraft(target)?.previewAnnotations[0]?.comment).toBe(
+        annotation.comment,
+      );
+      expect(redirect.promptRef.current).toBe("Keep this prompt");
+    }
+  },
+);
