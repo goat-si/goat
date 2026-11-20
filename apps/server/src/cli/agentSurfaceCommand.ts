@@ -54,6 +54,7 @@ export const OPERATOR_VERBS: Readonly<Record<string, ReadonlyArray<string>>> = {
   thread: ["list", "start", "send", "show"],
   project: ["add", "remove", "rename"],
   provider: ["diagnose"],
+  theme: ["clear", "set", "show"],
 };
 
 export const EXIT = {
