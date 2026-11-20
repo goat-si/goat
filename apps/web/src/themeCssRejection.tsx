@@ -15,7 +15,7 @@ export function ThemeCssRejectionNotice() {
       return () => listeners.delete(listener);
     },
     () => rejected,
-    () => false,
+    () => false as const,
   );
   return visible ? (
     <div
