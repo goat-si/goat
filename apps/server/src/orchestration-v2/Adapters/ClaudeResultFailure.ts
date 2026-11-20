@@ -276,3 +276,13 @@ function formatClaudeUsageLimitWait(waitMs: number): string {
   if (hours === 0) return `${totalMinutes}m`;
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
+
+export function claudeResetTimes(
+  times: ReadonlyMap<string, string | null>,
+  result: { readonly class: string; readonly resetAt?: string | null } | null,
+): Array<string | null> {
+  const hasResultReset = result?.class === "usage_limit" && result.resetAt != null;
+  return Array.from(times)
+    .filter(([type, time]) => !(type === "unknown" && time === null && hasResultReset))
+    .map(([, time]) => time);
+}
