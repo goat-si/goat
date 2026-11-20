@@ -18,9 +18,7 @@ export function acpPerTurnPromptUsage(
   const inputTokens = geminiUsage
     ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
     : usage.inputTokens;
-  const outputTokens = geminiUsage
-    ? usage.outputTokens + (usage.thoughtTokens ?? 0)
-    : usage.outputTokens;
+  const outputTokens = usage.outputTokens;
   // TurnTokenUsage contract: input includes cache read + write and reasoning
   // is a subset of output, so clamp counters that exceed their parent and
   // drop the ones the agent left unset. Cache writes are capped at whatever
