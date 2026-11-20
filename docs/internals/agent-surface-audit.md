@@ -17,8 +17,8 @@ Run `node scripts/agent-surface/inventory.ts` for the JSON inventory, including 
 | Mutating tools whose clientRequestId GOAT deduplicates | 73                |
 | Input parameters with a description                    | 561 of 1209 (46%) |
 | Tools with a worked example                            | 76 of 309         |
-| CLI commands, listed / unlisted                        | 62 / 21           |
-| CLI commands with usage examples                       | 0 of 83           |
+| CLI commands, listed / unlisted                        | 62 / 23           |
+| CLI commands with usage examples                       | 0 of 85           |
 | Listed CLI leaf commands with --json                   | 11 of 47          |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                      |
@@ -237,9 +237,9 @@ Human steps still use different approvals, errors, and CLI actions. Accepted tas
 
 The operator CLI has 62 listed commands for server operations. Registry commands are dispatched before that tree loads: `goat describe`, `goat call`, and generated `goat <resource> <verb>` commands expose the agent surface. The legacy `goat acp-mcp-call` remains an alias (apps/server/src/cli/acpMcpBridge.ts).
 
-- 0 of 83 commands define usage examples, so `--help` never shows a worked call.
+- 0 of 85 commands define usage examples, so `--help` never shows a worked call.
 - 11 of 47 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
-- 22 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 62 more.
+- 24 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 65 more.
 - `goat auth client revoke` reuses the session revoke command under a second parent, so its help begins "Revoke a session." (apps/server/src/cli/auth.ts).
 - Server flags such as `--dev-url` repeat on subcommands that start no server, such as `goat auth pairing create`.
 
