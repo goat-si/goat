@@ -392,6 +392,7 @@ export const AntigravityDriver: ProviderDriver<
       >,
     ) {
       yield* provider.onSessionStarted(started, undefined, startedProfiles.get(started));
+      yield* authFlow.onSignedInElsewhere;
       yield* Stream.runForEach(runtime.getEvents(), (event) => {
         if (event._tag === "EventStreamBarrier") {
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
@@ -524,7 +525,9 @@ export const AntigravityDriver: ProviderDriver<
       ),
       profileDirectory,
       onSessionStarted: (started, cwd) =>
-        provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
+        provider
+          .onSessionStarted(started, cwd, startedProfiles.get(started))
+          .pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
       onSessionEvent: (event) => {
         if (event._tag === "ConfigOptionsUpdated") {
           return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));

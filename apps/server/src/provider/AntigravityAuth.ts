@@ -77,6 +77,8 @@ export interface AntigravityAuth {
     stop: Effect.Effect<void>,
     task: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
+  /** A session started outside a flow, so an earlier flow's failure no longer describes sign-in. */
+  readonly onSignedInElsewhere: Effect.Effect<void>;
 }
 
 export type AntigravityAuthRuntime = Pick<
@@ -612,5 +614,13 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
     }),
   );
 
-  return { controller, withProcess };
+  const onSignedInElsewhere = SubscriptionRef.update(snapshot, (value) =>
+    activeFlow === undefined &&
+    operation === "idle" &&
+    (value.state.phase === "failed" || value.state.phase === "cancelled")
+      ? { ownerSessionId: null, state: emptyState }
+      : value,
+  );
+
+  return { controller, withProcess, onSignedInElsewhere };
 });
