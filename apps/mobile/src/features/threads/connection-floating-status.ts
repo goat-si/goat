@@ -10,7 +10,6 @@ export function connectionFloatingStatus(input: {
   const environmentLabel = input.environmentLabel ?? "Environment";
   const unavailable = (label: string): FloatingWorkingStatus => ({
     kind: "connection",
-    tone: "unavailable",
     label,
     onPress: input.onReconnect,
   });
@@ -18,15 +17,7 @@ export function connectionFloatingStatus(input: {
   switch (input.connectionState) {
     case "connecting":
     case "reconnecting":
-      return {
-        kind: "connection",
-        tone: "reconnecting",
-        label:
-          input.connectionError === null
-            ? `Reconnecting to ${environmentLabel}...`
-            : `Failed to connect. Retrying ${environmentLabel}...`,
-        onPress: input.onReconnect,
-      };
+      return null;
     case "offline":
       return unavailable("You are offline");
     case "unsupported":

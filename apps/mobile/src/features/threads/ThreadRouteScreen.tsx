@@ -4,6 +4,8 @@ import {
   type ThreadRouteScreenProps,
 } from "./thread-route-types";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
+import { RECONNECT_ERROR_DELAY_MS } from "./threadDetailTiming";
+import { connectionRetryLabel } from "./thread-connection-retry";
 import { firstRouteParam } from "../terminal/terminalRouteHelpers.ts";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useThreadHistoryControls } from "./useThreadHistoryControls";
@@ -922,11 +924,23 @@ function ThreadRouteContent(
           detailDeleted: selectedThreadDetailState.status === "deleted",
           connectionState: routeConnectionState,
         });
+  const connectionRetrying =
+    routeConnectionState === "connecting" || routeConnectionState === "reconnecting";
+  const retryConnectionError = useDelayedStatus(
+    `${environmentId}:${connectionRetrying && routeConnectionError !== null}`,
+    connectionRetrying ? routeConnectionError : null,
+    RECONNECT_ERROR_DELAY_MS,
+  );
+  const retryLabel = connectionRetryLabel({
+    connectionError: retryConnectionError,
+    connectionState: routeConnectionState,
+  });
   const threadSyncLabel = useDelayedStatus(
     selectedThread === null ? "" : scopedThreadKey(selectedThread.environmentId, selectedThread.id),
-    creationState === null
-      ? threadSyncStatusLabel(selectedThreadDetailState.status, contentPresentation.kind)
-      : null,
+    retryLabel ??
+      (creationState === null
+        ? threadSyncStatusLabel(selectedThreadDetailState.status, contentPresentation.kind)
+        : null),
   );
   const inspectorHeader = props.inspectorPresentation ? (
     <ThreadInspectorHeader

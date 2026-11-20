@@ -67,7 +67,6 @@ export type FloatingWorkingStatus =
     }
   | {
       readonly kind: "connection";
-      readonly tone: "reconnecting" | "unavailable";
       readonly label: string;
       readonly onPress: () => void;
     };
