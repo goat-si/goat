@@ -1,4 +1,4 @@
-import { TurnMemoryDetails } from "./TurnMemoryDetails";
+import { ThreadFeedMessageFrame } from "./ThreadFeedMessageFrame";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import {
   AssistantMarkdownBlocks,
@@ -26,11 +26,7 @@ import { ThreadContextDivider } from "./thread-context-divider";
 import { StandingInstructionsRow } from "./standing-instructions-row";
 import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
 import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
-import {
-  ThreadHandoffDivider,
-  ThreadHandoffRow,
-  ThreadModelSwitchDivider,
-} from "./thread-handoff-row";
+import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -162,7 +158,6 @@ import {
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
-import { ThreadFeedReplyProbe } from "./ThreadFeedReplyProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
@@ -3054,80 +3049,58 @@ export const ThreadFeed = memo(function ThreadFeed({
         workspaceRoot={props.workspaceRoot}
       >
         <ThreadMediaVisibility>
-          {info.item.type === "message" && info.item.message.role === "assistant" ? (
-            <ThreadFeedReplyProbe
-              environmentId={String(props.environmentId)}
-              threadId={String(props.threadId)}
-              messageId={String(info.item.message.id)}
-              length={info.item.message.text.length}
-            />
-          ) : null}
-          {info.item.type === "message" &&
-          !isCompactionCommandFeedEntry(info.item) &&
-          info.item.message.projectedItem?.item.type === "user_message" &&
-          info.item.message.projectedItem.item.modelSwitch ? (
-            <ThreadModelSwitchDivider
-              environmentId={props.environmentId}
-              modelSwitch={info.item.message.projectedItem.item.modelSwitch}
-              iconColor={iconSubtleColor}
-            />
-          ) : null}
-          <FeedEntryShimmerContext value={info.index}>
-            {renderFeedEntry(info, {
-              environmentId: props.environmentId,
-              offline: props.offline,
-              dispatchingMessageId: props.dispatchingMessageId,
-              onEditPendingMessage: props.onEditPendingMessage,
-              onUseArtifactTemplate: props.onUseArtifactTemplate,
-              threadId: props.threadId,
-              copiedRowId,
-              expandedWorkRows,
-              workRowSizing,
-              workGroupScrollPositions,
-              terminalAssistantMessageIds,
-              unsettledTurnId,
-              compactionLabelsByEntryId,
-              failedRunIds,
-              onCopyWorkRow,
-              onToggleWorkGroup,
-              onToggleWorkRow,
-              onToggleTurnFold,
-              onOpenTurnDiff,
-              onPressPreview,
-              onPlaybackStart: onInlinePlaybackStart,
-              markdownLinkHandlers,
-              renderMarkdownImage,
-              renderViewedImage,
-              renderReasoning,
-              iconSubtleColor,
-              replyActionSize,
-              screenColor,
-              userBubbleColor,
-              markdownStyles,
-              reviewCommentColors,
-              reviewCommentBubbleWidth,
-              themeAppearance,
-              duoColumns,
-              userBubbleMaxWidth,
-              markdownContentWidth,
-              contentWidth,
-              threadTitle: props.threadTitle,
-              skills: props.skills,
-              workspaceRoot: props.workspaceRoot,
-              workflowOpening,
-            })}
-          </FeedEntryShimmerContext>
-          {info.item.type === "message" &&
-          info.item.message.role === "user" &&
-          info.item.message.runId &&
-          info.item.message.inputIntent !== "steer" &&
-          info.item.message.inputIntent !== "promoted_queued_to_steer" ? (
-            <TurnMemoryDetails
-              environmentId={props.environmentId}
-              threadId={info.item.message.projectedItem?.item.threadId ?? props.threadId}
-              runId={info.item.message.runId}
-            />
-          ) : null}
+          <ThreadFeedMessageFrame
+            entry={info.item}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            iconColor={iconSubtleColor}
+          >
+            <FeedEntryShimmerContext value={info.index}>
+              {renderFeedEntry(info, {
+                environmentId: props.environmentId,
+                offline: props.offline,
+                dispatchingMessageId: props.dispatchingMessageId,
+                onEditPendingMessage: props.onEditPendingMessage,
+                onUseArtifactTemplate: props.onUseArtifactTemplate,
+                threadId: props.threadId,
+                copiedRowId,
+                expandedWorkRows,
+                workRowSizing,
+                workGroupScrollPositions,
+                terminalAssistantMessageIds,
+                unsettledTurnId,
+                compactionLabelsByEntryId,
+                failedRunIds,
+                onCopyWorkRow,
+                onToggleWorkGroup,
+                onToggleWorkRow,
+                onToggleTurnFold,
+                onOpenTurnDiff,
+                onPressPreview,
+                onPlaybackStart: onInlinePlaybackStart,
+                markdownLinkHandlers,
+                renderMarkdownImage,
+                renderViewedImage,
+                renderReasoning,
+                iconSubtleColor,
+                replyActionSize,
+                screenColor,
+                userBubbleColor,
+                markdownStyles,
+                reviewCommentColors,
+                reviewCommentBubbleWidth,
+                themeAppearance,
+                duoColumns,
+                userBubbleMaxWidth,
+                markdownContentWidth,
+                contentWidth,
+                threadTitle: props.threadTitle,
+                skills: props.skills,
+                workspaceRoot: props.workspaceRoot,
+                workflowOpening,
+              })}
+            </FeedEntryShimmerContext>
+          </ThreadFeedMessageFrame>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (

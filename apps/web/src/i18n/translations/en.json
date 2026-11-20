@@ -513,5 +513,15 @@
   "e121ed82245a9519": "What should we build in",
   "5a405f15d9985bd6": "What should we build?",
   "ee30ea652e809baa": "?",
-  "49008f43e572078a": "Work in a project to start"
+  "49008f43e572078a": "Work in a project to start",
+  "5a10725cff6b45aa": "Turn memory",
+  "af282d8bec98e6d4": "Loading turn memory…",
+  "254fa55e3c133d4c": "Turn memory is unavailable.",
+  "07ec4012f14e268b": "No memory activity was recorded for this turn.",
+  "41a9f21f1888c5cb": "Provided to the model",
+  "74d1eab671a41716": "Memory recall",
+  "ab5f7cd7f8d24e36": "Query",
+  "540690430e586ae8": "No visible entries.",
+  "3d40ebe62a5baa33": "Revision",
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }

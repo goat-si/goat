@@ -4,7 +4,7 @@ import { expect, it } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
   nativeEnv,
-  nativeItem,
+  nativeId,
   nativeSpace,
   renderNative,
 } from "../../testing/memoryNativeHarness";
@@ -21,17 +21,18 @@ it("reads only the expanded turn and removes its entries when permission changes
   h.responses.set(WS_METHODS.memoryTurnInspect, () => ({
     events: [
       {
+        id: "1",
         kind: "automatic",
         query: null,
         items: [
           {
-            memoryId: nativeItem.memoryId,
-            revisionId: nativeItem.revision.revisionId,
+            memoryId: nativeId,
+            revisionId: "00000000-0000-4000-8000-000000000004",
             excerpt: "release checklist",
           },
         ],
       },
-      { kind: "recall", query: "release date", items: [] },
+      { id: "2", kind: "recall", query: "release date", items: [] },
     ],
     truncated: false,
   }));

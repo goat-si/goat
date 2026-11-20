@@ -40,8 +40,8 @@ function Receipts({ environmentId, threadId, runId }: Target) {
     return <AppText>No memory activity was recorded for this turn.</AppText>;
   return (
     <View className="gap-2 rounded-md border border-border p-3">
-      {result.value.events.map((event, index) => (
-        <View key={index}>
+      {result.value.events.map((event) => (
+        <View key={event.id}>
           <AppText className="font-semibold">
             {event.kind === "automatic" ? "Provided to the model" : "Memory recall"}
           </AppText>

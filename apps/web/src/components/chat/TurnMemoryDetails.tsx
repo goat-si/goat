@@ -41,8 +41,8 @@ function Receipts({ environmentId, threadId, runId }: Target) {
     return <p>{gt("No memory activity was recorded for this turn.")}</p>;
   return (
     <div className="mt-1 space-y-2 rounded-md border p-3 wrap-anywhere">
-      {result.value.events.map((event, index) => (
-        <section key={index}>
+      {result.value.events.map((event) => (
+        <section key={event.id}>
           <strong>
             {event.kind === "automatic" ? gt("Provided to the model") : gt("Memory recall")}
           </strong>
