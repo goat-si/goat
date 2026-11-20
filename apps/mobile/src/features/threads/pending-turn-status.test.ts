@@ -20,14 +20,16 @@ it("shows sending then starting in the actual thinking row label", () => {
     ],
   );
   const append = createPendingTurnAppender();
-  expect(append(sent, { zen: false }).at(-1)).toMatchObject({
+  expect(
+    append(sent, { zen: false, dispatchingMessageId: MessageId.make("sent") }).at(-1),
+  ).toMatchObject({
     type: "thinking",
     providerStartingLabel: "Sending…",
   });
   expect(
     append(
       sent.map((row) => ({ ...row, acknowledged: true })),
-      { zen: false },
+      { zen: false, dispatchingMessageId: MessageId.make("sent") },
     ).at(-1),
   ).toMatchObject({ type: "thinking", providerStartingLabel: "Starting…" });
 });

@@ -20,8 +20,12 @@ it("holds stable turn rows while a sent message waits for its run", () => {
     ],
   );
   const append = createPendingTurnAppender();
-  const held = append(sent, { zen: false });
+  const held = append(sent, { zen: false, dispatchingMessageId: MessageId.make("sent") });
   expect(held.map((row) => row.id)).toEqual(["sent", "pending-fold:sent", "live-activity-row"]);
-  expect(append(sent, { zen: false })[1]).toBe(held[1]);
-  expect(append(sent, { zen: true }).map((row) => row.id)).toEqual(["sent", "live-activity-row"]);
+  expect(append(sent, { zen: false, dispatchingMessageId: MessageId.make("sent") })[1]).toBe(
+    held[1],
+  );
+  expect(
+    append(sent, { zen: true, dispatchingMessageId: MessageId.make("sent") }).map((row) => row.id),
+  ).toEqual(["sent", "live-activity-row"]);
 });

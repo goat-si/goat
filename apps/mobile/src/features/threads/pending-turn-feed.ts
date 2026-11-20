@@ -12,12 +12,17 @@ export interface PendingFoldFeedEntry {
 export function createPendingTurnAppender() {
   let fold: PendingFoldFeedEntry | null = null;
   let activity: Extract<ThreadFeedEntry, { readonly type: "thinking" }> | null = null;
-  return (feed: ReadonlyArray<PendingThreadFeedEntry>, options: { readonly zen: boolean }) => {
+  return (
+    feed: ReadonlyArray<PendingThreadFeedEntry>,
+    options: { readonly zen: boolean; readonly dispatchingMessageId: string | null },
+  ) => {
     const last = feed.at(-1);
     if (
       last?.type !== "message" ||
       last.message.role !== "user" ||
       last.pendingMessage === undefined ||
+      (last.acknowledged !== true &&
+        last.pendingMessage.messageId !== options.dispatchingMessageId) ||
       last.pendingMessage.creation !== undefined ||
       isCompactionCommandMessage(last.message) ||
       feed.some(

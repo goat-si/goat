@@ -2464,6 +2464,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const presentedFeed = appendGuestPendingMessages(
     appendPendingTurn(useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups), {
       zen: props.toolCallVisibility === "zen",
+      dispatchingMessageId: props.dispatchingMessageId,
     }),
     guestShare,
   );
