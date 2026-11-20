@@ -51,6 +51,7 @@ import {
   WorktreePreparingHeader,
   WorktreeSetupCard,
   WorktreeSetupDetails,
+  WorktreeSetupDetailsLink,
   WorktreeSetupFoldChip,
   worktreeSetupHandedOff,
   type WorktreeSetupCardProps,
@@ -2501,6 +2502,12 @@ export const ThreadFeed = memo(function ThreadFeed({
     hasSetup: !!props.worktreeSetup,
     preparing: !!props.preparingWorktree,
   });
+  const finishedSetupDetails =
+    !props.worktreeSetup &&
+    props.worktreeSetupDetails &&
+    props.worktreeSetupDetails.snapshot.phase === "done" &&
+    !props.worktreeSetupDetails.snapshot.stages.some((stage) => stage.status === "failed") &&
+    worktreeSetupHandedOff(props.worktreeSetupDetails);
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
@@ -3042,6 +3049,8 @@ export const ThreadFeed = memo(function ThreadFeed({
               onOpenDetails={setupDetails.open}
               foldAvailable={setupFoldRowId !== null}
             />
+          ) : finishedSetupDetails && info.index === setupAnchorIndex ? (
+            <WorktreeSetupDetailsLink onOpen={setupDetails.open} />
           ) : setupPresentation === "preparing" && info.index === setupAnchorIndex ? (
             <WorktreePreparingHeader />
           ) : null}
@@ -3195,6 +3204,9 @@ export const ThreadFeed = memo(function ThreadFeed({
                     onOpenDetails={setupDetails.open}
                     foldAvailable={setupFoldRowId !== null}
                   />
+                ) : null}
+                {setupAnchorIndex < 0 && finishedSetupDetails ? (
+                  <WorktreeSetupDetailsLink onOpen={setupDetails.open} />
                 ) : null}
                 {setupAnchorIndex < 0 && setupPresentation === "preparing" ? (
                   <WorktreePreparingHeader />

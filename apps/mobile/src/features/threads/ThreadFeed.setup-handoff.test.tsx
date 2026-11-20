@@ -205,8 +205,11 @@ vi.mock("expo-audio", () => ({
 }));
 vi.mock("../../components/FilePreviewGallery", () => ({ FilePreviewGallery: () => null }));
 vi.mock("./worktree-setup-sheet", () => ({
-  WorktreeSetupSheet: ({ children }: { children: ReactNode }) => (
-    <div role="dialog">{children}</div>
+  WorktreeSetupSheet: ({ children, onClose }: { children: ReactNode; onClose: () => void }) => (
+    <div role="dialog">
+      {children}
+      <button onClick={onClose}>Close setup details</button>
+    </div>
   ),
 }));
 
@@ -548,6 +551,109 @@ it("keeps setup details reachable when the owning fold is absent", async () => {
   try {
     await view.render();
     expect(view.container.textContent).toContain("Background setup");
+  } finally {
+    await view.unmount();
+    h.dispose();
+  }
+});
+
+it("reopens finished setup details, preserves failure access, and shows nothing without setup", async () => {
+  const startedAt = "2026-06-20T00:00:01.000Z";
+  const stages = [
+    {
+      id: "agent" as const,
+      status: "done" as const,
+      startedAt,
+      endedAt: startedAt,
+      percent: null,
+      detail: null,
+      tail: [],
+    },
+    {
+      id: "setup-script" as const,
+      status: "done" as const,
+      startedAt,
+      endedAt: startedAt,
+      percent: null,
+      detail: null,
+      tail: ["finished setup log"],
+    },
+  ];
+  const snapshot = {
+    threadId,
+    sequence: 1,
+    phase: "running" as const,
+    startedAt,
+    endedAt: null,
+    branch: "feature",
+    baseRef: "main",
+    worktreePath: null,
+    setupScript: null,
+    error: null,
+    stages,
+  };
+  const setup = { snapshot, turnStarted: false, onCancel: () => {}, onWorkLocally: null };
+  const h = createNativeMemoryHarness();
+  const props = {
+    environmentId: nativeEnv,
+    threadId,
+    threadTitle: "Thread",
+    detailRef: null,
+    feed: testFeed(),
+    queuedMessages: [],
+    dispatchingMessageId: null,
+    onEditPendingMessage: null,
+    contentPresentation: { kind: "ready" as const },
+    agentLabel: "Agent",
+    latestRun: { runId, status: "running" as const, startedAt, completedAt: null },
+    activeWorkStartedAt: startedAt,
+    listRef: createRef<LegendListRef>(),
+    freeze: shared(false),
+    anchorMessageId: null,
+    contentInsetEndAdjustment: shared(0),
+    keyboardOffset: 0,
+  };
+  const view = renderNative(
+    h,
+    <ThreadFeed {...props} worktreeSetup={setup} worktreeSetupDetails={setup} />,
+  );
+  try {
+    await view.render();
+    await view.click("Worktree setup details");
+    const done = {
+      ...setup,
+      turnStarted: true,
+      snapshot: { ...snapshot, phase: "done" as const, sequence: 2, endedAt: startedAt },
+    };
+    await view.rerender(<ThreadFeed {...props} worktreeSetup={null} worktreeSetupDetails={done} />);
+    await view.click("Close setup details");
+    expect(view.container.querySelector('[role="dialog"]')).toBeNull();
+    expect(view.container.querySelector('button[aria-label="Show setup details"]')).not.toBeNull();
+    await view.click("Show setup details");
+    expect(view.container.querySelector('[role="dialog"]')?.textContent).toContain(
+      "finished setup log",
+    );
+
+    await view.click("Close setup details");
+    const failed = {
+      ...done,
+      snapshot: { ...done.snapshot, phase: "failed" as const, error: "setup failed" },
+    };
+    await view.rerender(
+      <ThreadFeed {...props} worktreeSetup={failed} worktreeSetupDetails={failed} />,
+    );
+    expect(
+      view.container.querySelector(
+        'button[aria-label="Worktree setup failed. Show setup details."]',
+      ),
+    ).not.toBeNull();
+    expect(view.container.querySelector('button[aria-label="Show setup details"]')).toBeNull();
+    await view.click("Worktree setup failed. Show setup details.");
+    expect(view.container.querySelector('[role="dialog"]')?.textContent).toContain("setup failed");
+
+    await view.click("Close setup details");
+    await view.rerender(<ThreadFeed {...props} worktreeSetup={null} worktreeSetupDetails={null} />);
+    expect(view.container.querySelector('button[aria-label="Show setup details"]')).toBeNull();
   } finally {
     await view.unmount();
     h.dispose();

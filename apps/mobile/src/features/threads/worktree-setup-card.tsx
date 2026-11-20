@@ -128,6 +128,20 @@ export function worktreeSetupHandedOff(props: WorktreeSetupCardProps): boolean {
   return props.turnStarted && worktreeSetupAgentStarted(props.snapshot);
 }
 
+export function WorktreeSetupDetailsLink({ onOpen }: { readonly onOpen: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Show setup details"
+      onPress={onOpen}
+      hitSlop={8}
+      className="self-start px-2 py-1 active:opacity-70"
+    >
+      <Text className="text-2xs text-foreground-secondary">Setup details</Text>
+    </Pressable>
+  );
+}
+
 /** The card's state on the turn's fold row: setup still running, or a failure to look at. */
 export function WorktreeSetupFoldChip(props: WorktreeSetupCardProps & SetupDetailsControl) {
   const scriptName = props.snapshot.setupScript?.name ?? "Setup script";
