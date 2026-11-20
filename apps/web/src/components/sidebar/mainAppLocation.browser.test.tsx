@@ -54,6 +54,17 @@ async function settled(router: AnyRouter, navigation: Promise<void>) {
 }
 
 describe("main app return location", () => {
+  it("closes Settings without stepping before this app document", async () => {
+    await using screen = await render(<ReturnControls />, { router: THREAD_PATH });
+    const router = screen.router!;
+    using _tracking = { [Symbol.dispose]: startMainAppLocationTracking(router) };
+    using go = vi.spyOn(router.history, "go");
+    await settled(router, router.navigate({ href: "/settings/general" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close modal" }));
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe(THREAD_PATH));
+    expect(go).not.toHaveBeenCalled();
+  });
+
   it("removes Settings from history through the close command path", async () => {
     const otherThreadPath = "/environment-one/thread-two";
     await using screen = await render(<ReturnControls />, { router: THREAD_PATH });
