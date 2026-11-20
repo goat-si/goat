@@ -4428,7 +4428,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   );
 
   it.effect.each([
-    { cooldown: " (reset after 1h2m3s)", seconds: 3723 },
+    { cooldown: " (reset after 1h2m3s)", seconds: 3723, untyped: true },
     { cooldown: " (reset after 4m 6s) (last error: rate limited)", seconds: 246 },
     { cooldown: " (last error: upstream (reset after 1h))", seconds: 0 },
     { cooldown: " (reset after 1m) (last error: upstream (reset after 1h))", seconds: 60 },
@@ -4447,9 +4447,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachments: [],
         }),
       );
-      // An API-key session reports a gateway 429 only as text, with no rate_limit_info.
       const result = `API Error: Request rejected (429) · All credentials for model claude-opus-5-5 are cooling down${input.cooldown}`;
       yield* Queue.offerAll(harness.sdkMessages, [
+        ...("untyped" in input
+          ? [
+              claudeSdkFrame({
+                type: "rate_limit_event",
+                rate_limit_info: { status: "rejected", isUsingOverage: false },
+                uuid: "00000000-0000-4000-8000-000000000650",
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            ]
+          : []),
         makeAssistantErrorFrame({
           uuid: "00000000-0000-4000-8000-000000000654",
           error: "rate_limit",
@@ -4477,7 +4486,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       );
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("keeps the measured context when a usage limit ends the turn", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -4542,7 +4550,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(reportedContext, [2]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect.each(["ttl", "terminal"] as const)(
     "releases the legacy Claude turn input body (%s)",
     (mode) =>

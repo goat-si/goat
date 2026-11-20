@@ -46,6 +46,7 @@ import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
 import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
 import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
 import {
+  claudeResetTimes,
   providerFailureFromResult,
   terminalStatusFromResult,
   isClaudeBlockedAssistantRateLimit,
@@ -8004,14 +8005,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               usageLimited && message.subtype === "success" && message.local_command === "compact"
                 ? context.compactionFailure
                 : null;
-            const resetTimes = Array.from(context.rateLimitResetTimes.values());
-            const assistantLimit = context.latestAssistantRateLimit;
-            if (
-              assistantLimit?.type != null &&
-              !context.rateLimitResetTimes.has(assistantLimit.type)
-            ) {
-              resetTimes.push(assistantLimit.resetAt);
-            }
             const resultFailure = interrupted
               ? null
               : limitedCompaction !== null
@@ -8026,6 +8019,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     failureHint,
                     usageLimited,
                   );
+            const resetTimes = claudeResetTimes(context.rateLimitResetTimes, resultFailure);
+            const assistantLimit = context.latestAssistantRateLimit;
+            if (
+              assistantLimit?.type != null &&
+              !context.rateLimitResetTimes.has(assistantLimit.type)
+            ) {
+              resetTimes.push(assistantLimit.resetAt);
+            }
             if (resultFailure?.class === "usage_limit" && resultFailure.resetAt != null)
               resetTimes.push(resultFailure.resetAt);
             const resetAt = resetTimes.includes(null)
