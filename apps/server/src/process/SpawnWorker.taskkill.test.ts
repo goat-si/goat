@@ -13,7 +13,10 @@ it.live("settles a dead worker's child when Windows taskkill hangs", () =>
     });
     const realKill = process.kill.bind(process);
     try {
-      await NodeEvents.once(child, "spawn");
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
       const childPid = child.pid;
       expect(childPid).toBeDefined();
       const taskkill = Object.assign(new NodeEvents.EventEmitter(), { pid: 12346, kill: vi.fn() });

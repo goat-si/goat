@@ -601,8 +601,10 @@ export class SpawnWorkerPool {
       stdio: "ignore",
       windowsHide: true,
     });
+    // @effect-diagnostics-next-line globalTimers:off -- This Node worker callback owns and clears its watchdog.
     const timer = setTimeout(() => {
       if (settled) return;
+      // @effect-diagnostics-next-line globalConsole:off -- The Node callback reports the single fallback directly.
       console.warn("Windows taskkill timed out; killing the direct child.");
       const stopTaskkill = () => {
         if (taskkill.pid === undefined) return;
