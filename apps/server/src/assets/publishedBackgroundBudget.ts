@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { PUBLISHED_BACKGROUND_MAX_BYTES } from "@goat/contracts/themeRpc";
 export { PUBLISHED_BACKGROUND_MAX_BYTES };
-export const PUBLISHED_BACKGROUND_IN_FLIGHT_BYTES = 32 * 1024 * 1024;
+const PUBLISHED_BACKGROUND_IN_FLIGHT_BYTES = 32 * 1024 * 1024;
 const MAX_IN_FLIGHT_BACKGROUNDS = 64;
 
 export function makePublishedBackgroundBudget() {

@@ -1,6 +1,6 @@
 import type { ThemeDefinition } from "@goat/shared/themePalettes";
 
-export const ENVIRONMENT_THEMES_STORAGE_KEY = "goat:environment-themes:v1";
+const ENVIRONMENT_THEMES_STORAGE_KEY = "goat:environment-themes:v1";
 
 export function readEnvironmentThemeCache(
   parseThemes: (themes: ReadonlyArray<unknown>) => ReadonlyArray<ThemeDefinition>,
