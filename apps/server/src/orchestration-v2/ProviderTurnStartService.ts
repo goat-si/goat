@@ -1442,16 +1442,18 @@ export const layer: Layer.Layer<
                 eventSink,
               }),
             ),
-            Effect.mapError((cause) =>
-              startingRun?.activeAttemptId == null || startingRun.rootNodeId == null
-                ? cause
-                : new ProviderTurnStartError({
-                    runId: input.runId,
-                    cause: isProviderTurnStartError(cause) ? cause.cause : cause,
-                    attemptId: startingRun.activeAttemptId,
-                    rootNodeId: startingRun.rootNodeId,
-                  }),
-            ),
+            Effect.mapError((cause) => {
+              if (startingRun?.activeAttemptId == null || startingRun.rootNodeId == null)
+                return cause;
+              const error = new ProviderTurnStartError({
+                runId: input.runId,
+                cause: isProviderTurnStartError(cause) ? cause.cause : cause,
+                attemptId: startingRun.activeAttemptId,
+                rootNodeId: startingRun.rootNodeId,
+              });
+              if (isProviderTurnStartError(cause)) error.message = cause.message;
+              return error;
+            }),
           );
         },
         (effect, input) =>
