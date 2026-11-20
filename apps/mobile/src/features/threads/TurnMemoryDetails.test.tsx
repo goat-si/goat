@@ -10,7 +10,7 @@ import {
 } from "../../testing/memoryNativeHarness";
 import { TurnMemoryDetails } from "./TurnMemoryDetails";
 
-it("reads only the expanded turn and removes its entries when permission changes", async () => {
+it("reads only the expanded turn and hides forgotten entries even if a reread returns the old receipt", async () => {
   const h = createNativeMemoryHarness({ protocolVersion: 1, turnMemory: true });
   const threadId = ThreadId.make("turn-test-thread");
   const runId = RunId.make("turn-test-run");
@@ -48,6 +48,15 @@ it("reads only the expanded turn and removes its entries when permission changes
     expect(h.calls.filter((c) => c.method === WS_METHODS.memoryTurnInspect)).toMatchObject([
       { environmentId: nativeEnv, input: { memorySpaceId: nativeSpace, threadId, runId } },
     ]);
+    await act(async () => {
+      await h.signal({
+        kind: "forget",
+        memorySpaceId: nativeSpace,
+        memoryId: nativeId,
+        projectionWatermark: 2,
+      });
+    });
+    expect(view.container.textContent).not.toContain("release checklist");
     await act(async () => {
       h.grant([]);
     });
