@@ -347,7 +347,12 @@ export function syncBrowserChromeTheme() {
 
 function applyTheme(
   theme: Theme,
-  { suppressTransitions = false, preservePreview = true, validated = false } = {},
+  {
+    suppressTransitions = false,
+    preservePreview = true,
+    validated = false,
+    preserveRejection = false,
+  } = {},
 ) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   if (preservePreview && document.documentElement.dataset?.themeId === THEME_PREVIEW_ID) {
@@ -383,8 +388,13 @@ function applyTheme(
       .then(({ sanitizeThemeCss }) => {
         sanitizeThemeCss(css);
         if (revision !== themeValidationRevision) return;
-        setThemeCssRejected(false);
-        applyTheme(theme, { suppressTransitions, preservePreview, validated: true });
+        if (!preserveRejection) setThemeCssRejected(false);
+        applyTheme(theme, {
+          suppressTransitions,
+          preservePreview,
+          validated: true,
+          preserveRejection,
+        });
       })
       .catch((error: unknown) => {
         if (revision !== themeValidationRevision) return;
@@ -399,7 +409,8 @@ function applyTheme(
             const storage = migratingStorage(window.localStorage);
             if (previous.themeHalves === null) storage.removeItem(THEME_HALVES_STORAGE_KEY);
             else storage.setItem(THEME_HALVES_STORAGE_KEY, JSON.stringify(previous.themeHalves));
-            applyTheme(previous.theme, { suppressTransitions: true });
+            lastValidTheme = null;
+            applyTheme(previous.theme, { suppressTransitions: true, preserveRejection: true });
             emitChange();
           } catch (cause) {
             console.error("Could not restore the previous theme", safeErrorLogAttributes(cause));
