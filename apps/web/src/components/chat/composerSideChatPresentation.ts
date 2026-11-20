@@ -3,7 +3,11 @@ import { parseCodexFeedbackCommand } from "@goat/client-runtime/state/threads";
 import { isStandaloneForkCommand } from "../../composer-logic";
 import { sideChatCommandOverAnswer } from "@goat/client-runtime/state/unsent-question-answers";
 import type { ChatComposerProps } from "./ChatComposer";
-import type { ComposerThreadDraftState } from "../../composerDraftStore";
+import {
+  composerDraftHasUserContent,
+  type ComposerThreadDraftState,
+} from "../../composerDraftStore";
+import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import { filterTerminalContextsWithText } from "../../lib/terminalContext";
 
 export function composerSideChatIsLocal(
@@ -20,13 +24,12 @@ export function composerSideChatIsLocal(
       draft.previewAnnotations.length +
       draft.reviewComments.length +
       attachments.threadContexts.length >
-      0 ||
-    draft.replyTo !== null ||
-    draft.previewTabs.length > 0;
+    0;
   const props = options.props;
   return (
     composerTextCommandIsLocal(prompt, {
       hasAttachmentsOrContext,
+      usageHasContext: composerDraftHasUserContent({ ...draft, prompt: "" }),
       usageLimits: props.onUsageLimitsCommand !== undefined,
       codexFeedback: options.selectedProvider === "codex" && props.multipleModelSelections === null,
       fork:
@@ -35,7 +38,7 @@ export function composerSideChatIsLocal(
         props.activePendingProgress === null,
     }) ||
     sideChatCommandOverAnswer({
-      answer: prompt,
+      answer: stripInlineContextReferences(prompt).trim(),
       sideChatAvailable: available,
       hasAttachmentsOrContext,
     }) !== null
@@ -46,15 +49,19 @@ export function composerTextCommandIsLocal(
   text: string,
   options: {
     hasAttachmentsOrContext: boolean;
+    usageHasContext?: boolean;
     usageLimits: boolean;
     codexFeedback: boolean;
     fork: boolean;
   },
 ): boolean {
   if (options.fork && isStandaloneForkCommand(text)) return true;
-  if (options.hasAttachmentsOrContext) return false;
   return (
-    (options.usageLimits && isUsageLimitsCommand(text)) ||
-    (options.codexFeedback && parseCodexFeedbackCommand(text) !== null)
+    (options.usageLimits &&
+      !(options.usageHasContext ?? options.hasAttachmentsOrContext) &&
+      isUsageLimitsCommand(text)) ||
+    (!options.hasAttachmentsOrContext &&
+      options.codexFeedback &&
+      parseCodexFeedbackCommand(stripInlineContextReferences(text).trim()) !== null)
   );
 }

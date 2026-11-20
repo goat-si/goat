@@ -614,3 +614,52 @@ it.each([false, true])(
     await act(async () => root.unmount());
   },
 );
+
+it("opens a side chat while the parent approval stays pending", async () => {
+  test.shells = [];
+  test.allowed = true;
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.open.mockReset();
+  test.draft = { text: "/side question", attachments: [], context: undefined };
+  let send: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const parent = {
+    id: "approval-parent",
+    environmentId: "env",
+    projectId: "project",
+    title: "Task",
+    latestRun: {},
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+    hasPendingApprovals: true,
+  } as never;
+  await act(async () => {
+    await send?.({
+      thread: parent,
+      threadKey: "env:approval-parent",
+      text: "/side question",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+  });
+  expect(test.fork).toHaveBeenCalledOnce();
+  expect(test.start).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ message: expect.objectContaining({ text: "question" }) }),
+    }),
+  );
+  expect(test.open).toHaveBeenCalledWith({ environmentId: "env", threadId: "new-id" });
+  expect((parent as { hasPendingApprovals: boolean }).hasPendingApprovals).toBe(true);
+  await act(async () => root.unmount());
+});
