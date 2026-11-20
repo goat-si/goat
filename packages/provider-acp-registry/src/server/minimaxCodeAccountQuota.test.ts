@@ -344,4 +344,31 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
       expect(yield* read(env, ["acp"])).toBeNull();
     }),
   );
+
+  it.effect("clears the reading when the credential file is missing", () =>
+    Effect.gen(function* () {
+      const { credentials } = yield* Effect.promise(() => fixture());
+      yield* Effect.promise(() => NodeFSP.rm(credentials));
+      const request = vi.fn<typeof fetch>();
+      expect(yield* query(request)).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("clears the reading when the quota response is larger than 64 KiB", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => fixture());
+      const request = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(async () => successIdentity())
+        .mockImplementationOnce(
+          async () =>
+            new Response(JSON.stringify({ padding: "x".repeat(70 * 1024) }), {
+              headers: { "content-type": "application/json" },
+            }),
+        );
+      expect(yield* query(request)).toBeNull();
+      expect(request).toHaveBeenCalledTimes(2);
+    }),
+  );
 });
