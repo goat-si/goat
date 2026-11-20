@@ -304,7 +304,7 @@ it("keeps an open diff search while expanding and collapsing files", async () =>
     { container },
   );
   await expect.element(screen.getByRole("button", { name: "Expand all files" })).toBeVisible();
-  await vi.waitFor(() => expect(container.querySelector(".diff-render-surface")).not.toBeNull());
+  await expect.element(screen.getByRole("button", { name: "Expand first.txt" })).toBeVisible();
   const viewer = container.querySelector<HTMLElement>(".diff-render-surface");
   viewer!.focus();
   viewer!.dispatchEvent(
