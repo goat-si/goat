@@ -7,6 +7,20 @@ import {
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 
 type Attachment = ComposerImageAttachment | ComposerFileAttachment;
+const released = new WeakSet<Attachment>();
+const releasedFileIds = new WeakMap<File, Set<string>>();
+
+function markReleased(item: Attachment): boolean {
+  if (released.has(item)) return false;
+  if (item.file !== null) {
+    const ids = releasedFileIds.get(item.file) ?? new Set<string>();
+    if (ids.has(item.id)) return false;
+    ids.add(item.id);
+    releasedFileIds.set(item.file, ids);
+  }
+  released.add(item);
+  return true;
+}
 
 export function releaseUnownedQueuedEditAttachments(attachments: ReadonlyArray<Attachment>): void {
   const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadKey);
@@ -16,7 +30,9 @@ export function releaseUnownedQueuedEditAttachments(attachments: ReadonlyArray<A
   const ownedUrls = new Set(
     drafts.flatMap((draft) => draft.images.map((image) => image.previewUrl)),
   );
-  const unowned = attachments.filter((item) => !ownedIds.has(item.id));
+  const unowned = attachments.filter((item) => {
+    return !ownedIds.has(item.id) && markReleased(item);
+  });
   releaseDraftAttachments(unowned);
   for (const item of unowned) {
     if (
