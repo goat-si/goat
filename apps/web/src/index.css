@@ -757,6 +757,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 /* A person's message: a tailless neutral pill. One line is fully round (40px tall, 20px radius). */
+html[data-published-background] [data-workspace-area="conversation"] {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--background) 76%, transparent),
+      color-mix(in srgb, var(--background) 76%, transparent)
+    ),
+    var(--theme-background-image);
+  background-position: center;
+  background-size: cover;
+}
+
 @utility goat-person-pill {
   padding: 9px 16px;
   border-radius: 20px;

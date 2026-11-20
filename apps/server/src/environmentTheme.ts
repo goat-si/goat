@@ -30,6 +30,10 @@ import * as ServerConfig from "./config.ts";
 import { supervise } from "./backgroundSupervision.ts";
 import { fileWatchResync } from "./fileWatchResync.ts";
 import { readThemeDirectory } from "./themeDirectory.ts";
+import {
+  MAX_THEME_BACKGROUND_TOTAL_BYTES,
+  themeBackgroundRevision,
+} from "./assets/themeBackgroundFile.ts";
 
 const decodeEnvironmentThemeFileJsonExit = Schema.decodeUnknownExit(
   Schema.fromJsonString(EnvironmentThemeFile),
@@ -108,6 +112,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
   const themes: Array<EnvironmentTheme> = [];
   let examined = 0;
   let totalBytes = 0;
+  let backgroundBytes = 0;
   for (const entry of entries.toSorted()) {
     if (!entry.endsWith(THEME_FILE_SUFFIX)) continue;
     const id = entry.slice(0, -THEME_FILE_SUFFIX.length);
@@ -167,7 +172,21 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
       yield* Effect.logWarning("ignoring environment theme with invalid CSS", { path: filePath });
       continue;
     }
-    themes.push(checked.success);
+    const backgroundResult = yield* Effect.uninterruptible(
+      Effect.tryPromise(() =>
+        themeBackgroundRevision(
+          themesDir,
+          id,
+          raw,
+          MAX_THEME_BACKGROUND_TOTAL_BYTES - backgroundBytes,
+        ),
+      ).pipe(Effect.result),
+    );
+    if (backgroundResult._tag === "Failure")
+      yield* Effect.logWarning("cannot read theme background", { path: filePath });
+    const background = backgroundResult._tag === "Success" ? backgroundResult.success : null;
+    if (background) backgroundBytes += background.size;
+    themes.push({ ...checked.success, ...(background ? { background: background.revision } : {}) });
   }
   return themes;
 });

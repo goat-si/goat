@@ -440,6 +440,10 @@ function getSnapshot(): ThemeSnapshot {
   return lastSnapshot;
 }
 
+export function getThemeSnapshot(): ThemeSnapshot {
+  return getSnapshot();
+}
+
 function getServerSnapshot() {
   return DEFAULT_THEME_SNAPSHOT;
 }

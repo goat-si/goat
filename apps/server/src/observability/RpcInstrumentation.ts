@@ -308,6 +308,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.agentSessionsImport]: "workspace",
   [WS_METHODS.assetsCreateUrl]: "workspace",
   [WS_METHODS.themeValidateCss]: "server",
+  [WS_METHODS.themeBackgroundUrl]: "server",
   [WS_METHODS.assetsPersistChatAttachments]: "orchestration",
   [WS_METHODS.attachmentsCreateUploadUrl]: "workspace",
   [WS_METHODS.attachmentsDelete]: "workspace",

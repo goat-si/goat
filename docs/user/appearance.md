@@ -108,6 +108,11 @@ supplies the theme ID: `nightfall.json`
 can be selected with `goat theme set nightfall`. Keep the filename stable when updating its colors.
 Do not use `system`, `light`, `dark`, or a built-in theme's ID.
 
+To add a published background, place a PNG, JPEG, or WebP image of at most 16 MiB beside the
+theme file with the same name, such as `nightfall.png`. Web and desktop show it when the published
+theme is selected. A saved theme with the same ID keeps its own appearance and does not use the
+published background.
+
 For an integration that generates a palette, this shorter format also works:
 
 ```json

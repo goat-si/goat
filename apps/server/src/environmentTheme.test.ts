@@ -71,6 +71,22 @@ const currentThemes = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("environment theme", (it) => {
+  it.effect("exposes a revision only for a valid published background image", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-theme-background-" });
+      yield* fs.writeFileString(path.join(dir, "nightfall.json"), encodeThemeFile(NIGHTFALL_THEME));
+      const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+      yield* fs.writeFile(path.join(dir, "nightfall.png"), png);
+      const themes = yield* EnvironmentTheme.readPublishedThemes(dir);
+      assert.equal(themes.length, 1);
+      assert.match(themes[0]?.background ?? "", /^png:[a-f0-9]{64}$/);
+      yield* fs.writeFile(path.join(dir, "nightfall.png"), new TextEncoder().encode("not a PNG"));
+      const invalid = yield* EnvironmentTheme.readPublishedThemes(dir);
+      assert.isUndefined(invalid[0]?.background);
+    }).pipe(Effect.scoped),
+  );
   it.effect.each([
     '@import "https://evil.example/x.css";',
     '[data-slot="sidebar"]{background:url(https://evil.example/x)}',

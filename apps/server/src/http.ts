@@ -44,6 +44,10 @@ import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveVerifiedAsset } from "./assets/AssetAccess.ts";
+import {
+  resolveThemeBackgroundAsset,
+  THEME_BACKGROUND_TOKEN_PREFIX,
+} from "./assets/themeBackgroundAsset.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -581,6 +585,36 @@ export const layerAssetRoute = HttpRouter.add(
     const separatorIndex = suffix.indexOf("/");
     if (separatorIndex <= 0) {
       return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const assetToken = suffix.slice(0, separatorIndex);
+    if (assetToken.startsWith(THEME_BACKGROUND_TOKEN_PREFIX)) {
+      const background = yield* resolveThemeBackgroundAsset(
+        assetToken,
+        suffix.slice(separatorIndex + 1),
+      );
+      if (background?.kind === "busy")
+        return HttpServerResponse.empty({
+          status: 503,
+          headers: { "retry-after": "1", "cache-control": "no-store" },
+        });
+      if (!background)
+        return HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } });
+      const headers = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
+      if (request.method === "HEAD")
+        return HttpServerResponse.empty({
+          status: 200,
+          headers: {
+            ...headers,
+            "content-type": background.mimeType,
+            "content-length": String(background.bytes.byteLength),
+          },
+        });
+      return HttpServerResponse.stream(Stream.make(background.bytes), {
+        contentType: background.mimeType,
+        contentLength: background.bytes.byteLength,
+        headers,
+      });
     }
 
     const verified = yield* resolveVerifiedAsset(
