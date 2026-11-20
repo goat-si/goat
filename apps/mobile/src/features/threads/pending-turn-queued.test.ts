@@ -1,7 +1,8 @@
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import { CommandId, EnvironmentId, MessageId, RunId, ThreadId } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 import { appendPendingThreadMessages } from "./pending-thread-feed";
 import { createPendingTurnAppender } from "./pending-turn-feed";
+import { deriveThreadFeedPresentation } from "../../lib/threadActivity";
 
 it("does not show a sending status for an offline or queued message", () => {
   const queued = appendPendingThreadMessages(
@@ -57,4 +58,14 @@ it("waits while an earlier message dispatches, then holds one activity identity 
     providerStartingLabel: "Starting…",
   });
   expect(acknowledged.at(-1)?.id).toBe(sending.at(-1)?.id);
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const running = deriveThreadFeedPresentation(
+    [],
+    { runId: RunId.make("run"), status: "running", startedAt, completedAt: null },
+    new Set(),
+    new Set(),
+    startedAt,
+  );
+  expect(running.find((row) => row.type === "thinking")?.id).toBe(acknowledged.at(-1)?.id);
+  expect(running.find((row) => row.type === "run-fold")).toMatchObject({ workingSince: startedAt });
 });
