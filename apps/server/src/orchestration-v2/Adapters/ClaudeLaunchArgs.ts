@@ -2,36 +2,20 @@ import type { Settings as ClaudeSdkSettings } from "@anthropic-ai/claude-agent-s
 import type { ClaudeSettings } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { parseCliArgs, tokenizeCliArgs } from "@goat/shared/cliArgs";
+import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-export const claudeLaunchArgParseOptions = { valueFlags: ["append-system-prompt"] };
-
-export function claudeLaunchArgPlugins(launchArgs: string | undefined) {
-  const tokens = tokenizeCliArgs(launchArgs ?? "");
-  const directories: string[] = [];
-  for (let index = 0; index < tokens.length && tokens[index] !== "--"; index++) {
-    const token = tokens[index];
-    if (token === undefined) break;
-    if (!token.startsWith("--") || token.includes("=")) {
-      if (token.startsWith("--plugin-dir=")) directories.push(token.slice("--plugin-dir=".length));
-      continue;
-    }
-    const next = tokens[index + 1];
-    if (
-      next === undefined ||
-      (next.startsWith("--") && !claudeLaunchArgParseOptions.valueFlags.includes(token.slice(2)))
-    )
-      continue;
-    if (token === "--plugin-dir") directories.push(next);
-    index++;
-  }
-  return directories.map((path) => ({ type: "local" as const, path }));
-}
+export { claudeLaunchArgParseOptions } from "../../provider/Drivers/ClaudePluginLaunchArgs.ts";
+import {
+  claudeLaunchArgParseOptions,
+  claudeLaunchArgPluginDirectories,
+} from "../../provider/Drivers/ClaudePluginLaunchArgs.ts";
+export const claudeLaunchArgPlugins = (args: string | undefined) =>
+  claudeLaunchArgPluginDirectories(args).map((path) => ({ type: "local" as const, path }));
 
 export class ClaudeAppendSystemPromptFileError extends Schema.TaggedError<ClaudeAppendSystemPromptFileError>()(
   "ClaudeAppendSystemPromptFileError",
