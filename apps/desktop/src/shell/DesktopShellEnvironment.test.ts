@@ -522,6 +522,50 @@ describe("DesktopShellEnvironment", () => {
     }),
   );
 
+  it.effect.each(["darwin", "win32"] as const)(
+    "loads a release mirror from the login shell on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        yield* runShellEnvironment({
+          env,
+          platform,
+          handler: () =>
+            envOutput({
+              PATH: "/usr/bin",
+              GOAT_RELEASE_BASE_URL: "https://mirror.example/releases",
+            }),
+        });
+        assert.equal(env.GOAT_RELEASE_BASE_URL, "https://mirror.example/releases");
+      }),
+  );
+
+  it.effect("rejects shell mirror credentials before publishing the shell patch", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () =>
+          envOutput({
+            PATH: "/usr/bin",
+            GOAT_RELEASE_BASE_URL: "https://name:secret@mirror.example/releases",
+          }),
+        use: (service) =>
+          Effect.gen(function* () {
+            yield* service.installIntoProcess;
+            yield* service.awaitDiscovery;
+            const snapshot = yield* Stream.runHead(service.updates);
+            assert.isTrue(Option.isSome(snapshot));
+            if (Option.isSome(snapshot))
+              assert.notInclude(JSON.stringify(snapshot.value), "secret");
+            return true;
+          }),
+      });
+      assert.isUndefined(env.GOAT_RELEASE_BASE_URL);
+    }),
+  );
+
   it.effect("does not mix login-shell locale categories into an inherited locale", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = {
