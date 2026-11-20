@@ -163,9 +163,9 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
       const request = vi.fn<typeof fetch>();
       expect(
         yield* query(request, { MINIMAX_DATA_DIR: NodePath.join(sandbox, "absent-profile") }),
-      ).toBeUndefined();
-      expect(yield* query(request, { MINIMAX_DATA_DIR: undefined, HOME: sandbox })).toBeUndefined();
-      expect(yield* query(request, { MAVIS_REGION: undefined })).toBeUndefined();
+      ).toBeNull();
+      expect(yield* query(request, { MINIMAX_DATA_DIR: undefined, HOME: sandbox })).toBeNull();
+      expect(yield* query(request, { MAVIS_REGION: undefined })).toBeNull();
       expect(request).not.toHaveBeenCalled();
     }),
   );
@@ -174,9 +174,9 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
     Effect.gen(function* () {
       yield* Effect.promise(() => fixture());
       const request = vi.fn<typeof fetch>();
-      expect(yield* query(request, {}, ["--profile", "other", "acp"])).toBeUndefined();
-      expect(yield* query(request, { MAVIS_BUILD_ENV: "staging" })).toBeUndefined();
-      expect(yield* query(request, { MAVIS_REGION: "cn" })).toBeUndefined();
+      expect(yield* query(request, {}, ["--profile", "other", "acp"])).toBeNull();
+      expect(yield* query(request, { MAVIS_BUILD_ENV: "staging" })).toBeNull();
+      expect(yield* query(request, { MAVIS_REGION: "cn" })).toBeNull();
       expect(request).not.toHaveBeenCalled();
     }),
   );
@@ -190,7 +190,7 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
     Effect.gen(function* () {
       yield* Effect.promise(() => fixture("en", overrides));
       const request = vi.fn<typeof fetch>();
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       expect(request).not.toHaveBeenCalled();
     }),
   );
@@ -200,15 +200,15 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
       const { credentials } = yield* Effect.promise(() => fixture());
       const request = vi.fn<typeof fetch>();
       yield* Effect.promise(() => NodeFSP.chmod(credentials, 0o644));
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       yield* Effect.promise(() => NodeFSP.chmod(credentials, 0o600));
       yield* Effect.promise(() => NodeFSP.writeFile(credentials, "a".repeat(65_537)));
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       yield* Effect.promise(() => NodeFSP.rm(credentials));
       const decoy = NodePath.join(sandbox, "decoy");
       yield* Effect.promise(() => writeFileJson(decoy, {}));
       yield* Effect.promise(() => NodeFSP.symlink(decoy, credentials));
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       expect(request).not.toHaveBeenCalled();
     }),
   );
@@ -244,7 +244,7 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
     Effect.gen(function* () {
       yield* Effect.promise(() => fixture());
       const request = vi.fn<typeof fetch>().mockImplementation(async () => response());
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       expect(request).toHaveBeenCalledTimes(1);
     }),
   );
@@ -259,7 +259,7 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
           await fixture("en", { accessToken: "new-login" });
           return successQuota();
         });
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       expect(request).toHaveBeenCalledTimes(2);
     }),
   );
@@ -296,7 +296,7 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
         await fixture("en", { accessToken: "new-login" });
         return successIdentity();
       });
-      expect(yield* query(request)).toBeUndefined();
+      expect(yield* query(request)).toBeNull();
       expect(request).toHaveBeenCalledTimes(1);
     }),
   );
@@ -317,8 +317,31 @@ describe.skipIf(!NodeFS.constants.O_NOFOLLOW)("MiniMax Code login-backed quota",
       );
       yield* Effect.promise(() => started.promise);
       yield* TestClock.adjust("4 seconds");
-      expect(yield* Fiber.join(pending)).toBeUndefined();
+      expect(yield* Fiber.join(pending)).toBeNull();
       expect(signal?.aborted).toBe(true);
+    }),
+  );
+
+  it.effect("keeps the last reading through a failed read and clears it after a new login", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => fixture());
+      const request = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(async () => successIdentity())
+        .mockImplementationOnce(async () => successQuota())
+        .mockImplementationOnce(async () => new Response(null, { status: 503 }))
+        .mockImplementationOnce(async () => new Response(null, { status: 503 }));
+      const read = yield* makeMiniMaxCodeQuotaReader(request);
+      const env = { MINIMAX_DATA_DIR: root, MAVIS_REGION: "en" };
+      expect((yield* read(env, ["acp"]))?.windows).toHaveLength(2);
+      expect(yield* read(env, ["acp"])).toBeUndefined();
+      yield* Effect.promise(() => fixture("en", { generation: 13 }));
+      yield* Effect.promise(async () => {
+        const state = NodePath.join(root, "auth", "prod", "en", CLIENT, "auth-state.json");
+        const current = JSON.parse(await NodeFSP.readFile(state, "utf8"));
+        await writeFileJson(state, { ...current, generation: 13 });
+      });
+      expect(yield* read(env, ["acp"])).toBeNull();
     }),
   );
 });

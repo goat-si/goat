@@ -212,25 +212,49 @@ function quotaWindows(payload: Json | undefined): ServerProviderUsageWindow[] {
   return windows;
 }
 
+/** Settles with undefined once the signal aborts, so a stalled read cannot hold the probe. */
+function untilAborted<A>(signal: AbortSignal, work: Promise<A>): Promise<A | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const abort = () => resolve(undefined);
+    signal.addEventListener("abort", abort, { once: true });
+    void work
+      .then(resolve, () => resolve(undefined))
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+/**
+ * A reading, null when the signed-in account is gone or cannot be confirmed, or undefined when
+ * a read failed for the account the last reading came from, which keeps that reading.
+ */
 export const makeMiniMaxCodeQuotaReader = Effect.fnUntraced(function* (
   request: typeof fetch = fetch,
 ) {
   const uid = yield* HostProcess.UserId;
+  let lastAccount: string | undefined;
   return Effect.fnUntraced(function* (env: NodeJS.ProcessEnv, args: readonly string[]) {
     const root = profileRoot(env, args);
-    if (root === undefined || uid === undefined || !NodeFS.constants.O_NOFOLLOW) return;
+    let account: string | undefined;
+    const unread = (): null | undefined => {
+      if (account !== undefined && account === lastAccount) return undefined;
+      lastAccount = undefined;
+      return null;
+    };
+    if (root === undefined || uid === undefined || !NodeFS.constants.O_NOFOLLOW) return unread();
     const now = yield* Clock.currentTimeMillis;
     return yield* Effect.tryPromise({
-      try: async (signal): Promise<ServerProviderUsageLimits | undefined> => {
+      try: async (signal): Promise<ServerProviderUsageLimits | null | undefined> => {
         // realpath also handles operating system aliases such as /var on macOS.
         // Do not accept a symlinked data directory, which would change the account key.
-        if ((await NodeFSP.realpath(root)) !== root) return;
-        const read = (path: string) =>
-          signal.aborted ? Promise.resolve(undefined) : readPrivateJson(path, uid);
+        if ((await untilAborted(signal, NodeFSP.realpath(root))) !== root) return unread();
+        const read = (path: string) => untilAborted(signal, readPrivateJson(path, uid));
         const selected = await chooseRegion(read, root, env.MAVIS_REGION);
-        if (!selected) return;
+        if (!selected) return unread();
         const login = await readLogin(read, root, selected, now);
-        if (!login || signal.aborted) return;
+        if (!login) return unread();
+        account = root + "\0" + selected + "\0" + login.generation;
+        if (signal.aborted) return unread();
         const stillSignedIn = async () => {
           if ((await chooseRegion(read, root, env.MAVIS_REGION)) !== selected) return false;
           const current = await readLogin(read, root, selected, now);
@@ -256,7 +280,7 @@ export const makeMiniMaxCodeQuotaReader = Effect.fnUntraced(function* (
           },
         );
         const group = personalGroup(await boundedJson(identity, signal));
-        if (!group || !(await stillSignedIn())) return;
+        if (!group || !(await stillSignedIn())) return unread();
         const response = await request(
           new URL("/v1/api/openplatform/coding_plan/remains", origin.quota),
           {
@@ -267,15 +291,16 @@ export const makeMiniMaxCodeQuotaReader = Effect.fnUntraced(function* (
           },
         );
         const windows = quotaWindows(await boundedJson(response, signal));
-        if (!windows.length || signal.aborted) return;
+        if (!windows.length || signal.aborted) return unread();
         // Discard responses that raced an account/region change or token rotation.
-        if (!(await stillSignedIn())) return;
+        if (!(await stillSignedIn())) return unread();
+        lastAccount = account;
         return { checkedAt: DateTime.formatIso(DateTime.makeUnsafe(now)), windows };
       },
       catch: () => undefined,
     }).pipe(
-      Effect.orElseSucceed(() => undefined),
-      Effect.timeoutOrElse({ duration: "4 seconds", orElse: () => Effect.undefined }),
+      Effect.orElseSucceed(unread),
+      Effect.timeoutOrElse({ duration: "4 seconds", orElse: () => Effect.sync(unread) }),
     );
   });
 });
