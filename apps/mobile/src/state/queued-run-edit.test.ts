@@ -425,3 +425,29 @@ describe("queued edit context changes", () => {
     },
   );
 });
+
+it("does not add a reference for an unchanged reply when only the text changed", async () => {
+  const { queuedReplySnapshot, recoverQueuedReplyText } = await import("./recoverQueuedReply");
+  const reply = {
+    version: 1 as const,
+    kind: "response" as const,
+    contextId: ComposerContextId.make("response_unchanged"),
+    label: "Done",
+    citation: {
+      version: 1 as const,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("answer"),
+      text: "Done",
+      start: 0,
+      end: 4,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item"),
+  };
+  const context = { version: 1 as const, records: [reply] };
+  expect(recoverQueuedReplyText("Edited message", context, queuedReplySnapshot(context))).toBe(
+    "Edited message",
+  );
+});
