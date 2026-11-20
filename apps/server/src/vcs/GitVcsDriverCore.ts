@@ -1,3 +1,4 @@
+import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import {
@@ -1114,6 +1115,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       statusRemoteRefreshCache,
       new StatusRemoteRefreshCacheKey({ gitCommonDir, remoteName }),
     ).pipe(Effect.ignore);
+    yield* awaitStatusFetch(statusFetches.get(`${gitCommonDir}\0${remoteName}`)?.fiber);
   });
 
   const resolveDefaultBranchName = (

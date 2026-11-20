@@ -1,3 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - native realpath matches the spawned Git cwd.
+import * as NodeFS from "node:fs";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import { DEFAULT_SERVER_SETTINGS, ProjectId } from "@goat/contracts";
+import { autoPullProjects } from "../serverRuntimeStartup.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
@@ -71,6 +78,46 @@ describe("pullCurrentBranch", () => {
       remoteHead: yield* git(updater, ["rev-parse", "HEAD"]),
     };
   });
+
+  it.effect("the startup pull waits for a status fetch that runs past five seconds", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { cwd, remoteHead } = yield* cloneBehindRemote;
+        const targetPath = NodeFS.realpathSync.native(cwd);
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const fetchHeld = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let held = false;
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (
+              !held &&
+              ChildProcess.isStandardCommand(command) &&
+              command.args.includes("fetch") &&
+              String(command.options.cwd) === targetPath
+            ) {
+              held = true;
+              yield* Deferred.succeed(fetchHeld, undefined);
+              yield* Deferred.await(release);
+            }
+            return yield* delegate.spawn(command);
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const startup = yield* autoPullProjects(
+          [{ id: ProjectId.make("behind"), workspaceRoot: cwd, autoPull: true }],
+          { ...DEFAULT_SERVER_SETTINGS, defaultAutoPull: true },
+        ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver), Effect.forkChild);
+        yield* Deferred.await(fetchHeld);
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(startup);
+        assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), remoteHead);
+      }),
+    ).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(layerTest)))),
+  );
 
   it.effect("still fetches other branches on the first pull", () =>
     Effect.gen(function* () {
