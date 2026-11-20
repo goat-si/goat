@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The fixture runs real shell scripts against isolated files.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
