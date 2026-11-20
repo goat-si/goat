@@ -12,7 +12,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 import { makeDeferredRecoveryResends } from "./goat/DeferredRecoveryResends.ts";
 
-it.effect.each(["stopped", "inactive", "active", "human"] as const)(
+it.effect.each(["stopped", "inactive", "missing", "active", "human"] as const)(
   "recovery respects parent ownership: %s",
   (scenario) =>
     Effect.gen(function* () {
@@ -44,14 +44,17 @@ it.effect.each(["stopped", "inactive", "active", "human"] as const)(
             getTurnStartContext: () => Effect.succeed(projection),
             getThreadRecords: () =>
               Effect.succeed({
-                subagents: [
-                  {
-                    id: taskId,
-                    runId: parentRunId,
-                    status: scenario === "inactive" ? "completed" : "running",
-                    result: null,
-                  },
-                ],
+                subagents:
+                  scenario === "missing"
+                    ? []
+                    : [
+                        {
+                          id: taskId,
+                          runId: parentRunId,
+                          status: scenario === "inactive" ? "completed" : "running",
+                          result: null,
+                        },
+                      ],
                 turnItems:
                   scenario === "stopped"
                     ? [{ type: "run_interrupt_request", runId: parentRunId }]
