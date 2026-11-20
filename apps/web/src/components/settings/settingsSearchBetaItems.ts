@@ -5,7 +5,7 @@ import type { SettingsSearchItem } from "./settingsSearch";
 export const BETA_SETTINGS_SEARCH_ITEMS = [
   {
     id: "new-design",
-    title: "New design",
+    title: msg("New design"),
     to: "/settings/beta",
     searchTerms: ["beta redesign look style sidebar composer black quieter classic"],
   },
@@ -17,7 +17,7 @@ export const BETA_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "tool-call-visibility",
-    title: "Tool calls in chat",
+    title: msg("Tool calls in chat"),
     to: "/settings/beta",
     searchTerms: [
       "beta labs hide tool calls commands edits searches work log activity quiet chat zen final answers only",
