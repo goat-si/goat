@@ -770,4 +770,25 @@ describe("attachmentUploadQueue", () => {
       environmentId: firstEnvironment,
     });
   });
+
+  it("does not let a retained send overwrite a newer environment upload", async () => {
+    const image = makeImage("send-retarget");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const firstSend = awaitAttachmentUploads([image.id]);
+    startAttachmentUpload({ environmentId: secondEnvironment, image });
+    await Promise.resolve();
+    TestXmlHttpRequest.requests[0]?.complete();
+    await firstSend;
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "uploading",
+      environmentId: secondEnvironment,
+    });
+    TestXmlHttpRequest.requests[1]?.complete();
+    await awaitAttachmentUploads([image.id]);
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "ready",
+      environmentId: secondEnvironment,
+    });
+  });
 });

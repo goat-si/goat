@@ -71,6 +71,10 @@ function setUploadState(imageId: string, upload: AttachmentUploadState): void {
   }));
 }
 
+function setJobUploadState(job: UploadJob, upload: AttachmentUploadState): void {
+  if (heldUploadsByImageId.get(job.image.id) === job) setUploadState(job.image.id, upload);
+}
+
 function clearUploadState(imageId: string): void {
   useAttachmentUploadStore.setState((state) => {
     if (!(imageId in state.uploadsByImageId)) {
@@ -174,7 +178,7 @@ export function uploadBytes(input: {
 
 async function runUpload(job: UploadJob): Promise<void> {
   if (!readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)) {
-    setUploadState(job.image.id, {
+    setJobUploadState(job, {
       status: "failed",
       environmentId: job.environmentId,
       reason: "This connection cannot upload attachments.",
@@ -193,7 +197,7 @@ async function runUpload(job: UploadJob): Promise<void> {
       return;
     }
     if (verification.status === "verified") {
-      setUploadState(job.image.id, {
+      setJobUploadState(job, {
         status: "ready",
         environmentId: job.environmentId,
         attachmentId: job.persistedAttachmentId,
@@ -214,13 +218,13 @@ async function runUpload(job: UploadJob): Promise<void> {
             job.persistedAttachmentId,
           )
       ) {
-        clearUploadState(job.image.id);
+        if (heldUploadsByImageId.get(job.image.id) === job) clearUploadState(job.image.id);
         return;
       }
     }
     if (verification.status === "failed" || !job.image.file) {
       // Failed-state ids get deleted on retry/release; exclude persisted ids after transient verification failure.
-      setUploadState(job.image.id, {
+      setJobUploadState(job, {
         status: "failed",
         environmentId: job.environmentId,
         reason:
@@ -240,7 +244,7 @@ async function runUpload(job: UploadJob): Promise<void> {
           (supportedMimeType) => supportedMimeType === job.image.mimeType.toLowerCase(),
         );
   if (!mimeType) {
-    setUploadState(job.image.id, {
+    setJobUploadState(job, {
       status: "failed",
       environmentId: job.environmentId,
       reason: "Unsupported image type",
@@ -250,7 +254,7 @@ async function runUpload(job: UploadJob): Promise<void> {
   }
   const file = job.image.file;
   if (!file) {
-    setUploadState(job.image.id, {
+    setJobUploadState(job, {
       status: "failed",
       environmentId: job.environmentId,
       reason: "Original file is no longer available",
@@ -261,7 +265,7 @@ async function runUpload(job: UploadJob): Promise<void> {
 
   let lastStep = -1;
   if (!readEnvironmentScope(job.environmentId, AuthOrchestrationOperateScope)) {
-    setUploadState(job.image.id, {
+    setJobUploadState(job, {
       status: "failed",
       environmentId: job.environmentId,
       reason: "This connection cannot upload attachments.",
@@ -301,7 +305,7 @@ async function runUpload(job: UploadJob): Promise<void> {
             return;
           }
           lastStep = step;
-          setUploadState(job.image.id, {
+          setJobUploadState(job, {
             status: "uploading",
             environmentId: job.environmentId,
             progress,
@@ -331,7 +335,11 @@ async function runUpload(job: UploadJob): Promise<void> {
     return;
   }
   if (result.status === "uploaded") {
-    setUploadState(job.image.id, {
+    if (heldUploadsByImageId.get(job.image.id) !== job) {
+      deletePendingUpload(job.environmentId, result.attachmentId);
+      return;
+    }
+    setJobUploadState(job, {
       status: "ready",
       environmentId: job.environmentId,
       attachmentId: result.attachmentId,
@@ -342,7 +350,7 @@ async function runUpload(job: UploadJob): Promise<void> {
     }
     return;
   }
-  setUploadState(job.image.id, {
+  setJobUploadState(job, {
     status: "failed",
     environmentId: job.environmentId,
     reason:
@@ -388,8 +396,12 @@ const registry = createAttachmentUploadRegistry<UploadJob, WebUploadError>({
       }
       return state.attachmentId;
     } catch (error) {
-      if (!job.cancelled && readAttachmentUpload(job.image.id)?.status === "uploading") {
-        setUploadState(job.image.id, {
+      if (
+        !job.cancelled &&
+        heldUploadsByImageId.get(job.image.id) === job &&
+        readAttachmentUpload(job.image.id)?.status === "uploading"
+      ) {
+        setJobUploadState(job, {
           status: "failed",
           environmentId: job.environmentId,
           reason: "Upload failed",
