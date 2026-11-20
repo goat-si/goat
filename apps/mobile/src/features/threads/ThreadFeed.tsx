@@ -1,3 +1,4 @@
+import { ThreadStatusLine, type ThreadStatusLineModel } from "./thread-status-line";
 import { useMarkdownStyles, type MarkdownStyleSets } from "./threadMarkdownStyles";
 import { createPendingTurnAppender } from "./pending-turn-feed";
 import { RunFoldWorking } from "./RunFoldWorking";
@@ -326,6 +327,7 @@ export interface ThreadFeedProps {
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly pendingHandoff?: HandoffEndpoints | null;
+  readonly statusLines?: ReadonlyArray<ThreadStatusLineModel>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -3157,14 +3159,21 @@ export const ThreadFeed = memo(function ThreadFeed({
               </View>
             }
             ListFooterComponent={
-              props.pendingHandoff ? (
-                <ThreadHandoffDivider
-                  environmentId={props.environmentId}
-                  endpoints={props.pendingHandoff}
-                  iconColor={iconSubtleColor}
-                  surfaceColor={screenColor}
-                  label="Context handoff pending"
-                />
+              props.pendingHandoff || props.statusLines?.length ? (
+                <View>
+                  {props.pendingHandoff ? (
+                    <ThreadHandoffDivider
+                      environmentId={props.environmentId}
+                      endpoints={props.pendingHandoff}
+                      iconColor={iconSubtleColor}
+                      surfaceColor={screenColor}
+                      label="Context handoff pending"
+                    />
+                  ) : null}
+                  {props.statusLines?.map((line) => (
+                    <ThreadStatusLine key={line.key} line={line} iconColor={iconSubtleColor} />
+                  ))}
+                </View>
               ) : null
             }
             contentContainerStyle={{

@@ -37,20 +37,6 @@ export type FloatingWorkingStatus =
       readonly onPress: () => void;
     }
   | {
-      readonly kind: "background";
-      readonly label: string;
-      readonly accessibilityLabel: string;
-      readonly waiting: boolean;
-      readonly onPress: () => void;
-      readonly action: FloatingStatusAction;
-    }
-  | {
-      readonly kind: "lifecycle";
-      readonly state: "snoozed" | "settled" | "woke";
-      readonly label: string;
-      readonly action: FloatingStatusAction;
-    }
-  | {
       readonly kind: "stop";
       readonly label: string;
       readonly unresponsive: boolean;
@@ -151,8 +137,7 @@ export function piExtensionForControl(
   status: FloatingWorkingStatus | null,
   extension: ReturnType<typeof piExtensionStatus>,
 ) {
-  return status !== null &&
-    ["working", "compacting", "background", "goal", "lifecycle"].includes(status.kind)
+  return status !== null && ["working", "compacting", "goal"].includes(status.kind)
     ? extension
     : null;
 }

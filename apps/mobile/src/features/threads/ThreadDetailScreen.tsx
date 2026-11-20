@@ -1,3 +1,4 @@
+import { threadStatusLines } from "./thread-status-lines";
 import { USER_INPUT_TOGGLE_TIMING } from "./threadDetailMotion";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { CloudTaskStatus } from "./CloudTaskStatus";
@@ -499,6 +500,61 @@ function ThreadDetailBody(
     props.selectedThread.pendingBackgroundTasks,
   );
   const extensionStatus = piExtensionStatus(props.extensionStatuses);
+  const backgroundLine =
+    pendingBackgroundWork !== null && contentPresentationKind === "ready"
+      ? {
+          title: pendingBackgroundWork.title,
+          waiting: pendingBackgroundWork.waiting,
+          accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items.map((item) => item.label).join(", ")}`,
+          onOpen: () => {
+            Keyboard.dismiss();
+            navigation.navigate("ThreadBackgroundWork", {
+              environmentId: props.environmentId,
+              threadId: props.selectedThread.id,
+            });
+          },
+          action: {
+            label: statusPending ? "Stopping..." : "Stop",
+            accessibilityLabel: "Stop background work",
+            disabled: !props.canOperateThread || statusPending,
+            onPress: () => void runStatusAction("stop"),
+          },
+        }
+      : null;
+  const lifecycleLine =
+    contentPresentationKind === "ready" && (snoozeShown || settled || woke)
+      ? {
+          state: snoozeShown
+            ? ("snoozed" as const)
+            : settled
+              ? ("settled" as const)
+              : ("woke" as const),
+          label:
+            snoozeShown && snoozedUntil !== null
+              ? `Snoozed, wakes in ${snoozeWakeLabel(snoozedUntil, { now: lifecycleNow })}`
+              : settled
+                ? "Settled"
+                : "Woke from snooze",
+          action: {
+            label: statusPending
+              ? snoozeShown
+                ? "Waking..."
+                : settled
+                  ? "Un-settling..."
+                  : "Dismissing..."
+              : snoozeShown
+                ? "Wake now"
+                : settled
+                  ? "Un-settle"
+                  : "Dismiss",
+            accessibilityLabel: snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss",
+            disabled: !props.canOperateThread || statusPending,
+            onPress: () =>
+              void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
+          },
+        }
+      : null;
+  const statusLines = threadStatusLines({ background: backgroundLine, lifecycle: lifecycleLine });
   const floatingStatus = ((): FloatingWorkingStatus | null => {
     const connectionStatus = connectionFloatingStatus({
       connectionError: props.connectionError,
@@ -555,57 +611,6 @@ function ThreadDetailBody(
         onPress: () => {
           Keyboard.dismiss();
           openLinkedThread({ environmentId: props.environmentId, threadId: childInput.id });
-        },
-      };
-    }
-    if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
-      return {
-        kind: "background",
-        label: pendingBackgroundWork.title,
-        accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items
-          .map((item) => item.label)
-          .join(", ")}`,
-        waiting: pendingBackgroundWork.waiting,
-        onPress: () => {
-          Keyboard.dismiss();
-          navigation.navigate("ThreadBackgroundWork", {
-            environmentId: props.environmentId,
-            threadId: props.selectedThread.id,
-          });
-        },
-        action: {
-          label: statusPending ? "Stopping..." : "Stop",
-          accessibilityLabel: "Stop background work",
-          disabled: !props.canOperateThread || statusPending,
-          onPress: () => void runStatusAction("stop"),
-        },
-      };
-    }
-    if (contentPresentationKind === "ready" && (snoozeShown || settled || woke)) {
-      const state = snoozeShown ? "snoozed" : settled ? "settled" : "woke";
-      const label =
-        snoozeShown && snoozedUntil !== null
-          ? `Snoozed, wakes in ${snoozeWakeLabel(snoozedUntil, { now: lifecycleNow })}`
-          : settled
-            ? "Settled"
-            : "Woke from snooze";
-      const actionLabel = snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss";
-      return {
-        kind: "lifecycle",
-        state,
-        label,
-        action: {
-          label: statusPending
-            ? snoozeShown
-              ? "Waking..."
-              : settled
-                ? "Un-settling..."
-                : "Dismissing..."
-            : actionLabel,
-          accessibilityLabel: actionLabel,
-          disabled: !props.canOperateThread || statusPending,
-          onPress: () =>
-            void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
         },
       };
     }
@@ -1150,6 +1155,7 @@ function ThreadDetailBody(
                 detailRef={props.selectedThreadDetailRef}
                 workspaceRoot={props.threadCwd}
                 feed={props.selectedThreadFeed}
+                statusLines={statusLines}
                 pendingHandoff={props.pendingHandoff}
                 worktreeSetup={props.worktreeSetup}
                 setupWorkingStartedAt={props.setupWorkingStartedAt}

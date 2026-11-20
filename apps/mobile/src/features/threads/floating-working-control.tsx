@@ -91,12 +91,7 @@ export function FloatingWorkingControl(props: {
   const [actionWidth, setActionWidth] = useState(0);
   const [extensionWidth, setExtensionWidth] = useState(0);
   const extensionStatus = props.extensionStatus ?? null;
-  const action =
-    props.status?.kind === "background" ||
-    props.status?.kind === "lifecycle" ||
-    props.status?.kind === "stop"
-      ? props.status.action
-      : null;
+  const action = props.status?.kind === "stop" ? props.status.action : null;
   const [agentsWidth, setAgentsWidth] = useState(0);
   const hasQueue = props.queuedCount > 0;
   const hasPreview = props.devicePreview !== null || props.browserPreview !== null;
@@ -173,8 +168,7 @@ export function FloatingWorkingControl(props: {
     props.status?.kind === "connection" ||
     props.status?.kind === "extension" ||
     props.status?.kind === "child-input" ||
-    props.status?.kind === "held" ||
-    props.status?.kind === "background";
+    props.status?.kind === "held";
   const capsuleInteractive =
     statusInteractive ||
     extensionStatus !== null ||
@@ -494,48 +488,6 @@ function FloatingStatusLabel(props: {
           className="max-w-[260px] shrink font-goat-medium text-xs text-foreground"
           numberOfLines={1}
         >
-          {props.status.label}
-        </Text>
-      </StatusLabelRow>
-    );
-  }
-  if (props.status.kind === "lifecycle") {
-    return (
-      <StatusLabelRow
-        key="lifecycle"
-        accessibilityLabel={props.status.label}
-        className="gap-2"
-        onLayout={props.onLayout}
-      >
-        <SymbolView
-          name={props.status.state === "settled" ? "checkmark.circle" : "clock"}
-          size={13}
-          tintColorClassName="foreground"
-          type="monochrome"
-        />
-        <Text className="shrink font-goat-medium text-xs text-foreground" numberOfLines={1}>
-          {props.status.label}
-        </Text>
-      </StatusLabelRow>
-    );
-  }
-  if (props.status.kind === "background") {
-    return (
-      <StatusLabelRow
-        key="background"
-        accessibilityLabel={props.status.accessibilityLabel}
-        accessibilityRole="button"
-        onPress={props.status.onPress}
-        className="gap-2"
-        onLayout={props.onLayout}
-      >
-        <SymbolView
-          name={props.status.waiting ? "person.2" : "terminal"}
-          size={13}
-          tintColorClassName="foreground"
-          type="monochrome"
-        />
-        <Text className="shrink font-goat-medium text-xs text-foreground" numberOfLines={1}>
           {props.status.label}
         </Text>
       </StatusLabelRow>
