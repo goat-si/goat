@@ -100,9 +100,9 @@ export function runtimeArchiveUploadScript(
     assets="$GOAT_STAGING/client/assets"
     [ -d "$assets" ] && [ ! -L "$GOAT_STAGING/client" ] && [ ! -L "$assets" ] || exit 1
     if command -v sha256sum >/dev/null 2>&1; then
-      actual="$(sha256sum "$GOAT_SSH_UPLOADED_FONTS" | cut -d' ' -f1)"
+      actual="$(sha256sum < "$GOAT_SSH_UPLOADED_FONTS" | cut -d' ' -f1)"
     else
-      actual="$(shasum -a 256 "$GOAT_SSH_UPLOADED_FONTS" | cut -d' ' -f1)"
+      actual="$(shasum -a 256 < "$GOAT_SSH_UPLOADED_FONTS" | cut -d' ' -f1)"
     fi
     [ "$actual" = '${fonts.sha256}' ] || exit 1
     tar -xzf "$GOAT_SSH_UPLOADED_FONTS" -C "$assets"
