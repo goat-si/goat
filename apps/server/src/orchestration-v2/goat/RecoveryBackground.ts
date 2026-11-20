@@ -1,4 +1,6 @@
-import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
+import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
+import { neverStarted } from "../RestartBackgroundNote.ts";
+import type { OrchestrationV2ThreadProjection, ProviderThreadId } from "@goat/contracts";
 import type * as ProjectionStore from "../ProjectionStore.ts";
 
 export function providerThreadHasPendingBackgroundTasks(
@@ -29,4 +31,21 @@ export function resolveStaleBackgroundItemProviderInstanceId(
     }
   }
   return projection.providerThreads[0]?.providerInstanceId ?? projection.thread.providerInstanceId;
+}
+
+export function latestStartedRun(
+  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
+  providerThreadId: ProviderThreadId,
+) {
+  return projection.runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
+    (latest, run) =>
+      run.providerThreadId === providerThreadId &&
+      run.status !== "queued" &&
+      run.status !== "rolled_back" &&
+      !neverStarted(run) &&
+      (latest === undefined || runRanAfter(run, latest))
+        ? run
+        : latest,
+    undefined,
+  );
 }

@@ -1,4 +1,5 @@
 import {
+  latestStartedRun,
   providerThreadHasPendingBackgroundTasks,
   resolveStaleBackgroundItemProviderInstanceId,
 } from "./goat/RecoveryBackground.ts";
@@ -17,7 +18,6 @@ import {
   drainOutboxError,
 } from "./ProviderRuntimeRecoveryErrors.ts";
 export { ProviderRuntimeRecoveryError } from "./ProviderRuntimeRecoveryErrors.ts";
-import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   CommandId,
@@ -62,7 +62,6 @@ import {
   cancelledRosterTaskWork,
   cancelledTurnItemWork,
   mergeRestartCancelledBackgroundWork,
-  neverStarted,
 } from "./RestartBackgroundNote.ts";
 
 export interface ProviderRuntimeRecoverySummary {
@@ -97,23 +96,6 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
 >()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
-
-function latestStartedRun(
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
-  providerThreadId: ProviderThreadId,
-) {
-  return projection.runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
-    (latest, run) =>
-      run.providerThreadId === providerThreadId &&
-      run.status !== "queued" &&
-      run.status !== "rolled_back" &&
-      !neverStarted(run) &&
-      (latest === undefined || runRanAfter(run, latest))
-        ? run
-        : latest,
-    undefined,
-  );
-}
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
