@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import spanish from "../i18n/translations/es.json";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
@@ -11,10 +13,12 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 const scopes = vi.hoisted(() => ({
   denied: undefined as string | undefined,
   sourceControl: undefined as unknown,
+  showSettings: false,
 }));
 const setup = (deniedScope?: string, sourceControl?: unknown) => {
   scopes.denied = deniedScope;
   scopes.sourceControl = sourceControl;
+  scopes.showSettings = false;
 };
 const githubAvailable = {
   versionControlSystems: [],
@@ -122,7 +126,17 @@ vi.mock("../state/query", async (original) => ({
   useEnvironmentQuery: () => ({ data: scopes.sourceControl, isLoading: false }),
 }));
 vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
-  useAvailableSettingsSearchItems: () => [],
+  useAvailableSettingsSearchItems: () =>
+    scopes.showSettings
+      ? [
+          {
+            id: "diff-color-scheme",
+            title: "Diff colors",
+            to: "/settings/appearance",
+            searchTerms: ["colorblind"],
+          },
+        ]
+      : [],
 }));
 
 // The real palette and Base UI input must agree that confirming composition is typing.
@@ -270,4 +284,26 @@ it("tells screen readers whether a new project will be published", async () => {
   await expect.element(option).toHaveAttribute("aria-checked", "false");
   await option.click();
   await expect.element(option).toHaveAttribute("aria-checked", "true");
+});
+
+it("shows settings in the UI language and matches both localized names and English keywords", async () => {
+  setup();
+  scopes.showSettings = true;
+  try {
+    await using _screen = await render(
+      <GTProvider locale="es" translations={{ es: spanish }}>
+        <CommandPalette>{null}</CommandPalette>
+      </GTProvider>,
+    );
+    await act(() => openCommandPalette());
+    const input = page.getByRole("combobox");
+    for (const query of ["Colores de diferencias", "Diff colors", "colorblind"]) {
+      await input.fill(query);
+      await expect.element(page.getByText("Colores de diferencias", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Ajustes", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Ajustes · Apariencia", { exact: true })).toBeVisible();
+    }
+  } finally {
+    setup();
+  }
 });

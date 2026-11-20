@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import type { SettingsSearchItem } from "./settingsSearch";
 
@@ -5,14 +6,14 @@ import type { SettingsSearchItem } from "./settingsSearch";
 export const HUB_SETTINGS_SEARCH_ITEMS = [
   {
     id: "hub-connect-access",
-    title: "Allow GOAT Connect devices to reach hub devices",
+    title: msg("Allow GOAT Connect devices to reach hub devices"),
     to: "/settings/hub",
     isVisible: isGoatConnectEnabled,
     searchTerms: ["connect hub access grant revoke devices standing consent account"],
   },
   {
     id: "hub-enabled",
-    title: "This machine is the hub",
+    title: msg("This machine is the hub"),
     to: "/settings/hub",
     searchTerms: [
       "hub goatclaw opencodex home fleet parity remote link",
@@ -21,49 +22,49 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-pen-machines",
-    title: "List Pen machines as hub devices",
+    title: msg("List Pen machines as hub devices"),
     to: "/settings/hub",
     searchTerms: ["pen mesh members machines hub devices automatic phone"],
   },
   {
     id: "hub-cloud-holder",
-    title: "Cloud runs",
+    title: msg("Cloud runs"),
     to: "/settings/hub",
     searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
   },
   {
     id: "hub-cloud-auto-join",
-    title: "Join new cloud machines",
+    title: msg("Join new cloud machines"),
     to: "/settings/hub",
     searchTerms: ["cloud machine boat opencodex child bootstrap automatic join auto-join"],
   },
   {
     id: "hub-disposable-machines",
-    title: "Attach disposable machines",
+    title: msg("Attach disposable machines"),
     to: "/settings/hub",
     searchTerms: ["disposable machine cloud vm pen invite attach provisioner thread cap name rule"],
   },
   {
     id: "hub-relay-warning",
-    title: "Relay traffic warning",
+    title: msg("Relay traffic warning"),
     to: "/settings/hub",
     searchTerms: ["pen relay traffic bytes gigabytes warning threshold opencodex child link route"],
   },
   {
     id: "hub-permission-profiles",
-    title: "Permission profiles",
+    title: msg("Permission profiles"),
     to: "/settings/hub",
     searchTerms: ["goatclaw permission profiles supervisor agents capabilities limits"],
   },
   {
     id: "hub-default-profile",
-    title: "Default profile",
+    title: msg("Default profile"),
     to: "/settings/hub",
     searchTerms: ["goatclaw default permission profile worker manager owner observer"],
   },
   {
     id: "hub-devices",
-    title: "Hub devices",
+    title: msg("Hub devices"),
     to: "/settings/hub",
     searchTerms: [
       "opencodex devices devices on this hub nodes machines",
@@ -75,7 +76,7 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-nodes",
-    title: "Add an SSH host or GOAT server",
+    title: msg("Add an SSH host or GOAT server"),
     to: "/settings/hub",
     searchTerms: [
       "devices on this hub nodes machines ssh hosts linked goat servers cloud machines phone check routes",

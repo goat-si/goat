@@ -544,6 +544,7 @@ export function filterCommandPaletteGroups(input: {
   projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** GOAT Bot's added bots: found by a search, never listed for an empty one. */
   botSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
+  settingsSearchLabel?: string;
   settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
@@ -611,7 +612,7 @@ export function filterCommandPaletteGroups(input: {
     if (input.settingsSearchItems && input.settingsSearchItems.length > 0) {
       searchableGroups.push({
         value: "settings-search",
-        label: "Settings",
+        label: input.settingsSearchLabel ?? "Settings",
         items: input.settingsSearchItems,
       });
     }

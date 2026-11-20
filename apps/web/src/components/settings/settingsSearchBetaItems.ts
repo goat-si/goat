@@ -5,7 +5,7 @@ import type { SettingsSearchItem } from "./settingsSearch";
 export const BETA_SETTINGS_SEARCH_ITEMS = [
   {
     id: "new-design",
-    title: "New design",
+    title: msg("New design"),
     to: "/settings/beta",
     searchTerms: ["beta redesign look style sidebar composer black quieter classic"],
   },
