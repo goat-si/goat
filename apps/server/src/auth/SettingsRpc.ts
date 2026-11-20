@@ -6,6 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
+import { withMiniMaxCodeQuotaConsent } from "../provider/miniMaxCodeQuotaConsent.ts";
 import * as Settings from "../serverSettings.ts";
 import type { AuthenticatedSession } from "./EnvironmentAuth.ts";
 import * as SettingsSessionPermit from "./settingsSessionPermit.ts";
@@ -32,24 +33,26 @@ export const make = Effect.fn("SettingsRpc.make")(function* (session: Authentica
       input.patch.agentWorkspaceAccess !== undefined ||
       input.patch.agentTerminalAccess !== undefined ||
       input.patch.projectSettingsOverrides !== undefined;
-    return yield* input.providerInstanceMutation === undefined
-      ? !usesAgentPolicy
-        ? settings.updateSettings(input.patch, authorize(input.patch))
-        : updatePolicy === undefined
-          ? Effect.fail(
-              new ServerSettingsError({ settingsPath: "settings", operation: "normalize" }),
-            )
-          : updatePolicy(
-              input.patch,
-              session.sessionId,
-              input.agentTerminalBinding,
-              authorize(input.patch, undefined, input.agentTerminalBinding),
-            )
-      : routes.mutateProviderInstance(
-          { mutation: input.providerInstanceMutation, patch: input.patch },
-          { kind: "client", sessionId: session.sessionId },
-          undefined,
-          authorize(input.patch, input.providerInstanceMutation),
-        );
+    const update =
+      input.providerInstanceMutation === undefined
+        ? !usesAgentPolicy
+          ? settings.updateSettings(input.patch, authorize(input.patch))
+          : updatePolicy === undefined
+            ? Effect.fail(
+                new ServerSettingsError({ settingsPath: "settings", operation: "normalize" }),
+              )
+            : updatePolicy(
+                input.patch,
+                session.sessionId,
+                input.agentTerminalBinding,
+                authorize(input.patch, undefined, input.agentTerminalBinding),
+              )
+        : routes.mutateProviderInstance(
+            { mutation: input.providerInstanceMutation, patch: input.patch },
+            { kind: "client", sessionId: session.sessionId },
+            undefined,
+            authorize(input.patch, input.providerInstanceMutation),
+          );
+    return yield* session.principalKind === "person" ? withMiniMaxCodeQuotaConsent(update) : update;
   });
 });
