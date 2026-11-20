@@ -65,17 +65,24 @@ export function resolveProviderCompatibility(
   );
   if (!policy) return undefined;
   const unprefixed = version?.replace(/^v/, "");
-  // Strip Cursor build hashes, Google ACP release prefixes and Muse revisions; leave semver prereleases unknown.
+  // Normalize known provider release tags; other prereleases stay unknown.
   const stable =
     driver === "cursor"
       ? unprefixed?.replace(/^(\d{4}\.\d{2}\.\d{2})-[a-f0-9]+$/, "$1")
       : driver === "antigravity"
-        ? unprefixed?.replace(/^agy_acp_server_(\d+\.\d+\.\d+)$/, "$1")
+        ? unprefixed?.replace(/^(?:agy_acp_server_)?(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$/, "$1")
         : driver === "muse"
           ? unprefixed?.replace(/^(\d+\.\d+\.\d+)-R\d+(?:\.\d+)?$/, "$1")
           : unprefixed;
-  const status =
-    stable && /^\d+\.\d+\.\d+$/.test(stable)
+  // GOAT versions differ from upstream, so an older cached policy cannot permit 1.4.
+  const refusesLegacyAntigravity =
+    driver === "antigravity" &&
+    stable !== undefined &&
+    /^\d+\.\d+\.\d+$/.test(stable) &&
+    satisfiesSemverRange(stable, "<1.5.0");
+  const status = refusesLegacyAntigravity
+    ? "broken"
+    : stable && /^\d+\.\d+\.\d+$/.test(stable)
       ? (policy.ranges.find((entry) => satisfiesSemverRange(stable, entry.range))?.status ??
         "unknown")
       : "unknown";
@@ -87,8 +94,10 @@ export function resolveProviderCompatibility(
         : status === "graceful"
           ? "This provider version has limited compatibility with this GOAT release."
           : null;
-  const recommendedVersion = policy.recommendedVersion ?? null;
-  const recommendedRange = policy.recommendedRange ?? null;
+  const recommendedVersion = refusesLegacyAntigravity ? null : (policy.recommendedVersion ?? null);
+  const recommendedRange = refusesLegacyAntigravity
+    ? ">=1.5.12 <2"
+    : (policy.recommendedRange ?? null);
   const recommendation = recommendedVersion ?? recommendedRange;
   return {
     status,

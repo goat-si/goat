@@ -84,6 +84,7 @@ const DRIVER = ProviderDriverKind.make("antigravity");
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
 const isNodeRuntimeUnavailableError = Schema.is(NodeRuntimeUnavailableError);
 const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
+const isProviderSetupError = Schema.is(ProviderSetupError);
 const isAcpErrorDetails = Schema.is(Schema.Struct({ details: Schema.String }));
 const REFRESH_FAILED =
   "Could not refresh Antigravity models. The previous model list is unchanged.";
@@ -309,6 +310,25 @@ export const AntigravityDriver: ProviderDriver<
           runtimeTempDirectory,
         }),
       }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
+      const startCompatible = Effect.fn("AntigravityDriver.startCompatible")(function* () {
+        const version = (yield* runtime.initialize()).agentInfo?.version;
+        const advisory = version ? yield* installation.compatibility(version) : undefined;
+        if (advisory?.status === "broken") {
+          const target =
+            advisory.recommendedVersion ?? advisory.recommendedRange ?? "a newer version";
+          const update =
+            executable.source === "managed"
+              ? `Update it in Antigravity setup to ${target}`
+              : `Update the Antigravity executable at ${executable.executablePath} to ${target}`;
+          const cause = new ProviderSetupError({
+            instanceId,
+            operation: "runtime",
+            detail: `Antigravity ${version} does not work with this GOAT release. ${update}, then retry.`,
+          });
+          return yield* new AcpErrors.AcpTransportError({ detail: cause.detail, cause });
+        }
+        return yield* runtime.start();
+      });
       return {
         ...runtime,
         getEvents: () =>
@@ -326,7 +346,7 @@ export const AntigravityDriver: ProviderDriver<
           ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
           : {}),
         start: () =>
-          runtime.start().pipe(
+          startCompatible().pipe(
             Effect.tap((started) => Effect.sync(() => startedProfiles.set(started, userHome))),
             Effect.tapError((cause): Effect.Effect<void> =>
               input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
@@ -594,7 +614,11 @@ export const AntigravityDriver: ProviderDriver<
                 : cause._tag === "ProviderSetupError" &&
                     (cause.operation === "configure" || cause.operation === "start")
                   ? cause.detail
-                  : refreshFailureDetail(cause),
+                  : cause._tag === "AcpTransportError" &&
+                      isProviderSetupError(cause.cause) &&
+                      cause.cause.operation === "runtime"
+                    ? cause.cause.detail
+                    : refreshFailureDetail(cause),
               cause,
             }),
       ),
