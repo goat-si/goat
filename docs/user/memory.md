@@ -96,7 +96,7 @@ When connecting an outside agent through OAuth, select **Read memory** or **Writ
 
 ### Inspect memory for a turn
 
-Choose **Turn memory** below your message to see which memory revisions GOAT supplied to the provider and which results the agent retrieved with `memory.recall`. A delivered item shows what the provider received. The agent may use it, ignore it, or ask for more. Earlier turns can have no delivery record.
+Choose **Turn memory** below your message to see which memory revisions GOAT supplied to the provider and which results the agent retrieved with `memory.recall`. A delivered item shows what the provider received. The agent may use it, ignore it, or ask for more. Older turns can have no delivery record. Each entry identifies the revision sent at the time. A text preview is available while that revision is current and visible. The panel shows up to 32 recorded events per turn.
 
 ## When a conversation cannot save memories
 
