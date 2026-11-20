@@ -393,6 +393,9 @@ it("renders a recovered response whose source is missing as its existing neutral
   };
   const text = `${formatComposerContextReference(reply)} original`;
   native.value = "";
+  native.selection = { start: 0, end: 0 };
+  native.eventCount = 0;
+  native.writes = [];
   native.tokensJson = "[]";
   const root = createRoot(document.createElement("div"));
   try {
