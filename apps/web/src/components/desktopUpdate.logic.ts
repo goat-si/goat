@@ -1,4 +1,4 @@
-import { gtFallback, msg, type useGT } from "gt-react";
+import { gtFallback, type useGT } from "gt-react";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
 import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
 
@@ -103,9 +103,14 @@ export function getDesktopUpdateButtonTooltip(
   gt: DesktopUpdateTranslate = gtFallback,
 ): string {
   if (!state.enabled)
-    return translateDisabledMessage(state.message, gt) ?? gt("Automatic updates are disabled.");
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ?? gt("Automatic updates are disabled.")
+    );
   const actionTooltip = getDesktopUpdateActionTooltip(state, gt);
-  return state.installationNotice ? `${actionTooltip}\n${state.installationNotice}` : actionTooltip;
+  const installationNotice = state.installationNotice
+    ? translateDesktopUpdateMessage(state.installationNotice, gt)
+    : null;
+  return installationNotice ? `${actionTooltip}\n${installationNotice}` : actionTooltip;
 }
 
 function getDesktopUpdateActionTooltip(
@@ -160,7 +165,7 @@ function getDesktopUpdateActionTooltip(
         version: state.downloadedVersion,
       });
     }
-    return state.message ?? gt("Update failed");
+    return translateDesktopUpdateMessage(state.message, gt) ?? gt("Update failed");
   }
   return gt("Up to date");
 }
@@ -206,8 +211,11 @@ export function getDesktopUpdateStatusText(
   gt: DesktopUpdateTranslate = gtFallback,
 ): string {
   if (!state.enabled)
-    return translateDisabledMessage(state.message, gt) ?? gt("Automatic updates are disabled.");
-  if (state.errorContext === "download" && state.message) return state.message;
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ?? gt("Automatic updates are disabled.")
+    );
+  if (state.errorContext === "download" && state.message)
+    return translateDesktopUpdateMessage(state.message, gt) ?? state.message;
   const checkError = getDesktopUpdateCheckError(state, gt);
   if (checkError) return checkError;
   if (state.installPolicy === "paused")
@@ -221,7 +229,10 @@ export function getDesktopUpdateStatusText(
   if (state.pendingRestartReason === "busy")
     return gt("Automatic restart postponed until backend work finishes.");
   if (state.pendingRestartReason === "unknown")
-    return state.message ?? gt("Automatic restart postponed: backend activity cannot be verified.");
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ??
+      gt("Automatic restart postponed: backend activity cannot be verified.")
+    );
   if (state.installPolicy === "install-on-quit")
     return state.downloadedVersion
       ? gt("The downloaded update will install when you quit the app.")
@@ -231,15 +242,41 @@ export function getDesktopUpdateStatusText(
   );
 }
 
-// The desktop bridge can also supply diagnostics from the OS or update service.
-const disabledMessages = new Set<string>([
-  msg("Automatic updates are not available because no update feed is configured."),
-  msg("Automatic updates are only available in packaged production builds."),
-  msg("Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting."),
-  msg("Automatic updates on Linux require the AppImage or the .deb package."),
-]);
-function translateDisabledMessage(message: string | null, gt: DesktopUpdateTranslate) {
-  return message && disabledMessages.has(message) ? gt(message) : message;
+// Exact app-owned sentences only. Service diagnostics are not message ids.
+export function translateDesktopUpdateMessage(
+  message: string | null | undefined,
+  gt: DesktopUpdateTranslate,
+): string | null {
+  switch (message) {
+    case "Automatic updates are not available because no update feed is configured.":
+      return gt("Automatic updates are not available because no update feed is configured.");
+    case "Automatic updates are only available in packaged production builds.":
+      return gt("Automatic updates are only available in packaged production builds.");
+    case "Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting.":
+      return gt("Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting.");
+    case "Automatic updates on Linux require the AppImage or the .deb package.":
+      return gt("Automatic updates on Linux require the AppImage or the .deb package.");
+    case "GOAT can't update itself while it runs from where it was downloaded. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "GOAT can't update itself while it runs from where it was downloaded. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "GOAT can't update itself from a read-only disk. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "GOAT can't update itself from a read-only disk. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "Could not clear the pending update record. Check again to retry.":
+      return gt("Could not clear the pending update record. Check again to retry.");
+    case "Could not persist the downloaded update. Retry the download.":
+      return gt("Could not persist the downloaded update. Retry the download.");
+    case "Automatic restart postponed: WSL activity cannot be verified.":
+      return gt("Automatic restart postponed: WSL activity cannot be verified.");
+    default:
+      return message ?? null;
+  }
 }
 
 export function getDesktopUpdateDisabledReason(
@@ -248,7 +285,7 @@ export function getDesktopUpdateDisabledReason(
 ): string | null {
   if (!state || (state.enabled && state.status !== "disabled")) return null;
   return (
-    translateDisabledMessage(state.message?.trim() || null, gt) ??
+    translateDesktopUpdateMessage(state.message?.trim() || null, gt) ??
     gt("Automatic updates are not available in this build.")
   );
 }
@@ -268,7 +305,10 @@ export function getDesktopUpdateCheckError(
     state.downloadedVersion !== null
   )
     return null;
-  return state.message?.trim() || gt("Could not check for updates.");
+  const message = state.message?.trim();
+  return message
+    ? (translateDesktopUpdateMessage(message, gt) ?? message)
+    : gt("Could not check for updates.");
 }
 
 /** The version row's description when no update is waiting. */

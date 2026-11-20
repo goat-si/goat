@@ -25,6 +25,7 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
+  translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
 import {
   downloadLocalUpdate,
@@ -300,9 +301,18 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         : gt("Update available")
       : null;
   const installationDetail =
-    state?.installationNotice ?? idleTooltip?.detail ?? (!state?.enabled ? state?.message : null);
+    (state?.installationNotice
+      ? translateDesktopUpdateMessage(state.installationNotice, gt)
+      : null) ??
+    idleTooltip?.detail ??
+    (state && !state.enabled && state.message
+      ? translateDesktopUpdateMessage(state.message, gt)
+      : null);
   // A failed automatic download raises no toast, so the button is where its reason shows.
-  const downloadError = state?.enabled && state.errorContext === "download" ? state.message : null;
+  const downloadError =
+    state?.enabled && state.errorContext === "download" && state.message
+      ? translateDesktopUpdateMessage(state.message, gt)
+      : null;
   const tooltip = [
     heading,
     detail,

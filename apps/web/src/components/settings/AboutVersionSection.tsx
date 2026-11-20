@@ -15,6 +15,7 @@ import {
   getDesktopUpdateStatusText,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
+  translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -162,7 +163,9 @@ export function AboutVersionSection() {
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? gt("Check for Updates");
   const description =
-    updateState?.installationNotice ??
+    (updateState?.installationNotice
+      ? translateDesktopUpdateMessage(updateState.installationNotice, gt)
+      : null) ??
     (action === "download" || action === "install"
       ? gt("Update available.")
       : getDesktopUpdateIdleDescription(updateState, gt));

@@ -2,10 +2,13 @@ import { gtFallback } from "gt-react";
 import { describe, expect, it } from "vite-plus/test";
 import { getDesktopUpdateStatusText } from "./desktopUpdate.logic";
 import type { DesktopUpdateState } from "@goat/contracts";
+import en from "../i18n/translations/en.json";
+import ko from "../i18n/translations/ko.json";
 
 import {
   canCheckForUpdate,
   type DesktopUpdateTranslate,
+  getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleTooltip,
@@ -284,4 +287,52 @@ it("translates the desktop's disabled reason across update surfaces and preserve
     expect(getDesktopUpdateIdleTooltip(state, gt).detail).toBe(expected);
     expect(getDesktopUpdateStatusText(state, gt)).toBe(expected);
   }
+});
+
+const englishCatalog = en as Record<string, string>;
+const koreanCatalog = ko as Record<string, string>;
+
+function translateFromCatalog(source: string): string {
+  const id = Object.keys(englishCatalog).find((key) => englishCatalog[key] === source);
+  return id ? (koreanCatalog[id] ?? source) : source;
+}
+
+it("translates an app-owned installation sentence from the catalog", () => {
+  const sentence =
+    "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.";
+  const translated = translateFromCatalog(sentence);
+  expect(translated).not.toBe(sentence);
+  const gt: DesktopUpdateTranslate = (source, args) => {
+    const value = translateFromCatalog(String(source));
+    return args ? gtFallback(value, args) : value;
+  };
+  const state: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    downloadedVersion: "1.2.4",
+    installationNotice: sentence,
+  };
+  const tooltip = getDesktopUpdateButtonTooltip(state, gt);
+  expect(tooltip).toContain(translated);
+  expect(tooltip).not.toContain("needs an administrator");
+});
+
+it("passes a braced diagnostic through unchanged without an ICU error", () => {
+  const diagnostic = "Could not check for updates: updater failed {service}";
+  const gt: DesktopUpdateTranslate = (source, args) => {
+    const text = String(source);
+    const known = Object.keys(englishCatalog).some((key) => englishCatalog[key] === text);
+    if (!known && text.includes("{")) throw new Error(`ICU ${text}`);
+    const value = translateFromCatalog(text);
+    return args ? gtFallback(value, args) : value;
+  };
+  const state: DesktopUpdateState = {
+    ...baseState,
+    status: "error",
+    errorContext: "check",
+    message: diagnostic,
+  };
+  expect(getDesktopUpdateCheckError(state, gt)).toBe(diagnostic);
+  expect(getDesktopUpdateStatusText(state, gt)).toBe(diagnostic);
+  expect(getDesktopUpdateIdleTooltip(state, gt).detail).toContain(diagnostic);
 });
