@@ -129,6 +129,70 @@ describe("session first receipts", () => {
     }).pipe(Effect.provide(ThreadResults.layer.pipe(Layer.provideMerge(harness.layer))));
   });
 
+  it.effect(
+    "a restart settles with the accepted report of the run it continues when its own report was refused",
+    () => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("Check A and B", "restart-keeps-accepted-report"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        const worker = task.worker!;
+        const child = {
+          runId: worker.runId,
+          origin: "app_owned",
+          status: "completed",
+          completedAt: yield* DateTime.now,
+        } as OrchestrationV2Subagent;
+        harness.world.subagents.set(worker.threadId, [child]);
+        yield* TestClock.adjust("1 second");
+        const results = yield* ThreadResults.ThreadResultService;
+        const answer = "A found line 129. B could not read its file.";
+        const accepted = yield* results.report(worker.threadId, {
+          outcome: "failed",
+          summary: answer,
+        });
+        assert.strictEqual(accepted.runId, worker.runId);
+        assert.strictEqual(accepted.outcome, "failed");
+        assert.strictEqual(accepted.summary, answer);
+
+        let run = harness.world.latestRun(worker.threadId)!;
+        harness.world.setStatus(worker.threadId, run.ordinal, "completed");
+        const resumed = harness.world.addRun(
+          worker.threadId,
+          MessageId.make("restart-" + run.ordinal),
+        );
+        run = { ...resumed, restartContinuationOfRunId: run.id };
+        const runs = harness.world.runs.get(worker.threadId)!;
+        harness.world.runs.set(worker.threadId, [...runs.slice(0, -1), run]);
+        harness.world.subagents.set(worker.threadId, [
+          { ...child, completionDelivery: { state: "claimed", observedByRunId: null } },
+        ]);
+        const refused = yield* Effect.flip(
+          results.report(worker.threadId, { outcome: "failed", summary: "Still waiting." }),
+        );
+        assert.strictEqual(refused.reason, "delegates_pending");
+
+        harness.world.subagents.set(worker.threadId, [
+          { ...child, completionDelivery: { state: "delivered", observedByRunId: null } },
+        ]);
+        harness.assistant({ ...task, worker: { ...worker, runId: run.id } }, answer, false, 1);
+        harness.world.setStatus(worker.threadId, run.ordinal, "completed");
+        yield* runtime.drain;
+        const finished = (yield* ledger.getTask(task.taskId))!.task;
+        assert.strictEqual(finished.status, "failed");
+        assert.strictEqual(finished.resultSummary, answer);
+      }).pipe(Effect.provide(ThreadResults.layer.pipe(Layer.provideMerge(harness.layer))));
+    },
+  );
+
   it.effect.each(["same item", "separate item", "fallback"] as const)(
     "direct answer keeps exactly the intended messages: %s",
     (variant) => {
