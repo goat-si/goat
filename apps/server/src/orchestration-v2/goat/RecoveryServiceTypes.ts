@@ -34,4 +34,5 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
     readonly prepareForShutdownWithStopKind: (stopKind: "restart" | "quit") => ShutdownPreparation;
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
+  // @effect-diagnostics-next-line deterministicKeys:off -- Preserve the service key across the move.
 >()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
