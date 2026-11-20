@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type ScopedThreadRef,
   type TurnMemoryInput,
   type TurnMemoryResult,
   type MemoryChangeSignal,
@@ -12,6 +13,8 @@ import {
   WS_METHODS,
   supportsMemoryProtocol,
 } from "@goat/contracts";
+import { turnMemoryReadVersion, type TurnMemoryProjection } from "./turnMemoryProjection.ts";
+export type { TurnMemoryProjection } from "./turnMemoryProjection.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { memoryLocalSpace } from "../memoryPresentation.ts";
@@ -264,6 +267,7 @@ export function createMemoryTombstoneLedger(maxSpaces = 256, maxIdsPerSpace = 10
 export function createMemoryEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
   ledger = createMemoryTombstoneLedger(),
+  threadDetail?: (ref: ScopedThreadRef) => Atom.Atom<TurnMemoryProjection | null>,
 ) {
   const disposedAtom = Atom.make(false);
   const sessions = createEnvironmentSessionAtoms(runtime);
@@ -556,7 +560,12 @@ export function createMemoryEnvironmentAtoms<R, E>(
     });
     type Target = { readonly environmentId: EnvironmentId; readonly input: EnvironmentRpcInput<T> };
     return Object.assign((target: Target) => family(environmentRpcKey(target)), {
-      reply: (target: Target) => replyFamily(environmentRpcKey(target)),
+      reply: (target: Target, version?: string) =>
+        replyFamily(
+          version === undefined
+            ? environmentRpcKey(target)
+            : JSON.stringify([target.environmentId, target.input, version]),
+        ),
     });
   }
   const read = bodyQuery(WS_METHODS.memoryRead);
@@ -581,13 +590,23 @@ export function createMemoryEnvironmentAtoms<R, E>(
   type TurnTarget = { environmentId: EnvironmentId; input: Omit<TurnMemoryInput, "memorySpaceId"> };
   const turnForRun = Atom.family((key: string) => {
     const [environmentId, input] = JSON.parse(key) as [EnvironmentId, TurnTarget["input"]];
+    const version = Atom.make(
+      (get) =>
+        threadDetail &&
+        turnMemoryReadVersion(
+          get(threadDetail({ environmentId, threadId: input.threadId })),
+          input.runId,
+        ),
+    ).pipe(Atom.setIdleTTL(0));
     return Atom.make((get): Option.Option<TurnMemoryResult> | null => {
       if (!get(canInspectTurnMemory(environmentId))) return Option.none();
       const status = get(spaceForTurn(environmentId));
       if (status._tag === "Initial") return null;
       const memorySpaceId = status._tag === "Success" ? status.value : null;
       if (memorySpaceId === null) return Option.none();
-      return get(turnMemory.reply({ environmentId, input: { ...input, memorySpaceId } }));
+      return get(
+        turnMemory.reply({ environmentId, input: { ...input, memorySpaceId } }, get(version)),
+      );
     }).pipe(Atom.setIdleTTL(0));
   });
 
