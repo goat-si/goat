@@ -1,9 +1,12 @@
+import { gtFallback } from "gt-react";
 import { describe, expect, it } from "vite-plus/test";
 import { getDesktopUpdateStatusText } from "./desktopUpdate.logic";
 import type { DesktopUpdateState } from "@goat/contracts";
 
 import {
   canCheckForUpdate,
+  type DesktopUpdateTranslate,
+  getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
@@ -119,6 +122,38 @@ describe("desktop update button state", () => {
 });
 
 describe("desktop update UI helpers", () => {
+  it("passes version and diagnostics separately to the UI translator", () => {
+    const gt: DesktopUpdateTranslate = (source, args) => {
+      if (source === "Update {version} ready to download") {
+        return gtFallback("可下载更新 {version}", args);
+      }
+      if (source === "{error} Click to check again.") {
+        return gtFallback("{error} 点击重试。", args);
+      }
+      if (source === "Update check failed") return "更新检查失败";
+      if (source === "Install update {version} and restart GOAT?") {
+        return gtFallback("安装更新 {version} 并重启 GOAT？", args);
+      }
+      return gtFallback(source, args);
+    };
+    const state = { ...baseState, status: "available" as const, availableVersion: "1.1.0" };
+    expect(getDesktopUpdateButtonTooltip(state, gt)).toBe("可下载更新 1.1.0");
+    expect(getDesktopUpdateInstallConfirmationMessage(state, gt)).toContain(
+      "安装更新 1.1.0 并重启 GOAT？",
+    );
+    expect(
+      getDesktopUpdateIdleTooltip(
+        {
+          ...baseState,
+          status: "error",
+          errorContext: "check",
+          message: "HTTP 504",
+        },
+        gt,
+      ),
+    ).toEqual({ title: "更新检查失败", detail: "HTTP 504 点击重试。" });
+  });
+
   it("builds the stable release URL for a downloaded version", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30", "")).toBe(
       "https://github.com/goat-si/goat-releases/releases/tag/v0.0.30",
@@ -234,4 +269,19 @@ it("does not show recovery advice when the updater is disabled", () => {
   expect(
     getDesktopUpdateStatusText({ ...baseState, enabled: false, recoveryStatus: "restoring" }),
   ).toBe("Automatic updates are disabled.");
+});
+
+it("translates the desktop's disabled reason across update surfaces and preserves external diagnostics", () => {
+  const reason = "Automatic updates are not available because no update feed is configured.";
+  const gt: DesktopUpdateTranslate = (source) =>
+    source === reason ? "未配置更新源" : `translated: ${source}`;
+  for (const [message, expected] of [
+    [reason, "未配置更新源"],
+    ["HTTP 503", "HTTP 503"],
+  ] as const) {
+    const state = { ...baseState, enabled: false, status: "disabled" as const, message };
+    expect(getDesktopUpdateButtonTooltip(state, gt)).toBe(expected);
+    expect(getDesktopUpdateIdleTooltip(state, gt).detail).toBe(expected);
+    expect(getDesktopUpdateStatusText(state, gt)).toBe(expected);
+  }
 });
