@@ -57,6 +57,17 @@ If a version manager gives your terminal a newer Node.js than GOAT, set the inst
 If the CLI needs sign-in, run `mcode login` on that machine, or `mcode login --region global`
 for a global (non-mainland China) account.
 
+On macOS or Linux with a direct `mcode acp` installation, set `MINIMAX_DATA_DIR` under the provider
+instance’s **Variables** to the absolute path of the MCode data directory for the profile you use
+on that environment. Then enable **Show MiniMax Code quota** in that instance’s settings to see its
+signed-in account’s limits in Fleet. The setting is off by default and can be turned off again at
+any time. GOAT reads the local MCode login token only when this setting is on and sends it only to
+MiniMax to check quota. It does not use an API key. If GOAT cannot determine the region from the
+profile’s saved preference, set `MAVIS_REGION` to `cn` (mainland China) or `en` (global). GOAT does
+not show quota if the login is unavailable, expired, or stored outside the MCode data directory.
+Enter these routing variables as plain values, not secret references.
+Quota lookup relies on private MiniMax endpoints and may become unavailable if MiniMax changes them.
+
 If a new thread fails to open after switching models, try the model currently selected in
 MCode. With CLI 0.7.8, switching from **M3.1-Flash · thinking** to **M3.1-Flash** can
 return an internal error from the agent’s ACP model selector.

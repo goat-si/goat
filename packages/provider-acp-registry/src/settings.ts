@@ -5,6 +5,20 @@ import * as Schema from "effect/Schema";
 export const AcpRegistryDistributionPreference = Schema.Literals(["auto", "binary", "npx", "uvx"]);
 export type AcpRegistryDistributionPreference = typeof AcpRegistryDistributionPreference.Type;
 
+/** Recognize the direct preset launch, not an arbitrary ACP launcher or wrapper. */
+export function isMiniMaxCode(settings: unknown): boolean {
+  if (settings === null || typeof settings !== "object") return false;
+  const { source, commandPath, commandArgs } = settings as Record<string, unknown>;
+  return (
+    source === "local" &&
+    typeof commandPath === "string" &&
+    commandPath.trim().split("/").at(-1) === "mcode" &&
+    Array.isArray(commandArgs) &&
+    commandArgs.length === 1 &&
+    commandArgs[0] === "acp"
+  );
+}
+
 export const AcpRegistrySettings = makeProviderSettingsSchema(
   {
     source: Schema.Literals(["registry", "local"]).pipe(
@@ -45,6 +59,15 @@ export const AcpRegistrySettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
+    readMiniMaxCodeQuota: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Show MiniMax Code quota",
+        description:
+          "When on, GOAT reads the login token from the MiniMax Code data directory you set in Variables (MINIMAX_DATA_DIR) and sends it only to MiniMax to check quota. No API key is needed.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
     authMethodId: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -64,7 +87,7 @@ export const AcpRegistrySettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["source", "agentId", "commandPath", "authMethodId"],
+    order: ["source", "agentId", "commandPath", "readMiniMaxCodeQuota", "authMethodId"],
   },
 );
 export type AcpRegistrySettings = typeof AcpRegistrySettings.Type;

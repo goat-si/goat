@@ -1213,7 +1213,7 @@ export function ProviderInstanceCard({
       environmentId={environmentId}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
-      variant="settings"
+      variant="instance-settings"
       onChange={updateConfig}
     />
   ) : (

@@ -72,4 +72,25 @@ describe("ProviderSettingsForm helpers", () => {
 
     expect(next).toEqual({ experimental: false });
   });
+
+  it("offers a default-off quota switch only for direct MiniMax Code, and can remove consent", () => {
+    const acp = providerClients.get(ProviderDriverKind.make("acpRegistry"))!;
+    const local = { source: "local", commandPath: "mcode", commandArgs: ["acp"] };
+    const quota = (config: unknown) =>
+      deriveProviderSettingsFields(acp, config).find(
+        (field) => field.key === "readMiniMaxCodeQuota",
+      );
+    const field = quota(local);
+    expect(field).toMatchObject({
+      control: "switch",
+      defaultBooleanValue: false,
+      label: "Show MiniMax Code quota",
+    });
+    const optedIn = nextProviderConfigWithFieldValue(local, field!, true);
+    expect(optedIn).toEqual({ ...local, readMiniMaxCodeQuota: true });
+    expect(nextProviderConfigWithFieldValue(optedIn, field!, false)).toEqual(local);
+    expect(quota({ ...local, commandPath: "omp" })).toBeUndefined();
+    expect(quota({ ...local, commandArgs: ["login"] })).toBeUndefined();
+    expect(quota({ source: "registry", agentId: "minimax-code" })).toBeUndefined();
+  });
 });
