@@ -4,7 +4,6 @@ import {
   type ThreadGuestShare,
 } from "@goat/contracts";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
-import type { PendingFoldFeedEntry } from "./pending-turn-feed";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { threadHasCaughtUpTo } from "@goat/client-runtime/state/threads";
 import type {
@@ -28,6 +27,13 @@ export type PendingThreadFeedEntry = ThreadFeedEntry & {
   readonly pendingMessage?: QueuedThreadMessage;
   readonly acknowledged?: boolean;
 };
+
+export interface PendingFoldFeedEntry {
+  readonly type: "pending-fold";
+  readonly id: string;
+  readonly createdAt: string;
+  readonly messageId: string;
+}
 
 // An acknowledged row stops being pending once the thread catches up to it,
 // even when the feed hides that message (a rolled-back or cancelled run).

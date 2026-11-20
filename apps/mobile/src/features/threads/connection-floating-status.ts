@@ -1,14 +1,19 @@
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
-import type { FloatingWorkingStatus } from "./floating-working-status";
+
+export interface ConnectionFloatingStatus {
+  readonly kind: "connection";
+  readonly label: string;
+  readonly onPress: () => void;
+}
 
 export function connectionFloatingStatus(input: {
   readonly connectionError: string | null;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly environmentLabel: string | null;
   readonly onReconnect: () => void;
-}): FloatingWorkingStatus | null {
+}): ConnectionFloatingStatus | null {
   const environmentLabel = input.environmentLabel ?? "Environment";
-  const unavailable = (label: string): FloatingWorkingStatus => ({
+  const unavailable = (label: string): ConnectionFloatingStatus => ({
     kind: "connection",
     label,
     onPress: input.onReconnect,

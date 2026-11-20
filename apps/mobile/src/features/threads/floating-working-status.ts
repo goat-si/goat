@@ -19,6 +19,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import type { ConnectionFloatingStatus } from "./connection-floating-status";
 
 export interface FloatingStatusAction {
   readonly label: string;
@@ -51,11 +52,7 @@ export type FloatingWorkingStatus =
       readonly accessibilityLabel: string;
       readonly onPress: () => void;
     }
-  | {
-      readonly kind: "connection";
-      readonly label: string;
-      readonly onPress: () => void;
-    };
+  | ConnectionFloatingStatus;
 
 export const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("mobile-thread-run-stop:empty"),
