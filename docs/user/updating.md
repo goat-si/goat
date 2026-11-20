@@ -204,10 +204,10 @@ the live database, the pre-update snapshot directory, and the recovery
 acknowledgement file. The launcher stops when it cannot safely resume an
 interrupted update or verify the database before starting either release.
 The live files may be incomplete or contain newer writes. If the
-snapshot is missing, use another verified backup taken before the update. The
-live database has already been upgraded and the previous release cannot read
-it, so without a pre-update backup, stop after step 2 and run the newer release
-again rather than restoring the previous one.
+snapshot is missing, use another verified backup taken before the update. A copy
+of the live database is not a substitute: it may already be upgraded, and the
+previous release cannot read an upgraded database. If you have no pre-update
+backup, stop after step 2, keep those copies, and ask for help before restarting.
 
 1. Stop every server using that home, including any desktop instance, foreground
    server, or background service that uses it. On Linux, run
