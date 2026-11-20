@@ -1,3 +1,8 @@
+import { useSetupDetails } from "./use-setup-details";
+import { ThreadStatusLine, type ThreadStatusLineModel } from "./thread-status-line";
+import { useMarkdownStyles, type MarkdownStyleSets } from "./threadMarkdownStyles";
+import { createPendingTurnAppender } from "./pending-turn-feed";
+import { RunFoldWorking } from "./RunFoldWorking";
 import { UserMessageVideo } from "./UserMessageVideo";
 import { MessageAttachmentUnknown } from "./MessageAttachmentUnknown";
 import { rememberSentImage, sentImageHandoff } from "../../lib/sentImageHandoff";
@@ -44,8 +49,11 @@ import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
   WorktreePreparingHeader,
-  WorktreeWorkingHeader,
   WorktreeSetupCard,
+  WorktreeSetupDetails,
+  WorktreeSetupDetailsLink,
+  WorktreeSetupFoldChip,
+  worktreeSetupHandedOff,
   type WorktreeSetupCardProps,
 } from "./worktree-setup-card";
 import * as Haptics from "expo-haptics";
@@ -145,14 +153,12 @@ import { readMobileMediaConnection, routeMobileMediaUrl } from "../../lib/enviro
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { inlineFilePreviewKind, isPdfFile } from "../../lib/filePreview";
 import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
-import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
-import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
@@ -194,7 +200,6 @@ import {
   type LayoutVariant,
   THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
-import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
@@ -311,7 +316,7 @@ export interface ThreadFeedHandle {
 export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
-  readonly setupWorkingStartedAt?: string | null;
+  readonly worktreeSetupDetails?: WorktreeSetupCardProps | null;
   readonly preparingWorktree?: boolean;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
@@ -326,6 +331,7 @@ export interface ThreadFeedProps {
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly pendingHandoff?: HandoffEndpoints | null;
+  readonly statusLines?: ReadonlyArray<ThreadStatusLineModel>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -600,107 +606,6 @@ function ThreadMediaVisibility(props: { readonly children: ReactNode }) {
   return <ThreadMediaVisibleContext value={visible}>{props.children}</ThreadMediaVisibleContext>;
 }
 
-interface MarkdownStyleSets {
-  readonly user: MarkdownStyleSet;
-  readonly assistant: MarkdownStyleSet;
-}
-
-function useMarkdownStyles(): MarkdownStyleSets {
-  const { appearance } = useAppearancePreferences();
-  const nativeMarkdownTypography = useMemo(
-    () => resolveNativeMarkdownTypography(appearance.baseFontSize),
-    [appearance.baseFontSize],
-  );
-  const theme = useUniwindTheme();
-  const markdownBodyColor = theme["--color-md-body"];
-  const markdownStrongColor = theme["--color-md-strong"];
-  const markdownLinkColor = theme["--color-md-link"];
-  const markdownBlockquoteBorder = theme["--color-md-blockquote-border"];
-  const markdownCodeBg = theme["--color-md-code-bg"];
-  const markdownCodeText = theme["--color-md-code-text"];
-  const markdownInlineCodeText = theme["--color-foreground-secondary"];
-  const markdownHrColor = theme["--color-md-hr"];
-  // Native chip drawing parses opaque hex only, and this role is translucent.
-  const contextChipBorderColor = flattenThemeColor(
-    theme["--color-border"],
-    theme["--color-user-bubble"],
-  );
-  const markdownUserBodyColor = theme["--color-user-bubble-foreground"];
-  const markdownUserCodeBg = theme["--color-md-user-code-bg"];
-  const markdownUserCodeText = theme["--color-md-user-code-text"];
-  const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
-  const markdownUserFenceBg = theme["--color-md-user-fence-bg"];
-  const regularFontFamily = FONT_FAMILIES.regular;
-  const boldFontFamily = FONT_FAMILIES.bold;
-
-  return useMemo(() => {
-    return {
-      user: {
-        nativeTextStyle: {
-          color: markdownUserBodyColor,
-          strongColor: markdownUserBodyColor,
-          mutedColor: markdownUserBodyColor,
-          linkColor: markdownUserBodyColor,
-          inlineCodeColor: markdownUserInlineCodeText,
-          codeColor: markdownUserCodeText,
-          codeBackgroundColor: markdownUserCodeBg,
-          codeBlockBackgroundColor: markdownUserFenceBg,
-          fileTextColor: markdownUserBodyColor,
-          quoteMarkerColor: markdownUserBodyColor,
-          dividerColor: markdownUserBodyColor,
-          contextChipBorderColor,
-          fontSize: nativeMarkdownTypography.fontSize,
-          lineHeight: nativeMarkdownTypography.lineHeight,
-          headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-          fontFamily: regularFontFamily,
-          headingFontFamily: boldFontFamily,
-          boldFontFamily,
-        },
-      },
-      assistant: {
-        nativeTextStyle: {
-          color: markdownBodyColor,
-          strongColor: markdownStrongColor,
-          mutedColor: markdownBodyColor,
-          linkColor: markdownLinkColor,
-          inlineCodeColor: markdownInlineCodeText,
-          codeColor: markdownCodeText,
-          codeBackgroundColor: markdownCodeBg,
-          codeBlockBackgroundColor: markdownCodeBg,
-          fileTextColor: markdownCodeText,
-          quoteMarkerColor: markdownBlockquoteBorder,
-          dividerColor: markdownHrColor,
-          contextChipBorderColor,
-          fontSize: nativeMarkdownTypography.fontSize,
-          lineHeight: nativeMarkdownTypography.lineHeight,
-          headingFontSizes: nativeMarkdownTypography.headingFontSizes,
-          fontFamily: regularFontFamily,
-          headingFontFamily: boldFontFamily,
-          boldFontFamily,
-        },
-      },
-    };
-  }, [
-    boldFontFamily,
-    contextChipBorderColor,
-    markdownBlockquoteBorder,
-    markdownBodyColor,
-    markdownCodeBg,
-    markdownCodeText,
-    markdownHrColor,
-    markdownInlineCodeText,
-    markdownLinkColor,
-    markdownStrongColor,
-    markdownUserBodyColor,
-    markdownUserCodeBg,
-    markdownUserCodeText,
-    markdownUserFenceBg,
-    markdownUserInlineCodeText,
-    nativeMarkdownTypography,
-    regularFontFamily,
-  ]);
-}
-
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
 function ThreadAutomationMessageRow(props: {
   readonly environmentId: EnvironmentId;
@@ -915,6 +820,10 @@ function renderFeedEntry(
     | "threadId"
     | "workspaceRoot"
   > & {
+    readonly setupFoldRowId: string | null;
+    readonly worktreeSetup: WorktreeSetupCardProps | null;
+    readonly setupDetailsOpen: boolean;
+    readonly onOpenSetupDetails: () => void;
     readonly formatMessageTime: (input: string) => string;
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -973,18 +882,41 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "pending-fold") {
+    return (
+      <View
+        className="mb-1 border-b border-border-subtle px-2"
+        style={{ height: TURN_FOLD_HEIGHT }}
+      />
+    );
+  }
+
   if (entry.type === "run-fold") {
     return (
       <View className="mb-1 flex-row items-center border-b border-border-subtle px-2">
-        <RunFoldButton
-          key={entry.id}
-          entry={entry}
-          environmentId={props.environmentId}
-          threadId={props.threadId}
-          onToggle={props.onToggleTurnFold}
-          rowSizing={props.workRowSizing}
-          iconColor={iconSubtleColor}
-        />
+        {entry.workingSince ? (
+          <RunFoldWorking
+            startedAt={entry.workingSince}
+            minHeight={Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight)}
+          />
+        ) : (
+          <RunFoldButton
+            key={entry.id}
+            entry={entry}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            onToggle={props.onToggleTurnFold}
+            rowSizing={props.workRowSizing}
+            iconColor={iconSubtleColor}
+          />
+        )}
+        {props.worktreeSetup && entry.id === props.setupFoldRowId ? (
+          <WorktreeSetupFoldChip
+            {...props.worktreeSetup}
+            detailsOpen={props.setupDetailsOpen}
+            onOpenDetails={props.onOpenSetupDetails}
+          />
+        ) : null}
         {entry.checkpointSummary ? (
           <TurnDiffStat
             checkpoint={entry.checkpointSummary}
@@ -2416,7 +2348,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       />
     ) : null;
   };
-  const markdownStyles = useMarkdownStyles();
+  const markdownStyles = useMarkdownStyles(theme);
   const renderReasoning = (text: string) => (
     <AssistantMarkdownContent
       markdown={text}
@@ -2436,14 +2368,16 @@ export const ThreadFeed = memo(function ThreadFeed({
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
+  const setupDetails = useSetupDetails(scopedThreadKey(props.environmentId, props.threadId));
   const listAppearanceData = {
+    setupDetailsOpen: setupDetails.isOpen,
     formatMessageTime,
     disclosureLayout,
     // Handoff cards read it through renderItem; a visible card must follow a reconnect.
     offline: props.offline,
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
-    setupWorkingStartedAt: props.setupWorkingStartedAt,
+    worktreeSetupDetails: props.worktreeSetupDetails,
     preparingWorktree: props.preparingWorktree,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
@@ -2545,8 +2479,12 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const { jumpToMessageId } = props;
   const jumpReady = !!jumpToMessageId && loadedListKey === `${feedThreadKey}:filled`;
+  const [appendPendingTurn] = useState(createPendingTurnAppender);
   const presentedFeed = appendGuestPendingMessages(
-    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups),
+    appendPendingTurn(useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups), {
+      zen: props.toolCallVisibility === "zen",
+      dispatchingMessageId: props.dispatchingMessageId,
+    }),
     guestShare,
   );
   const jumpRunId =
@@ -2562,12 +2500,35 @@ export const ThreadFeed = memo(function ThreadFeed({
   }
   const setupPresentation = worktreeSetupPresentation({
     hasSetup: !!props.worktreeSetup,
-    working: !!props.setupWorkingStartedAt,
     preparing: !!props.preparingWorktree,
   });
+  const finishedSetupDetails =
+    !props.worktreeSetup &&
+    props.worktreeSetupDetails &&
+    props.worktreeSetupDetails.snapshot.phase === "done" &&
+    !props.worktreeSetupDetails.snapshot.stages.some((stage) => stage.status === "failed") &&
+    worktreeSetupHandedOff(props.worktreeSetupDetails);
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
+  const setupPrompt = presentedFeed[setupAnchorIndex];
+  const setupRunId =
+    setupPrompt?.type === "message"
+      ? (setupPrompt.message.runId ??
+        (presentedFeed.filter((entry) => entry.type === "message" && entry.message.role === "user")
+          .length === 1
+          ? (props.latestRun?.runId ?? `runless:${setupPrompt.id}`)
+          : `runless:${setupPrompt.id}`))
+      : null;
+  const setupFoldRowId =
+    props.worktreeSetup &&
+    worktreeSetupHandedOff(props.worktreeSetup) &&
+    props.worktreeSetup.snapshot.phase === "running"
+      ? (presentedFeed.find(
+          (entry, index) =>
+            index > setupAnchorIndex && entry.type === "run-fold" && entry.runId === setupRunId,
+        )?.id ?? null)
+      : null;
   // The empty↔filled key below remounts the list and resets its imperative
   // content-inset override. Seed each fresh instance as it attaches with the
   // current overlay height before the scroll integration's next reaction;
@@ -2944,6 +2905,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   // corrects each row's height as it mounts — the feed visibly jumps.
   const getFixedItemSize = (entry: ThreadFeedRow) => {
     if (entry.type === "guest-pending") return undefined;
+    if (entry.type === "pending-fold") return resolveThreadFeedFixedItemSize("run-fold");
     if (entry.type === "html-render") {
       return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
     }
@@ -3031,6 +2993,10 @@ export const ThreadFeed = memo(function ThreadFeed({
           ) : null}
           <FeedEntryShimmerContext value={info.index}>
             {renderFeedEntry(info, {
+              setupFoldRowId,
+              worktreeSetup: props.worktreeSetup ?? null,
+              setupDetailsOpen: setupDetails.isOpen,
+              onOpenSetupDetails: setupDetails.open,
               formatMessageTime,
               environmentId: props.environmentId,
               offline: props.offline,
@@ -3076,9 +3042,15 @@ export const ThreadFeed = memo(function ThreadFeed({
             })}
           </FeedEntryShimmerContext>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
-            <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
-          ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
-            <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
+            <WorktreeSetupCard
+              key={props.threadId}
+              {...props.worktreeSetup}
+              detailsOpen={setupDetails.isOpen}
+              onOpenDetails={setupDetails.open}
+              foldAvailable={setupFoldRowId !== null}
+            />
+          ) : finishedSetupDetails && info.index === setupAnchorIndex ? (
+            <WorktreeSetupDetailsLink onOpen={setupDetails.open} />
           ) : setupPresentation === "preparing" && info.index === setupAnchorIndex ? (
             <WorktreePreparingHeader />
           ) : null}
@@ -3170,6 +3142,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
             keyExtractor={(entry) => entry.id}
             getItemType={(entry) => {
+              if (entry.type === "pending-fold") return "run-fold";
               if (entry.type !== "message") return entry.type;
               if (isCompactionCommandFeedEntry(entry)) return "message:compaction";
               if (
@@ -3224,7 +3197,16 @@ export const ThreadFeed = memo(function ThreadFeed({
               <View style={settling ? { opacity: 0 } : undefined}>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
-                  <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+                  <WorktreeSetupCard
+                    key={props.threadId}
+                    {...props.worktreeSetup}
+                    detailsOpen={setupDetails.isOpen}
+                    onOpenDetails={setupDetails.open}
+                    foldAvailable={setupFoldRowId !== null}
+                  />
+                ) : null}
+                {setupAnchorIndex < 0 && finishedSetupDetails ? (
+                  <WorktreeSetupDetailsLink onOpen={setupDetails.open} />
                 ) : null}
                 {setupAnchorIndex < 0 && setupPresentation === "preparing" ? (
                   <WorktreePreparingHeader />
@@ -3236,14 +3218,21 @@ export const ThreadFeed = memo(function ThreadFeed({
               </View>
             }
             ListFooterComponent={
-              props.pendingHandoff ? (
-                <ThreadHandoffDivider
-                  environmentId={props.environmentId}
-                  endpoints={props.pendingHandoff}
-                  iconColor={iconSubtleColor}
-                  surfaceColor={screenColor}
-                  label="Context handoff pending"
-                />
+              props.pendingHandoff || props.statusLines?.length ? (
+                <View>
+                  {props.pendingHandoff ? (
+                    <ThreadHandoffDivider
+                      environmentId={props.environmentId}
+                      endpoints={props.pendingHandoff}
+                      iconColor={iconSubtleColor}
+                      surfaceColor={screenColor}
+                      label="Context handoff pending"
+                    />
+                  ) : null}
+                  {props.statusLines?.map((line) => (
+                    <ThreadStatusLine key={line.key} line={line} iconColor={iconSubtleColor} />
+                  ))}
+                </View>
               ) : null
             }
             contentContainerStyle={{
@@ -3272,6 +3261,9 @@ export const ThreadFeed = memo(function ThreadFeed({
               horizontalPadding={horizontalPadding}
             />
           </View>
+        ) : null}
+        {setupDetails.isOpen && props.worktreeSetupDetails ? (
+          <WorktreeSetupDetails {...props.worktreeSetupDetails} onClose={setupDetails.close} />
         ) : null}
         <VideoPreviewModal source={expandedVideo} onRequestClose={closeVideoPreview} />
         <FilePreviewModal source={expandedFile} onRequestClose={closeFilePreview} />

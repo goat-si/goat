@@ -13,10 +13,8 @@ export function resolveWorktreeSetupSnapshot(
 
 export function worktreeSetupPresentation(input: {
   hasSetup: boolean;
-  working: boolean;
   preparing: boolean;
-}): "setup" | "working" | "preparing" | "none" {
+}): "setup" | "preparing" | "none" {
   if (input.hasSetup) return "setup";
-  if (input.working) return "working";
   return input.preparing ? "preparing" : "none";
 }

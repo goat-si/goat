@@ -1,3 +1,5 @@
+import { latestRunsEqual, feedEntryRunId, isUserMessageEntry } from "./threadFeedIdentity";
+import { createLiveFold } from "./threadLiveFold";
 import { liveToolActivitySummary } from "./threadLiveToolSummary";
 import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
@@ -965,28 +967,6 @@ interface ThreadFeedPresentationBuild {
   readonly firstEntryByRun: ReadonlyMap<RunId, number>;
 }
 
-function latestRunsEqual(left: ThreadFeedLatestRun | null, right: ThreadFeedLatestRun | null) {
-  return (
-    left === right ||
-    (left !== null &&
-      right !== null &&
-      left.runId === right.runId &&
-      left.status === right.status &&
-      left.startedAt === right.startedAt &&
-      left.completedAt === right.completedAt &&
-      left.turnEnded === right.turnEnded &&
-      left.providerStartingLabel === right.providerStartingLabel)
-  );
-}
-
-function feedEntryRunId(entry: ThreadFeedEntry): RunId | null {
-  return entry.type === "message" ? (entry.message.runId ?? null) : entry.runId;
-}
-
-function isUserMessageEntry(entry: ThreadFeedEntry | undefined): boolean {
-  return entry?.type === "message" && entry.message.role === "user";
-}
-
 /**
  * A user message starts every fold and is never hidden or grouped, so the
  * rows before it depend only on the entries before it, their runs, and the
@@ -1142,8 +1122,20 @@ export function deriveThreadFeedPresentation(
       for (const entryId of fold.hiddenEntryIds) collapsedEntryIds.add(entryId);
     }
   }
+  const liveFold = createLiveFold({
+    feed: sourceFeed,
+    prefix: result,
+    activeRunId,
+    startedAt: activeWorkStartedAt,
+    working: isWorking,
+    runless: runlessWorkActive,
+    zen,
+    compactionRuns: compactionCommandRunIds,
+  });
   for (let sourceIndex = 0; sourceIndex < sourceFeed.length; sourceIndex += 1) {
     const entry = sourceFeed[sourceIndex]!;
+    const liveRow = liveFold.before(entry);
+    if (liveRow) result.push(liveRow);
     const feedIndex = retainedFeedIndices[sourceIndex]!;
     if (isUserMessageEntry(entry)) {
       restarts.push({ entry: feedIndex, rowsLength: result.length });
@@ -1225,6 +1217,8 @@ export function deriveThreadFeedPresentation(
       );
     }
   }
+  const trailingLiveFold = liveFold.end();
+  if (trailingLiveFold) result.push(trailingLiveFold);
   if (
     isWorking &&
     activeWorkStartedAt !== null &&

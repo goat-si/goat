@@ -1130,6 +1130,7 @@ describe("buildThreadFeed", () => {
       "fold:Worked for 8.0s",
       "assistant:launch-answer",
       "user:resume",
+      "fold:Working",
       "activity-group",
     ]);
   });
@@ -1260,7 +1261,7 @@ describe("buildThreadFeed", () => {
         new Set(),
         startedAt,
       ),
-    ).toEqual([]);
+    ).toMatchObject([{ type: "run-fold", label: "Working" }]);
   });
 
   it("pretty prints T3 MCP dynamic tool activities and attaches the product logo", () => {

@@ -116,7 +116,7 @@ describe("resolveThreadFeedSubmissionAnchor", () => {
     ).toBe("first-message");
   });
 
-  it("does not anchor a follow-up after a user message appears", () => {
+  it("keeps the first message's anchor, not the follow-up's, after a user message appears", () => {
     expect(
       resolveThreadFeedSubmissionAnchor({
         currentAnchorMessageId: "first-message",
@@ -126,7 +126,7 @@ describe("resolveThreadFeedSubmissionAnchor", () => {
         deliveryDeferred: false,
         queuedMessageCount: 0,
       }),
-    ).toBeNull();
+    ).toBe("first-message");
   });
 
   // regression: #7897 stop pushing follow-up messages to the top
