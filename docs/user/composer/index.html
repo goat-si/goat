@@ -154,6 +154,9 @@ into a normal draft.</p>
 the conversation to before that message. Choose <strong>Revert and keep changes</strong> to
 leave workspace files as they are, or <strong>Revert files too</strong> to put the workspace back
 to its checkpoint from before that message. That also undoes edits you made yourself.
+Files you hid from Git with <code>git update-index --skip-worktree</code> or <code>--assume-unchanged</code> are
+restored too. Afterward, such a file shows as modified again if its restored content differs
+from your last commit.
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
@@ -216,6 +219,12 @@ environment. When acceleration is automatic, both are shown because transcriptio
 may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.</p>
+<p>With a supported speech model, the composer and review comments show a live
+transcript while you record. To transcribe only after recording stops, choose
+<strong>Transcribe after I stop recording</strong> in the microphone’s options; this choice
+belongs to the device. If live transcription is interrupted, GOAT transcribes
+the full recording when you stop. Desktop Browser annotation comments and iPhone
+dictation continue to transcribe after recording stops.</p>
 <p>Model management requires the explicit <code>voice:manage</code> permission; ordinary pairing
 does not grant it. On the environment’s machine, create a pairing with:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:operate</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> voice:manage</span></span></code></pre>
@@ -244,10 +253,13 @@ shortcut described above.</p>
 the text. Drag a row by its handle to reorder it, use the handle’s arrow keys, promote the message
 to a steer, or remove it.</p>
 <p>If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press <strong>Resume</strong> in an empty composer to continue. Resume also continues a stopped run or one
-that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue,
-unless it steers a turn that is already running. You can edit, reorder, or remove held messages
-without starting them.</p>
+Press <strong>Resume</strong> in an empty composer to continue. When the provider supports native Resume,
+it continues the stopped or limited run without adding a message. GOAT can resend a request
+the provider never accepted. If GOAT cannot confirm delivery, Resume reports that
+uncertainty so you can decide what to send next. If Resume asks for a new message,
+send one to continue.
+Sending a new message also resumes the queue, unless it steers a turn that is already running.
+You can edit, reorder, or remove held messages without starting them.</p>
 <p>The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message’s
 attachments appear above the text with a remove control, and new images can be added the usual way.

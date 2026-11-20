@@ -53,9 +53,14 @@ without replaying its transitions.</p>
 <p>On web and desktop, choose <strong>Create theme</strong> to adjust a palette, or import a GOAT or VS Code
 theme. The theme editor’s color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.</p>
+<p>The editor also accepts scoped CSS for colors and opacity on supported app elements. CSS cannot
+load images or other resources; use the background setting for images. Themes with unsupported
+CSS are rejected when imported or saved.</p>
 <h2 id="environment-themes">Environment themes</h2>
 <p>Environment themes and defaults come from the server serving your web app or the desktop app’s
 main local environment. Additional connections do not use them.</p>
+<p>To let agents publish and select environment themes, enable <strong>Agent theme changes</strong> in Settings.
+This is off by default and agents cannot enable it themselves.</p>
 <p>Select a published theme in <strong>Settings → Appearance</strong> to follow its palette as the server updates
 it. <strong>Duplicate</strong> makes an independent copy you can edit. A saved custom theme with the same ID
 takes precedence. If the server stops publishing the selected theme, GOAT falls back to its
@@ -66,7 +71,9 @@ standard theme.</p>
 choosing another theme afterward sticks until the next <code>goat theme set</code>. Run the command again to
 reapply it, even if the name is unchanged.</p>
 <p><code>goat theme clear</code> removes the default without changing anyone’s current theme. <code>goat theme show</code> lists
-the default and published themes.</p>
+the default and published themes.
+An agent can select the stock theme for connected clients with an empty theme ID; this is different
+from clearing the environment default.</p>
 <h3 id="publish-a-theme">Publish a theme</h3>
 <p>Save a theme exported from GOAT into the server’s <code>userdata/themes/</code> folder:
 <code>~/.goat/userdata/themes/</code> for <code>goat serve</code>, <code>~/.goat/desktop/userdata/themes/</code> for the desktop
@@ -74,6 +81,10 @@ app, or <code>&lt;path&gt;/userdata/themes/</code> for a server started with <co
 supplies the theme ID: <code>nightfall.json</code>
 can be selected with <code>goat theme set nightfall</code>. Keep the filename stable when updating its colors.
 Do not use <code>system</code>, <code>light</code>, <code>dark</code>, or a built-in theme’s ID.</p>
+<p>To add a published background, place a PNG, JPEG, or WebP image of at most 16 MiB beside the
+theme file with the same name, such as <code>nightfall.png</code>. Web and desktop show it when the published
+theme is selected. A saved theme with the same ID keeps its own appearance and does not use the
+published background.</p>
 <p>For an integration that generates a palette, this shorter format also works:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
 <span class="line"><span style="color:#79B8FF">  "name"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"Nightfall"</span><span style="color:#E1E4E8">,</span></span>

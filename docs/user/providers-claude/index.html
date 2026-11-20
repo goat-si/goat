@@ -3,6 +3,10 @@
 <p>GOAT uses Claude Code’s login and configuration. Start with the default provider
 for one account; <a href="/goat/docs/user/install/#providers">provider setup</a> covers installation and
 shared provider settings.</p>
+<p>On macOS and Linux, closing a Claude session stops the background helpers that
+session started, such as a dev server, a Gradle or adb daemon, or a compiler
+cache. A build in another session that was using one of those helpers fails and
+has to be run again; the helper starts again when next needed.</p>
 <h2 id="claude-cloud">Claude Cloud</h2>
 <p>Claude Cloud appears automatically in <strong>Settings &gt; Providers</strong>. Sign in to Claude with a
 claude.ai account, either from the Claude Cloud card or the Claude provider card. The cloud

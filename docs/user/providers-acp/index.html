@@ -122,8 +122,8 @@ the agent exposes: ACP has no portable native subagent-lineage contract, so rich
 remain agent-specific.</p>
 <h2 id="checkpoints">Checkpoints</h2>
 <p>Checkpoint rollback restores your files as usual. ACP agents cannot rewind their own conversation,
-so the next turn after a rollback starts a fresh agent session that no longer remembers the
-conversation from before the checkpoint.</p>
+so the next turn after a rollback starts a fresh agent session. GOAT sends it the kept
+conversation without the turns you rolled back.</p>
 <p>Registry instances are not used for GOAT’s app-owned text generation, such as thread titles, commit
 messages, branch names, or pull request descriptions. Configure a text-generation-capable provider
 for those actions.</p>
