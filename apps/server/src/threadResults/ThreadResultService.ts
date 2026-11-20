@@ -2,6 +2,8 @@ import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
+  isGoatBotSessionThreadId,
+  isOrchestrationV2WorkActive,
   type OrchestrationV2AppThread,
   type OrchestrationV2Run,
   type RunId,
@@ -11,6 +13,7 @@ import {
   type ThreadResultPullRequest,
   ThreadResultReport,
 } from "@goat/contracts";
+import { subagentHoldsCompletion } from "@goat/provider-core/server/subagentProjection";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -25,11 +28,13 @@ import { readObservedCheck, readObservedCheckState } from "./ObservedCheckServic
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
   {
-    reason: Schema.Literals(["run_not_found", "run_mismatch", "storage"]),
+    reason: Schema.Literals(["run_not_found", "run_mismatch", "delegates_pending", "storage"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.reason === "delegates_pending")
+      return "Delegated results are outstanding. Wait for their notifications or read the results with task.status, then report what each task returned.";
     return this.reason === "run_not_found"
       ? "The thread has no run to report on."
       : this.reason === "run_mismatch"
@@ -220,6 +225,29 @@ const make = Effect.gen(function* () {
     if (input.runId !== undefined && run === undefined)
       return yield* new ThreadResultError({ reason: "run_mismatch" });
     if (run === undefined) return yield* new ThreadResultError({ reason: "run_not_found" });
+    if (isGoatBotSessionThreadId(threadId)) {
+      // A child result can wake the bot in a new run while a sibling is still working.
+      const { messages } = yield* threads
+        .getThreadRecords(threadId, ["messages"], { messageIds: [run.userMessageId] })
+        .pipe(Effect.mapError(storage));
+      const wake = messages[0]?.delegatedCompletion;
+      const { subagents } = yield* threads
+        .getThreadRecords(threadId, ["subagents"], {
+          subagentRunIds: wake === undefined ? [run.id] : [run.id, wake.parentRunId],
+        })
+        .pipe(Effect.mapError(storage));
+      if (
+        subagents.some(
+          (child) =>
+            child.origin === "app_owned" &&
+            child.promotedAt === undefined &&
+            (wake?.taskIds.includes(child.id)
+              ? isOrchestrationV2WorkActive(child.status)
+              : subagentHoldsCompletion(child)),
+        )
+      )
+        return yield* new ThreadResultError({ reason: "delegates_pending" });
+    }
     const reportedAt = DateTime.formatIso(yield* DateTime.now);
     const reportJson = yield* encodeReport(input).pipe(Effect.mapError(storage));
     yield* sql`

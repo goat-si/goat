@@ -350,7 +350,7 @@ it.effect("goat_thread_search keeps the link another host returned for its match
   }).pipe(Effect.provide(layerThreadTools)),
 );
 
-it.effect.each(["run_mismatch", "storage"] as const)(
+it.effect.each(["run_mismatch", "delegates_pending", "storage"] as const)(
   "maps report %s to the existing MCP error code",
   (reason) =>
     Effect.gen(function* () {
@@ -361,7 +361,7 @@ it.effect.each(["run_mismatch", "storage"] as const)(
         .handle("goat_thread_report_result", { runId: RunId.make("foreign"), outcome: "succeeded" })
         .pipe(Stream.unwrap, Stream.runCollect);
       expect(response.at(-1)?.result).toMatchObject({
-        code: reason === "run_mismatch" ? "invalid_request" : "orchestration_error",
+        code: reason === "storage" ? "orchestration_error" : "invalid_request",
       });
     }).pipe(
       Effect.provide(
