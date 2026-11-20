@@ -30,8 +30,10 @@ import {
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
 import {
+  commandlessCommandLabel,
   contextCompactionLabel,
   formatCommandActionsLabel,
+  liveActivityToolStatus,
   liveThoughtLine,
   toolItemForDisplay,
   workEntryDisplayIndicatesToolFailure,
@@ -491,7 +493,12 @@ function toFeedActivity(
   const summary = itemSummary(item, toolPresentation);
   const detail = item.type === "notification" ? null : itemPreview(item);
   const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
-  const workEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const initialWorkEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const commandless = commandlessCommandLabel(
+    initialWorkEntry,
+    liveActivityToolStatus(initialWorkEntry.toolLifecycleStatus, false),
+  );
+  const workEntry = commandless ? { ...initialWorkEntry, label: commandless } : initialWorkEntry;
   const readPaths =
     item.type === "dynamic_tool" && toolGroupAction(workEntry) === "read"
       ? collectToolFilePaths(item)
@@ -1510,7 +1517,10 @@ function appendToolGroupRows(
       ? latestActivity.lifecycleStatus === "inProgress"
         ? "Thinking"
         : "Thought"
-      : liveToolActivitySummary(latestActivity, live)
+      : (commandlessCommandLabel(
+          latestActivity.workEntry,
+          liveActivityToolStatus(latestActivity.lifecycleStatus, live),
+        ) ?? liveToolActivitySummary(latestActivity, live))
     : singleActivity !== null &&
         singleActivity.toolLike &&
         toolGroupAction(singleActivity.workEntry) !== "edit"
