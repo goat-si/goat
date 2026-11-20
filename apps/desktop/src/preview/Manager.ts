@@ -1,3 +1,4 @@
+import { makeServerCaptureLease } from "./serverCaptureLease.ts";
 import { detachDestroyedTab, replaceMap } from "./detachDestroyedTab.ts";
 import {
   PreviewTabNotFoundError,
@@ -3231,6 +3232,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       { discard: true },
     );
   });
+  const captureLease = makeServerCaptureLease(startFrameCapture, stopFrameCapture);
   const updateServerTabCapturing = Effect.fn("PreviewManager.updateServerTabCapturing")(
     function* (painting: {
       readonly key: { readonly threadId: string; readonly tabId: string };
@@ -3241,6 +3243,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           candidate.serverTab?.threadId === painting.key.threadId &&
           candidate.serverTab.tabId === painting.key.tabId,
       );
+      yield* captureLease(painting, tab?.tabId);
       if (tab && tab.capturing !== painting.active) {
         yield* update(tab.tabId, { capturing: painting.active });
       }

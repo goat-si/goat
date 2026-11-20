@@ -1623,10 +1623,18 @@ describe("PreviewManager", () => {
       Effect.gen(function* () {
         const host = yield* DesktopBrowserHost.DesktopBrowserHost;
         const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const windowThrottling = vi.fn<(enabled: boolean) => void>();
+        const mainWebContents = Object.assign(makeTestHostWebContents(), {
+          setBackgroundThrottling: windowThrottling,
+        });
         const contents = Object.assign(
-          makeTestPreviewWebContents(async () => {
-            throw new Error("unused");
-          }, 42),
+          makeTestPreviewWebContents(
+            async () => {
+              throw new Error("unused");
+            },
+            42,
+            mainWebContents,
+          ),
           {
             isDevToolsOpened: () => false,
             getUserAgent: () => "Electron",
@@ -1639,6 +1647,11 @@ describe("PreviewManager", () => {
         ) as unknown as typeof contents.debugger.sendCommand;
         fromId.mockReturnValue(contents);
         const manager = yield* PreviewManager.PreviewManager;
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: mainWebContents,
+        } as never);
         const capturing = yield* Queue.unbounded<boolean>();
         yield* manager.subscribeStateChanges((_tabId, state) =>
           Queue.offer(capturing, state.capturing).pipe(Effect.asVoid),
@@ -1671,8 +1684,12 @@ describe("PreviewManager", () => {
           }),
         );
         expect(yield* Queue.take(capturing)).toBe(true);
+        expect(windowThrottling.mock.calls).toEqual([[false]]);
+        expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
         screenshot.resolve({ data: "" });
         expect(yield* Queue.take(capturing)).toBe(false);
+        expect(windowThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
       }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 
