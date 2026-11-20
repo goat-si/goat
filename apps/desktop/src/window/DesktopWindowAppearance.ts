@@ -59,7 +59,7 @@ export function syncWindowAppearance(
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
   materialActive = false,
-  hasTitleBarOverlay = false,
+  hasTitleBarOverlay: boolean,
 ): Effect.Effect<void> {
   return Effect.sync(() => {
     if (window.isDestroyed()) {
