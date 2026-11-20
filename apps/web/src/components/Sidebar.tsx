@@ -218,12 +218,7 @@ import { SIDEBAR_DRAG_DISTANCE, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { sameHolds, sameKeys } from "./Sidebar.equality";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
-import {
-  pickSnoozePreset,
-  resolveSnoozePresets,
-  snoozeWakeLabel,
-  type SnoozePreset,
-} from "./Sidebar.snooze";
+import { useSidebarSnooze, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { SidebarProjectScope } from "./sidebar/SidebarProjectScope";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
@@ -740,6 +735,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const { resolveSnoozePresets, pickSnoozePreset, snoozeLabels, bulkSnoozeLabel } =
+    useSidebarSnooze(timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -2034,9 +2031,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       // Presets sync across environments, so the first selected thread's stand for all.
       const snoozeEnvironmentId = selectedThreads[0]?.environmentId ?? null;
       const snoozePresets =
-        snoozeEnvironmentId === null
-          ? []
-          : resolveSnoozePresets(new Date(), timestampFormat, snoozeEnvironmentId);
+        snoozeEnvironmentId === null ? [] : resolveSnoozePresets(new Date(), snoozeEnvironmentId);
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
@@ -2052,7 +2047,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               ? [
                   {
                     id: "snooze",
-                    label: `Snooze (${count})`,
+                    label: bulkSnoozeLabel(count),
                     disabled: !canOperateThreads(selectedThreads),
                     children: [
                       ...snoozePresets.map((preset) => ({
@@ -2063,7 +2058,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       })),
                       {
                         id: "snooze:custom",
-                        label: "Custom…",
+                        label: snoozeLabels.custom,
                         separatorBefore: snoozePresets.length > 0,
                         disabled: !canOperateThreads(selectedThreads),
                       },
@@ -2117,7 +2112,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               : pickSnoozePreset(
                   snoozePresets,
                   clicked.value.slice("snooze:".length),
-                  timestampFormat,
                   snoozeEnvironmentId,
                 );
         if (preset) {
@@ -2455,11 +2449,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
-        const snoozePresets = resolveSnoozePresets(
-          new Date(),
-          timestampFormat,
-          thread.environmentId,
-        );
+        const snoozePresets = resolveSnoozePresets(new Date(), thread.environmentId);
         const threadProjectGroup =
           projectGroupsRef.current.find((project) =>
             project.memberProjectRefs.some(
@@ -2503,6 +2493,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
+              snoozeLabels,
             }),
             position,
           ),
@@ -2516,7 +2507,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               : pickSnoozePreset(
                   snoozePresets,
                   clicked.value.slice("snooze:".length),
-                  timestampFormat,
                   thread.environmentId,
                 );
           if (preset) attemptSnooze(threadRef, preset);

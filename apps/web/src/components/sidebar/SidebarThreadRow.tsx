@@ -10,6 +10,7 @@ import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
 import { threadOriginLabel } from "@goat/client-runtime/state/models";
 import { useSortable } from "@dnd-kit/sortable";
+import { useGT } from "gt-react";
 import { CSS } from "@dnd-kit/utilities";
 import {
   canSnooze,
@@ -498,6 +499,7 @@ function ThreadRenameInput(props: {
 }
 
 export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+  const gt = useGT();
   const {
     isRenaming,
     onCancelRename,
@@ -1116,7 +1118,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                   !props.snoozeSupported ? null : (
                     <button
                       type="button"
-                      aria-label="Wake thread now"
+                      aria-label={gt("Wake thread now")}
                       onClick={handleUnsnoozeClick}
                       onPointerDown={handleActionPointerDown}
                       className={cn(
