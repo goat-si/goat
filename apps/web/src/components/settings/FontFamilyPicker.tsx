@@ -189,8 +189,8 @@ export function FontFamilyPicker({
         />
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ComboboxEmpty>No fonts found.</ComboboxEmpty>
-          <div className="relative min-h-0 max-h-72 w-full flex-1 overflow-hidden">
-            <ComboboxListVirtualized>
+          <div className="relative flex min-h-0 max-h-72 w-full flex-1 flex-col overflow-hidden">
+            <ComboboxListVirtualized className="flex min-h-0 flex-col">
               <LegendList<string>
                 ref={listRef}
                 data={items}
@@ -201,6 +201,7 @@ export function FontFamilyPicker({
                 renderItem={({ item, index }) => renderItem(item, index)}
                 estimatedItemSize={30}
                 drawDistance={360}
+                className="min-h-0"
                 style={{ height: Math.min(items.length * 30, 288) }}
               />
             </ComboboxListVirtualized>
