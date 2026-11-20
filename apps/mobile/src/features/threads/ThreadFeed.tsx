@@ -1,3 +1,4 @@
+import { TurnMemoryDetails } from "./TurnMemoryDetails";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import {
   AssistantMarkdownBlocks,
@@ -3116,6 +3117,17 @@ export const ThreadFeed = memo(function ThreadFeed({
               workflowOpening,
             })}
           </FeedEntryShimmerContext>
+          {info.item.type === "message" &&
+          info.item.message.role === "user" &&
+          info.item.message.runId &&
+          info.item.message.inputIntent !== "steer" &&
+          info.item.message.inputIntent !== "promoted_queued_to_steer" ? (
+            <TurnMemoryDetails
+              environmentId={props.environmentId}
+              threadId={info.item.message.projectedItem?.item.threadId ?? props.threadId}
+              runId={info.item.message.runId}
+            />
+          ) : null}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
