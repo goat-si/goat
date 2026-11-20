@@ -6,7 +6,7 @@ import type {
   SourceControlWritingStyleMode,
 } from "@goat/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
-import { createModelSelection } from "@goat/shared/model";
+import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import {
   isTextGenerationEligible,
   resolveReviewGuideModelSelection,
@@ -409,7 +409,12 @@ export function SourceControlWritingSettingsSection() {
                       return;
                     }
                     updateSettings({
-                      sourceControlWriterModelSelection: createModelSelection(instanceId, model),
+                      sourceControlWriterModelSelection: pickModelSelection(
+                        mixedWriterModel ? null : settings.sourceControlWriterModelSelection,
+                        instanceId,
+                        model,
+                        mixedWriterModel ? null : activeSelection,
+                      ),
                     });
                   }}
                 />
@@ -541,7 +546,12 @@ export function SourceControlWritingSettingsSection() {
                           return;
                         }
                         updateSettings({
-                          reviewGuideModelSelection: createModelSelection(instanceId, model),
+                          reviewGuideModelSelection: pickModelSelection(
+                            mixedReviewGuideModel ? null : settings.reviewGuideModelSelection,
+                            instanceId,
+                            model,
+                            mixedReviewGuideModel ? null : reviewGuideSelection,
+                          ),
                         });
                       }}
                     />

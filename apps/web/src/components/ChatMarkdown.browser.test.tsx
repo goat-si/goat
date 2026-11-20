@@ -177,6 +177,18 @@ function buttonsLabelled(container: HTMLElement, label: string) {
   );
 }
 
+it("preserves right-to-left direction in expandable markdown", async () => {
+  setup();
+  await using screen = await renderText(
+    '<details dir="rtl"><summary>تفاصيل</summary>محتوى</details>',
+  );
+  const summary = screen.getByRole("button", { name: "تفاصيل" });
+  await expect.element(summary).toBeVisible();
+  expect(getComputedStyle(summary.element()).direction).toBe("rtl");
+  await userEvent.click(summary);
+  await expect.element(screen.getByText("محتوى")).toBeVisible();
+});
+
 describe("ChatMarkdown context references", () => {
   it("draws skill and file references as link text at the sentence's size and baseline", async () => {
     setup();

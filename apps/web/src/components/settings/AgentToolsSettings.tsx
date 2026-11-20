@@ -18,7 +18,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { persistScopedSettingsPatch } from "./scopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -30,6 +29,7 @@ import {
   useScopedSettingsMixed,
   useScopedSettingsWriteAllowed,
   useUpdateScopedSettings,
+  writeScopedSettings,
 } from "./useScopedSettings";
 
 const TOOL_LISTING_LABELS: Readonly<Record<AgentToolListing, string>> = {
@@ -96,40 +96,44 @@ function BuiltInSkillSetting(props: {
   const choice = reference?.override === undefined ? "inherit" : reference.override ? "on" : "off";
   const save = async (enabled: boolean | undefined) => {
     if (!canWrite || pending || !supported || (!projectScope && enabled === undefined)) return;
-    const serverWrites = connectedEnvironments.flatMap((environment) => {
-      const previous = environment.serverConfig?.settings;
-      if (!previous) return [];
-      const projectIds = projectScope
-        ? scope.members
-            .filter((member) => member.environmentId === environment.environmentId)
-            .map((member) => member.id)
-        : [];
-      if (projectScope && projectIds.length === 0) return [];
-      return [
-        {
-          environmentId: environment.environmentId,
-          label: environment.label,
-          previous,
-          patch: projectScope
-            ? {
-                projectSettingsOverrides: builtInSkillProjectPatch(
-                  previous,
-                  projectIds,
+    const plan = (environments: Parameters<typeof writeScopedSettings>[0]) => {
+      const serverWrites = environments.flatMap((environment) => {
+        const previous = environment.serverConfig?.settings;
+        if (!previous) return [];
+        const projectIds = projectScope
+          ? scope.members
+              .filter((member) => member.environmentId === environment.environmentId)
+              .map((member) => member.id)
+          : [];
+        if (projectScope && projectIds.length === 0) return [];
+        return [
+          {
+            environmentId: environment.environmentId,
+            label: environment.label,
+            previous,
+            patch: projectScope
+              ? {
+                  projectSettingsOverrides: builtInSkillProjectPatch(
+                    previous,
+                    projectIds,
+                    props.name,
+                    enabled,
+                  ),
+                }
+              : builtInSkillEnvironmentPatch(
+                  previous.disabledBuiltInSkills,
                   props.name,
-                  enabled,
+                  enabled === true,
                 ),
-              }
-            : builtInSkillEnvironmentPatch(
-                previous.disabledBuiltInSkills,
-                props.name,
-                enabled === true,
-              ),
-        },
-      ];
-    });
+          },
+        ];
+      });
+      return { serverWrites, clientPatch: {}, hasClientWrite: false, unavailableReason: null };
+    };
     setPending(true);
-    const result = await persistScopedSettingsPatch(
-      { serverWrites, clientPatch: {}, hasClientWrite: false, unavailableReason: null },
+    const result = await writeScopedSettings(
+      connectedEnvironments,
+      plan,
       (request) =>
         readEnvironmentScope(request.environmentId, AuthSettingsWriteScope)
           ? persistServer(request)
