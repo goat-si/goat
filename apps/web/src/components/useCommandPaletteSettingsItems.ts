@@ -1,23 +1,24 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useGT, useMessages } from "gt-react";
-import type { ReactNode } from "react";
+import { createElement } from "react";
 
-import type { CommandPaletteActionItem } from "./CommandPalette.logic";
+import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "./CommandPalette.logic";
+import { SettingsIcon } from "./solar";
 import {
   settingsForThisPlatform,
   SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settings/settingsSearch";
 
+const settingsPaletteIcon = createElement(SettingsIcon, { className: ITEM_ICON_CLASS });
+
 export function useCommandPaletteSettingsItems(
   availableSettingsSearchItems: ReadonlyArray<SettingsSearchItem>,
   pathname: string,
-  icon: ReactNode,
 ): CommandPaletteActionItem[] {
   const gt = useGT();
   const m = useMessages();
   const navigate = useNavigate();
-  // Settings use the same word-start and typo matching as threads.
   return settingsForThisPlatform(availableSettingsSearchItems).map((item) => {
     const sourceSection = SETTINGS_SECTION_LABELS[item.to];
     const title = m(item.title);
@@ -34,7 +35,7 @@ export function useCommandPaletteSettingsItems(
       title,
       description: gt("Settings · {section}", { section }),
       ...(item.secondary ? { secondary: true } : {}),
-      icon,
+      icon: settingsPaletteIcon,
       run: async () => {
         await navigate({
           to: item.to,

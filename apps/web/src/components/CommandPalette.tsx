@@ -1765,7 +1765,6 @@ function OpenCommandPaletteDialog(props: {
   const settingsSearchItems = useCommandPaletteSettingsItems(
     availableSettingsSearchItems,
     pathname,
-    <SettingsIcon className={ITEM_ICON_CLASS} />,
   );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
