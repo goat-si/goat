@@ -3,48 +3,50 @@ import { ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as ServerConfig from "../config.ts";
+import * as Result from "effect/Result";
+import { expect } from "vite-plus/test";
 import { SYNTHETIC_CLAUDE_STANDARD_MODEL } from "../provider/ClaudeModelCatalog.testFixtures.ts";
+import * as ServerConfig from "../config.ts";
 import {
   layerClaudeTextGenerationTest,
   withFakeClaudeEnv,
 } from "./ClaudeTextGeneration.testkit.ts";
 
-it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration images", (it) => {
-  it.effect("sends image attachments to Claude, not only their metadata", () =>
+it.layer(layerClaudeTextGenerationTest)("Claude image fallback", (it) => {
+  it.effect.each(["unsupported", "auth"] as const)("handles image attempt with %s", (scenario) =>
     withFakeClaudeEnv(
       {
         output: JSON.stringify({ structured_output: { branch: "fix/login-button" } }),
-        stdinMustContain: Buffer.from("hello").toString("base64"),
+        rejectsImages: scenario === "auth" ? "auth" : true,
       },
       (textGeneration) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-          const attachmentId = "thread-1-claude-attachment";
-          const imagePath = path.join(attachmentsDir, `${attachmentId}.png`);
+          const id = "thread-1-claude-text-only-attachment";
+          const imagePath = path.join(attachmentsDir, `${id}.png`);
           yield* fs.makeDirectory(attachmentsDir, { recursive: true });
           yield* fs.writeFile(imagePath, Buffer.from("hello"));
-          yield* textGeneration
+          const result = yield* textGeneration
             .generateBranchName({
               cwd: process.cwd(),
               message: "fix this",
               attachments: [
-                {
-                  type: "image",
-                  id: attachmentId,
-                  name: "screen.png",
-                  mimeType: "image/png",
-                  sizeBytes: 5,
-                },
+                { type: "image", id, name: "screen.png", mimeType: "image/png", sizeBytes: 5 },
               ],
               modelSelection: {
                 instanceId: ProviderInstanceId.make("claudeAgent"),
                 model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
               },
             })
-            .pipe(Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)));
+            .pipe(Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)), Effect.result);
+          if (scenario === "auth") {
+            expect(Result.isFailure(result)).toBe(true);
+          } else {
+            expect(Result.isSuccess(result)).toBe(true);
+            if (Result.isSuccess(result)) expect(result.success.branch).toBe("fix/login-button");
+          }
         }),
     ),
   );
