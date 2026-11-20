@@ -1019,8 +1019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  // The effort popover's model row hands off to the model picker. Opening on the next frame
-  // lets the effort popover finish closing and return focus before the picker takes it.
+  // Wait a frame for the effort popover to close and return focus before opening the model picker.
   const openComposerModelPicker = () => {
     requestAnimationFrame(() => setIsComposerModelPickerOpen(true));
   };
@@ -3746,6 +3745,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         sideChatAvailable,
                         composerDraft,
                         attachmentDraft,
+                        { props, selectedProvider },
                       )
                     }
                     canInterrupt={canInterrupt}
