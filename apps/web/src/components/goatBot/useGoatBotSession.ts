@@ -31,6 +31,7 @@ import type {
 import { useContext, useEffect, useSyncExternalStore } from "react";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
+import { withAttachmentUploadSend } from "~/lib/attachmentUploadQueue";
 import { randomUUID } from "~/lib/utils";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import {
@@ -116,33 +117,40 @@ function newQueue(environmentId: EnvironmentId) {
         (session.machine.ensure.bot.threadId === bot.threadId || session.members.has(bot.threadId))
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId, questionId }) => {
-      const port = useSessions.getState().sessions.get(environmentId)?.port;
-      if (!port) throw new Error("GOAT Bot isn't available");
-      const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
-      if (disposed) throw new Error("GOAT Bot environment was removed");
-      const result = await port.ingest(
-        bot.environmentId,
-        goatBotIngestInput({
-          bot,
-          text,
-          attachments: files,
-          clientMessageId: clientKey,
-          receivedAt,
-          ...(taskId === undefined ? {} : { taskId }),
-          ...(questionId === undefined ? {} : { questionId }),
-        }),
-      );
-      // The server keeps its own copy of each file once it has the message, and a rejected
-      // message is never sent again.
-      forget(clientKey);
-      if (result.state === "rejected")
-        return {
-          requestKey: result.inputId,
-          rejected: GOAT_BOT_NOT_ACCEPTED,
-        };
-      return { requestKey: result.inputId };
-    },
+    send: withAttachmentUploadSend(
+      async (uploadSend, { clientKey, text, attachments, receivedAt, bot, taskId, questionId }) => {
+        const port = useSessions.getState().sessions.get(environmentId)?.port;
+        if (!port) throw new Error("GOAT Bot isn't available");
+        const files = await uploadGoatBotAttachments(
+          bot.environmentId,
+          attachments,
+          uploadSend.outcome,
+        );
+        if (disposed) throw new Error("GOAT Bot environment was removed");
+        const result = await port.ingest(
+          bot.environmentId,
+          goatBotIngestInput({
+            bot,
+            text,
+            attachments: files,
+            clientMessageId: clientKey,
+            receivedAt,
+            ...(taskId === undefined ? {} : { taskId }),
+            ...(questionId === undefined ? {} : { questionId }),
+          }),
+        );
+        // The server keeps its own copy of each file once it has the message, and a rejected
+        // message is never sent again.
+        if (result.state !== "rejected") uploadSend.claim(files);
+        forget(clientKey);
+        if (result.state === "rejected")
+          return {
+            requestKey: result.inputId,
+            rejected: GOAT_BOT_NOT_ACCEPTED,
+          };
+        return { requestKey: result.inputId };
+      },
+    ),
   });
   return {
     ...queue,

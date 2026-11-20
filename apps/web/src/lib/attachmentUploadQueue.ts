@@ -25,6 +25,7 @@ import {
   type ComposerImageAttachment,
   type ComposerThreadTarget,
 } from "../composerDraftStore";
+import { usePromptStashStore } from "../promptStashStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentCatalog } from "../connection/catalog";
 import { assetEnvironment } from "../state/assets";
@@ -69,6 +70,22 @@ interface UploadJob {
 type DraftFileOwner = Pick<UploadJob, "image" | "environmentId" | "draftTarget">;
 
 const heldUploadsByImageId = new Map<string, UploadJob>();
+
+interface PersistedUploadRef {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+  readonly attachmentId: string;
+}
+
+interface PersistedUploadWaiters {
+  count: number;
+  claimed: boolean;
+  released: PersistedUploadRef | undefined;
+}
+
+const persistedUploadWaiters = new Map<string, PersistedUploadWaiters>();
+const persistedUploadKey = (environmentId: EnvironmentId, attachmentId: string) =>
+  JSON.stringify([environmentId, attachmentId]);
 
 function setUploadState(imageId: string, upload: AttachmentUploadState): void {
   useAttachmentUploadStore.setState((state) => ({
@@ -592,11 +609,14 @@ export function releaseAttachmentUpload(imageId: string, environmentId?: Environ
   clearUploadState(imageId);
 }
 
-export function releasePersistedAttachmentUpload(input: {
-  readonly id: string;
-  readonly environmentId: EnvironmentId;
-  readonly attachmentId: string;
-}): void {
+export function releasePersistedAttachmentUpload(input: PersistedUploadRef): boolean {
+  const waiters = persistedUploadWaiters.get(
+    persistedUploadKey(input.environmentId, input.attachmentId),
+  );
+  if (waiters) {
+    waiters.released ??= input;
+    return false;
+  }
   const upload = readAttachmentUpload(input.id);
   if (
     upload?.status === "ready" &&
@@ -604,7 +624,7 @@ export function releasePersistedAttachmentUpload(input: {
     upload.attachmentId === input.attachmentId
   ) {
     releaseAttachmentUpload(input.id, input.environmentId);
-    return;
+    return true;
   }
   const job = heldUploadsByImageId.get(input.id);
   if (
@@ -614,6 +634,86 @@ export function releasePersistedAttachmentUpload(input: {
     releaseAttachmentUpload(input.id, input.environmentId);
   }
   deletePendingUpload(input.environmentId, input.attachmentId);
+  return true;
+}
+
+function finishPersistedUploadRelease(input: PersistedUploadRef, claimed: boolean): void {
+  const { id, environmentId, attachmentId } = input;
+  const draftOwnsUpload = Object.values(useComposerDraftStore.getState().draftsByThreadKey).some(
+    (draft) =>
+      draft.files.some(
+        (file) =>
+          file.uploadEnvironmentId === environmentId && file.uploadedAttachmentId === attachmentId,
+      ),
+  );
+  const stashOwnsUpload = usePromptStashStore
+    .getState()
+    .entries.some((entry) =>
+      entry.files?.some(
+        (file) => file.environmentId === environmentId && file.attachmentId === attachmentId,
+      ),
+    );
+  if (draftOwnsUpload || stashOwnsUpload) return;
+
+  const job = heldUploadsByImageId.get(id);
+  const upload = readAttachmentUpload(id, environmentId);
+  if (job?.environmentId === environmentId && job.persistedAttachmentId === attachmentId) {
+    cancelAttachmentUpload(id);
+    clearUploadState(id);
+  } else if (!job && upload?.status === "ready" && upload.attachmentId === attachmentId) {
+    clearUploadState(id);
+  }
+  if (!claimed) deletePendingUpload(environmentId, attachmentId);
+}
+
+type AttachmentSendOutcome = ReadonlyArray<ChatAttachment> | undefined;
+
+export interface AttachmentUploadSend {
+  readonly outcome: Promise<AttachmentSendOutcome>;
+  claim(attachments: ReadonlyArray<ChatAttachment>): void;
+}
+
+export function withAttachmentUploadSend<Args extends unknown[], Result>(
+  send: (uploads: AttachmentUploadSend, ...args: Args) => Promise<Result>,
+) {
+  return async (...args: Args): Promise<Result> => {
+    let consumed: AttachmentSendOutcome;
+    let finish: ((attachments: AttachmentSendOutcome) => void) | undefined;
+    const outcome = new Promise<AttachmentSendOutcome>((resolve) => {
+      finish = resolve;
+    });
+    try {
+      return await send(
+        {
+          outcome,
+          claim(attachments) {
+            consumed = attachments;
+          },
+        },
+        ...args,
+      );
+    } finally {
+      finish?.(consumed);
+    }
+  };
+}
+
+function retainPersistedUpload(environmentId: EnvironmentId, attachmentId: string) {
+  const key = persistedUploadKey(environmentId, attachmentId);
+  const waiters = persistedUploadWaiters.get(key) ?? {
+    count: 0,
+    claimed: false,
+    released: undefined,
+  };
+  persistedUploadWaiters.set(key, waiters);
+  waiters.count++;
+  return (consumed: AttachmentSendOutcome) => {
+    waiters.claimed ||= consumed?.some((attachment) => attachment.id === attachmentId) === true;
+    waiters.count--;
+    if (waiters.count !== 0) return;
+    persistedUploadWaiters.delete(key);
+    if (waiters.released) finishPersistedUploadRelease(waiters.released, waiters.claimed);
+  };
 }
 
 export function retryAttachmentUpload(input: {
@@ -651,11 +751,27 @@ export function verifyStashedAttachmentUpload(input: {
 export async function awaitAttachmentUploads(
   imageIds: ReadonlyArray<string>,
   environmentId?: EnvironmentId,
+  sendOutcome?: Promise<AttachmentSendOutcome>,
 ): Promise<void> {
   await Promise.all(
     imageIds.map(async (imageId) => {
       const job = heldUploadsByImageId.get(imageId);
-      if (!job || (environmentId !== undefined && job.environmentId !== environmentId)) return;
+      if (!job) {
+        const upload = readAttachmentUpload(imageId, environmentId);
+        if (
+          sendOutcome &&
+          upload?.status === "ready" &&
+          persistedUploadWaiters.has(persistedUploadKey(upload.environmentId, upload.attachmentId))
+        ) {
+          void sendOutcome.then(retainPersistedUpload(upload.environmentId, upload.attachmentId));
+        }
+        return;
+      }
+      if (environmentId !== undefined && job.environmentId !== environmentId) return;
+      // Verification only makes the ID ready. The send receipt decides whether it was used.
+      const finishPersistedWait = job.persistedAttachmentId
+        ? retainPersistedUpload(job.environmentId, job.persistedAttachmentId)
+        : undefined;
       job.waiters++;
       try {
         const error = await job.settled;
@@ -665,6 +781,10 @@ export async function awaitAttachmentUploads(
         if (job.draftReleased && job.waiters === 0) {
           job.release();
           job.release = () => {};
+        }
+        if (finishPersistedWait) {
+          if (sendOutcome) void sendOutcome.then(finishPersistedWait);
+          else finishPersistedWait(undefined);
         }
       }
     }),
@@ -707,11 +827,12 @@ export function releaseDraftAttachment(
       releaseAttachmentUpload(attachment.id, environmentId);
       return;
     }
-    releasePersistedAttachmentUpload({
+    const released = releasePersistedAttachmentUpload({
       id: attachment.id,
       environmentId: attachment.uploadEnvironmentId,
       attachmentId: attachment.uploadedAttachmentId,
     });
+    if (!released) return;
     if (heldUploadsByImageId.has(attachment.id) || readAttachmentUpload(attachment.id)) {
       releaseAttachmentUpload(attachment.id, environmentId ?? attachment.uploadEnvironmentId);
     }

@@ -1,4 +1,4 @@
-import type { EnvironmentId, UnifiedSettings } from "@goat/contracts";
+import type { ChatAttachment, EnvironmentId, UnifiedSettings } from "@goat/contracts";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
@@ -10,6 +10,13 @@ import {
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import {
+  awaitAttachmentUploads,
+  readAttachmentUpload,
+  retryAttachmentUpload,
+  startAttachmentUpload,
+} from "../../lib/attachmentUploadQueue";
+import type { ComposerSendSnapshot } from "../ChatView.logic";
 import { environmentPresentations } from "../../state/presentation";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -43,6 +50,26 @@ export function liveAttachmentCapabilities(
         config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
     }),
   };
+}
+
+export function prepareComposerSendUploads(
+  environmentId: EnvironmentId,
+  draftTarget: ComposerThreadTarget,
+  attachments: ComposerSendSnapshot["attachments"],
+  sendOutcome: Promise<ReadonlyArray<ChatAttachment> | undefined>,
+) {
+  for (const attachment of attachments) {
+    const upload =
+      readAttachmentUpload(attachment.id, environmentId)?.status === "failed"
+        ? retryAttachmentUpload
+        : startAttachmentUpload;
+    upload({ environmentId, image: attachment, draftTarget });
+  }
+  return awaitAttachmentUploads(
+    attachments.map((attachment) => attachment.id),
+    environmentId,
+    sendOutcome,
+  );
 }
 
 /**

@@ -124,6 +124,7 @@ export async function stageGoatBotFiles(
 export async function uploadGoatBotAttachments(
   environmentId: EnvironmentId,
   attachments: ReadonlyArray<GoatBotDraftAttachment>,
+  sendOutcome: Promise<ReadonlyArray<ChatAttachment> | undefined>,
 ): Promise<ReadonlyArray<ChatAttachment>> {
   if (attachments.length === 0) return [];
   for (const attachment of attachments) {
@@ -139,6 +140,7 @@ export async function uploadGoatBotAttachments(
   await awaitAttachmentUploads(
     attachments.map((attachment) => attachment.id),
     environmentId,
+    sendOutcome,
   );
   const uploaded = getUploadedAttachments({ environmentId, images: attachments });
   if (uploaded === null) throw new Error("An attachment didn't finish uploading.");

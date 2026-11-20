@@ -82,12 +82,10 @@ import { usePlanFollowUpSend } from "./useProposedPlanSend";
 import { useMultipleModelSend } from "./useMultipleModelSend";
 import { type ComposerDispatchMode } from "@goat/client-runtime/state/composer-dispatch";
 import {
-  awaitAttachmentUploads,
+  type AttachmentUploadSend,
   getUploadedAttachments,
-  readAttachmentUpload,
   releaseDraftAttachments,
-  retryAttachmentUpload,
-  startAttachmentUpload,
+  withAttachmentUploadSend,
 } from "../../lib/attachmentUploadQueue";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readEnvironmentScope } from "../../state/session";
@@ -125,6 +123,7 @@ import {
   draftHasNonPromptContent,
   firstCallOnly,
   liveAttachmentCapabilities,
+  prepareComposerSendUploads,
   readEnvironmentPresentation,
   saveSettingsBeforeRedirect,
   selectPlanModeEnabled,
@@ -300,7 +299,8 @@ export function useComposerSend(input: ComposerSendInput) {
     });
   const continueThreadOnSsh: SshContinuation["continueThreadOnSsh"] = (...args) =>
     ssh().continueThreadOnSsh(...args);
-  const onSend = async (
+  async function onSend(
+    uploadSend: AttachmentUploadSend,
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -308,7 +308,7 @@ export function useComposerSend(input: ComposerSendInput) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
-  ) => {
+  ) {
     e?.preventDefault();
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
@@ -961,21 +961,12 @@ export function useComposerSend(input: ComposerSendInput) {
         : readEnvironmentPresentation(environmentId)?.serverConfig?.environment.capabilities
             .attachmentUploads === true;
     if (turnUsesAttachmentUploads && composerAttachmentsSnapshot.length > 0) {
-      for (const attachment of composerAttachmentsSnapshot) {
-        const upload =
-          readAttachmentUpload(attachment.id, environmentId)?.status === "failed"
-            ? retryAttachmentUpload
-            : startAttachmentUpload;
-        upload({
-          environmentId,
-          image: attachment,
-          draftTarget: composerDraftTarget,
-        });
-      }
       try {
-        await awaitAttachmentUploads(
-          composerAttachmentsSnapshot.map((attachment) => attachment.id),
+        await prepareComposerSendUploads(
           environmentId,
+          composerDraftTarget,
+          composerAttachmentsSnapshot,
+          uploadSend.outcome,
         );
       } catch (error) {
         sendInFlightRef.current = false;
@@ -1212,6 +1203,7 @@ export function useComposerSend(input: ComposerSendInput) {
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
       });
+      if (sent) uploadSend.claim(await turnAttachmentsPromise);
       recordPromptOnSuccess(environmentId, sent);
       return;
     }
@@ -1404,6 +1396,7 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        uploadSend.claim(turnAttachmentsResult.value);
         checkoutLink.link(scopeThreadRef(environmentId, threadIdForSend), checkoutPullRequestUrl);
         setKeepFullHistory(routeThreadKey, false);
         clearUsageLimitsFor(routeThreadKey);
@@ -1526,9 +1519,9 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
-  };
+  }
   const onSendWithRouting = useSendWithRouting(
-    onSend,
+    (...args) => withAttachmentUploadSend(onSend)(...args),
     sendInFlightRef,
     readPendingEnvironmentChange,
     refreshBeforeSend,

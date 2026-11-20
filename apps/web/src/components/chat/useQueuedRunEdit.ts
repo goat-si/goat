@@ -42,8 +42,10 @@ import {
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   awaitAttachmentUploads,
+  type AttachmentUploadSend,
   getUploadedAttachments,
   startAttachmentUpload,
+  withAttachmentUploadSend,
 } from "../../lib/attachmentUploadQueue";
 import { buildMessageContext, isResponseContextRecord } from "../../lib/composerContextRecords";
 import {
@@ -102,6 +104,8 @@ export interface QueuedRunEditContent {
   readonly replyTo?: ResponseContextRecord | null;
 }
 
+type SetThreadError = (threadId: ThreadId, error: string | null) => void;
+
 // The edit draft owns thread mentions and the reply, so one removed while editing is dropped.
 const isDraftOwnedRecord = (record: ComposerContextRecord) =>
   record.kind === "thread" || record.kind === "response";
@@ -116,6 +120,7 @@ async function submitQueuedRunEdit(input: {
   readonly editing: EditingQueuedRun;
   readonly content: QueuedRunEditContent;
   readonly editQueuedRun: ReturnType<typeof useEditQueuedRunCommand>;
+  readonly uploadSend: AttachmentUploadSend;
 }): Promise<string | null> {
   const { environmentId, draftTarget, editing, content } = input;
   const editText = content.prompt.trim();
@@ -137,6 +142,7 @@ async function submitQueuedRunEdit(input: {
     await awaitAttachmentUploads(
       files.map((file) => file.id),
       environmentId,
+      input.uploadSend.outcome,
     );
     validateFiles();
     const uploaded = getUploadedAttachments({ environmentId, images: files });
@@ -195,7 +201,9 @@ async function submitQueuedRunEdit(input: {
         },
       },
     });
-    return result._tag === "Failure" ? "Could not save the edited queued message." : null;
+    if (result._tag === "Failure") return "Could not save the edited queued message.";
+    input.uploadSend.claim(uploads);
+    return null;
   } catch (error) {
     return error instanceof Error ? error.message : "Could not save the edited queued message.";
   }
@@ -394,10 +402,11 @@ export function useQueuedRunEdit(input: {
     }));
   });
 
-  const saveEdit = async (
+  async function saveEdit(
+    uploadSend: AttachmentUploadSend,
     content: QueuedRunEditContent,
-    setThreadError: (threadId: ThreadId, error: string | null) => void,
-  ) => {
+    setThreadError: SetThreadError,
+  ) {
     if (editing === null || isSaving) return;
     if (
       content.previewAnnotations.some(
@@ -438,6 +447,7 @@ export function useQueuedRunEdit(input: {
       editing,
       content,
       editQueuedRun: editQueuedRunCommand,
+      uploadSend,
     });
     setThreadError(editing.threadId, error);
     const current = finishSave(error === null);
@@ -452,7 +462,7 @@ export function useQueuedRunEdit(input: {
     releaseUnownedQueuedEditAttachments(newAttachments, environmentId);
     if (!current) return;
     focusComposerSoon();
-  };
+  }
 
   return {
     editingRunId: editing?.runId ?? null,
@@ -466,6 +476,7 @@ export function useQueuedRunEdit(input: {
     }),
     cancelEdit,
     removeEditingAttachment,
-    saveEdit,
+    saveEdit: (content: QueuedRunEditContent, setThreadError: SetThreadError) =>
+      withAttachmentUploadSend(saveEdit)(content, setThreadError),
   };
 }

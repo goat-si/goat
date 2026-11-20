@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, type ChatAttachment } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -161,6 +161,14 @@ function setConnected(environmentId: EnvironmentId, connected: boolean) {
     connectionStates(environmentId),
     AsyncResult.success({ phase: connected ? "connected" : "backoff" }),
   );
+}
+
+function controlledPromise<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 describe("attachmentUploadQueue", () => {
@@ -537,6 +545,57 @@ describe("attachmentUploadQueue", () => {
       expect.anything(),
     );
   });
+
+  it.each(["accepted", "abandoned"] as const)(
+    "keeps a discarded hydrated upload until the waiting send is %s",
+    async (outcome) => {
+      const file: ComposerFileAttachment = {
+        ...makeFile(`waiting-${outcome}`),
+        file: null,
+        uploadedAttachmentId: `pending-waiting-${outcome}`,
+        uploadEnvironmentId: firstEnvironment,
+      };
+      const verification = controlledPromise<{ _tag: "Success"; value: object }>();
+      const send = controlledPromise<ReadonlyArray<ChatAttachment> | undefined>();
+      const laterSend = controlledPromise<undefined>();
+      const removeCalls = () =>
+        mocks.runAtomCommand.mock.calls
+          .filter(([, command]) => command === mocks.removeUpload)
+          .map(([, , target]) => target);
+      mocks.executeAtomQuery.mockReturnValueOnce(verification.promise);
+
+      startAttachmentUpload({ environmentId: firstEnvironment, image: file });
+      const waiting = awaitAttachmentUploads([file.id], firstEnvironment, send.promise);
+      releaseDraftAttachment(file, firstEnvironment);
+      const deletesDuringVerification = removeCalls();
+      verification.resolve({ _tag: "Success", value: {} });
+      await waiting;
+
+      const uploaded = getUploadedAttachments({ environmentId: firstEnvironment, images: [file] });
+      const deletesBeforeSendSettles = removeCalls();
+      await awaitAttachmentUploads([file.id], firstEnvironment, laterSend.promise);
+      send.resolve(outcome === "accepted" ? (uploaded ?? undefined) : undefined);
+      await send.promise;
+      const deletesBeforeLastSendSettles = removeCalls();
+      laterSend.resolve(undefined);
+      await laterSend.promise;
+
+      expect(deletesDuringVerification).toEqual([]);
+      expect(deletesBeforeSendSettles).toEqual([]);
+      expect(deletesBeforeLastSendSettles).toEqual([]);
+      expect(uploaded?.map((attachment) => attachment.id)).toEqual([file.uploadedAttachmentId]);
+      expect(removeCalls()).toEqual(
+        outcome === "accepted"
+          ? []
+          : [
+              {
+                environmentId: firstEnvironment,
+                input: { attachmentId: file.uploadedAttachmentId },
+              },
+            ],
+      );
+    },
+  );
 
   it("keeps the persisted upload when retrying after a transient verification failure", async () => {
     const draftId = DraftId.make("draft-transient-verification");
