@@ -60,11 +60,14 @@ describe("session first receipts", () => {
     }).pipe(Effect.provide(harness.layer));
   });
   it.effect.each([
+    "never reported",
+    "reported before delegating",
+    "fresh report between restarts",
     "no retry",
     "fresh report",
     "no retry after restart",
     "fresh report after restart",
-  ] as const)("settles a bot task whose premature report was rejected: %s", (variant) => {
+  ] as const)("settles delegated bot work: %s", (variant) => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -80,34 +83,48 @@ describe("session first receipts", () => {
         origin: "app_owned",
         status: "running",
       } as OrchestrationV2Subagent;
-      harness.world.subagents.set(worker.threadId, [child]);
       const results = yield* ThreadResults.ThreadResultService;
-      const error = yield* Effect.flip(
-        results.report(worker.threadId, { outcome: "failed", summary: "Still waiting." }),
-      );
-      assert.strictEqual(error.reason, "delegates_pending");
-      harness.world.subagents.set(worker.threadId, [{ ...child, status: "completed" }]);
+      if (variant === "reported before delegating") {
+        yield* results.report(worker.threadId, { outcome: "succeeded", summary: "Already done." });
+        yield* TestClock.adjust("1 second");
+      }
+      harness.world.subagents.set(worker.threadId, [child]);
+      if (variant !== "never reported" && variant !== "reported before delegating") {
+        const error = yield* Effect.flip(
+          results.report(worker.threadId, { outcome: "failed", summary: "Still waiting." }),
+        );
+        assert.strictEqual(error.reason, "delegates_pending");
+      }
+      harness.world.subagents.set(worker.threadId, [
+        { ...child, status: "completed", completedAt: yield* DateTime.now },
+      ]);
       const answer = "A found line 129. B could not read its file.";
       harness.assistant(task, "Checking.\n", true);
       yield* runtime.runPass;
       yield* runtime.settle([input.inputId]);
       let run = harness.world.latestRun(worker.threadId)!;
-      if (variant.endsWith("after restart")) {
+      const restart = () => {
         harness.world.setStatus(worker.threadId, run.ordinal, "completed");
-        const resumed = harness.world.addRun(worker.threadId, MessageId.make("restart"));
+        const resumed = harness.world.addRun(
+          worker.threadId,
+          MessageId.make("restart-" + run.ordinal),
+        );
         run = { ...resumed, restartContinuationOfRunId: run.id };
         const runs = harness.world.runs.get(worker.threadId)!;
         harness.world.runs.set(worker.threadId, [...runs.slice(0, -1), run]);
-      }
+      };
+      if (variant.includes("restart")) restart();
       if (variant.startsWith("fresh report"))
         yield* results.report(worker.threadId, { outcome: "failed", summary: answer });
+      if (variant === "fresh report between restarts") restart();
       harness.assistant({ ...task, worker: { ...worker, runId: run.id } }, answer, false, 1);
       harness.world.setStatus(worker.threadId, run.ordinal, "completed");
       yield* runtime.drain;
       const finished = (yield* ledger.getTask(task.taskId))!.task;
       assert.strictEqual(finished.status, "failed");
       assert.include(finished.resultSummary!, answer);
-      if (variant.startsWith("no retry")) assert.include(finished.resultSummary!, "final report");
+      if (!variant.startsWith("fresh report"))
+        assert.include(finished.resultSummary!, "final report");
       else assert.strictEqual(finished.resultSummary, answer);
     }).pipe(Effect.provide(ThreadResults.layer.pipe(Layer.provideMerge(harness.layer))));
   });
