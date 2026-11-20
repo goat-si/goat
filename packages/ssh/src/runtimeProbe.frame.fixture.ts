@@ -76,8 +76,9 @@ const PREFIX =
   "uname() { printf 'MINGW64_NT\\n'; }\n" +
   'date() { if [ -f "$HOME/now" ]; then cat "$HOME/now"; else printf \'4102444800\\n\'; fi; }\n' +
   "shasum() {\n" +
+  '  set -- -a 256 "$HOME/.goat/runtime/goat/versions/1.2.3/goat"\n' +
   '  printf \'%s\\n\' "$3" >> "$HOME/digests"\n' +
-  '  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$3"; else command shasum -a 256 "$3"; fi\n' +
+  "  if command -v sha256sum >/dev/null 2>&1; then sha256sum; else command shasum -a 256; fi\n" +
   '  if [ -f "$HOME/digest-hook" ]; then mv "$HOME/digest-hook" "$HOME/digest-hook.ran"; . "$HOME/digest-hook.ran" >/dev/null; fi\n' +
   "}\n" +
   "ps() { printf '%s\\n' '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND'" +
@@ -141,7 +142,9 @@ export const fixture = Effect.fn("runtimeProbe.factsFrame.fixture")(function* (
   const script = PREFIX + generated.slice(0, boundary) + "\n";
   const run = (tail = TAIL) =>
     Effect.promise(async () => {
-      const out = await exec("sh", ["-c", script + tail], { env: { ...process.env, HOME: home } });
+      const out = await exec("sh", ["-c", script + tail], {
+        env: { HOME: home, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      });
       return out.stdout.split("\n").filter(Boolean);
     });
   return {
