@@ -25,6 +25,7 @@ export interface ProviderTurnStartServiceV2Shape {
     readonly runId: RunId;
     readonly attemptId: RunAttemptId;
     readonly rootNodeId: NodeId;
+    readonly failureMessage?: string;
   }) => Effect.Effect<void, ProviderTurnStartError>;
   /**
    * Starts the run's provider turn. When `willRetry` is true, a session open

@@ -660,6 +660,9 @@ export const layer: Layer.Layer<
         return;
       }
       const session = sessionResult.success;
+      if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
+      if (session.providerSession === undefined)
+        return yield* missingProviderSession(runId, session.driver);
       if (
         nativeResume &&
         (session.resumeInterruptedTurn === undefined ||
@@ -850,8 +853,6 @@ export const layer: Layer.Layer<
             }),
           );
         }
-        if (session.providerSession === undefined)
-          return yield* missingProviderSession(runId, session.driver);
         const uncertainDelivery = hasPendingHandoff(projection, providerThread);
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&

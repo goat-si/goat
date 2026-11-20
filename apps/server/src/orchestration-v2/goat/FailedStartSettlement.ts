@@ -19,11 +19,13 @@ export function makeFailedStartSettlement(input: {
       runId,
       attemptId,
       rootNodeId,
+      failureMessage,
     }: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
       readonly attemptId: RunAttemptId;
       readonly rootNodeId: NodeId;
+      readonly failureMessage?: string;
     }) {
       const projection = yield* input.projectionStore.getTurnStartContext(threadId, runId);
       const run = projection.runs.find((candidate) => candidate.id === runId);
@@ -57,7 +59,9 @@ export function makeFailedStartSettlement(input: {
           type: "error",
           title: "Turn failed to start",
           failure: makeProviderFailure({
+            class: "provider_error",
             message:
+              failureMessage ??
               "GOAT could not start this turn. Send the message again; if it keeps failing, check the server logs.",
           }),
         },

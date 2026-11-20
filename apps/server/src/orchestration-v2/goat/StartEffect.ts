@@ -33,6 +33,7 @@ export function makeStartEffect(provider: ProviderTurnStartServiceV2Shape) {
               runId: input.runId,
               attemptId: error.attemptId,
               rootNodeId: error.rootNodeId,
+              ...(error.message === "" ? {} : { failureMessage: error.message }),
             })
             .pipe(
               Effect.tapError(() =>
