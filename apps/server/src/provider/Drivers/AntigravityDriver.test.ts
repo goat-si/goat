@@ -1,3 +1,4 @@
+import { knownProviderFailureMessage } from "@goat/provider-core/server/failure";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -75,6 +76,38 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "refuses an Antigravity executable older than 1.5 before opening a session",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const old = yield* h.makeExecutable("runtime-old", { agentVersion: "1.4.5" });
+        h.controls.selected = { ...old, source: "path", version: null };
+        const threadId = ThreadId.make("thread-antigravity-old-runtime");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const error = yield* Effect.gen(function* () {
+          const session = yield* h.instance.orchestrationAdapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-antigravity-old-runtime"),
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }).pipe(Effect.scoped, Effect.flip);
+        expect(knownProviderFailureMessage(error)).toContain("Antigravity 1.4.5 does not work");
+        expect((yield* h.refresh().pipe(Effect.flip)).detail).toContain(
+          "Antigravity 1.4.5 does not work",
+        );
+        const methods = (yield* h.readRequests).map((request) => request.method);
+        expect(methods).toContain("initialize");
+        expect(methods).not.toContain("session/new");
+      }).pipe(Effect.scoped),
+  );
   // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
     "a turn in flight keeps its runtime home through an instance rebuild while orphaned runs are swept",

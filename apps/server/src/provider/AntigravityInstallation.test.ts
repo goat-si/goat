@@ -123,21 +123,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
       }),
   );
 
-  it.effect("falls back to runtime 1.4.5 when Google's CLI manifest offers no release", () =>
-    Effect.gen(function* () {
-      const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
-      const started = yield* installation.start;
-      expect(started.version).toBe("1.4.5");
-      yield* terminalState(installation);
-      expect(requests).toEqual([
-        hostPlatform === "win32"
-          ? "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json"
-          : "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json",
-        hostPlatform === "win32"
-          ? "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-x86_64.zip"
-          : "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.5-linux-x86_64.zip",
-      ]);
-    }),
+  it.effect(
+    "does not install the incompatible legacy runtime when the CLI channel is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
+        const error = yield* installation.start.pipe(Effect.flip);
+        expect(error.detail).toContain("No Antigravity release is available");
+        expect(requests).toEqual([
+          hostPlatform === "win32"
+            ? "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json"
+            : "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json",
+        ]);
+      }),
   );
 
   it.effect("reports missing Node before downloading the standalone provider runtime", () =>

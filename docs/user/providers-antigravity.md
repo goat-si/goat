@@ -52,11 +52,9 @@ account.
 ## Runtime installation
 
 Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
-and Windows x64 or ARM64. When Google's release channel is unreachable, every one
-of these installs the 1.4.5 runtime GOAT tested, except musl Linux: that runtime is
-built for glibc, so musl Linux installs only Google's native CLI, and while the
-channel is down setup reports that no release is available. Allow several GB of free disk space,
-especially on Linux.
+and Windows x64 or ARM64. It installs Google's native CLI when the release channel
+is available. Antigravity runtimes older than 1.5 are incompatible; update them in
+provider settings. Allow several GB of free disk space, especially on Linux.
 On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.
 
@@ -151,8 +149,7 @@ or send `/clear` when you need a fresh context.
 
 When your Antigravity runtime offers `/goal`, send `/goal` followed by a verifiable
 objective. Antigravity keeps working until it completes the goal or you cancel it.
-If you still use the older 1.4.5 runtime, update Antigravity in provider settings,
-then refresh provider status.
+If the command is unavailable, update Antigravity in provider settings and refresh provider status.
 
 Use Stop to interrupt a running goal, then ask Antigravity to stop pursuing it
 before starting more work. Ordinary follow-ups wait until the running turn ends.
