@@ -9,15 +9,19 @@ import * as ProjectHandlers from "./handlers.ts";
 import { clientLaunchHarness } from "./handlers.testkit.ts";
 import { ProjectToolkit } from "./tools.ts";
 
-it.effect("reading a project shows the default model saved in Settings", () =>
+it.effect("reading a project shows the default model and actions saved in Settings", () =>
   Effect.gen(function* () {
     const overrideModel = {
       instanceId: ProviderInstanceId.make("claudeAgent"),
       model: "claude-sonnet",
     };
+    const overrideScripts = [
+      { id: "test", name: "Test", command: "pnpm test", icon: "test", runOnWorktreeCreate: false },
+    ];
     const harness = clientLaunchHarness({
       runtimeModeCeiling: "full-access",
       overrideModel,
+      overrideScripts,
       launched: [],
     });
     const dependencies = Layer.merge(
@@ -46,7 +50,10 @@ it.effect("reading a project shows the default model saved in Settings", () =>
       .handle("goat_project_read", { projectId: harness.projectId })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
 
-    expect(read.at(-1)?.result).toMatchObject({ defaultModelSelection: overrideModel });
+    expect(read.at(-1)?.result).toMatchObject({
+      defaultModelSelection: overrideModel,
+      scripts: overrideScripts,
+    });
   }),
 );
 

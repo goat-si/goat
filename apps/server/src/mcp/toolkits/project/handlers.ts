@@ -1,5 +1,6 @@
 import { OrchestratorMcpFailure, ProjectId, type Project as ProjectRecord } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { resolveProjectScripts } from "@goat/shared/projectScripts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -50,6 +51,7 @@ const withSavedDefaultModel = Effect.gen(function* () {
         resolved.sources.defaultModelSelection === "project"
           ? resolved.settings.defaultModelSelection
           : null,
+      scripts: resolveProjectScripts(settings, project),
     };
   };
 });
@@ -152,6 +154,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     McpToolAccess.setsUpProjects(({ workspaceRoot, ...input }) =>
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
+        const savedSettings = yield* withSavedDefaultModel;
         if (workspaceRoot === undefined) {
           // Project creation records no model default (only an update does), so
           // reject what this mode would otherwise drop silently.
@@ -184,7 +187,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               ),
             );
           return {
-            ...project,
+            ...savedSettings(project),
             ...(created.commitError === undefined ? {} : { commitError: created.commitError }),
           };
         }
@@ -195,9 +198,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               "Creating a project does not set its default model; set defaultModelSelection afterwards with goat_project_update.",
           });
         const commandId = yield* newCommandId();
-        return yield* projects
+        const created = yield* projects
           .create({ ...input, workspaceRoot, commandId, projectId: ProjectId.make(commandId) })
           .pipe(Effect.mapError(projectFailure));
+        return savedSettings(created);
       }),
     ),
   ),
@@ -205,10 +209,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     McpToolAccess.writesEnvironment((input) =>
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
+        const savedSettings = yield* withSavedDefaultModel;
         const updated = yield* projects
           .update({ ...input, commandId: yield* newCommandId() })
           .pipe(Effect.mapError(projectFailure));
-        return (yield* withSavedDefaultModel)(updated);
+        return savedSettings(updated);
       }),
     ),
   ),
