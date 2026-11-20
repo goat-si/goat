@@ -624,6 +624,41 @@ describe("parseAgentSessionTranscript", () => {
     expect(thread?.title ?? null).toBe(expected);
   });
 
+  it.each([false, true])(
+    "retains a Claude error only when a model also answered: %s",
+    (modelAnswered) => {
+      const records = [
+        { type: "user", message: { role: "user", content: "plugin" } },
+        ...(modelAnswered
+          ? [
+              {
+                type: "assistant",
+                message: {
+                  role: "assistant",
+                  model: "claude-sonnet-4-5",
+                  content: "Which plugin?",
+                },
+              },
+            ]
+          : []),
+        {
+          type: "assistant",
+          message: { role: "assistant", model: "<synthetic>", content: "Invalid API key" },
+        },
+      ];
+      const thread = AgentSessionScanner.parseAgentSessionTranscript({
+        contents: records.map((record) => JSON.stringify(record)).join("\n"),
+        source: "claudeAgent",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        fallbackSessionId: "claude-session",
+        lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
+      });
+      expect(thread?.messages.map((message) => message.text) ?? null).toEqual(
+        modelAnswered ? ["plugin", "Which plugin?", "Invalid API key"] : null,
+      );
+    },
+  );
+
   it("skips sessions without a visible user message", () => {
     const thread = AgentSessionScanner.parseAgentSessionTranscript({
       contents: JSON.stringify({

@@ -120,6 +120,8 @@ function claudeTitle(title: string | undefined): string | undefined {
   return claudeUserText(trimmed).text === trimmed ? trimmed : undefined;
 }
 
+const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
+
 export function foldClaudeFields(
   fields: ClaudeFields,
   record: DecodedTranscriptRecord,
@@ -134,9 +136,8 @@ export function foldClaudeFields(
       record.customTitle === undefined
         ? fields.customTitle
         : (claudeTitle(record.customTitle) ?? null),
-    // Claude uses this sentinel for local error responses. It is not a
-    // model ID that can be selected when the imported session resumes.
-    model: model && model !== "<synthetic>" ? model : fields.model,
+    // Not a model ID that can be selected when the imported session resumes.
+    model: model && model !== CLAUDE_SYNTHETIC_MODEL ? model : fields.model,
   };
 }
 
@@ -227,6 +228,8 @@ export function parseAgentSessionRecords(
   // Names a session whose only request was a bare command, such as `/review`.
   let bareCommandTitle: string | undefined;
   let hasAssistantMessage = false;
+  let hasClaudeSyntheticReply = false;
+  let hasClaudeModelReply = false;
   let hasCodexSessionId = false;
   const messages: Array<AgentSessionThreadMessage & { readonly codexResponseUser: boolean }> = [];
   let firstUserMessage:
@@ -339,6 +342,11 @@ export function parseAgentSessionRecords(
       if (record.type !== "user" && record.type !== "assistant") continue;
       const { text, titleText } = claudeVisibleText(record);
       if (text.length === 0) continue;
+      if (record.type === "assistant") {
+        if (record.message?.model?.trim() === CLAUDE_SYNTHETIC_MODEL)
+          hasClaudeSyntheticReply = true;
+        else hasClaudeModelReply = true;
+      }
       retainMessage(
         {
           role: record.type,
@@ -416,6 +424,13 @@ export function parseAgentSessionRecords(
   );
   if (firstUserMessage === undefined) return null;
   if (input.source === "claudeAgent" && derivedTitle === undefined && !hasAssistantMessage)
+    return null;
+  if (
+    input.source === "claudeAgent" &&
+    droppedMessageCount === 0 &&
+    hasClaudeSyntheticReply &&
+    !hasClaudeModelReply
+  )
     return null;
   const firstUserMessageRetained = messages.includes(firstUserMessage);
   const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
