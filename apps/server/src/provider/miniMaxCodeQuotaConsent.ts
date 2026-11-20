@@ -1,6 +1,7 @@
 import {
   ServerSettingsError,
   type ProviderInstanceConfig,
+  type ProviderInstanceId,
   type ServerSettings,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -43,9 +44,7 @@ function quotaLaunchEnabled(
 export const enforceMiniMaxCodeQuotaConsent = Effect.fn("enforceMiniMaxCodeQuotaConsent")(
   function* (current: ServerSettings, next: ServerSettings) {
     if (yield* MiniMaxCodeQuotaConsent) return;
-    for (const id of Object.keys(next.providerInstances) as ReadonlyArray<
-      keyof typeof next.providerInstances
-    >) {
+    for (const id of Object.keys(next.providerInstances).map((key) => key as ProviderInstanceId)) {
       const instance = next.providerInstances[id];
       const config = grantedConfig(instance);
       if (!config) continue; // Disabling or removing the grant is always safe.

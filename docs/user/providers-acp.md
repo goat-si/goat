@@ -64,7 +64,8 @@ signed-in account’s limits in Fleet. The setting is off by default and can be 
 any time. GOAT reads the local MCode login token only when this setting is on and sends it only to
 MiniMax to check quota. It does not use an API key. If GOAT cannot determine the region from the
 profile’s saved preference, set `MAVIS_REGION` to `cn` (mainland China) or `en` (global). GOAT does
-not show quota if the login is unavailable, expired, or stored outside the MCode data directory.
+not show quota if the login is unavailable, expired, stored outside the MCode data directory, or
+in files other users on that machine can read.
 Enter these routing variables as plain values, not secret references.
 Quota lookup relies on private MiniMax endpoints and may become unavailable if MiniMax changes them.
 
