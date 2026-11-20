@@ -84,14 +84,18 @@ export const settlementReportRun = Effect.fn("ThreadResults.settlementReportRun"
   children: ReadonlyArray<OrchestrationV2Subagent>,
 ) {
   const delegates = children.filter((child) => child.origin === "app_owned" && !child.promotedAt);
-  const rows = yield* sql<{ runId: RunId; reportedAt: string | null }>`
-    SELECT owned.value AS runId, report.reported_at AS reportedAt
+  const rows = yield* sql<{ runId: RunId; reportedAt: string | null; due: number }>`
+    SELECT owned.value AS runId, report.reported_at AS reportedAt, pending.key IS NOT NULL AS due
     FROM json_each(${encodeRunIds(ownedRuns.map((run) => run.id))}) AS owned
-    JOIN thread_run_results AS report ON report.thread_id = ${threadId} AND report.run_id = owned.value
-    ORDER BY owned.key DESC LIMIT 1
+    LEFT JOIN channel_runtime_state AS pending ON pending.key = ${prefix} || owned.value
+    LEFT JOIN thread_run_results AS report ON report.thread_id = ${threadId} AND report.run_id = owned.value
+    WHERE pending.key IS NOT NULL OR report.run_id IS NOT NULL
+    ORDER BY owned.key DESC
   `;
-  const latest = rows[0];
-  if (!delegates.length) return current.id;
+  // A refused report leaves its run due; with delegates left, an accepted report the restart
+  // walk reaches still settles the task.
+  if (!delegates.length) return rows[0]?.due ? null : current.id;
+  const latest = rows.find((row) => row.reportedAt !== null);
   if (!latest?.reportedAt) return null;
   const reportedAt = Date.parse(latest.reportedAt);
   if (
