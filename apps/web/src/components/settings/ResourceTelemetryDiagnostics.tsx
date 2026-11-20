@@ -980,8 +980,16 @@ function ResourceTelemetryDiagnosticsBody({
               </p>
             </div>
             <div className="flex items-center gap-2 text-3xs text-muted-foreground/65">
-              <span className="size-1.5 rounded-full bg-success" />
-              Sampling every {snapshot ? formatSampleInterval(snapshot.sampleIntervalMs) : "..."}
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  snapshot && snapshot.sampleIntervalMs > 0
+                    ? "bg-success"
+                    : "bg-muted-foreground/55",
+                )}
+              />
+              Sampling {snapshot && snapshot.sampleIntervalMs <= 0 ? "" : "every "}
+              {snapshot ? formatSampleInterval(snapshot.sampleIntervalMs) : "..."}
             </div>
           </div>
           <div className="grid grid-cols-2 divide-x divide-y divide-border/55 md:grid-cols-3">

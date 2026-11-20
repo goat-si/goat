@@ -62,6 +62,7 @@ export function resourceHistoryCpuScaleMax(
 }
 
 export function formatSampleInterval(valueMs: number): string {
+  if (valueMs <= 0) return "on demand";
   if (valueMs < 1_000) return `${Math.max(0, Math.round(valueMs))} ms`;
   const seconds = valueMs / 1_000;
   return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${
