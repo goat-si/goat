@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@goat/contracts";
 import {
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -22,7 +23,10 @@ function markReleased(item: Attachment): boolean {
   return true;
 }
 
-export function releaseUnownedQueuedEditAttachments(attachments: ReadonlyArray<Attachment>): void {
+export function releaseUnownedQueuedEditAttachments(
+  attachments: ReadonlyArray<Attachment>,
+  environmentId?: EnvironmentId,
+): void {
   const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadKey);
   const ownedIds = new Set(
     drafts.flatMap((draft) => [...draft.images, ...draft.files].map((item) => item.id)),
@@ -33,7 +37,7 @@ export function releaseUnownedQueuedEditAttachments(attachments: ReadonlyArray<A
   const unowned = attachments.filter((item) => {
     return !ownedIds.has(item.id) && markReleased(item);
   });
-  releaseDraftAttachments(unowned);
+  releaseDraftAttachments(unowned, environmentId);
   for (const item of unowned) {
     if (
       item.type === "image" &&
@@ -45,9 +49,12 @@ export function releaseUnownedQueuedEditAttachments(attachments: ReadonlyArray<A
   }
 }
 
-export function discardQueuedEditDraft(target: ComposerThreadTarget): void {
+export function discardQueuedEditDraft(
+  target: ComposerThreadTarget,
+  environmentId?: EnvironmentId,
+): void {
   const store = useComposerDraftStore.getState();
   const draft = store.getComposerDraft(target);
   store.clearComposerContent(target);
-  if (draft) releaseUnownedQueuedEditAttachments([...draft.images, ...draft.files]);
+  if (draft) releaseUnownedQueuedEditAttachments([...draft.images, ...draft.files], environmentId);
 }

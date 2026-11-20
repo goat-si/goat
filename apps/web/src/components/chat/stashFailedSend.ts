@@ -137,7 +137,7 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
     });
   }
   for (const attachment of [...snapshot.images, ...snapshot.previewAnnotations]) {
-    releaseAttachmentUpload(attachment.id);
+    releaseAttachmentUpload(attachment.id, environmentId);
   }
   const imagesSettled =
     snapshot.images.length === 0

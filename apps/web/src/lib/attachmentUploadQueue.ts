@@ -30,7 +30,11 @@ import { environmentCatalog } from "../connection/catalog";
 import { assetEnvironment } from "../state/assets";
 import { attachmentEnvironment } from "../state/attachments";
 import { readEnvironmentScope, readPreparedConnection } from "../state/session";
-import type { AttachmentUploadState, ReadyAttachmentUpload } from "./attachmentUploadState";
+import {
+  attachmentUploadForEnvironment,
+  type AttachmentUploadState,
+  type ReadyAttachmentUpload,
+} from "./attachmentUploadState";
 
 const MAX_UPLOADS_PER_ENVIRONMENT = 3;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
@@ -86,8 +90,14 @@ function clearUploadState(imageId: string): void {
   });
 }
 
-export function readAttachmentUpload(imageId: string): AttachmentUploadState | undefined {
-  return useAttachmentUploadStore.getState().uploadsByImageId[imageId];
+export function readAttachmentUpload(
+  imageId: string,
+  environmentId?: EnvironmentId,
+): AttachmentUploadState | undefined {
+  const upload = useAttachmentUploadStore.getState().uploadsByImageId[imageId];
+  return environmentId === undefined
+    ? upload
+    : attachmentUploadForEnvironment(upload, environmentId);
 }
 
 function resolveCurrentFileDraftTarget(job: DraftFileOwner): ComposerThreadTarget | undefined {
@@ -536,8 +546,14 @@ function cancelAttachmentUpload(imageId: string): void {
   job.resolveSettled();
 }
 
-export function releaseAttachmentUpload(imageId: string): void {
+export function releaseAttachmentUpload(imageId: string, environmentId?: EnvironmentId): void {
   const upload = readAttachmentUpload(imageId);
+  const job = heldUploadsByImageId.get(imageId);
+  if (
+    environmentId !== undefined &&
+    (job?.environmentId ?? upload?.environmentId) !== environmentId
+  )
+    return;
   const hasWaiters = (heldUploadsByImageId.get(imageId)?.waiters ?? 0) > 0;
   cancelAttachmentUpload(imageId);
   if (hasWaiters) return;
@@ -565,7 +581,7 @@ export function releasePersistedAttachmentUpload(input: {
     upload.environmentId === input.environmentId &&
     upload.attachmentId === input.attachmentId
   ) {
-    releaseAttachmentUpload(input.id);
+    releaseAttachmentUpload(input.id, input.environmentId);
     return;
   }
   const job = heldUploadsByImageId.get(input.id);
@@ -573,7 +589,7 @@ export function releasePersistedAttachmentUpload(input: {
     job?.environmentId === input.environmentId &&
     job.persistedAttachmentId === input.attachmentId
   ) {
-    releaseAttachmentUpload(input.id);
+    releaseAttachmentUpload(input.id, input.environmentId);
   }
   deletePendingUpload(input.environmentId, input.attachmentId);
 }
@@ -610,11 +626,14 @@ export function verifyStashedAttachmentUpload(input: {
   });
 }
 
-export async function awaitAttachmentUploads(imageIds: ReadonlyArray<string>): Promise<void> {
+export async function awaitAttachmentUploads(
+  imageIds: ReadonlyArray<string>,
+  environmentId?: EnvironmentId,
+): Promise<void> {
   await Promise.all(
     imageIds.map(async (imageId) => {
       const job = heldUploadsByImageId.get(imageId);
-      if (!job) return;
+      if (!job || (environmentId !== undefined && job.environmentId !== environmentId)) return;
       const release = registry.hold(job);
       job.waiters++;
       try {
@@ -652,29 +671,35 @@ export function getUploadedAttachments(input: {
 /** In-memory queue releases miss uploads after reload; every draft discard must use this path. */
 export function releaseDraftAttachment(
   attachment: ComposerImageAttachment | ComposerFileAttachment,
+  environmentId?: EnvironmentId,
 ): void {
   if (
     attachment.type === "file" &&
     attachment.uploadedAttachmentId !== undefined &&
     attachment.uploadEnvironmentId !== undefined
   ) {
+    if (environmentId !== undefined && environmentId !== attachment.uploadEnvironmentId) {
+      releaseAttachmentUpload(attachment.id, environmentId);
+      return;
+    }
     releasePersistedAttachmentUpload({
       id: attachment.id,
       environmentId: attachment.uploadEnvironmentId,
       attachmentId: attachment.uploadedAttachmentId,
     });
     if (heldUploadsByImageId.has(attachment.id) || readAttachmentUpload(attachment.id)) {
-      releaseAttachmentUpload(attachment.id);
+      releaseAttachmentUpload(attachment.id, environmentId ?? attachment.uploadEnvironmentId);
     }
     return;
   }
-  releaseAttachmentUpload(attachment.id);
+  releaseAttachmentUpload(attachment.id, environmentId);
 }
 
 export function releaseDraftAttachments(
   attachments: ReadonlyArray<ComposerImageAttachment | ComposerFileAttachment>,
+  environmentId?: EnvironmentId,
 ): void {
   for (const attachment of attachments) {
-    releaseDraftAttachment(attachment);
+    releaseDraftAttachment(attachment, environmentId);
   }
 }

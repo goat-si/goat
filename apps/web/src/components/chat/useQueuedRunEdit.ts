@@ -134,7 +134,10 @@ async function submitQueuedRunEdit(input: {
     };
     validateFiles();
     for (const file of files) startAttachmentUpload({ environmentId, image: file, draftTarget });
-    await awaitAttachmentUploads(files.map((file) => file.id));
+    await awaitAttachmentUploads(
+      files.map((file) => file.id),
+      environmentId,
+    );
     validateFiles();
     const uploaded = getUploadedAttachments({ environmentId, images: files });
     if (uploaded === null) throw new Error("Retry or remove failed uploads before saving.");
@@ -268,7 +271,7 @@ export function useQueuedRunEdit(input: {
     const target = queuedRunEditDraftId(routeThreadRef, runId);
     // A save in flight still sends these uploads.
     if (isSaving) useComposerDraftStore.getState().clearComposerContent(target);
-    else discardQueuedEditDraft(target);
+    else discardQueuedEditDraft(target, environmentId);
   };
 
   const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
@@ -446,7 +449,7 @@ export function useQueuedRunEdit(input: {
         .clearComposerContent(queuedRunEditDraftId(routeThreadRef, editing.runId));
       composerRef.current?.resetCursorState();
     }
-    releaseUnownedQueuedEditAttachments(newAttachments);
+    releaseUnownedQueuedEditAttachments(newAttachments, environmentId);
     if (!current) return;
     focusComposerSoon();
   };

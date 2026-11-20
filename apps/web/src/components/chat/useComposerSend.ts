@@ -967,7 +967,7 @@ export function useComposerSend(input: ComposerSendInput) {
     if (turnUsesAttachmentUploads && composerAttachmentsSnapshot.length > 0) {
       for (const attachment of composerAttachmentsSnapshot) {
         const upload =
-          readAttachmentUpload(attachment.id)?.status === "failed"
+          readAttachmentUpload(attachment.id, environmentId)?.status === "failed"
             ? retryAttachmentUpload
             : startAttachmentUpload;
         upload({
@@ -976,7 +976,10 @@ export function useComposerSend(input: ComposerSendInput) {
           draftTarget: composerDraftTarget,
         });
       }
-      await awaitAttachmentUploads(composerAttachmentsSnapshot.map((attachment) => attachment.id));
+      await awaitAttachmentUploads(
+        composerAttachmentsSnapshot.map((attachment) => attachment.id),
+        environmentId,
+      );
       const attachmentCapabilitiesAfterUpload = readLiveAttachmentCapabilities();
       if (attachmentCapabilitiesAfterUpload.fileBlockReason !== null) {
         sendInFlightRef.current = false;
@@ -1405,7 +1408,7 @@ export function useComposerSend(input: ComposerSendInput) {
         setKeepFullHistory(routeThreadKey, false);
         clearUsageLimitsFor(routeThreadKey);
         if (turnUsesAttachmentUploads) {
-          releaseDraftAttachments(composerAttachmentsSnapshot);
+          releaseDraftAttachments(composerAttachmentsSnapshot, environmentId);
         }
         acknowledgeActiveThreadWoke();
         // A draft still on screen finalizes once its thread route takes over.

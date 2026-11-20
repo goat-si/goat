@@ -1,13 +1,25 @@
 import type { ScopedProjectRef, ScopedThreadRef } from "@goat/contracts";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 
-import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
+import {
+  type DraftId,
+  resolveComposerDraftKey,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { releaseDraftAttachments } from "./attachmentUploadQueue";
 
 export function releaseComposerDraftUploads(target: ScopedThreadRef | DraftId): void {
-  const draft = useComposerDraftStore.getState().getComposerDraft(target);
+  const store = useComposerDraftStore.getState();
+  const draft = store.getComposerDraft(target);
+  const key = resolveComposerDraftKey(store, target);
+  const environmentId =
+    typeof target === "string"
+      ? key === null
+        ? undefined
+        : store.draftThreadsByThreadKey[key]?.environmentId
+      : target.environmentId;
   if (draft) {
-    releaseDraftAttachments([...draft.images, ...draft.files]);
+    releaseDraftAttachments([...draft.images, ...draft.files], environmentId);
   }
 }
 
@@ -22,13 +34,16 @@ export function releaseProjectDraftUploads(
       session.projectId === projectRef.projectId
     ) {
       const draft = store.draftsByThreadKey[draftKey];
-      releaseDraftAttachments(draft ? [...draft.images, ...draft.files] : []);
+      releaseDraftAttachments(
+        draft ? [...draft.images, ...draft.files] : [],
+        projectRef.environmentId,
+      );
     }
   }
   for (const threadRef of projectThreadRefs) {
     const draft = store.draftsByThreadKey[scopedThreadKey(threadRef)];
     if (draft) {
-      releaseDraftAttachments([...draft.images, ...draft.files]);
+      releaseDraftAttachments([...draft.images, ...draft.files], threadRef.environmentId);
     }
   }
 }

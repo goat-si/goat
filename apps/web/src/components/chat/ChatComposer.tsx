@@ -823,7 +823,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ...composerImages,
         ...composerFiles,
       ])) {
-        releaseAttachmentUpload(attachment.id);
+        releaseAttachmentUpload(attachment.id, environmentId);
       }
       return;
     }
@@ -833,7 +833,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? composerFiles
         : composerFiles.filter((file) => file.sizeBytes > maxFileAttachmentBytes);
     for (const attachment of attachmentsToReleaseOnUploadCapabilityLoss(invalidFiles)) {
-      releaseAttachmentUpload(attachment.id);
+      releaseAttachmentUpload(attachment.id, environmentId);
     }
     const uploadableFiles =
       maxFileAttachmentBytes === null
@@ -1291,7 +1291,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const removeComposerImageFromDraft = (imageId: string) => {
     if (questionAttachmentTarget && activePendingIsResponding) return;
-    releaseAttachmentUpload(imageId);
+    releaseAttachmentUpload(imageId, environmentId);
     removeComposerDraftImage(attachmentDraftTarget, imageId);
   };
 
@@ -1300,9 +1300,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Hydrated uploads use persisted attachment ids, not queue keys.
     const file = composerFilesRef.current.find((candidate) => candidate.id === fileId);
     if (file) {
-      releaseDraftAttachment(file);
+      releaseDraftAttachment(file, environmentId);
     } else {
-      releaseAttachmentUpload(fileId);
+      releaseAttachmentUpload(fileId, environmentId);
     }
     removeComposerDraftFile(attachmentDraftTarget, fileId);
   };

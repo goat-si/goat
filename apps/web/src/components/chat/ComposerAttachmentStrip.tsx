@@ -16,7 +16,10 @@ import {
   composerFileNeedsReattach,
 } from "../../composerDraftStore";
 import { retryAttachmentUpload, useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
-import type { AttachmentUploadState } from "../../lib/attachmentUploadState";
+import {
+  attachmentUploadForEnvironment,
+  type AttachmentUploadState,
+} from "../../lib/attachmentUploadState";
 import { useAttachmentUploadProgress } from "../../hooks/useAttachmentUploadProgress";
 import { isHeicImageFile } from "../../lib/imageCompression";
 import {
@@ -180,7 +183,9 @@ export function ComposerAttachmentMediaRow({
       ]
         .map(({ image, ready }) => {
           const upload =
-            ready && supportsAttachmentUploads ? uploadsByImageId[image.id] : undefined;
+            ready && supportsAttachmentUploads
+              ? attachmentUploadForEnvironment(uploadsByImageId[image.id], environmentId)
+              : undefined;
           const source = ready?.source;
           const snapShotAnimationPending =
             source?.kind === "snap-shot" && pendingSnapShotIdSet.has(image.id);
@@ -346,7 +351,9 @@ export function ComposerAttachmentMediaRow({
           supportsAttachmentUploads &&
           maxFileAttachmentBytes !== null &&
           file.sizeBytes <= maxFileAttachmentBytes;
-        const upload = fileCanUpload ? uploadsByImageId[file.id] : undefined;
+        const upload = fileCanUpload
+          ? attachmentUploadForEnvironment(uploadsByImageId[file.id], environmentId)
+          : undefined;
         return (
           <div
             key={file.id}
@@ -452,7 +459,9 @@ export function ComposerAttachmentFileList({
           supportsAttachmentUploads &&
           maxFileAttachmentBytes !== null &&
           file.sizeBytes <= maxFileAttachmentBytes;
-        const upload = fileCanUpload ? uploadsByImageId[file.id] : undefined;
+        const upload = fileCanUpload
+          ? attachmentUploadForEnvironment(uploadsByImageId[file.id], environmentId)
+          : undefined;
         const needsReattach = composerFileNeedsReattach(file);
         const canReattachFile = fileStagingLimit !== null && file.sizeBytes <= fileStagingLimit;
         return (
