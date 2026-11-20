@@ -1,3 +1,4 @@
+import { recoveryParkMarkerId } from "./RecoveryParkMarker.ts";
 import type { OrchestrationV2DomainEvent, RunId, ThreadId } from "@goat/contracts";
 import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
@@ -5,6 +6,9 @@ import * as Effect from "effect/Effect";
 import { isBufferedProviderNotification } from "../NotificationMailbox.ts";
 import type { ProjectionStoreV2 } from "../ProjectionStore.ts";
 import { worktreeSetupPending } from "./OrchestratorRunState.ts";
+
+const MARKER_BATCH_SIZE = 64;
+const MARKER_READ_CONCURRENCY = 8;
 
 export function makeReleaseUnattendedHolds<E, R>(input: {
   readonly projectionStore: ProjectionStoreV2["Service"];
@@ -47,17 +51,35 @@ export function makeReleaseUnattendedHolds<E, R>(input: {
         .map((message) => message.id),
     );
     const now = yield* DateTime.now;
-    const released = held.filter((run) => unattended.has(run.userMessageId));
-    if (released.length === 0) return;
-    yield* writeSystemEvents(
-      released.map((run) => ({
-        type: "run.updated" as const,
-        threadId,
-        runId: run.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...run, queueHeld: false },
-      })),
-    );
+    for (let offset = 0; offset < held.length; offset += MARKER_BATCH_SIZE) {
+      const page = held
+        .slice(offset, offset + MARKER_BATCH_SIZE)
+        .filter((run) => unattended.has(run.userMessageId));
+      const checked = yield* Effect.forEach(
+        page,
+        (run) =>
+          projectionStore
+            .getTurnItem({
+              threadId,
+              itemId: recoveryParkMarkerId(run.id),
+            })
+            .pipe(Effect.map((marker) => ({ run, marker }))),
+        { concurrency: MARKER_READ_CONCURRENCY },
+      );
+      const released = checked
+        .filter(({ marker }) => marker?.type !== "system_notice" || marker.status !== "waiting")
+        .map(({ run }) => run);
+      if (released.length > 0)
+        yield* writeSystemEvents(
+          released.map((run) => ({
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...run, queueHeld: false },
+          })),
+        );
+    }
   });
 }

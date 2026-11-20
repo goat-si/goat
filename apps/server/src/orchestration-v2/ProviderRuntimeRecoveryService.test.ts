@@ -533,6 +533,7 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getMessagesById: () => Effect.succeed(new Map()),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -987,6 +988,7 @@ it.effect("leaves delegated tasks to their own child threads after process loss"
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getMessagesById: () => Effect.succeed(new Map()),
         }),
         Layer.mock(EventSink.EventSinkV2)({
           commitCommand: (input) => {
@@ -1250,6 +1252,14 @@ it.effect.each(cloudRecoveryCases)(
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getRecoveryThreadIds: () => Effect.succeed([threadId]),
               getRuntimeRecoveryProjection: () => Effect.succeed(recoveryProjection),
+              getMessagesById: (_threadId, ids) =>
+                Effect.succeed(
+                  new Map(
+                    recoveryProjection.messages
+                      .filter((message) => ids.includes(message.id))
+                      .map((message) => [message.id, message]),
+                  ),
+                ),
             }),
             Layer.mock(EventSink.EventSinkV2)({ commitCommand: committed }),
             Layer.mock(EffectOutbox.EffectOutboxV2)({

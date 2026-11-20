@@ -473,6 +473,7 @@ export interface ProjectionRuntimeResponseContext {
 export interface ProjectionRecordFilter {
   readonly providerThreadIds?: ReadonlyArray<ProviderThreadId>;
   readonly providerTurnAttemptIds?: ReadonlyArray<RunAttemptId>;
+  readonly providerTurnLimit?: 1;
   readonly messageRoles?: ReadonlyArray<OrchestrationV2ConversationMessage["role"]>;
   readonly turnItemRunId?: RunId;
   readonly messageIds?: ReadonlyArray<MessageId>;
@@ -3073,7 +3074,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY julianday(json_extract(payload_json, '$.tokenUsage.updatedAt')) DESC,
               provider_thread_id ASC, ordinal ASC
             LIMIT 1`
-                  : sql`ORDER BY provider_thread_id ASC, ordinal ASC`
+                  : filter?.providerTurnLimit === 1
+                    ? sql`LIMIT 1`
+                    : sql`ORDER BY provider_thread_id ASC, ordinal ASC`
               }
           `
               : sql<PayloadRow>`

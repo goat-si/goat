@@ -46,19 +46,27 @@ export const selectThreadRecords = <K extends ProjectionRecordField>(
   filter: ProjectionRecordFilter | undefined,
 ) => {
   const latestRun = latestIdleCompactionRun(projection.runs);
-  const matchingTurns = projection.providerTurns.filter(
-    (row) =>
-      (filter?.providerTurnAttemptIds === undefined ||
-        (row.runAttemptId !== null && filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
-      (filter?.providerTurnThreadIds === undefined ||
-        filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
-      (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
-      (filter?.ancestryRunIds === undefined ||
-        projection.attempts.some(
-          (attempt) =>
-            attempt.id === row.runAttemptId && filter.ancestryRunIds?.includes(attempt.runId),
-        )),
-  );
+  const matchesTurn = (row: OrchestrationV2ThreadProjection["providerTurns"][number]) =>
+    (filter?.providerTurnAttemptIds === undefined ||
+      (row.runAttemptId !== null && filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
+    (filter?.providerTurnThreadIds === undefined ||
+      filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
+    (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
+    (filter?.ancestryRunIds === undefined ||
+      projection.attempts.some(
+        (attempt) =>
+          attempt.id === row.runAttemptId && filter.ancestryRunIds?.includes(attempt.runId),
+      ));
+  const firstTurn =
+    filter?.providerTurnLimit === 1 && filter.latestProviderTurnUsageOnly !== true
+      ? projection.providerTurns.find(matchesTurn)
+      : undefined;
+  const matchingTurns =
+    filter?.providerTurnLimit === 1 && filter.latestProviderTurnUsageOnly !== true
+      ? firstTurn === undefined
+        ? []
+        : [firstTurn]
+      : projection.providerTurns.filter(matchesTurn);
   const selected = {
     ...projection,
     providerThreads: projection.providerThreads.filter(

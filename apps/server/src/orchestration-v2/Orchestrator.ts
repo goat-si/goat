@@ -1,3 +1,5 @@
+import { recoveryParkMarkerId } from "./goat/RecoveryParkMarker.ts";
+import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
 import { makeReleaseUnattendedHolds } from "./goat/ReleaseUnattendedHolds.ts";
 import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
 import { makeNotificationTasks } from "./goat/NotificationTasks.ts";
@@ -712,6 +714,45 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* Ref.update(events, (existing) => [...existing, withId]);
         return withId;
       });
+
+  const settleRecoveryParkNotice = Effect.fn("Orchestrator.settleRecoveryParkNotice")(function* (
+    command: Extract<OrchestrationV2ServerCommand, { readonly threadId: ThreadId }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    runId: RunId,
+    now: DateTime.Utc,
+    outcome: "sent" | "discarded",
+  ) {
+    const marker = yield* projectionStore
+      .getTurnItem({
+        threadId: command.threadId,
+        itemId: recoveryParkMarkerId(runId),
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (marker?.type !== "system_notice" || marker.status !== "waiting") return;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "turn-item.updated",
+      threadId: command.threadId,
+      runId,
+      occurredAt: now,
+      payload: {
+        ...marker,
+        status: "completed",
+        completedAt: now,
+        updatedAt: now,
+        message:
+          outcome === "sent"
+            ? "Recovery message released by your request."
+            : "Recovery message discarded.",
+      },
+    });
+  });
 
   const sessionHasBackgroundWork = makeSessionHasBackgroundWork(providerSessions);
 
@@ -5700,6 +5741,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : [];
     const releasedAt = yield* DateTime.now;
     for (const held of heldRunsToRelease) {
+      yield* settleRecoveryParkNotice(command, events, held.id, releasedAt, "sent");
       yield* emit(
         events,
         command,
@@ -8800,6 +8842,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     yield* emitQueuedRunCancellation({ command, events, projection, run: queuedRun, now, cause });
+    yield* settleRecoveryParkNotice(command, events, queuedRun.id, now, "discarded");
     const emitEvent = emit(events, command);
     const guest = queuedMessage?.context?.guest;
     if (guest !== undefined) {
@@ -12387,6 +12430,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const now = yield* DateTime.now;
         const queued = projection.runs.filter((run) => run.status === "queued");
         for (const run of queued) {
+          yield* settleRecoveryParkNotice(command, events, run.id, now, "sent");
           yield* emit(
             events,
             command,
@@ -13393,4 +13437,3 @@ export const layer: Layer.Layer<
   Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(RuntimeAdmission.layer),
 );
-import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
