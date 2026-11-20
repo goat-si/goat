@@ -1,3 +1,4 @@
+import { makeRefEpochs } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import {
   branchNameFromHeadRef,
@@ -3432,20 +3433,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     } satisfies GitRefsSnapshot;
   });
 
-  const listRefsEpochByCommonDir = new Map<string, number>();
-  let listRefsEpochSequence = 0;
-  const bumpListRefsEpoch = (gitCommonDir: string): number => {
-    const nextEpoch = ++listRefsEpochSequence;
-    listRefsEpochByCommonDir.delete(gitCommonDir);
-    listRefsEpochByCommonDir.set(gitCommonDir, nextEpoch);
-    if (listRefsEpochByCommonDir.size > LIST_REFS_SNAPSHOT_CACHE_CAPACITY) {
-      const oldestKey = listRefsEpochByCommonDir.keys().next().value;
-      if (oldestKey !== undefined) {
-        listRefsEpochByCommonDir.delete(oldestKey);
-      }
-    }
-    return nextEpoch;
-  };
+  const { epochs: listRefsEpochByCommonDir, advance: advanceEpoch } = makeRefEpochs(
+    LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
+  );
   const listRefsGenerationByCommonDir = new Map<string, number>();
   let listRefsGenerationSequence = 0;
   const setListRefsGeneration = (gitCommonDir: string, generation: number): number => {
@@ -3474,15 +3464,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_REFS_SNAPSHOT_CACHE_TTL : Duration.zero),
     },
   );
+  const advanceListRefsEpoch = (gitCommonDir: string) =>
+    advanceEpoch(gitCommonDir, (epoch) =>
+      Cache.invalidate(listRefsSnapshotCache, new GitRefsSnapshotCacheKey({ gitCommonDir, epoch })),
+    );
   const listRefsRefreshSnapshotCache = yield* Cache.makeWith(
     (cacheKey: GitRefsRefreshCacheKey) =>
-      Effect.suspend(() => {
-        const epoch = bumpListRefsEpoch(cacheKey.gitCommonDir);
-        return Cache.get(
-          listRefsSnapshotCache,
-          new GitRefsSnapshotCacheKey({ gitCommonDir: cacheKey.gitCommonDir, epoch }),
-        );
-      }),
+      advanceListRefsEpoch(cacheKey.gitCommonDir).pipe(
+        Effect.flatMap((epoch) =>
+          Cache.get(
+            listRefsSnapshotCache,
+            new GitRefsSnapshotCacheKey({ gitCommonDir: cacheKey.gitCommonDir, epoch }),
+          ),
+        ),
+      ),
     {
       capacity: LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
       timeToLive: (exit) =>
@@ -3520,7 +3515,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (repositoryPaths === null) return;
     const previousGeneration = currentListRefsGeneration(repositoryPaths.gitCommonDir);
     bumpListRefsGeneration(repositoryPaths.gitCommonDir);
-    bumpListRefsEpoch(repositoryPaths.gitCommonDir);
+    yield* advanceListRefsEpoch(repositoryPaths.gitCommonDir);
     yield* Cache.invalidate(
       listRefsRefreshSnapshotCache,
       new GitRefsRefreshCacheKey({
