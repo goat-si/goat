@@ -49,6 +49,8 @@ const reactTests = [
   "src/features/threads/PendingUserInputCard.stop.test.tsx",
   "src/features/threads/SubagentRow.provider.test.tsx",
   "src/features/threads/thread-work-log.answer.test.tsx",
+  "src/features/threads/ThreadFeed.setup-handoff.test.tsx",
+  "src/features/threads/use-setup-details.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",

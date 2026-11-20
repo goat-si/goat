@@ -1158,6 +1158,7 @@ function ThreadDetailBody(
                 statusLines={statusLines}
                 pendingHandoff={props.pendingHandoff}
                 worktreeSetup={props.worktreeSetup}
+                worktreeSetupDetails={props.worktreeSetupDetails}
                 preparingWorktree={
                   props.creationState?.kind === "preparing" &&
                   props.creationState.preparingWorktree &&

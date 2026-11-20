@@ -788,7 +788,7 @@ function ThreadRouteContent(
     );
   };
   const setupTurnStartedAt = composer.selectedThreadActivityRun?.startedAt ?? null;
-  const { visible: worktreeSetup } = useWorktreeSetup({
+  const { snapshot: worktreeSetupSnapshot, visible: worktreeSetup } = useWorktreeSetup({
     environmentId: selectedThread?.environmentId ?? null,
     threadId: selectedThread?.id ?? null,
     preparing:
@@ -1016,6 +1016,16 @@ function ThreadRouteContent(
           extensionStatuses={composer.extensionStatuses}
           providerSubagentStatus={composer.providerSubagentStatus}
           creationState={creationState}
+          worktreeSetupDetails={
+            worktreeSetupSnapshot
+              ? {
+                  snapshot: worktreeSetupSnapshot,
+                  turnStarted: setupTurnStartedAt !== null,
+                  onCancel: handleCancelWorktreeSetup,
+                  onWorkLocally: setupMessage && selectedThreadProject ? handleWorkLocally : null,
+                }
+              : null
+          }
           worktreeSetup={
             worktreeSetup
               ? {
