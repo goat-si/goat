@@ -360,7 +360,7 @@ function applyTheme(
         const previous = lastAppliedTheme?.theme ?? "system";
         lastAppliedTheme = null;
         setThemeValidated(previous);
-        setThemeCssRejected(isThemeCssResourceError(error));
+        setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
       });
     return;
   }
@@ -565,7 +565,7 @@ export function setTheme(next: Theme): boolean {
       })
       .catch((error: unknown) => {
         if (revision === themeValidationRevision)
-          setThemeCssRejected(isThemeCssResourceError(error));
+          setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
       });
     return true;
   }
@@ -656,7 +656,7 @@ function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): bool
       })
       .catch((error: unknown) => {
         if (revision === themeValidationRevision)
-          setThemeCssRejected(isThemeCssResourceError(error));
+          setThemeCssRejected(isThemeCssResourceError(error) ? "resource" : "invalid");
       });
     return true;
   }

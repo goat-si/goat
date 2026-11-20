@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { useMessages } from "gt-react";
-import { THEME_CSS_RESOURCE_MESSAGE } from "./themeCssMessages";
-let rejected = false;
+import { THEME_CSS_INVALID_MESSAGE, THEME_CSS_RESOURCE_MESSAGE } from "./themeCssMessages";
+let rejected: false | "resource" | "invalid" = false;
 const listeners = new Set<() => void>();
-export function setThemeCssRejected(value: boolean) {
+export function setThemeCssRejected(value: false | "resource" | "invalid") {
   rejected = value;
   for (const listener of listeners) listener();
 }
@@ -22,7 +22,7 @@ export function ThemeCssRejectionNotice() {
       role="alert"
       className="fixed right-4 top-4 z-[100] rounded-md border bg-background p-3 text-sm text-foreground shadow-lg"
     >
-      {m(THEME_CSS_RESOURCE_MESSAGE)}
+      {m(visible === "resource" ? THEME_CSS_RESOURCE_MESSAGE : THEME_CSS_INVALID_MESSAGE)}
     </div>
   ) : null;
 }
