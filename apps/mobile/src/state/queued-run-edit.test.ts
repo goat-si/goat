@@ -3,6 +3,8 @@ import { Atom } from "effect/reactivity";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   restoreAttachmentOnlyBootstrapPrompt,
+  formatComposerContextReference,
+  collectComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
 import {
   ChatAttachmentId,
@@ -361,7 +363,7 @@ it("redirects a settings callback after the queued edit ends", () => {
 });
 
 describe("queued edit context changes", () => {
-  it.each(["reply-only", "unchanged", "text-and-reply"] as const)(
+  it.each(["reply-only", "unchanged", "text-and-reply", "already-referenced"] as const)(
     "handles %s when the run starts",
     async (scenario) => {
       await waitForComposerDraftsLoaded();
@@ -397,6 +399,8 @@ describe("queued edit context changes", () => {
       );
       const target = queuedEditDraftKey(threadKey, runId);
       if (scenario === "text-and-reply") setComposerDraftText(target, "Edited message");
+      if (scenario === "already-referenced")
+        setComposerDraftText(target, `${formatComposerContextReference(reply)} original`);
       if (scenario !== "unchanged")
         setComposerDraftContext(target, { version: 1, records: [reply] });
       appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
@@ -406,9 +410,16 @@ describe("queued edit context changes", () => {
         expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBeUndefined();
       } else {
         expect(getComposerDraftSnapshot(threadKey).context?.records).toContainEqual(reply);
-        expect(getComposerDraftSnapshot(threadKey).text).toBe(
-          scenario === "reply-only" ? "original" : "Edited message",
-        );
+        const recovered = getComposerDraftSnapshot(threadKey);
+        const message = scenario === "text-and-reply" ? "Edited message" : "original";
+        expect(recovered.text).toBe(`${formatComposerContextReference(reply)} ${message}`);
+        expect(
+          collectComposerContextReferences(recovered.text).filter(
+            (ref) => ref.contextId === reply.contextId,
+          ),
+        ).toHaveLength(1);
+        setComposerDraftText(threadKey, `${recovered.text} continued`);
+        expect(getComposerDraftSnapshot(threadKey).context?.records).toContainEqual(reply);
       }
       expect(getQueuedRunEdit(threadKey)).toBeNull();
     },

@@ -1,3 +1,4 @@
+import { queuedReplySnapshot, recoverQueuedReplyText } from "./recoverQueuedReply";
 import type {
   ChatAttachment,
   MessageId,
@@ -80,7 +81,12 @@ export function useQueuedRunEdit(threadKey: string | null): QueuedRunEdit | null
  * the thread's composer when that is empty; otherwise it is dropped. Either
  * way the thread says so, wherever the user is when it happens.
  */
-function exitQueuedRunEdit(threadKey: string, edit: QueuedRunEdit, originalContext: string): void {
+function exitQueuedRunEdit(
+  threadKey: string,
+  edit: QueuedRunEdit,
+  originalContext: string,
+  originalReplies: ReadonlyMap<string, string>,
+): void {
   const editDraftKey = queuedEditDraftKey(threadKey, edit.runId);
   const editDraft = getComposerDraftSnapshot(editDraftKey);
   const threadDraft = getComposerDraftSnapshot(threadKey);
@@ -104,7 +110,7 @@ function exitQueuedRunEdit(threadKey: string, edit: QueuedRunEdit, originalConte
   if (recovery === "kept") {
     // The merge publishes the draft before writing it, so a failed write only delays persistence to the next one.
     mergeComposerDraftContent(threadKey, {
-      text: editDraft.text,
+      text: recoverQueuedReplyText(editDraft.text, editDraft.context, originalReplies),
       attachments: editDraft.attachments,
       ...(editDraft.context ? { context: editDraft.context, preserveContextRecords: true } : {}),
     }).catch((error: unknown) => {
@@ -138,11 +144,17 @@ export function beginQueuedRunEdit(
   clearComposerDraft(draftKey);
   setComposerDraftText(draftKey, originalText);
   setComposerDraftContext(draftKey, edit.context);
-  const originalContext = JSON.stringify(getComposerDraftSnapshot(draftKey).context ?? null);
+  const initialContext = getComposerDraftSnapshot(draftKey).context;
+  const originalContext = JSON.stringify(initialContext ?? null);
+  const originalReplies = queuedReplySnapshot(initialContext);
   queuedRunEdits.begin(
     threadKey,
     { ...edit, originalText },
-    { runs, onRunLeftQueue: (key, current) => exitQueuedRunEdit(key, current, originalContext) },
+    {
+      runs,
+      onRunLeftQueue: (key, current) =>
+        exitQueuedRunEdit(key, current, originalContext, originalReplies),
+    },
   );
 }
 

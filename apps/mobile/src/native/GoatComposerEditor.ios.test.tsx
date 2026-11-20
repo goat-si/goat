@@ -368,3 +368,51 @@ it.each(CASES)(
     });
   },
 );
+
+it("renders a recovered response whose source is missing as its existing neutral chip", async () => {
+  const { EnvironmentId, ThreadId, MessageId, TurnItemId, ComposerContextId } =
+    await import("@goat/contracts");
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const reply = {
+    version: 1 as const,
+    kind: "response" as const,
+    contextId: ComposerContextId.make("response_answer"),
+    label: "Done",
+    citation: {
+      version: 1 as const,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("missing-thread"),
+      messageId: MessageId.make("answer"),
+      text: "Done",
+      start: 0,
+      end: 4,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item"),
+  };
+  const text = `${formatComposerContextReference(reply)} original`;
+  native.value = "";
+  native.tokensJson = "[]";
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () =>
+      root.render(
+        <ComposerEditor
+          value={text}
+          context={{ version: 1, records: [reply] }}
+          onChangeText={() => {}}
+        />,
+      ),
+    );
+    expect(JSON.parse(native.tokensJson)).toContainEqual(
+      expect.objectContaining({
+        type: "context",
+        source: formatComposerContextReference(reply),
+        label: "Done",
+      }),
+    );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
