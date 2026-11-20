@@ -191,6 +191,7 @@ import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
   acpPermissionDisposition,
+  acpModeAllowed,
   makeAcpClientPolicyGrants,
   unknownRecord,
 } from "./clientPolicy.ts";
@@ -6267,6 +6268,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const configOptions = yield* runtime.getConfigOptions;
           const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
           const modeLocked = flavor.lockSessionModeToPolicy && policyMode !== undefined;
+          const modeAllowed = (value: string) =>
+            flavor.runtimeModeForSessionMode === undefined ||
+            acpModeAllowed(flavor.runtimeModeForSessionMode(value), runtimePolicy.runtimeMode);
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
           const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
             ACP_SESSION_MODE_OPTION_ID,
@@ -6301,6 +6305,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             )
               continue;
             if (
+              (selection.id === ACP_SESSION_MODE_OPTION_ID || option?.category === "mode") &&
+              typeof selection.value === "string" &&
+              !modeAllowed(selection.value)
+            )
+              continue;
+            if (
               option !== undefined &&
               option.type === "select" &&
               typeof selection.value === "string"
@@ -6331,6 +6341,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             !modeLocked &&
             modeSelection !== undefined &&
             typeof modeSelection.value === "string" &&
+            modeAllowed(modeSelection.value) &&
             modeState?.availableModes.some((mode) => mode.id === modeSelection.value) === true &&
             modeState.currentModeId !== modeSelection.value
           ) {
@@ -6379,7 +6390,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const nativeBuild = nativeBuildConfigurationBySessionId.get(startResult.sessionId);
             if (nativeBuild !== undefined) {
               if (
-                !modeLocked &&
+                policyMode === undefined &&
                 nativeBuild.modeId !== undefined &&
                 effectiveModeState?.currentModeId !== nativeBuild.modeId &&
                 effectiveModeState?.availableModes.some(
@@ -6395,7 +6406,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 if (
                   option === undefined ||
                   option.type !== "select" ||
-                  (modeLocked && option.category === "mode")
+                  (policyMode !== undefined && option.category === "mode")
                 )
                   continue;
                 const choices = option.options.flatMap((entry) =>
