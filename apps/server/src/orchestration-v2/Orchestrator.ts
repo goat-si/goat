@@ -1,4 +1,4 @@
-import { recoveryParkMarkerId } from "./goat/RecoveryParkMarker.ts";
+import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
 import { makeReleaseUnattendedHolds } from "./goat/ReleaseUnattendedHolds.ts";
 import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
@@ -715,43 +715,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return withId;
       });
 
-  const settleRecoveryParkNotice = Effect.fn("Orchestrator.settleRecoveryParkNotice")(function* (
-    command: Extract<OrchestrationV2ServerCommand, { readonly threadId: ThreadId }>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    runId: RunId,
-    now: DateTime.Utc,
-    outcome: "sent" | "discarded",
-  ) {
-    const marker = yield* projectionStore
-      .getTurnItem({
-        threadId: command.threadId,
-        itemId: recoveryParkMarkerId(runId),
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-        ),
-      );
-    if (marker?.type !== "system_notice" || marker.status !== "waiting") return;
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "turn-item.updated",
-      threadId: command.threadId,
-      runId,
-      occurredAt: now,
-      payload: {
-        ...marker,
-        status: "completed",
-        completedAt: now,
-        updatedAt: now,
-        message:
-          outcome === "sent"
-            ? "Recovery message released by your request."
-            : "Recovery message discarded.",
-      },
-    });
+  const settleRecoveryParkNotice = makeSettleRecoveryParkNotice({
+    projectionStore,
+    OrchestratorProjectionError,
+    emit,
   });
 
   const sessionHasBackgroundWork = makeSessionHasBackgroundWork(providerSessions);
