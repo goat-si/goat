@@ -16,6 +16,14 @@ import {
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 
+import {
+  splitMinutes,
+  UNIT_MINUTES,
+  WHEN_LABELS,
+  WHEN_VALUES,
+  type DurationUnit,
+  useSnoozePresetLabel,
+} from "../useSnoozePresetLabel";
 import { PlusIcon, XIcon } from "~/components/solar";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import {
@@ -43,8 +51,6 @@ import {
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 
-const UNIT_MINUTES = { minutes: 1, hours: 60, days: 24 * 60 } as const;
-type DurationUnit = keyof typeof UNIT_MINUTES;
 const DURATION_UNITS: ReadonlyArray<DurationUnit> = ["minutes", "hours", "days"];
 const UNIT_LABELS: Record<DurationUnit, string> = {
   minutes: msg("minutes"),
@@ -57,28 +63,6 @@ const SINGULAR_UNIT_LABELS: Record<DurationUnit, string> = {
   days: msg("day"),
 };
 
-const WHEN_LABELS: Record<"after" | SnoozePresetDay, string> = {
-  after: msg("In"),
-  today: msg("Today"),
-  tomorrow: msg("Tomorrow"),
-  monday: msg("Monday"),
-  tuesday: msg("Tuesday"),
-  wednesday: msg("Wednesday"),
-  thursday: msg("Thursday"),
-  friday: msg("Friday"),
-  saturday: msg("Saturday"),
-  sunday: msg("Sunday"),
-};
-const WHEN_VALUES = ["after", ...SnoozePresetDay.literals] as const;
-
-// Labels client-runtime's resolveSnoozePreset returns that WHEN_LABELS does not declare.
-const RESOLVED_DAY_LABELS: Readonly<Record<string, string>> = {
-  "This morning": msg("This morning"),
-  "This afternoon": msg("This afternoon"),
-  "This evening": msg("This evening"),
-  "Next week": msg("Next week"),
-};
-
 // Offered in order when adding, skipping any already in the list.
 const ADD_CANDIDATES: ReadonlyArray<SnoozePresetSetting> = [
   ...DEFAULT_SNOOZE_PRESETS,
@@ -86,16 +70,6 @@ const ADD_CANDIDATES: ReadonlyArray<SnoozePresetSetting> = [
   { kind: "at", day: "saturday", time: "09:00" },
   { kind: "after", minutes: 24 * 60 },
 ];
-
-function splitMinutes(minutes: number): { amount: number; unit: DurationUnit } {
-  if (minutes % UNIT_MINUTES.days === 0) {
-    return { amount: minutes / UNIT_MINUTES.days, unit: "days" };
-  }
-  if (minutes % UNIT_MINUTES.hours === 0) {
-    return { amount: minutes / UNIT_MINUTES.hours, unit: "hours" };
-  }
-  return { amount: minutes, unit: "minutes" };
-}
 
 function nextCandidate(presets: ReadonlyArray<SnoozePresetSetting>): SnoozePresetSetting {
   const used = new Set(presets.map(snoozePresetId));
@@ -246,23 +220,12 @@ function SnoozePresetList(props: {
   onSettle: () => void;
 }) {
   const gt = useGT();
-  const m = useMessages();
   const nowMinute = useNowMinute();
   const now = new Date(`${nowMinute}Z`);
   const locale = useLocale();
-  const relative = new Intl.RelativeTimeFormat(locale);
   const formatTime = (date: Date) =>
     formatShortTimestamp(date.toISOString(), props.timestampFormat);
-  const formatLabel = (preset: SnoozePresetSetting, daysAhead: number, label: string) => {
-    if (preset.kind === "after") {
-      const { amount, unit } = splitMinutes(preset.minutes);
-      const text = relative.format(amount, unit);
-      return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
-    }
-    return daysAhead === 7 && preset.day !== "monday"
-      ? gt("Next {weekday}", { weekday: m(WHEN_LABELS[preset.day]) })
-      : m(RESOLVED_DAY_LABELS[label] ?? label);
-  };
+  const formatLabel = useSnoozePresetLabel();
   const seenIds = new Set<string>();
   const seenWakes = new Set<string>();
   const preview = (preset: SnoozePresetSetting): SnoozePresetPreview => {

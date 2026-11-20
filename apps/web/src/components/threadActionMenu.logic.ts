@@ -100,6 +100,11 @@ export interface ThreadActionMenuState {
     readonly titleRegeneration: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
+  readonly snoozeLabels?: {
+    readonly snooze: string;
+    readonly wake: string;
+    readonly custom: string;
+  };
   /** Hide project actions and title edits for the global agent. */
   readonly globalAgent?: boolean | undefined;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
@@ -224,10 +229,14 @@ export function buildThreadActionMenuItems(
     ...(state.supports.snooze
       ? [
           state.isSnoozed
-            ? { id: "unsnooze" as const, label: "Wake thread", icon: "clock" }
+            ? {
+                id: "unsnooze" as const,
+                label: state.snoozeLabels?.wake ?? "Wake thread",
+                icon: "clock",
+              }
             : {
                 id: "snooze" as const,
-                label: "Snooze",
+                label: state.snoozeLabels?.snooze ?? "Snooze",
                 icon: "clock",
                 disabled: !state.canSnoozeNow,
                 children: [
@@ -238,7 +247,7 @@ export function buildThreadActionMenuItems(
                   })),
                   {
                     id: "snooze:custom" as const,
-                    label: "Custom…",
+                    label: state.snoozeLabels?.custom ?? "Custom…",
                     separatorBefore: state.snoozePresets.length > 0,
                   },
                 ],
