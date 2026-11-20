@@ -7,16 +7,22 @@ import {
   type MemorySpaceId,
   type MemoryImportSourceFormat,
   type MemoryImportSource,
-  type MemoryImportPreviewItem,
+  AuthMemoryReadScope,
 } from "@goat/contracts";
 import {
+  type MemoryUpdateItem,
+  importScopeMatches,
   memoryImportFormatLabels,
   memoryImportFormats,
   memoryImportIssueReason,
   memoryImportResultLines,
 } from "@goat/client-runtime/memory-import-workflow";
-import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
+import { Fragment, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEnvironmentScope,
+  readEnvironmentScope,
+  readPreparedConnection,
+} from "../../state/session";
 import { memoryImportRequestFailureMessage } from "@goat/client-runtime/memory-import-workflow";
 import { useEnvironment } from "../../state/environments";
 import { memoryEnvironment } from "../../state/memory";
@@ -28,6 +34,7 @@ import {
   changedImportDestinationMessage,
 } from "../../lib/memoryImportRecoveryStorage";
 import { randomUUID } from "../../lib/utils";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { MemoryScopeSettings, type MemoryScopeSelection } from "./MemoryScopeSettings";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { Button } from "../ui/button";
@@ -43,9 +50,10 @@ export function MemoryImportSettings({
 }) {
   const registry = useContext(RegistryContext);
   const canImport = useAtomValue(memoryEnvironment.importProvider.permissionAtom(environmentId));
-  const formats = memoryImportFormats(
-    useEnvironment(environmentId)?.serverConfig?.environment.capabilities,
-  );
+  const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
+  const formats = memoryImportFormats(capabilities);
+  const canRead = useEnvironmentScope(environmentId, AuthMemoryReadScope);
+  const canCheck = capabilities?.memory?.codexImportUpdates === true && canRead;
   const [admission] = useState(() => {
     try {
       return createMemoryImportAdmission({ environmentId, memorySpaceId });
@@ -71,7 +79,13 @@ export function MemoryImportSettings({
   );
   const [format, setFormat] = useState<MemoryImportSourceFormat | null>(null);
   const [sources, setSources] = useState<readonly MemoryImportSource[]>([]);
-  const [items, setItems] = useState<readonly MemoryImportPreviewItem[]>([]);
+  const [items, setItems] = useState<readonly MemoryUpdateItem[]>([]);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<{
+    item: MemoryUpdateItem;
+    sourceText: string;
+    savedText: string;
+  } | null>(null);
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [scopeEpoch, setScopeEpoch] = useState(0);
   const [scope, setScope] = useState<MemoryScopeSelection | null>(null);
@@ -81,28 +95,36 @@ export function MemoryImportSettings({
   const authorized = useRef(canImport);
   const generation = useRef(0);
   const previousScope = useRef<MemoryScopeSelection | null>(null);
-  const run = async (action: () => Promise<unknown>) => {
-    const token = generation.current;
-    setBusy(true);
-    setError(null);
-    try {
-      await action();
-    } catch (error) {
-      if (mounted.current && token === generation.current)
-        setError(
-          memoryImportRequestFailureMessage(error, format ?? undefined) ??
-            "Import request failed. Check the result before previewing again.",
-        );
-    }
-    if (mounted.current && token === generation.current) {
-      setBusy(false);
-    }
-  };
+  const run = useStableCallback(
+    async (action: () => Promise<unknown>, source?: MemoryImportSourceFormat) => {
+      const token = generation.current;
+      setBusy(true);
+      setError(null);
+      try {
+        await action();
+      } catch (error) {
+        if (mounted.current && token === generation.current)
+          setError(
+            memoryImportRequestFailureMessage(error, source) ??
+              "Import request failed. Check the result before previewing again.",
+          );
+      }
+      if (mounted.current && token === generation.current) {
+        setBusy(false);
+      }
+    },
+  );
   useEffect(() => {
     mounted.current = true;
     if (canImport) authorized.current = true;
+    if (!canRead) {
+      // eslint-disable-next-line react/set-state-in-effect -- Retire the displayed source comparison when its read grant is revoked.
+      setItems([]);
+      setComparison(null);
+      setUpdateMessage(null);
+      setSelected([]);
+    }
     // Recover synchronizes the saved handle with the server, never admitting a write.
-    // eslint-disable-next-line react/set-state-in-effect
     if (canImport && workflow) void run(() => workflow.recover());
     if (
       !canImport &&
@@ -114,6 +136,8 @@ export function MemoryImportSettings({
     ) {
       generation.current++;
       setItems([]);
+      setUpdateMessage(null);
+      setComparison(null);
       setSelected([]);
       setSources([]);
       setBusy(true);
@@ -141,20 +165,23 @@ export function MemoryImportSettings({
         void workflow.removeDestination().catch(() => undefined);
       else workflow?.invalidate({ environmentId, memorySpaceId, session: randomUUID() });
     };
-  }, [canImport, workflow, run, environmentId, memorySpaceId]);
-  const changeScope = (next: MemoryScopeSelection | null) => {
+  }, [canImport, canRead, workflow, run, environmentId, memorySpaceId]);
+  const changeScope = useStableCallback((next: MemoryScopeSelection | null) => {
     const previous = previousScope.current;
     previousScope.current = next;
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
     setScope(next);
-    if (JSON.stringify(previous) === JSON.stringify(next) || !workflow) return;
+    if (!workflow) return;
     generation.current++;
     workflow.stop();
     workflow.invalidate({ environmentId, memorySpaceId, session: randomUUID() });
     setItems([]);
+    setUpdateMessage(null);
+    setComparison(null);
     setSelected([]);
     setBusy(false);
-  };
-  const invalidateDestination = async () => {
+  });
+  const invalidateDestination = useStableCallback(async () => {
     generation.current++;
     previousScope.current = null;
     setScope(null);
@@ -164,9 +191,11 @@ export function MemoryImportSettings({
     setError(changedImportDestinationMessage);
     setBusy(false);
     setItems([]);
+    setUpdateMessage(null);
+    setComparison(null);
     setSelected([]);
     setSources([]);
-  };
+  });
   useEffect(() => {
     const unsubscribe = admission?.subscribeInvalidation(() => {
       void invalidateDestination();
@@ -180,6 +209,13 @@ export function MemoryImportSettings({
       unregister();
     };
   }, [environmentId, memorySpaceId, invalidateDestination, admission]);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- Expire the two user-requested memory bodies after one minute.
+  useEffect(() => {
+    if (!comparison) return;
+    const timer = setTimeout(() => setComparison(null), 60_000);
+    return () => clearTimeout(timer);
+  }, [comparison]);
   const locked =
     busy ||
     ["previewed", "save_failed", "recovery", "saving", "applying", "checking"].includes(
@@ -199,6 +235,8 @@ export function MemoryImportSettings({
               setFormat(value);
               setSources([]);
               setItems([]);
+              setUpdateMessage(null);
+              setComparison(null);
               setSelected([]);
               workflow?.invalidate();
             }}
@@ -229,14 +267,40 @@ export function MemoryImportSettings({
               onClick={() =>
                 void run(async () => {
                   setItems([]);
+                  setUpdateMessage(null);
+                  setComparison(null);
                   setSelected([]);
                   const result = await workflow!.discover(format!);
                   if (result && mounted.current) setSources(result.sources);
-                })
+                }, format ?? undefined)
               }
             >
               Discover profiles
             </Button>
+            {format === "codex" && canCheck ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!workflow || !canImport || !scope || locked}
+                onClick={() =>
+                  void run(async () => {
+                    setComparison(null);
+                    setItems([]);
+                    setSelected([]);
+                    setUpdateMessage(null);
+                    if (!admission || !workflow) return;
+                    await admission.capturePreview();
+                    const checked = await workflow.checkCodexUpdates();
+                    if (checked && mounted.current) {
+                      setItems(checked.items);
+                      setUpdateMessage(checked.message);
+                    }
+                  }, "codex")
+                }
+              >
+                Check for updates
+              </Button>
+            ) : null}
             {sources.map((source, index) => (
               <Button
                 key={source.sourceId}
@@ -246,11 +310,13 @@ export function MemoryImportSettings({
                 onClick={() =>
                   void run(async () => {
                     setItems([]);
+                    setUpdateMessage(null);
+                    setComparison(null);
                     setSelected([]);
                     await admission!.capturePreview();
                     const result = await workflow!.preview(source.sourceId);
                     if (result && mounted.current) setItems(result.items);
-                  })
+                  }, source.format)
                 }
               >
                 {source.format === "aside"
@@ -259,7 +325,8 @@ export function MemoryImportSettings({
               </Button>
             ))}
           </div>
-          {progress?.phase === "discovered" && sources.length === 0 ? (
+          {updateMessage ? <p role="status">{updateMessage}</p> : null}
+          {!updateMessage && progress?.phase === "discovered" && sources.length === 0 ? (
             <p className="text-xs leading-normal text-muted-foreground/80">
               {format
                 ? memoryImportIssueReason("source_missing", "request", format)
@@ -269,36 +336,86 @@ export function MemoryImportSettings({
           {items.length > 0 ? (
             <div role="group" aria-label="Choose memories to import">
               {items.map((item, index) => (
-                <label key={item.sourceItemKey} className="block space-x-2">
-                  <input
-                    type="checkbox"
-                    disabled={
-                      !canImport || locked || item.issue !== undefined || !item.sourceFingerprint
-                    }
-                    checked={selected.includes(item.sourceItemKey)}
-                    onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      setSelected((current) =>
-                        checked
-                          ? [...current, item.sourceItemKey]
-                          : current.filter((key) => key !== item.sourceItemKey),
-                      );
-                    }}
-                  />
-                  <span>
-                    {item.title ??
-                      (format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`)}
-                    {item.issue !== undefined
-                      ? ` · ${memoryImportIssueReason(item.issue, "item")}`
-                      : ""}
-                    {item.tooLargeForTurnStart
-                      ? " · Stored, but too large to add to new turns automatically"
-                      : ""}
-                  </span>
-                </label>
+                <Fragment key={item.sourceItemKey}>
+                  <label className="block space-x-2">
+                    <input
+                      type="checkbox"
+                      disabled={
+                        !canImport ||
+                        locked ||
+                        item.issue !== undefined ||
+                        !item.sourceFingerprint ||
+                        !importScopeMatches(item, scope?.scope)
+                      }
+                      checked={selected.includes(item.sourceItemKey)}
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
+                        setSelected((current) =>
+                          checked
+                            ? [...current, item.sourceItemKey]
+                            : current.filter((key) => key !== item.sourceItemKey),
+                        );
+                      }}
+                    />
+                    <span>
+                      {item.title ??
+                        (format === "aside" || item.change
+                          ? item.sourceItemKey
+                          : `Memory ${index + 1}`)}
+                      {item.change ? ` · ${item.change}` : ""}
+                      {!importScopeMatches(item, scope?.scope)
+                        ? " · Select the original destination scope to update"
+                        : ""}
+                      {item.issue !== undefined
+                        ? ` · ${memoryImportIssueReason(item.issue, "item")}`
+                        : ""}
+                      {item.tooLargeForTurnStart
+                        ? " · Stored, but too large to add to new turns automatically"
+                        : ""}
+                    </span>
+                  </label>
+                  {item.change === "Changed in both" && canCheck && canImport ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={locked}
+                        onClick={() =>
+                          void run(async () => {
+                            const result = await workflow?.compareCodex(item);
+                            if (mounted.current && result)
+                              setComparison({
+                                item,
+                                sourceText: result.sourceText,
+                                savedText: result.savedText,
+                              });
+                          })
+                        }
+                      >
+                        Compare versions
+                      </Button>
+                      {comparison?.item === item ? (
+                        <dl className="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <dt>Saved in GOAT</dt>
+                            <dd className="whitespace-pre-wrap break-words">
+                              {comparison.savedText}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Codex source</dt>
+                            <dd className="whitespace-pre-wrap break-words">
+                              {comparison.sourceText}
+                            </dd>
+                          </div>
+                        </dl>
+                      ) : null}
+                    </>
+                  ) : null}
+                </Fragment>
               ))}
             </div>
-          ) : progress?.phase === "selecting" ? (
+          ) : !updateMessage && progress?.phase === "selecting" ? (
             <p className="text-xs leading-normal text-muted-foreground/80">
               No importable memories found in this profile.
             </p>
@@ -314,7 +431,10 @@ export function MemoryImportSettings({
                   workflow.select(
                     items
                       .filter(
-                        (item) => selected.includes(item.sourceItemKey) && item.sourceFingerprint,
+                        (item) =>
+                          selected.includes(item.sourceItemKey) &&
+                          item.sourceFingerprint &&
+                          importScopeMatches(item, scope.scope),
                       )
                       .map((item) => ({
                         sourceItemKey: item.sourceItemKey,
@@ -352,6 +472,8 @@ export function MemoryImportSettings({
                     workflow?.invalidate();
 
                     setItems([]);
+                    setUpdateMessage(null);
+                    setComparison(null);
                     setSelected([]);
                   }}
                 >

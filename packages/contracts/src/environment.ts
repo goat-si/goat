@@ -107,6 +107,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       hub: Schema.optionalKey(Schema.Boolean),
       importProvider: Schema.optionalKey(Schema.Boolean),
       /** Import preview can flag items too large for the turn-start frame; absent on older servers. */
+      codexImportUpdates: Schema.optionalKey(Schema.Boolean),
       importTurnStartFit: Schema.optionalKey(Schema.Boolean),
       refusedReverts: Schema.optionalKey(Schema.Boolean),
       resolutionInputs: Schema.optionalKey(Schema.Boolean),

@@ -9,12 +9,22 @@ import {
   type MemorySpaceId,
 } from "@goat/contracts";
 import {
+  type MemoryUpdateItem,
+  importScopeMatches,
   memoryImportFormatLabels,
   memoryImportFormats,
   memoryImportIssueReason,
   memoryImportResultLines,
 } from "@goat/client-runtime/memory-import-workflow";
-import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { AppState } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Option from "effect/Option";
@@ -33,7 +43,7 @@ import type { MemoryScreenParams } from "./SettingsMemoryRouteScreen.logic";
 import type { EnvironmentId } from "@goat/contracts";
 
 type Discovery = Extract<MemoryImportProviderResult, { action: "discover" }>;
-type Preview = Extract<MemoryImportProviderResult, { action: "preview" }>;
+type Preview = { readonly items: readonly MemoryUpdateItem[] };
 const Copy = ({ children }: { children: React.ReactNode }) => (
   <Text className="p-3 text-sm text-foreground-muted">{children}</Text>
 );
@@ -60,9 +70,9 @@ export function MemoryImportSettings({
   const registry = useContext(RegistryContext);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const allowed = useAtomValue(memory.importProvider.permissionAtom(params.environmentId));
-  const formats = memoryImportFormats(
-    useAtomValue(serverEnvironment.configValueAtom(params.environmentId))?.environment.capabilities,
-  );
+  const capabilities = useAtomValue(serverEnvironment.configValueAtom(params.environmentId))
+    ?.environment.capabilities;
+  const formats = memoryImportFormats(capabilities);
   const connection = useAtomValue(
     environmentSession.preparedConnectionValueAtom(params.environmentId),
   );
@@ -82,6 +92,16 @@ export function MemoryImportSettings({
   const [format, setFormat] = useState<MemoryImportSourceFormat | null>(null);
   const [sources, setSources] = useState<Discovery | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const canCheck =
+    capabilities?.memory?.codexImportUpdates === true &&
+    AsyncResult.isSuccess(grants) &&
+    sessionGrantsScope(grants.value, "memory:read");
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<{
+    item: MemoryUpdateItem;
+    sourceText: string;
+    savedText: string;
+  } | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [destinationConfirmed, setDestinationConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -89,14 +109,23 @@ export function MemoryImportSettings({
   const pending = useRef(false);
   const mounted = useRef(true);
   const generation = useRef(0);
-  const previous = useRef({ connection, allowed, enabled, bindingToken, scope });
+  const previous = useRef({ connection, allowed, enabled, bindingToken, scope, canCheck });
   const transition = useRef(Promise.resolve());
   const invalidateSelection = useCallback(() => {
     setPreview(null);
+    setUpdateMessage(null);
+    setComparison(null);
     setSources(null);
     setSelected(new Set());
     setDestinationConfirmed(false);
-  }, []);
+  }, [
+    setPreview,
+    setUpdateMessage,
+    setComparison,
+    setSources,
+    setSelected,
+    setDestinationConfirmed,
+  ]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -176,12 +205,17 @@ export function MemoryImportSettings({
   }, [registry, params.environmentId, memorySpaceId, enabled, run, workflow]);
   useEffect(() => {
     const old = previous.current;
-    previous.current = { connection, allowed, enabled, bindingToken, scope };
+    previous.current = { connection, allowed, enabled, bindingToken, scope, canCheck };
     const remove =
       (revoked && old.connection === connection && Option.isSome(connection)) ||
       (old.enabled && !enabled) ||
       old.bindingToken !== bindingToken;
-    if (remove || old.connection !== connection || old.scope !== scope) {
+    if (
+      remove ||
+      old.connection !== connection ||
+      old.scope !== scope ||
+      (old.canCheck && !canCheck)
+    ) {
       generation.current++;
       pending.current = false;
       // The workflow is external mutable state; retire the displayed preview with its fence.
@@ -211,6 +245,7 @@ export function MemoryImportSettings({
   }, [
     allowed,
     revoked,
+    canCheck,
     enabled,
     connection,
     bindingToken,
@@ -221,6 +256,13 @@ export function MemoryImportSettings({
     recover,
     invalidateSelection,
   ]);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- Expire the two user-requested memory bodies after one minute.
+  useEffect(() => {
+    if (!comparison) return;
+    const timer = setTimeout(() => setComparison(null), 60_000);
+    return () => clearTimeout(timer);
+  }, [comparison]);
   useFocusEffect(
     useCallback(() => {
       recover();
@@ -271,7 +313,28 @@ export function MemoryImportSettings({
           }}
         />
       ))}
-      {sources?.sources.length === 0 && format ? (
+      {canCheck && format === "codex" ? (
+        <Action
+          label="Check for updates"
+          disabled={!writable || !scope}
+          onPress={() => {
+            setPreview(null);
+            setSelected(new Set());
+            setComparison(null);
+            setUpdateMessage(null);
+            setDestinationConfirmed(false);
+            void run(async () => {
+              const checked = await workflow.checkCodexUpdates();
+              if (checked) {
+                setPreview({ items: checked.items });
+                setUpdateMessage(checked.message);
+              }
+            }, "codex");
+          }}
+        />
+      ) : null}
+      {updateMessage ? <Copy>{updateMessage}</Copy> : null}
+      {!updateMessage && sources?.sources.length === 0 && format ? (
         <Copy>{memoryImportIssueReason("source_missing", "request", format)}</Copy>
       ) : null}
       {sources?.sources.map((source, index) => (
@@ -285,6 +348,8 @@ export function MemoryImportSettings({
           disabled={!writable}
           onPress={() => {
             setSelected(new Set());
+            setComparison(null);
+            setUpdateMessage(null);
             setDestinationConfirmed(false);
             void run(async () => {
               const result = await workflow.preview(source.sourceId);
@@ -299,28 +364,68 @@ export function MemoryImportSettings({
             {preview.items.length} memories in this preview. Select the memories to import.
           </Copy>
           {preview.items.map((item, index) => (
-            <SettingsSwitchRow
-              key={item.sourceItemKey}
-              label={
-                item.issue
-                  ? `${format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`}: ${memoryImportIssueReason(item.issue, "item")}`
-                  : (item.title ??
-                    (format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`))
-              }
-              {...(item.tooLargeForTurnStart
-                ? { subtitle: "Stored, but too large to add to new turns automatically" }
-                : {})}
-              value={selected.has(item.sourceItemKey)}
-              disabled={!writable || !selecting || !!item.issue || !item.sourceFingerprint}
-              onValueChange={(value) =>
-                setSelected((old) => {
-                  const next = new Set(old);
-                  if (value) next.add(item.sourceItemKey);
-                  else next.delete(item.sourceItemKey);
-                  return next;
-                })
-              }
-            />
+            <Fragment key={item.sourceItemKey}>
+              <SettingsSwitchRow
+                label={
+                  item.issue
+                    ? `${format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`}: ${memoryImportIssueReason(item.issue, "item")}`
+                    : (item.title ??
+                        (format === "aside" || item.change
+                          ? item.sourceItemKey
+                          : `Memory ${index + 1}`)) +
+                      (item.change ? ` · ${item.change}` : "") +
+                      (!importScopeMatches(item, scope)
+                        ? " · Select the original destination scope to update"
+                        : "")
+                }
+                {...(item.tooLargeForTurnStart
+                  ? { subtitle: "Stored, but too large to add to new turns automatically" }
+                  : {})}
+                value={selected.has(item.sourceItemKey)}
+                disabled={
+                  !writable ||
+                  !selecting ||
+                  !!item.issue ||
+                  !item.sourceFingerprint ||
+                  !importScopeMatches(item, scope)
+                }
+                onValueChange={(value) =>
+                  setSelected((old) => {
+                    const next = new Set(old);
+                    if (value) next.add(item.sourceItemKey);
+                    else next.delete(item.sourceItemKey);
+                    return next;
+                  })
+                }
+              />
+              {item.change === "Changed in both" && canCheck && allowed && enabled ? (
+                <>
+                  <Action
+                    label="Compare versions"
+                    disabled={!writable}
+                    onPress={() =>
+                      void run(async () => {
+                        const result = await workflow.compareCodex(item);
+                        if (result && mounted.current)
+                          setComparison({
+                            item,
+                            sourceText: result.sourceText,
+                            savedText: result.savedText,
+                          });
+                      })
+                    }
+                  />
+                  {comparison?.item === item ? (
+                    <>
+                      <Copy>Saved in GOAT</Copy>
+                      <Copy>{comparison.savedText}</Copy>
+                      <Copy>Codex source</Copy>
+                      <Copy>{comparison.sourceText}</Copy>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+            </Fragment>
           ))}
           <SettingsSwitchRow
             label="Use selected scope and this environment as the import destination"
@@ -339,7 +444,10 @@ export function MemoryImportSettings({
                 preview.items
                   .filter(
                     (item) =>
-                      selected.has(item.sourceItemKey) && item.sourceFingerprint && !item.issue,
+                      selected.has(item.sourceItemKey) &&
+                      item.sourceFingerprint &&
+                      !item.issue &&
+                      importScopeMatches(item, scope),
                   )
                   .map((item) => ({
                     sourceItemKey: item.sourceItemKey,

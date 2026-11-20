@@ -278,7 +278,12 @@ export const make = Effect.gen(function* () {
         hubDiagnostics: true,
         siteNotes: true,
         ...(importRuntime._tag === "Some"
-          ? { importProvider: true, importTurnStartFit: true, asideImport: true }
+          ? {
+              importProvider: true,
+              importTurnStartFit: true,
+              asideImport: true,
+              codexImportUpdates: true,
+            }
           : {}),
       },
       repositoryIdentity: true,

@@ -2105,6 +2105,14 @@ export const MemoryImportSource = struct({
 });
 export type MemoryImportSource = typeof MemoryImportSource.Type;
 
+export const CodexImportBaseline = struct({
+  sourceItemKey: key,
+  sourceFingerprint: digest,
+  scope: MemoryScope,
+  locallyEdited: Schema.Boolean,
+});
+export type CodexImportBaseline = typeof CodexImportBaseline.Type;
+
 export const MemoryImportPreviewItem = struct({
   sourceItemKey: key,
   sourceFingerprint: Schema.optionalKey(digest),
@@ -2167,6 +2175,15 @@ const importSelector = struct({
 
 export const MemoryImportProviderInput = bounded(
   Schema.Union([
+    struct({ ...space, action: Schema.Literal("codexBaseline"), after: Schema.optionalKey(key) }),
+    struct({
+      ...space,
+      action: Schema.Literal("compareCodex"),
+      sourceId: MemoryImportSourceId,
+      sessionId: canonical,
+      sourceItemKey: key,
+      sourceFingerprint: digest,
+    }),
     struct({ ...space, action: Schema.Literal("discover"), format: MemoryImportSourceFormat }),
     struct({
       ...space,
@@ -2191,6 +2208,13 @@ export type MemoryImportProviderInput = typeof MemoryImportProviderInput.Type;
 
 export const MemoryImportProviderResult = bounded(
   Schema.Union([
+    struct({
+      action: Schema.Literal("codexBaseline"),
+      sourceId: Schema.NullOr(MemoryImportSourceId),
+      items: array(CodexImportBaseline, 64),
+      next: Schema.NullOr(key),
+    }),
+    struct({ action: Schema.Literal("compareCodex"), sourceText: text, savedText: text }),
     struct({ action: Schema.Literal("discover"), sources: array(MemoryImportSource, 128) }),
     struct({
       action: Schema.Literal("preview"),

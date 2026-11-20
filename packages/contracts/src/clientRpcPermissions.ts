@@ -282,7 +282,12 @@ export function clientRpcRequiredScopes(
         : [...new Set([...scopes, AuthProvidersManageScope])];
   }
   if (method === WS_METHODS.memoryImportProvider)
-    return [AuthMemoryWriteScope, AuthFilesystemReadScope];
+    return typeof input === "object" &&
+      input !== null &&
+      "action" in input &&
+      (input.action === "codexBaseline" || input.action === "compareCodex")
+      ? [AuthMemoryReadScope, AuthMemoryWriteScope, AuthFilesystemReadScope]
+      : [AuthMemoryWriteScope, AuthFilesystemReadScope];
   if (method === WS_METHODS.memoryReadSource)
     return [AuthMemoryReadScope, AuthOrchestrationReadScope];
   if (method === WS_METHODS.sshWorkspaceLaunch)

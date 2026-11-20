@@ -88,6 +88,16 @@ describe("memory client guards", () => {
       "memory:write",
       "filesystem:read",
     ]));
+  it.each(["codexBaseline", "compareCodex"])(
+    "requires memory read for the %s import action",
+    (action) => {
+      expect(clientRpcRequiredScopes(WS_METHODS.memoryImportProvider, { action })).toEqual([
+        "memory:read",
+        "memory:write",
+        "filesystem:read",
+      ]);
+    },
+  );
   it("disables cloud machine changes without settings write and leaves listing to the server", () => {
     expect(clientRpcRequiredScopes(WS_METHODS.cloudMachinesList, {})).toEqual([]);
     for (const method of [
