@@ -2,6 +2,8 @@ import * as M from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   codexImportChanges,
+  readCodexComparison,
+  canShowCodexComparison,
   importScopeMatches,
   initialMemoryImportWorkflowState,
   memoryImportFormats,
@@ -190,4 +192,51 @@ describe("Codex source updates", () => {
     expect(importScopeMatches(changes[1]!)).toBe(false);
     expect(importScopeMatches(changes[1]!, { kind: "user" })).toBe(true);
   });
+});
+
+it("retires an open Codex comparison and rejects a delayed reply when another client forgets the memory", async () => {
+  const { applyMemoryChange, emptyMemoryExposure } = await import("./state/memory.ts");
+  const memoryId = M.MemoryId.make("00000000-0000-4000-8000-000000000007");
+  const memorySpaceId = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+  const item = { sourceItemKey: "note", byteCount: 12, mappingRequired: false, memoryId };
+  let current = applyMemoryChange(emptyMemoryExposure(), {
+    kind: "reset",
+    memorySpaceId,
+    projectionWatermark: 1,
+  });
+  const result = {
+    action: "compareCodex" as const,
+    savedText: "private saved text",
+    sourceText: "private source text",
+  };
+  const shown = await readCodexComparison(
+    item,
+    () => current,
+    async () => result,
+  );
+  expect(shown?.savedText).toBe("private saved text");
+  const delayed = Promise.withResolvers<typeof result>();
+  const pending = readCodexComparison(
+    item,
+    () => current,
+    () => delayed.promise,
+  );
+  current = applyMemoryChange(current, {
+    kind: "forget",
+    memoryId,
+    memorySpaceId,
+    projectionWatermark: 2,
+  });
+  expect(canShowCodexComparison(item, shown!.exposure, current)).toBe(false);
+  delayed.resolve(result);
+  expect(await pending).toBeNull();
+  expect(
+    await readCodexComparison(
+      item,
+      () => current,
+      () => {
+        throw new Error("forgotten body requested");
+      },
+    ),
+  ).toBeNull();
 });
