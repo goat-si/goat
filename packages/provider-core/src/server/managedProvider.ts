@@ -62,13 +62,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
   }) => Effect.Effect<void>;
   /**
-   * Independent, generation-scoped usage enrichment. Clear the old reading on
-   * each base check; this source cannot assert it still belongs to the login.
+   * Independent, generation-scoped usage enrichment. A reading replaces the published usage,
+   * null clears it (the account behind it is gone or changed), and undefined keeps the last
+   * reading (a transient failure for the same account).
    */
   readonly enrichUsageLimits?: (input: {
     readonly settings: Settings;
     readonly snapshot: ServerProvider;
-  }) => Effect.Effect<ServerProvider["usageLimits"]>;
+  }) => Effect.Effect<ServerProvider["usageLimits"] | null>;
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean | ((snapshot: ServerProvider) => boolean);
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
@@ -162,14 +163,15 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
             Effect.flatMap((limits) =>
               Ref.modify(snapshotStateRef, (state) => {
                 if (
+                  limits === undefined ||
                   state.enrichmentGeneration !== generation ||
                   !state.snapshot.installed ||
                   state.snapshot.auth.status === "unauthenticated" ||
-                  Equal.equals(state.snapshot.usageLimits, limits)
+                  Equal.equals(state.snapshot.usageLimits, limits ?? undefined)
                 ) {
                   return [null, state] as const;
                 }
-                const next = withUsageLimits(state.snapshot, limits);
+                const next = withUsageLimits(state.snapshot, limits ?? undefined);
                 return [next, { ...state, snapshot: next }] as const;
               }),
             ),
@@ -259,9 +261,13 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           input.keepsReportedUsage?.(state.snapshot, probedSnapshot) !== false
             ? state.snapshot.usageLimits
             : usageBeforeProbe;
-        const usageLimits =
-          switchedAccount || input.enrichUsageLimits
-            ? probedSnapshot.usageLimits
+        const usageLimits = switchedAccount
+          ? probedSnapshot.usageLimits
+          : input.enrichUsageLimits
+            ? // The enrichment that follows this check decides whether its reading still holds.
+              probedSnapshot.installed && probedSnapshot.auth.status !== "unauthenticated"
+              ? state.snapshot.usageLimits
+              : undefined
             : probedSnapshot.usageLimits === undefined && published !== usageBeforeProbe
               ? published
               : resolveUsageLimitsAfterProbe({ published, probed: probedSnapshot.usageLimits });

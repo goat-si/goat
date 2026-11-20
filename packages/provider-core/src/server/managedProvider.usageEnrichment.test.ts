@@ -150,58 +150,105 @@ describe("managed provider usage enrichment", () => {
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 
-  it.effect("clears old optional account usage and cancels a pending read on a new check", () =>
+  it.effect(
+    "keeps account usage across a check, cancels a pending read, and clears it on sign-out",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const releaseCheck = yield* Deferred.make<void>();
+          const secondStarted = yield* Deferred.make<void>();
+          const secondCancelled = yield* Deferred.make<void>();
+          const readCount = yield* Ref.make(0);
+          const checkCount = yield* Ref.make(0);
+          const usageLimits = { checkedAt: refreshedSnapshot.checkedAt, windows: [] };
+          const signedOutSnapshot: ServerProvider = {
+            ...refreshedSnapshotSecond,
+            auth: { status: "unauthenticated" },
+          };
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Deferred.await(releaseCheck).pipe(
+              Effect.andThen(Ref.updateAndGet(checkCount, (n) => n + 1)),
+              Effect.map((n) =>
+                n === 1 ? refreshedSnapshot : n === 2 ? refreshedSnapshotSecond : signedOutSnapshot,
+              ),
+            ),
+            enrichUsageLimits: () =>
+              Ref.updateAndGet(readCount, (n) => n + 1).pipe(
+                Effect.flatMap((n) =>
+                  n === 1
+                    ? Effect.succeed(usageLimits)
+                    : Deferred.succeed(secondStarted, undefined).pipe(
+                        Effect.andThen(Effect.never),
+                        Effect.onInterrupt(() => Deferred.succeed(secondCancelled, undefined)),
+                      ),
+                ),
+              ),
+            refreshInterval: "1 hour",
+          });
+          const updates = yield* provider.streamChanges.pipe(
+            Stream.toQueue({ capacity: "unbounded" }),
+          );
+          yield* Effect.yieldNow;
+          yield* Deferred.succeed(releaseCheck, undefined);
+          assert.deepStrictEqual(yield* Queue.take(updates), refreshedSnapshot);
+          assert.deepStrictEqual(yield* Queue.take(updates), { ...refreshedSnapshot, usageLimits });
+          assert.deepStrictEqual(yield* provider.refresh, {
+            ...refreshedSnapshotSecond,
+            usageLimits,
+          });
+          yield* Deferred.await(secondStarted);
+          assert.deepStrictEqual(yield* provider.getSnapshot, {
+            ...refreshedSnapshotSecond,
+            usageLimits,
+          });
+          assert.deepStrictEqual(yield* provider.refresh, signedOutSnapshot);
+          yield* Deferred.await(secondCancelled);
+          assert.deepStrictEqual(yield* provider.getSnapshot, signedOutSnapshot);
+          assert.strictEqual(yield* Ref.get(readCount), 2);
+        }),
+      ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("keeps account usage when a read fails and clears it when the account is gone", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const releaseCheck = yield* Deferred.make<void>();
-        const secondStarted = yield* Deferred.make<void>();
-        const secondCancelled = yield* Deferred.make<void>();
-        const readCount = yield* Ref.make(0);
-        const checkCount = yield* Ref.make(0);
+        const reads = yield* Queue.unbounded<ServerProvider["usageLimits"] | null>();
+        const taken = yield* Queue.unbounded<ServerProvider["usageLimits"] | null>();
         const usageLimits = { checkedAt: refreshedSnapshot.checkedAt, windows: [] };
-        const signedOutSnapshot: ServerProvider = {
-          ...refreshedSnapshotSecond,
-          auth: { status: "unauthenticated" },
-        };
+        const withUsage = { ...refreshedSnapshot, usageLimits };
         const provider = yield* makeManagedServerProvider<TestSettings>({
           resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
           getSettings: Effect.succeed({ enabled: true }),
           streamSettings: Stream.empty,
           haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
           initialSnapshot: () => Effect.succeed(initialSnapshot),
-          checkProvider: Deferred.await(releaseCheck).pipe(
-            Effect.andThen(Ref.updateAndGet(checkCount, (n) => n + 1)),
-            Effect.map((n) =>
-              n === 1 ? refreshedSnapshot : n === 2 ? refreshedSnapshotSecond : signedOutSnapshot,
-            ),
-          ),
+          checkProvider: Effect.succeed(refreshedSnapshot),
           enrichUsageLimits: () =>
-            Ref.updateAndGet(readCount, (n) => n + 1).pipe(
-              Effect.flatMap((n) =>
-                n === 1
-                  ? Effect.succeed(usageLimits)
-                  : Deferred.succeed(secondStarted, undefined).pipe(
-                      Effect.andThen(Effect.never),
-                      Effect.onInterrupt(() => Deferred.succeed(secondCancelled, undefined)),
-                    ),
-              ),
-            ),
+            Queue.take(reads).pipe(Effect.tap((reading) => Queue.offer(taken, reading))),
           refreshInterval: "1 hour",
         });
         const updates = yield* provider.streamChanges.pipe(
           Stream.toQueue({ capacity: "unbounded" }),
         );
-        yield* Effect.yieldNow;
-        yield* Deferred.succeed(releaseCheck, undefined);
+        yield* Queue.offer(reads, usageLimits);
+        assert.deepStrictEqual(yield* Queue.take(updates), withUsage);
+        assert.deepStrictEqual(yield* Queue.take(taken), usageLimits);
+
+        assert.deepStrictEqual(yield* provider.refresh, withUsage);
+        assert.deepStrictEqual(yield* Queue.take(updates), withUsage);
+        yield* Queue.offer(reads, undefined);
+        assert.strictEqual(yield* Queue.take(taken), undefined);
+        assert.deepStrictEqual(yield* provider.getSnapshot, withUsage);
+
+        yield* provider.refresh;
+        assert.deepStrictEqual(yield* Queue.take(updates), withUsage);
+        yield* Queue.offer(reads, null);
         assert.deepStrictEqual(yield* Queue.take(updates), refreshedSnapshot);
-        assert.deepStrictEqual(yield* Queue.take(updates), { ...refreshedSnapshot, usageLimits });
-        assert.deepStrictEqual(yield* provider.refresh, refreshedSnapshotSecond);
-        yield* Deferred.await(secondStarted);
-        assert.deepStrictEqual(yield* provider.getSnapshot, refreshedSnapshotSecond);
-        assert.deepStrictEqual(yield* provider.refresh, signedOutSnapshot);
-        yield* Deferred.await(secondCancelled);
-        assert.deepStrictEqual(yield* provider.getSnapshot, signedOutSnapshot);
-        assert.strictEqual(yield* Ref.get(readCount), 2);
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
