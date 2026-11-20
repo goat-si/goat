@@ -130,6 +130,27 @@ async function editorElement(selector: string) {
 }
 
 describe("ThemeEditorPanel", () => {
+  it("rejects unsafe CSS before saving the theme", async () => {
+    const onSaved = vi.fn(() => true);
+    await using _screen = await render(
+      <ThemeEditorPanel
+        open
+        onOpenChange={() => {}}
+        onSaved={onSaved}
+        editingTheme={null}
+        initialAppearance="light"
+        restoreTheme={() => {}}
+      />,
+    );
+    await userEvent.fill(page.getByLabelText("Theme name"), "CSS test");
+    await userEvent.fill(
+      page.getByLabelText("Custom CSS"),
+      '@import "https://evil.example/x.css";',
+    );
+    await page.getByRole("button", { name: "Create theme" }).click();
+    await expect.element(page.getByRole("alert")).toBeVisible();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
   it("keeps its left edge when resized after the window shrank", async () => {
     await using view = await renderPanel();
     dragHeader(view.panel, 700, 40);

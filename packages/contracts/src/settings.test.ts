@@ -41,6 +41,16 @@ const decodeMemoryHubSettings = Schema.decodeSync(MemoryHubSettings);
 const decodeUnknownMemoryHubSettings = Schema.decodeUnknownSync(MemoryHubSettings);
 const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateInput);
 
+it("lets administrators disable agent theme publication", () => {
+  expect(decodeServerSettings({}).enableAgentThemeWrites).toBe(false);
+  expect(decodeServerSettingsPatch({ enableAgentThemeWrites: false })).toEqual({
+    enableAgentThemeWrites: false,
+  });
+  expect(decodeServerSettings({ enableAgentThemeWrites: false }).enableAgentThemeWrites).toBe(
+    false,
+  );
+});
+
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
   expect(

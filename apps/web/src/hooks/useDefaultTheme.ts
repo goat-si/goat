@@ -7,6 +7,8 @@ import { getThemeDefinition, singleAppearanceOf, subscribeToCustomThemes } from 
 import { setAppearanceMode, setTheme } from "./useTheme";
 
 const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "goat:default-theme-applied:v2:";
+const APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX = "goat:default-appearance-applied:v1:";
+const appliedGenerations = new Map<string, string>();
 
 /** Include set time so reasserting the same theme still applies. */
 export function defaultThemeGeneration(theme: string, setAt: string): string {
@@ -30,8 +32,25 @@ export function defaultThemeToApply(input: {
   return generation;
 }
 
+export function defaultAppearanceToApply(input: {
+  readonly environmentId: string | null;
+  readonly appearance: string;
+  readonly setAt: string;
+  readonly appliedGeneration: string | null;
+}): string | null {
+  if (
+    input.environmentId === null ||
+    (input.appearance !== "light" && input.appearance !== "dark" && input.appearance !== "system")
+  )
+    return null;
+  const generation = defaultThemeGeneration(input.appearance, input.setAt);
+  return generation === input.appliedGeneration ? null : generation;
+}
+
 function readAppliedGeneration(storageKey: string): string | null {
   if (typeof window === "undefined") return null;
+  const inMemory = appliedGenerations.get(storageKey);
+  if (inMemory !== undefined) return inMemory;
   try {
     return migratingStorage(window.localStorage).getItem(storageKey);
   } catch {
@@ -40,14 +59,15 @@ function readAppliedGeneration(storageKey: string): string | null {
 }
 
 function writeAppliedGeneration(storageKey: string, generation: string): void {
+  appliedGenerations.set(storageKey, generation);
   try {
     migratingStorage(window.localStorage).setItem(storageKey, generation);
   } catch {
-    // Unrecordable means the next config event applies again; harmless.
+    // Keep the generation in memory when storage is unavailable.
   }
 }
 
-function adoptDefaultTheme(): void {
+function adoptThemeSelection(): void {
   if (typeof window === "undefined") return;
   const environmentId = appAtomRegistry.get(themeEnvironmentIdAtom);
   if (environmentId === null) return;
@@ -69,6 +89,30 @@ function adoptDefaultTheme(): void {
   // Only record adoption after both writes succeed, so an appearance failure remains retryable.
   if (half !== null && !setAppearanceMode(half)) return;
   writeAppliedGeneration(storageKey, generation);
+}
+
+function adoptDefaultTheme(): void {
+  if (typeof window === "undefined") return;
+  adoptThemeSelection();
+  const environmentId = appAtomRegistry.get(themeEnvironmentIdAtom);
+  if (environmentId === null) return;
+  const { defaultAppearance, defaultAppearanceSetAt } =
+    appAtomRegistry.get(themeServerSettingsAtom);
+  const storageKey = `${APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX}${environmentId}`;
+  const generation = defaultAppearanceToApply({
+    environmentId,
+    appearance: defaultAppearance,
+    setAt: defaultAppearanceSetAt,
+    appliedGeneration: readAppliedGeneration(storageKey),
+  });
+  if (
+    generation === null ||
+    (defaultAppearance !== "light" &&
+      defaultAppearance !== "dark" &&
+      defaultAppearance !== "system")
+  )
+    return;
+  if (setAppearanceMode(defaultAppearance)) writeAppliedGeneration(storageKey, generation);
 }
 
 /**

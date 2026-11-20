@@ -10,6 +10,7 @@ import {
   canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
+  getThemeDefinition,
   getThemePreviewAppearance,
   parseThemeHalves,
   resolveDesktopTheme,
@@ -25,6 +26,7 @@ import {
   type ThemeHalves,
   type ThemePreferenceMode,
 } from "../themePalette";
+import { applyThemeCss } from "../themeCss";
 
 type Theme = ThemePreference;
 type ThemeSnapshot = {
@@ -338,7 +340,11 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     appearanceMode,
     themeHalves,
   );
-  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
+  const resolvedTheme = resolveThemeHalf(theme, themeHalves, resolvedAppearance);
+  applyThemePalette(resolvedTheme, resolvedAppearance);
+  void applyThemeCss(getThemeDefinition(resolvedTheme)?.css).catch((error: unknown) => {
+    console.error("Could not apply theme CSS", safeErrorLogAttributes(error));
+  });
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   syncBrowserChromeTheme();

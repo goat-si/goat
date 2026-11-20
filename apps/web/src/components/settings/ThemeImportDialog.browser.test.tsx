@@ -163,6 +163,63 @@ function themeJsonc(name: string, background: string) {
 }
 
 describe("ThemeImportDialog JSONC imports", () => {
+  it("rejects an imported theme containing unsafe CSS", async () => {
+    using _themes = isolateThemes();
+    await using _screen = await render(
+      <ThemeImportDialog
+        open
+        onOpenChange={() => {}}
+        onImported={() => true}
+        onImportedMany={() => {}}
+      />,
+    );
+    const json = JSON.stringify({
+      version: THEME_FILE_VERSION,
+      name: "Unsafe",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css: '@import "https://evil.example/x.css";',
+    });
+    await page.getByRole("textbox", { name: "Theme JSON" }).fill(json);
+    await page.getByRole("button", { name: "Add theme", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "Images in theme CSS are not supported. Use the background setting instead.",
+        ),
+      )
+      .toBeVisible();
+    expect(getCustomThemes()).toEqual([]);
+  });
+
+  it("explains that imported CSS image URLs need the background setting", async () => {
+    using _themes = isolateThemes();
+    await using _screen = await render(
+      <ThemeImportDialog
+        open
+        onOpenChange={() => {}}
+        onImported={() => true}
+        onImportedMany={() => {}}
+      />,
+    );
+    const json = JSON.stringify({
+      version: THEME_FILE_VERSION,
+      name: "Image",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css: '[data-slot="sidebar"]{background:url(data:image/png;base64,AA==)}',
+    });
+    await page.getByRole("textbox", { name: "Theme JSON" }).fill(json);
+    await page.getByRole("button", { name: "Add theme", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "Images in theme CSS are not supported. Use the background setting instead.",
+        ),
+      )
+      .toBeVisible();
+    expect(getCustomThemes()).toEqual([]);
+  });
   it.each(["paste", "file"])("imports a VS Code JSONC theme from %s", async (source) => {
     using _themes = isolateThemes();
     await using _screen = await render(

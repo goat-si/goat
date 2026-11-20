@@ -42,6 +42,7 @@ export function AgentToolsSettings() {
   return (
     <SettingsSection id="agent-tools" title="Agent tools">
       <AgentToolListingSetting />
+      <AgentThemeWritesSetting />
       <AgentWorkspaceTerminalSettings />
       <BuiltInSkillSetting
         name="goat-discipline"
@@ -58,6 +59,31 @@ export function AgentToolsSettings() {
         environmentDescription="Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns."
       />
     </SettingsSection>
+  );
+}
+
+function AgentThemeWritesSetting() {
+  const { scope } = useSettingsScope();
+  const settings = useScopedSettings();
+  const update = useUpdateScopedSettings();
+  const allowed = useScopedSettingsWriteAllowed();
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  return (
+    <SettingsRow
+      title="Agent theme changes"
+      serverScoped
+      settingKeys={["enableAgentThemeWrites"]}
+      description="Allow agents with settings access to publish environment themes."
+      control={
+        <ScopedSwitch
+          settingKeys={["enableAgentThemeWrites"]}
+          aria-label="Agent theme changes"
+          checked={settings.enableAgentThemeWrites}
+          disabled={!allowed || projectScope}
+          onCheckedChange={(checked) => update({ enableAgentThemeWrites: Boolean(checked) })}
+        />
+      }
+    />
   );
 }
 

@@ -7,6 +7,8 @@ import {
   ChevronUpIcon,
 } from "~/components/solar";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useMessages } from "gt-react";
+import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
 import {
   applyThemeColorPreview,
   THEME_COLOR_ROLES,
@@ -29,9 +31,14 @@ import {
   type ThemeDefinition,
 } from "../../themePalette";
 import { useViewportSize } from "../../hooks/useViewportSize";
+import { applyThemeCss } from "../../themeCss";
+import { THEME_CSS_RESOURCE_MESSAGE } from "../../themeCssMessages";
+import { validateThemeCssForSave } from "../../validateThemeCssForSave";
+import { THEME_CSS_MAX_LENGTH } from "@goat/contracts";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { Switch } from "../ui/switch";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -143,8 +150,11 @@ export function ThemeEditorPanel({
   seedName?: string | undefined;
   restoreTheme: () => void;
 }) {
+  const m = useMessages();
+  const resourceErrorMessage = m(THEME_CSS_RESOURCE_MESSAGE);
   const isEditing = editingTheme !== null;
   const [name, setName] = useState("");
+  const [css, setCss] = useState("");
   const [activeAppearance, setActiveAppearance] = useState<ThemeAppearance>(initialAppearance);
   const [isAdvanced, setIsAdvanced] = useState(false);
   const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
@@ -155,6 +165,7 @@ export function ThemeEditorPanel({
   >({ light: false, dark: false });
   const [shouldRegenerateGuidedColors, setShouldRegenerateGuidedColors] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const saveGeneration = useRef(0);
   const [isMinimized, setIsMinimized] = useState(false);
   const [roleQuery, setRoleQuery] = useState("");
   const [isInspecting, setIsInspecting] = useState(false);
@@ -200,6 +211,7 @@ export function ThemeEditorPanel({
       }
 
       setName(editingTheme?.label ?? seedName ?? "");
+      setCss(sourceTheme?.css ?? "");
       setActiveAppearance(nextAppearance);
       // Open unmanaged themes in advanced mode to preserve imported or hand-tuned colors.
       setIsAdvanced(sourceTheme !== null && sourceTheme.managed !== true);
@@ -253,11 +265,19 @@ export function ThemeEditorPanel({
   useEffect(() => {
     if (!open) return;
     applyThemeColorPreview(colorsByAppearance[activeAppearance], activeAppearance);
-  }, [activeAppearance, colorsByAppearance, open]);
+    void applyThemeCss(css).catch((cause: unknown) =>
+      setError(
+        isThemeCssResourceError(cause)
+          ? resourceErrorMessage
+          : "Custom CSS is invalid or unsupported.",
+      ),
+    );
+  }, [activeAppearance, colorsByAppearance, css, open, resourceErrorMessage]);
 
   useEffect(() => {
     if (!open) return;
     return () => {
+      saveGeneration.current++;
       restoreTheme();
     };
   }, [open, restoreTheme]);
@@ -555,13 +575,16 @@ export function ThemeEditorPanel({
     setShouldRegenerateGuidedColors(false);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!name.trim()) {
       setError("Name your theme first.");
       return;
     }
 
+    const generation = ++saveGeneration.current;
     try {
+      const safeCss = css ? await validateThemeCssForSave(css) : undefined;
+      if (generation !== saveGeneration.current) return;
       const colorsForSave = !isAdvanced
         ? {
             light: simpleColorsDirtyByAppearance.light
@@ -591,6 +614,7 @@ export function ThemeEditorPanel({
             name: mergeTarget.label,
             appearance: mergeTarget.appearance,
             colors: mergeTarget.colors,
+            ...(safeCss ? { css: safeCss } : {}),
             variants: {
               ...mergeTarget.variants,
               ...Object.fromEntries(editedModes.map((mode) => [mode, colorsForSave[mode]])),
@@ -611,6 +635,7 @@ export function ThemeEditorPanel({
             name,
             appearance: baseAppearance,
             colors: colorsForSave[baseAppearance],
+            ...(safeCss ? { css: safeCss } : {}),
             ...(getThemeModes(editingTheme).length > 1
               ? { variants: { [variantAppearance]: colorsForSave[variantAppearance] } }
               : {}),
@@ -633,6 +658,7 @@ export function ThemeEditorPanel({
             name: mergeTarget.label,
             appearance: mergeTarget.appearance,
             colors: mergeTarget.colors,
+            ...(safeCss ? { css: safeCss } : {}),
             variants: {
               ...mergeTarget.variants,
               [activeAppearance]: colorsForSave[activeAppearance],
@@ -648,6 +674,7 @@ export function ThemeEditorPanel({
             name,
             appearance: activeAppearance,
             colors: colorsForSave[activeAppearance],
+            ...(safeCss ? { css: safeCss } : {}),
             ...(isAdvanced ? {} : { managed: true }),
           }),
         );
@@ -673,12 +700,15 @@ export function ThemeEditorPanel({
       }
       onOpenChange(false);
     } catch (cause) {
+      if (generation !== saveGeneration.current) return;
       setError(
-        cause instanceof Error
-          ? cause.message
-          : isEditing
-            ? "Could not save the theme."
-            : "Could not create the theme.",
+        isThemeCssResourceError(cause)
+          ? resourceErrorMessage
+          : cause instanceof Error
+            ? cause.message
+            : isEditing
+              ? "Could not save the theme."
+              : "Could not create the theme.",
       );
     }
   };
@@ -1009,7 +1039,7 @@ export function ThemeEditorPanel({
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto py-3 pl-3 pr-1.5">
             {renderNameField()}
             {error ? (
-              <p aria-live="polite" className="text-sm text-destructive">
+              <p role="alert" aria-live="polite" className="text-sm text-destructive">
                 {error}
               </p>
             ) : null}
@@ -1017,13 +1047,25 @@ export function ThemeEditorPanel({
             <div className="space-y-3">
               {renderColorsHeader()}
               {renderColorFields()}
+              <label className="block text-sm">
+                Custom CSS
+                <Textarea
+                  aria-label="Custom CSS"
+                  value={css}
+                  maxLength={THEME_CSS_MAX_LENGTH}
+                  onChange={(event) => {
+                    setCss(event.currentTarget.value);
+                    setError(null);
+                  }}
+                />
+              </label>
             </div>
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border/70 px-3 py-2">
             <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button disabled={!name.trim()} size="sm" onClick={handleSubmit}>
+            <Button disabled={!name.trim()} size="sm" onClick={() => void handleSubmit()}>
               {isEditing ? (
                 mergeTarget ? (
                   `Merge into “${mergeTarget.label}”`

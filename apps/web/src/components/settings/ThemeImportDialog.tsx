@@ -2,7 +2,11 @@ import { DownloadIcon, PlusIcon } from "~/components/solar";
 import type { ChangeEvent, DragEvent, UIEvent } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { useEffect, useRef, useState } from "react";
+import { useMessages } from "gt-react";
+import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
 import { formatBytes } from "../../lib/formatBytes";
+import { validateThemeCssForSave } from "../../validateThemeCssForSave";
+import { THEME_CSS_RESOURCE_MESSAGE } from "../../themeCssMessages";
 import { cn } from "../../lib/utils";
 import {
   getCustomThemes,
@@ -30,6 +34,11 @@ import { ThemeSearchSection } from "./ThemeSearchSection";
  * locks the UI for as long as that takes.
  */
 const MAX_THEME_FILE_BYTES = 256 * 1024;
+
+async function validateThemeCss(theme: ThemeDefinition): Promise<ThemeDefinition> {
+  if (theme.css === undefined) return theme;
+  return { ...theme, css: await validateThemeCssForSave(theme.css) };
+}
 
 /** Highlighting rebuilds markup per keystroke; fall back to plain text for oversized pastes. */
 const MAX_HIGHLIGHTED_JSON_LENGTH = 20_000;
@@ -208,6 +217,8 @@ function ThemeImportBody({
   onClose: () => void;
 }) {
   const { signal } = session;
+  const m = useMessages();
+  const resourceErrorMessage = m(THEME_CSS_RESOURCE_MESSAGE);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -264,11 +275,11 @@ function ThemeImportBody({
       try {
         parsed.push({
           sourceName: file.name,
-          theme: parseThemeImport(await file.text()),
+          theme: await validateThemeCss(parseThemeImport(await file.text())),
         });
       } catch (cause) {
         failures.push(
-          `${file.name}: ${cause instanceof Error ? cause.message : "not a theme file"}`,
+          `${file.name}: ${isThemeCssResourceError(cause) ? resourceErrorMessage : cause instanceof Error ? cause.message : "not a theme file"}`,
         );
       }
     }
@@ -395,14 +406,16 @@ function ThemeImportBody({
     else if (!error) onClose();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const oversized = describeOversizedThemeFile(json.length);
     if (oversized) {
       setError(oversized);
       return;
     }
     try {
-      const theme = parseThemeImport(json);
+      const requestId = ++importRequestRef.current;
+      const theme = await validateThemeCss(parseThemeImport(json));
+      if (!isCurrentRequest(requestId)) return;
       if (getCustomThemes().some((existing) => existing.id === theme.id)) {
         setError(null);
         setConflicts([theme]);
@@ -418,7 +431,13 @@ function ThemeImportBody({
       }
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "That theme file is invalid.");
+      setError(
+        isThemeCssResourceError(cause)
+          ? resourceErrorMessage
+          : cause instanceof Error
+            ? cause.message
+            : "That theme file is invalid.",
+      );
     }
   };
 
@@ -531,7 +550,7 @@ function ThemeImportBody({
               <Button variant="ghost" onClick={() => onClose()}>
                 Cancel
               </Button>
-              <Button disabled={!json.trim() || isReading} onClick={handleSubmit}>
+              <Button disabled={!json.trim() || isReading} onClick={() => void handleSubmit()}>
                 <PlusIcon />
                 Add theme
               </Button>

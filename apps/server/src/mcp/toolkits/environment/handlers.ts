@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as AutomationHold from "../../../automationHold.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as ThemePublication from "../../../themePublication.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -96,8 +97,12 @@ function settingSchema(key: SettingsKey): unknown {
   const document = Schema.toJsonSchemaDocument(
     Schema.Struct({
       [key]:
-        key === "memoryOwnerSourceReadPolicy"
-          ? ServerSettingsSchema.fields.memoryOwnerSourceReadPolicy
+        key === "memoryOwnerSourceReadPolicy" ||
+        key === "defaultTheme" ||
+        key === "defaultThemeSetAt" ||
+        key === "defaultAppearance" ||
+        key === "defaultAppearanceSetAt"
+          ? ServerSettingsSchema.fields[key]
           : ServerSettingsPatch.fields[key],
     }),
   );
@@ -167,6 +172,62 @@ const clientDenied = () =>
   });
 
 export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
+  goat_theme_set: McpToolAccess.destructive(
+    McpToolAccess.writesEnvironment((input, check) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const context = yield* Effect.context<Effect.Services<typeof check>>();
+        const reauthorize = scope.reauthorize;
+        if (
+          scope.thread === undefined &&
+          (!scope.grantedScopes?.includes("settings:write") || reauthorize === undefined)
+        )
+          return yield* clientDenied();
+        const threadAuthorization = check.pipe(Effect.asVoid, Effect.provideContext(context));
+        const authorization = (
+          scope.thread === undefined && reauthorize !== undefined
+            ? reauthorize(["settings:write"]).pipe(
+                Effect.asVoid,
+                Effect.mapError(() => clientDenied()),
+              )
+            : threadAuthorization
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath: CLIENT_REVOKED,
+                operation: "write-file",
+                cause,
+              }),
+          ),
+        );
+        const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+        const publication = yield* ThemePublication.ThemePublicationService;
+        const run = Effect.gen(function* () {
+          yield* check;
+          yield* publication.set({ ...input, agent: true }, authorization).pipe(
+            Effect.mapError((error) =>
+              error.reason === "denied"
+                ? new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: error.message,
+                  })
+                : error.reason === "invalid"
+                  ? invalid(error.message)
+                  : unavailable(),
+            ),
+          );
+          return {
+            ...(input.themeId === undefined ? {} : { themeId: input.themeId }),
+            ...(input.appearance === undefined ? {} : { appearance: input.appearance }),
+          };
+        });
+        return yield* scope.thread === undefined
+          ? run
+          : executor.withLock(scope.thread.threadId, run);
+      }),
+    ),
+  ),
   goat_environment_usage: McpToolAccess.reads((input) =>
     Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
       ScopedReadMcp.usage(scope, input),

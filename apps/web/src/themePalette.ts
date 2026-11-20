@@ -1,4 +1,5 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
+import { THEME_CSS_MAX_LENGTH } from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import "culori/css";
@@ -54,6 +55,7 @@ export type ThemeFile = Readonly<{
   variants?: ThemeVariantOverrides;
   collection?: ThemeCollection;
   managed?: boolean;
+  css?: string;
 }>;
 
 let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> | null = null;
@@ -139,6 +141,11 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isRecord(value)) return null;
   if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
   if (!isThemeLabel(value.label) || !isThemeAppearance(value.appearance)) return null;
+  if (
+    value.css !== undefined &&
+    (typeof value.css !== "string" || value.css.length > THEME_CSS_MAX_LENGTH)
+  )
+    return null;
   const colors = parseStoredThemeColors(value.colors, value.appearance);
   if (!colors) return null;
   const variants = parseStoredThemeVariants(value.variants, value.appearance);
@@ -152,6 +159,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
     colors,
     ...(variants ? { variants } : {}),
     ...(collection ? { collection } : {}),
+    ...(typeof value.css === "string" ? { css: value.css } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
 }
@@ -1274,6 +1282,11 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
   }
 
   const overrides = parseThemeColorOverrides(rawColors);
+  if (
+    value.css !== undefined &&
+    (typeof value.css !== "string" || value.css.length > THEME_CSS_MAX_LENGTH)
+  )
+    throw new Error("Theme CSS is invalid or too large.");
   const collection = parseThemeCollection(value.collection);
   if (value.collection !== undefined && !collection) {
     throw new Error("Theme collections need a valid id and label.");
@@ -1315,6 +1328,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     colors: { ...fallback, ...overrides },
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
     ...(collection ? { collection } : {}),
+    ...(typeof value.css === "string" ? { css: value.css } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
 }
@@ -1329,6 +1343,7 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
     colors: canonicalTheme.colors,
     ...(canonicalTheme.variants ? { variants: canonicalTheme.variants } : {}),
     ...(canonicalTheme.collection ? { collection: canonicalTheme.collection } : {}),
+    ...(canonicalTheme.css !== undefined ? { css: canonicalTheme.css } : {}),
     ...(canonicalTheme.managed ? { managed: true } : {}),
   };
   return `${JSON.stringify(file, null, 2)}\n`;

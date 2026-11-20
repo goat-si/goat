@@ -7,8 +7,10 @@ import {
   EnvironmentThemeFile,
   EnvironmentThemeId,
   environmentThemeFileHasColors,
+  ThemeCssValidationError,
 } from "@goat/contracts";
 import { UNPUBLISHABLE_THEME_IDS } from "@goat/shared/themePalettes";
+import { sanitizeThemeCss } from "@goat/shared/themeCssSanitizer";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -27,6 +29,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "./config.ts";
 import { supervise } from "./backgroundSupervision.ts";
 import { fileWatchResync } from "./fileWatchResync.ts";
+import { readThemeDirectory } from "./themeDirectory.ts";
 
 const decodeEnvironmentThemeFileJsonExit = Schema.decodeUnknownExit(
   Schema.fromJsonString(EnvironmentThemeFile),
@@ -35,7 +38,7 @@ const isEnvironmentThemeId = Schema.is(EnvironmentThemeId);
 
 const THEME_FILE_SUFFIX = ".json";
 
-const MAX_THEME_FILES = 32;
+export const MAX_THEME_FILES = 32;
 /** Shared with publishing so it cannot accept files the watcher skips. */
 export const MAX_THEME_FILE_BYTES = 32 * 1024;
 const MAX_THEME_TOTAL_BYTES = 192 * 1024;
@@ -49,6 +52,7 @@ export class EnvironmentThemeService extends Context.Service<
   EnvironmentThemeService,
   {
     readonly current: Effect.Effect<ReadonlyArray<EnvironmentTheme>>;
+    readonly validateCss: (css: string) => Effect.Effect<string, ThemeCssValidationError>;
 
     /** Subscribes before reading to retain changes during connection. */
     readonly streamChanges: Stream.Stream<ReadonlyArray<EnvironmentTheme>>;
@@ -92,10 +96,14 @@ export const readThemeFileGuarded = (filePath: string, maxBytes: number): string
 };
 
 export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const entries = yield* fs
-    .readDirectory(themesDir)
-    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  const result = yield* Effect.try(() => readThemeDirectory(themesDir)).pipe(Effect.result);
+  if (result._tag === "Failure") {
+    yield* Effect.logWarning("cannot read bounded environment theme directory", {
+      path: themesDir,
+    });
+    return [];
+  }
+  const entries = result.success;
 
   const themes: Array<EnvironmentTheme> = [];
   let examined = 0;
@@ -150,7 +158,16 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
       break;
     }
 
-    themes.push({ id, ...file });
+    const checked = yield* Effect.try(() => ({
+      id,
+      ...file,
+      ...(file.css === undefined ? {} : { css: sanitizeThemeCss(file.css) }),
+    })).pipe(Effect.result);
+    if (checked._tag === "Failure") {
+      yield* Effect.logWarning("ignoring environment theme with invalid CSS", { path: filePath });
+      continue;
+    }
+    themes.push(checked.success);
   }
   return themes;
 });
@@ -199,6 +216,13 @@ const make = Effect.gen(function* () {
 
   return {
     current: Effect.map(refresh, (state) => state.themes),
+    validateCss: Effect.fn("EnvironmentTheme.validateCss")((css: string) =>
+      Effect.try({
+        try: () => sanitizeThemeCss(css),
+        catch: () =>
+          new ThemeCssValidationError({ message: "Custom CSS is invalid or unsupported." }),
+      }),
+    ),
     get streamChanges() {
       return Stream.unwrap(
         Effect.gen(function* () {

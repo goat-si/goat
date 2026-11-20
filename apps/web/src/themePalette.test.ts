@@ -69,6 +69,17 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("theme files", () => {
+  it("retains custom CSS when importing and storing a theme", () => {
+    const css = '[data-slot="sidebar"]{color:red}';
+    const theme = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "CSS",
+      appearance: "dark",
+      colors: { canvas: "#112233" },
+      css,
+    });
+    expect(theme.css).toBe(css);
+  });
   it("gives non-Latin theme names distinct stable ids", () => {
     const file = {
       version: THEME_FILE_VERSION,

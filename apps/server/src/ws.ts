@@ -2840,6 +2840,8 @@ export const layerWsRpc = (
         [WS_METHODS.agentSessionsScan]: (input) => agentSessionScanner.scan(input),
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),
+        [WS_METHODS.themeValidateCss]: (input) =>
+          environmentTheme.validateCss(input.css).pipe(Effect.map((css) => ({ css }))),
         [WS_METHODS.assetsCreateUrl]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {

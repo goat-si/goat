@@ -69,10 +69,17 @@ On web and desktop, choose **Create theme** to adjust a palette, or import a GOA
 theme. The theme editor's color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.
 
+The editor also accepts scoped CSS for colors and opacity on supported app elements. CSS cannot
+load images or other resources; use the background setting for images. Themes with unsupported
+CSS are rejected when imported or saved.
+
 ## Environment themes
 
 Environment themes and defaults come from the server serving your web app or the desktop app's
 main local environment. Additional connections do not use them.
+
+To let agents publish and select environment themes, enable **Agent theme changes** in Settings.
+This is off by default and agents cannot enable it themselves.
 
 Select a published theme in **Settings → Appearance** to follow its palette as the server updates
 it. **Duplicate** makes an independent copy you can edit. A saved custom theme with the same ID

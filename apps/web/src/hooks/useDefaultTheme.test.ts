@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { defaultThemeGeneration, defaultThemeToApply } from "./useDefaultTheme";
+import {
+  defaultAppearanceToApply,
+  defaultThemeGeneration,
+  defaultThemeToApply,
+} from "./useDefaultTheme";
 
 const BASE = {
   environmentId: "env-1",
@@ -11,6 +15,21 @@ const BASE = {
 } as const;
 
 describe("default theme adoption", () => {
+  it("applies each valid environment appearance generation once", () => {
+    const input = {
+      environmentId: "env-1",
+      appearance: "dark",
+      setAt: "2026-11-20",
+      appliedGeneration: null,
+    };
+    const generation = defaultAppearanceToApply(input);
+    expect(generation).not.toBeNull();
+    expect(defaultAppearanceToApply({ ...input, appliedGeneration: generation })).toBeNull();
+    expect(defaultAppearanceToApply({ ...input, appearance: "future" })).toBeNull();
+    expect(
+      defaultAppearanceToApply({ ...input, setAt: "2026-11-21", appliedGeneration: generation }),
+    ).not.toBeNull();
+  });
   it("does not replay a generation it already applied", () => {
     const generation = defaultThemeGeneration(BASE.defaultTheme, BASE.defaultThemeSetAt);
     expect(defaultThemeToApply({ ...BASE, appliedGeneration: generation })).toBe(null);
