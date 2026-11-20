@@ -12,7 +12,6 @@ import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { composerAttachmentUploadKey as uploadKey } from "../lib/composerAttachmentUploadQueue";
 import { threadOutboxRetryDelayMs, type QueuedThreadMessage } from "./thread-outbox-model";
-
 const state = vi.hoisted(() => ({
   draftText: "Keep this draft separate",
   cleanups: [] as Array<() => void>,
@@ -166,7 +165,6 @@ import { createThreadOutboxDelivery } from "./threadOutboxDelivery";
 import { composerAttachmentUploadsAtom } from "./composer-attachment-upload-states";
 import { workspaceConnections } from "./workspace";
 import { queuedMessageWaitReasonsAtom } from "./threadOutboxWaitReasons";
-
 const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMessage => ({
   environmentId: EnvironmentId.make("secondary"),
   threadId: ThreadId.make("thread"),
@@ -599,6 +597,7 @@ describe("compaction before a queued send", () => {
     await runDrain();
     expect(remaining()).toEqual([queued]);
 
+    // A restarted app delivers the persisted message again.
     state.cleanups.splice(0).forEach((cleanup) => cleanup());
     await runDrain();
     expect(state.start.mock.calls.map(([call]) => call.input)).toEqual([
@@ -776,6 +775,7 @@ describe("queued task whose launch reply is lost", () => {
 });
 
 describe("queued delivery timing", () => {
+  /** Runs `change`, then resolves once the delivery it starts has settled. */
   async function deliveryAfter(change: () => void): Promise<void> {
     const settled = Promise.withResolvers<void>();
     const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {

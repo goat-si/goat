@@ -63,6 +63,7 @@ interface UploadJob {
   stopWatchingConnection: () => void;
   release: () => void;
   waiters: number;
+  draftReleased: boolean;
 }
 
 type DraftFileOwner = Pick<UploadJob, "image" | "environmentId" | "draftTarget">;
@@ -496,6 +497,7 @@ export function startAttachmentUpload(input: {
     stopWatchingConnection: () => {},
     release: () => {},
     waiters: 0,
+    draftReleased: false,
   };
 
   heldUploadsByImageId.set(input.image.id, job);
@@ -528,7 +530,24 @@ export function startAttachmentUpload(input: {
     progress: 0,
     ...(previous ? { previous } : {}),
   });
-  job.release = registry.hold(job);
+  try {
+    job.release = registry.hold(job);
+  } catch (cause) {
+    const error = new WebUploadError({
+      message: cause instanceof Error ? cause.message : "Upload failed",
+    });
+    job.stopWatchingConnection();
+    job.resolveSettled();
+    if (heldUploadsByImageId.get(input.image.id) === job) {
+      heldUploadsByImageId.delete(input.image.id);
+      setUploadState(input.image.id, {
+        status: "failed",
+        environmentId: input.environmentId,
+        reason: error.message,
+        ...(previous ? { previous } : {}),
+      });
+    }
+  }
 }
 
 function cancelAttachmentUpload(imageId: string): void {
@@ -536,9 +555,12 @@ function cancelAttachmentUpload(imageId: string): void {
   if (!job) {
     return;
   }
+  if (job.waiters > 0) {
+    job.draftReleased = true;
+    return;
+  }
   job.release();
   job.release = () => {};
-  if (job.waiters > 0) return;
   job.cancelled = true;
   job.stopWatchingConnection();
   heldUploadsByImageId.delete(imageId);
@@ -634,13 +656,15 @@ export async function awaitAttachmentUploads(
     imageIds.map(async (imageId) => {
       const job = heldUploadsByImageId.get(imageId);
       if (!job || (environmentId !== undefined && job.environmentId !== environmentId)) return;
-      const release = registry.hold(job);
       job.waiters++;
       try {
         await job.settled;
       } finally {
         job.waiters--;
-        release();
+        if (job.draftReleased && job.waiters === 0) {
+          job.release();
+          job.release = () => {};
+        }
       }
     }),
   );
