@@ -658,5 +658,7 @@
   "39b3e751b2026cf1": "¿Borrar las vistas guardadas?",
   "8a79ebeceb89b809": "Esto elimina las vistas guardadas que no se pueden leer.",
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
-  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo."
+  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
+  "856812e7e1fc445e": "Llamadas a herramientas en el chat",
+  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes"
 }

@@ -658,5 +658,7 @@
   "39b3e751b2026cf1": "Clear saved views?",
   "8a79ebeceb89b809": "This removes the unreadable saved views.",
   "1e6c081708cf5864": "Limit reached, delete a view first",
-  "79c3a969207c8760": "This view exceeds the allowed field length."
+  "79c3a969207c8760": "This view exceeds the allowed field length.",
+  "856812e7e1fc445e": "Tool calls in chat",
+  "d24e3cd7bcf08490": "Keep awake while agents work"
 }
