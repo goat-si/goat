@@ -755,4 +755,19 @@ describe("attachmentUploadQueue", () => {
     TestXmlHttpRequest.requests[4]!.complete();
     await awaitAttachmentUploads([images[3]!.id]);
   });
+
+  it("keeps an upload alive while a send is waiting after the draft releases it", async () => {
+    const image = makeImage("send-owns-transfer");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([image.id]);
+    releaseAttachmentUpload(image.id);
+    expect(TestXmlHttpRequest.requests[0]?.listeners.get("abort")).toBeDefined();
+    TestXmlHttpRequest.requests[0]?.complete();
+    await settled;
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "ready",
+      environmentId: firstEnvironment,
+    });
+  });
 });

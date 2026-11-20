@@ -163,7 +163,9 @@ export function createAttachmentUploadRegistry<
               }
             }),
           );
-          const fiber = yield* Effect.forkScoped(transfer(key, transfers.get(key.id)));
+          const fiber = yield* Effect.forkScoped(transfer(key, transfers.get(key.id)), {
+            startImmediately: true,
+          });
           transfers.set(key.id, fiber);
           running.add(fiber);
           fiber.addObserver(() => {
