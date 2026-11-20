@@ -7,6 +7,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ThreadResults from "../threadResults/ThreadResultService.ts";
+import type { OrchestrationV2Subagent } from "@goat/contracts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
@@ -57,6 +59,59 @@ describe("session first receipts", () => {
       assert.strictEqual(harness.world.launches[0]?.modelSelection.instanceId, "codex");
     }).pipe(Effect.provide(harness.layer));
   });
+  it.effect.each([
+    "no retry",
+    "fresh report",
+    "no retry after restart",
+    "fresh report after restart",
+  ] as const)("settles a bot task whose premature report was rejected: %s", (variant) => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const input = yield* gateway.ingest(goatInput("Check A and B", variant), rpcContext);
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      const worker = task.worker!;
+      const child = {
+        runId: worker.runId,
+        origin: "app_owned",
+        status: "running",
+      } as OrchestrationV2Subagent;
+      harness.world.subagents.set(worker.threadId, [child]);
+      const results = yield* ThreadResults.ThreadResultService;
+      const error = yield* Effect.flip(
+        results.report(worker.threadId, { outcome: "failed", summary: "Still waiting." }),
+      );
+      assert.strictEqual(error.reason, "delegates_pending");
+      harness.world.subagents.set(worker.threadId, [{ ...child, status: "completed" }]);
+      const answer = "A found line 129. B could not read its file.";
+      harness.assistant(task, "Checking.\n", true);
+      yield* runtime.runPass;
+      yield* runtime.settle([input.inputId]);
+      let run = harness.world.latestRun(worker.threadId)!;
+      if (variant.endsWith("after restart")) {
+        harness.world.setStatus(worker.threadId, run.ordinal, "completed");
+        const resumed = harness.world.addRun(worker.threadId, MessageId.make("restart"));
+        run = { ...resumed, restartContinuationOfRunId: run.id };
+        const runs = harness.world.runs.get(worker.threadId)!;
+        harness.world.runs.set(worker.threadId, [...runs.slice(0, -1), run]);
+      }
+      if (variant.startsWith("fresh report"))
+        yield* results.report(worker.threadId, { outcome: "failed", summary: answer });
+      harness.assistant({ ...task, worker: { ...worker, runId: run.id } }, answer, false, 1);
+      harness.world.setStatus(worker.threadId, run.ordinal, "completed");
+      yield* runtime.drain;
+      const finished = (yield* ledger.getTask(task.taskId))!.task;
+      assert.strictEqual(finished.status, "failed");
+      assert.include(finished.resultSummary!, answer);
+      if (variant.startsWith("no retry")) assert.include(finished.resultSummary!, "final report");
+      else assert.strictEqual(finished.resultSummary, answer);
+    }).pipe(Effect.provide(ThreadResults.layer.pipe(Layer.provideMerge(harness.layer))));
+  });
+
   it.effect.each(["same item", "separate item", "fallback"] as const)(
     "direct answer keeps exactly the intended messages: %s",
     (variant) => {
