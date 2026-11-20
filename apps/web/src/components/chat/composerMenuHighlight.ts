@@ -18,3 +18,19 @@ export function resolveComposerMenuActiveItemId(input: {
 
   return input.items[0]?.id ?? null;
 }
+
+export function nudgeComposerMenuItem(
+  composerMenuItems: ReadonlyArray<{ id: string }>,
+  composerHighlightedItemId: string | null,
+  key: "ArrowDown" | "ArrowUp",
+): string | null {
+  const highlightedIndex = composerMenuItems.findIndex(
+    (item) => item.id === composerHighlightedItemId,
+  );
+  const normalizedIndex = highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
+  const offset = key === "ArrowDown" ? 1 : -1;
+  const nextIndex =
+    (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
+  const nextItem = composerMenuItems[nextIndex];
+  return nextItem?.id ?? null;
+}

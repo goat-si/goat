@@ -10,7 +10,7 @@ interface ComposerDraftSelection {
 }
 
 // Keep each draft's caret across composer unmounts without notifying other drafts.
-const composerDraftSelectionAtom = Atom.family((_draftKey: string) =>
+export const composerDraftSelectionAtom = Atom.family((_draftKey: string) =>
   Atom.make<ComposerDraftSelection | null>(null).pipe(
     Atom.keepAlive,
     Atom.withLabel("mobile:composer-draft-selection"),

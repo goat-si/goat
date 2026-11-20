@@ -1,3 +1,6 @@
+import { describeRawElement } from "./AnnotationElementLabel.ts";
+import { positionBox } from "./AnnotationPositionBox.ts";
+import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
 import {
   createButton,
   styleControl,
@@ -255,22 +258,6 @@ function pickFromPoint(clientX: number, clientY: number): Element | null {
   return null;
 }
 
-function describeRawElement(element: Element): string {
-  const tag = element.tagName.toLowerCase();
-  const id = element.id ? `#${element.id}` : "";
-  const classes =
-    element instanceof HTMLElement && typeof element.className === "string"
-      ? element.className
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 2)
-          .map((name) => `.${name}`)
-          .join("")
-      : "";
-  return `${tag}${id}${classes}`;
-}
-
 function createBox(color: string, fill: string): HTMLDivElement {
   const node = document.createElement("div");
   node.setAttribute(OVERLAY_ATTRIBUTE, "");
@@ -285,17 +272,6 @@ function createBox(color: string, fill: string): HTMLDivElement {
     `z-index:${CONTENT_LAYER_Z_INDEX}`,
   ].join(";");
   return node;
-}
-
-function positionBox(node: HTMLElement, rect: PreviewAnnotationRect): void {
-  if (rect.width <= 0 || rect.height <= 0) {
-    node.style.display = "none";
-    return;
-  }
-  node.style.display = "block";
-  node.style.transform = `translate(${rect.x}px, ${rect.y}px)`;
-  node.style.width = `${rect.width}px`;
-  node.style.height = `${rect.height}px`;
 }
 
 function createLabel(): HTMLDivElement {
@@ -463,9 +439,18 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   comment.placeholder = "Describe the change…";
   comment.setAttribute("dir", "auto");
   comment.rows = 1;
+  comment.maxLength = COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS;
   comment.className =
     "min-h-8 max-h-24 min-w-0 flex-1 resize-none overflow-y-hidden border-0 border-b border-b-transparent bg-transparent px-0 py-1.5 font-sans text-sm leading-5 text-foreground outline-none ring-0 placeholder:text-muted-foreground focus:border-b-primary focus:outline-none focus:ring-0";
   composerRow.appendChild(comment);
+  const count = document.createElement("span");
+  count.className = "text-xs text-muted-foreground";
+  const updateCount = () => {
+    count.textContent = `${comment.value.length} / ${COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS}`;
+  };
+  comment.addEventListener("input", updateCount);
+  updateCount();
+  composerRow.appendChild(count);
 
   const dragHandle = document.createElement("button");
   dragHandle.type = "button";
@@ -524,6 +509,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   let editorLayoutFrame: number | null = null;
 
   const resizeComment = (): void => {
+    updateCount();
     const maxHeight = 96;
     comment.style.height = "auto";
     const nextHeight = Math.min(comment.scrollHeight, maxHeight);
@@ -1287,6 +1273,10 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
 
   const submitAnnotation = (submission: PreviewAnnotationSubmission): void => {
     if (voiceControl?.busy()) return;
+    if (comment.value.length > COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS) {
+      comment.focus();
+      return;
+    }
     if (submission === "send" && !sendEnabled) return;
     if (pendingCapture || (selected.size === 0 && regions.length === 0 && strokes.length === 0))
       return;

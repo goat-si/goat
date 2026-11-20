@@ -1,9 +1,14 @@
+import { composerSideChatIsLocal } from "./composerSideChatPresentation";
 import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
 import { useMessages } from "gt-react";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
-import { composerPathOrModelReplacement } from "./composerModelMentions";
+import {
+  composerPathOrModelReplacement,
+  selectedModelOrCustomFallback,
+} from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
+import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { getCompatibleRuntimeModeOptions } from "./runtimeModeConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -38,7 +43,7 @@ import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/con
 import { isPasteAsTextShortcut } from "@goat/client-runtime/text-paste";
 import { useComposerFolderDrop } from "./useComposerFolderDrop";
 import { splitTransferredFiles } from "./workspaceFileDrop";
-import { createModelSelection, normalizeModelSlug } from "@goat/shared/model";
+import { createModelSelection } from "@goat/shared/model";
 import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   memo,
@@ -126,6 +131,7 @@ import {
 import {
   attachmentsToReleaseOnUploadCapabilityLoss,
   composerOtherFilesForPresentation,
+  composerInlineFileIds,
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
@@ -164,7 +170,6 @@ import {
 } from "../composerContextPresentation";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import {
-  collectInlineContextIds,
   type ComposerContextReference,
   ensureInlineContextReferences,
   formatInlineContextReference,
@@ -188,6 +193,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { copySnapshot } from "./copySnapshot";
 import { buildDraftContextClipboardFragment } from "./composerDraftContextClipboard";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
+import { droppedThreadContextRecord } from "./threadContextDrop.logic";
 import { readThreadShell } from "~/state/entities";
 import type { ThreadPullRequestLink } from "@goat/contracts";
 import {
@@ -211,7 +217,7 @@ import { readDraftSnapshot, useChatComposerVoiceController } from "./useComposer
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
+import { resolveComposerMenuActiveItemId, nudgeComposerMenuItem } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
 import { readPromptUltrathink } from "./TraitsPicker";
@@ -673,15 +679,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const prompt = composerDraft.prompt;
   const composerImages = attachmentDraft.images;
   const composerFiles = attachmentDraft.files;
-  const inlineFileIdSet = (() => {
-    if (questionAttachmentTarget) return new Set<string>();
-    const contextIds = new Set(collectInlineContextIds(prompt));
-    return new Set(
-      composerFiles
-        .filter((file) => contextIds.has(toKindScopedComposerContextId("file", file.id)))
-        .map((file) => file.id),
-    );
-  })();
+  const inlineFileIdSet = composerInlineFileIds(questionAttachmentTarget, prompt, composerFiles);
   const composerVideos = composerFiles.filter((file) =>
     isPreviewableComposerVideo(file, environmentId),
   );
@@ -979,12 +977,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   }
 
-  const selectedModelForPickerWithCustomFallback = (() => {
-    const currentOptions = modelOptionsByInstance.get(selectedInstanceId) ?? [];
-    return currentOptions.some((option) => option.slug === selectedModelForPicker)
-      ? selectedModelForPicker
-      : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  })();
+  const selectedModelForPickerWithCustomFallback = selectedModelOrCustomFallback(
+    modelOptionsByInstance.get(selectedInstanceId) ?? [],
+    selectedModelForPicker,
+    selectedProvider,
+  );
 
   const activeThreadModelDisplayName = resolveContextWindowModelDisplayName(
     activeThreadModelSelection,
@@ -1022,8 +1019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  // The effort popover's model row hands off to the model picker. Opening on the next frame
-  // lets the effort popover finish closing and return focus before the picker takes it.
+  // Wait a frame for the effort popover to close and return focus before opening the model picker.
   const openComposerModelPicker = () => {
     requestAnimationFrame(() => setIsComposerModelPickerOpen(true));
   };
@@ -1123,7 +1119,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     imageCount: composerImages.length + composerFiles.length,
     existingAttachmentCount: editingQueuedAttachments?.length ?? 0,
     terminalContexts: composerTerminalContexts,
-    elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
+    elementContextCount:
+      composerPreviewAnnotations.length +
+      composerReviewComments.length +
+      composerThreadContexts.length,
   });
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const compactSlashCommandAvailable =
@@ -1964,15 +1963,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const nudgeComposerMenuHighlight = (key: "ArrowDown" | "ArrowUp") => {
     if (composerMenuItems.length === 0) return;
-    const highlightedIndex = composerMenuItems.findIndex(
-      (item) => item.id === composerHighlightedItemId,
+    setComposerHighlightedItemId(
+      nudgeComposerMenuItem(composerMenuItems, composerHighlightedItemId, key),
     );
-    const normalizedIndex = highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
-    const offset = key === "ArrowDown" ? 1 : -1;
-    const nextIndex =
-      (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
-    const nextItem = composerMenuItems[nextIndex];
-    setComposerHighlightedItemId(nextItem?.id ?? null);
   };
 
   const blurMobileComposerAfterSend = () => {
@@ -2088,8 +2081,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const submitCitationAndSendStable = useStableCallback(submitCitationAndSend);
-  // A question took the editor while a citation comment was
-  // unsaved. Keep the comment in the prompt that comes back afterward.
+  // A question taking the editor must leave an unsaved citation comment in the returning prompt.
   const saveCitationDraftToPrompt = (replacedValue: string, savedValue: string) => {
     if (replacedValue !== prompt) return;
     if (promptRef.current === replacedValue) promptRef.current = savedValue;
@@ -2531,6 +2523,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const insertAttachmentReferences = (
     references: ReadonlyArray<ComposerContextReference>,
     selection?: { start: number; end: number },
+    pendingInsertion?: ComposerAttachmentInsertion,
   ): boolean => {
     if (references.length === 0) return false;
     // Question answers carry attachments beside the answer, never as chips. Falling back to
@@ -2541,6 +2534,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       liveAttachmentTargetKey: attachmentTargetKeyRef.current,
       references,
       insertReferences: () => {
+        if (pendingInsertion?.insert(references)) return true;
         if (selection) {
           const edit = inlineContextReferenceReplacement(promptRef.current, selection, references);
           return applyPromptReplacementStable(edit.start, edit.end, edit.text);
@@ -2777,8 +2771,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
-      const shell = readThreadShell(ref);
-      return shell ? [threadContextRecord(ref, shell.title)] : [];
+      const record = droppedThreadContextRecord(ref, readThreadShell(ref));
+      return record ? [record] : [];
     });
     const routed = records.length > 0 ? routeThreadContexts(records) : [];
     if (routed.length === 0) return;
@@ -3744,7 +3738,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running"}
+                    isRunning={
+                      phase === "running" &&
+                      !composerSideChatIsLocal(
+                        prompt,
+                        sideChatAvailable,
+                        composerDraft,
+                        attachmentDraft,
+                        { props, selectedProvider },
+                      )
+                    }
                     canInterrupt={canInterrupt}
                     runId={activeThread?.runtime?.activeRunId ?? null}
                     followUpBehavior={followUpBehavior}

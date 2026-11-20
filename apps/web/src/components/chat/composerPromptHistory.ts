@@ -1,3 +1,5 @@
+import { ThreadContextRecord, type OrchestrationMessageContext } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
@@ -12,11 +14,13 @@ const TRAILING_LEGACY_CONTEXT =
 
 export type ComposerPromptHistoryMessage = Parameters<typeof resolveUserMessagePresentation>[0] & {
   readonly id: string;
+  readonly context?: OrchestrationMessageContext | undefined;
 };
 
 export interface ComposerPromptHistoryEntry {
   readonly id: string;
   readonly prompt: string;
+  readonly threadContexts?: ReadonlyArray<ThreadContextRecord>;
 }
 
 export interface ComposerPromptHistoryPosition {
@@ -36,6 +40,7 @@ function findActive(
 export interface ComposerPromptHistoryStep {
   readonly position: ComposerPromptHistoryPosition | null;
   readonly prompt: string;
+  readonly threadContexts?: ReadonlyArray<ThreadContextRecord>;
 }
 
 function stripTrailingReviewComments(prompt: string): string {
@@ -70,7 +75,10 @@ function stripInlineTerminalLabels(prompt: string, headers: ReadonlyArray<string
   return result;
 }
 
-export function recallableComposerPrompt(messageText: string): string {
+export function recallableComposerPrompt(
+  messageText: string,
+  keptContextIds: ReadonlySet<string> = new Set(),
+): string {
   let prompt = messageText.trim();
   if (prompt.startsWith(CLAUDE_ULTRATHINK_PREFIX)) {
     prompt = prompt.slice(CLAUDE_ULTRATHINK_PREFIX.length);
@@ -101,6 +109,7 @@ export function recallableComposerPrompt(messageText: string): string {
 
   // Recall strips chips because their backing records are absent.
   for (const reference of collectComposerContextReferences(prompt).toReversed()) {
+    if (keptContextIds.has(reference.contextId)) continue;
     let { start, end } = reference;
     if (prompt[end] === " ") end += 1;
     else if (prompt[start - 1] === " ") start -= 1;
@@ -125,14 +134,23 @@ export function buildComposerPromptHistoryEntries(
     if (message.role !== "user") continue;
     // Automations and other agents send user-role messages; recall only what the user typed.
     if (resolveUserMessagePresentation(message).attribution !== null) continue;
-    const prompt = recallableComposerPrompt(message.text);
+    const records = (message.context?.records ?? []).filter(Schema.is(ThreadContextRecord));
+    const prompt = recallableComposerPrompt(
+      message.text,
+      new Set(records.map((record) => record.contextId)),
+    );
+    const referenced = new Set(
+      collectComposerContextReferences(prompt).map((reference) => reference.contextId),
+    );
+    const threadContexts = records.filter((record) => referenced.has(record.contextId));
     if (prompt.length === 0) continue;
+    const entry = { id: message.id, prompt, ...(threadContexts.length ? { threadContexts } : {}) };
     const previous = entries[entries.length - 1];
     if (previous && previous.prompt === prompt) {
-      entries[entries.length - 1] = { id: message.id, prompt };
+      entries[entries.length - 1] = entry;
       continue;
     }
-    entries.push({ id: message.id, prompt });
+    entries.push(entry);
   }
   return entries;
 }
@@ -151,11 +169,19 @@ export function stepComposerPromptHistory(input: {
     if (activeIndex < 0 && currentPrompt.length > 0) return null;
     const entry = entries[activeIndex < 0 ? entries.length - 1 : activeIndex - 1];
     if (!entry) return null;
-    return { position: { entryId: entry.id, recalled: entry.prompt }, prompt: entry.prompt };
+    return {
+      position: { entryId: entry.id, recalled: entry.prompt },
+      prompt: entry.prompt,
+      ...(entry.threadContexts ? { threadContexts: entry.threadContexts } : {}),
+    };
   }
 
   if (activeIndex < 0) return null;
   const entry = entries[activeIndex + 1];
   if (!entry) return { position: null, prompt: "" };
-  return { position: { entryId: entry.id, recalled: entry.prompt }, prompt: entry.prompt };
+  return {
+    position: { entryId: entry.id, recalled: entry.prompt },
+    prompt: entry.prompt,
+    ...(entry.threadContexts ? { threadContexts: entry.threadContexts } : {}),
+  };
 }

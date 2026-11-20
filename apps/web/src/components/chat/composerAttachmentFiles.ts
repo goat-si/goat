@@ -1,3 +1,5 @@
+import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
+import { collectInlineContextIds } from "../../lib/composerContextReferences";
 import {
   type EnvironmentId,
   isProviderSendTurnSupportedImageMimeType,
@@ -221,4 +223,18 @@ export function shouldHandleComposerAttachmentPaste(input: {
   }
 
   return input.files.some((file) => classifyComposerAttachmentFile(file) === "file");
+}
+
+export function composerInlineFileIds(
+  questionAttachmentTarget: unknown,
+  prompt: string,
+  composerFiles: ReadonlyArray<ComposerFileAttachment>,
+) {
+  if (questionAttachmentTarget) return new Set<string>();
+  const contextIds = new Set(collectInlineContextIds(prompt));
+  return new Set(
+    composerFiles
+      .filter((file) => contextIds.has(toKindScopedComposerContextId("file", file.id)))
+      .map((file) => file.id),
+  );
 }
