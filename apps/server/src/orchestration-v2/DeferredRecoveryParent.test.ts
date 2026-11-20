@@ -93,7 +93,7 @@ it.effect.each(["stopped", "inactive", "active", "human"] as const)(
       ).toBe(true);
       yield* deferred.captureSequence(run.threadId);
       yield* deferred.drain(locks);
-      expect(commits).toBe(scenario === "active" || scenario === "human" ? 1 : 0);
+      expect(commits).toBe(scenario === "stopped" ? 0 : 1);
     }).pipe(Effect.provide(Layer.mergeAll(IdAllocator.layer, ThreadCommandExecutor.layer))),
 );
 

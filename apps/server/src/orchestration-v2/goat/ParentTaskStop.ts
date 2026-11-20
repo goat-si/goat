@@ -11,7 +11,7 @@ import type {
   ProjectionRuntimeRecoveryState,
 } from "../ProjectionStore.ts";
 
-export const parentTaskStopped = Effect.fn("ParentTaskStop.check")(function* <E, E2 = never>(
+export const parentTaskStopped = Effect.fn("ParentTaskStop.check")(function* <E>(
   reader: {
     readonly getThreadRecords: <K extends ProjectionRecordField>(
       threadId: ThreadId,
@@ -21,8 +21,6 @@ export const parentTaskStopped = Effect.fn("ParentTaskStop.check")(function* <E,
   },
   projection: Pick<ProjectionRuntimeRecoveryState, "thread">,
   source: OrchestrationV2Run,
-  requireActive = false,
-  coveredByStop?: (parentThreadId: ThreadId) => Effect.Effect<boolean, E2>,
 ) {
   // A parent's Stop reaches its open delegated tasks through an effect a restart can cut short.
   const { lineage, forkedFrom } = projection.thread;
@@ -41,8 +39,6 @@ export const parentTaskStopped = Effect.fn("ParentTaskStop.check")(function* <E,
       task !== undefined && task.result === null && isOrchestrationV2WorkActive(task.status)
         ? task.runId
         : null;
-    if (parentRunId === null && requireActive) return true;
-    if (coveredByStop !== undefined) return yield* coveredByStop(lineage.parentThreadId);
     if (
       parentRunId !== null &&
       (yield* reader.getThreadRecords(lineage.parentThreadId, ["turnItems"], {

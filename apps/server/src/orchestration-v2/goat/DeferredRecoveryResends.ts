@@ -17,7 +17,6 @@ import type { EffectOutboxV2 } from "../EffectOutbox.ts";
 import type { ProjectionStoreV2 } from "../ProjectionStore.ts";
 import type { ThreadCommandExecutor } from "../ThreadCommandExecutor.ts";
 import { MAX_DEFERRED_RECOVERY_RESENDS } from "./RecoveryResendLimits.ts";
-import { parentTaskStopped } from "./ParentTaskStop.ts";
 
 type Candidate = {
   readonly threadId: ThreadId;
@@ -85,10 +84,15 @@ export function makeDeferredRecoveryResends(input: {
               )
             )
               return;
+            const { lineage } = projection.thread;
             if (
-              yield* parentTaskStopped(input.projections, projection, run, true, (parentId) =>
-                input.outbox.hasDelegatedStop(parentId, candidate.threadId, run.id),
-              )
+              lineage.relationshipToParent === "subagent" &&
+              lineage.parentThreadId !== null &&
+              (yield* input.outbox.hasDelegatedStop(
+                lineage.parentThreadId,
+                candidate.threadId,
+                run.id,
+              ))
             )
               return;
             const now = yield* DateTime.now;
