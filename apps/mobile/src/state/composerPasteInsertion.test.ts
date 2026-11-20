@@ -32,3 +32,55 @@ it("keeps a pending paste before text typed at its caret, and the caret after th
   const caret = `Before ${link} yaz`.length;
   expect(captureComposerDraftInsertion(key)).toMatchObject({ start: caret, end: caret });
 });
+
+it.each(["first", "second"] as const)(
+  "keeps paste order when the %s attachment completes first",
+  async (finishesFirst) => {
+    const key = `env:overlap-${finishesFirst}`;
+    const makeFile = (id: string) => ({
+      id,
+      type: "file" as const,
+      name: `${id}.png`,
+      mimeType: "text/plain",
+      sizeBytes: 1,
+      fileUri: `file:///${id}.png`,
+    });
+    setComposerDraftText(key, "Before ");
+    const first = captureComposerDraftInsertion(key, { start: 7, end: 7 });
+    const second = captureComposerDraftInsertion(key, { start: 7, end: 7 });
+    setComposerDraftText(key, "Before typed");
+    rememberComposerDraftSelection(key, "Before typed", { start: 12, end: 12 });
+    const firstDone = Promise.withResolvers<void>();
+    const secondDone = Promise.withResolvers<void>();
+    const firstPaste = firstDone.promise.then(() =>
+      appendComposerDraftAttachments(key, [makeFile("first")], {
+        appendReference: true,
+        insertion: first,
+      }),
+    );
+    const secondPaste = secondDone.promise.then(() =>
+      appendComposerDraftAttachments(key, [makeFile("second")], {
+        appendReference: true,
+        insertion: second,
+      }),
+    );
+    if (finishesFirst === "first") {
+      firstDone.resolve();
+      await firstPaste;
+      secondDone.resolve();
+      await secondPaste;
+    } else {
+      secondDone.resolve();
+      await secondPaste;
+      firstDone.resolve();
+      await firstPaste;
+    }
+    const expected =
+      "Before [first.png](goat-context://v1/file/first) [second.png](goat-context://v1/file/second) typed";
+    expect(getComposerDraftSnapshot(key).text).toBe(expected);
+    expect(captureComposerDraftInsertion(key)).toMatchObject({
+      start: expected.length,
+      end: expected.length,
+    });
+  },
+);

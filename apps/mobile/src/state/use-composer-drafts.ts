@@ -1,5 +1,10 @@
 import { mergeReferencedComposerContext } from "./mergeReferencedComposerContext";
-import { caretAfterInsertion, mapCapturedRange } from "./composerDraftInsertion";
+import {
+  caretAfterInsertion,
+  mapCapturedRange,
+  registerComposerDraftInsertion,
+  completeComposerDraftInsertion,
+} from "./composerDraftInsertion";
 import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
 import { deduplicateComposerAttachments } from "./composerAttachmentDedup";
 import { useAtomValue } from "@effect/atom-react";
@@ -65,6 +70,7 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   readComposerDraftSelection,
   rememberComposerDraftSelection,
+  composerDraftSelectionAtom,
 } from "./composerDraftSelection";
 import {
   abortComposerDraftOperations,
@@ -117,11 +123,11 @@ export function captureComposerDraftInsertion(
   selection?: { start: number; end: number },
 ): ComposerDraftInsertion {
   const { text } = getComposerDraftSnapshot(draftKey);
-  return {
+  return registerComposerDraftInsertion(composerDraftSelectionAtom(draftKey), {
     text,
     ...(selection ??
       readComposerDraftSelection(draftKey, text) ?? { start: text.length, end: text.length }),
-  };
+  });
 }
 
 function contextInsertionRange(
@@ -302,6 +308,7 @@ function draftWithInsertedContext(
   for (const record of content.context.records) records.set(record.contextId, record);
   const context = referencedComposerContext(text, { version: 1, records: [...records.values()] });
   if ((context?.records.length ?? 0) > COMPOSER_CONTEXT_MAX_RECORDS) return null;
+  completeComposerDraftInsertion(target, text, start + insertion.length, insertion);
   rememberComposerDraftSelection(
     draftKey,
     text,
