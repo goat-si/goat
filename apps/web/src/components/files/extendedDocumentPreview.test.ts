@@ -27,6 +27,13 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("decodes Mac Roman rich text", () => {
+    for (const header of [String.raw`\mac`, String.raw`\mac\ansicpg10000`]) {
+      expect(html(String.raw`{\rtf1` + header + String.raw` Caf\'8e Cr\'8fme}`)).toEqual([
+        "<p>Café Crème</p>",
+      ]);
+    }
+  });
   it("treats a backslash before a line break as a paragraph break, as TextEdit writes them", () => {
     const textEdit = String.raw`{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}
 \pard\f0\fs24 \cf0 First\
