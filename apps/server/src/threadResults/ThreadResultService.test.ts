@@ -2,6 +2,7 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { assert, it } from "@effect/vitest";
 import {
+  MessageId,
   NodeId,
   RunAttemptId,
   RunId,
@@ -51,7 +52,7 @@ const thread = {
 } as unknown as OrchestrationV2AppThread;
 
 const run = (id: RunId, ordinal: number, status: OrchestrationV2Run["status"]) =>
-  ({ id, ordinal, status }) as OrchestrationV2Run;
+  ({ id, ordinal, status, userMessageId: MessageId.make("msg:" + id) }) as OrchestrationV2Run;
 
 type Delegate = Pick<
   OrchestrationV2Subagent,
@@ -71,10 +72,14 @@ const layerWithRuns = (
         getThreadRecords: (id, _fields, filter) =>
           Effect.succeed({
             thread: { ...thread, id },
-            messages: wake ? [{ delegatedCompletion: wake }] : [],
+            messages: wake
+              ? [{ id: MessageId.make("msg:" + secondRun), delegatedCompletion: wake }]
+              : [],
             runs,
             subagents: subagents.filter(
-              (child) => child.runId && filter?.subagentRunIds?.includes(child.runId),
+              (child) =>
+                filter?.subagentRunIds === undefined ||
+                (child.runId && filter.subagentRunIds.includes(child.runId)),
             ),
           } as never),
       }),
@@ -226,6 +231,51 @@ it.effect("a wake can report the result it carries once its sibling's result is 
         parentRunId: firstRun,
         taskIds: [id],
       }),
+    ),
+  );
+});
+
+it.effect("a restarted bot checks delegates across its own task generation", () => {
+  const bot = ThreadId.make("goat-bot-session:restart");
+  const unrelated = RunId.make("other-task");
+  const old = RunId.make("older-generation");
+  const retry = { ...run(secondRun, 4, "running"), restartContinuationOfRunId: firstRun };
+  const children: Delegate[] = [firstRun, unrelated, old].map((runId) => ({
+    runId,
+    origin: "app_owned",
+    status: "running",
+  }));
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const [id, task, generation] of [
+      [firstRun, "task-A", 2],
+      [unrelated, "task-B", 2],
+      [old, "task-A", 1],
+    ] as const) {
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${bot}, ${"msg:" + id}, ${task}, ${generation}, 'task', '2026-11-20')`;
+    }
+    const results = yield* ThreadResultService.ThreadResultService;
+    const error = yield* Effect.flip(results.report(bot, { outcome: "failed" }));
+    assert.strictEqual(error.reason, "delegates_pending");
+    children[0] = { runId: firstRun, origin: "app_owned", status: "completed" };
+    const final = yield* results.report(bot, {
+      outcome: "failed",
+      summary: "B's file is missing.",
+    });
+    assert.strictEqual(final.runId, retry.id);
+  }).pipe(
+    Effect.provide(
+      layerWithRuns(
+        [
+          run(old, 1, "completed"),
+          run(unrelated, 2, "completed"),
+          run(firstRun, 3, "completed"),
+          retry,
+        ],
+        children,
+      ),
     ),
   );
 });

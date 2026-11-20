@@ -1,26 +1,7 @@
 /**
- * ChannelWorkerReports - turns what worker threads do into ledger task events.
- *
- * Completion comes from the worker thread's own runs, read from its projection: the task's
- * current run must finish `completed`, with no open question, no answer still on its way, no
- * provider background work, no pull request watch, and no pending restart continuation. Process
- * exit, a last assistant sentence, or an explicit "completed" report alone never finish a task.
- * Reading the projection (rather than counting events) makes a replayed or missed event harmless:
- * every pass decides from the current state, and a finished task cannot finish again.
- *
- * Each pass also records what the worker thread shows besides its run status (linked pull
- * requests, native questions and approvals, a usage-limit wait) as `task.worker.observed`. A run
- * that stopped on a usage limit keeps the task alive: GOAT resumes the worker after the reset, or
- * shows that a person has to.
- *
- * Workers may also report progress, questions, and proposed completion with channel_task_report;
- * the caller's thread and generation must match the task's assignment.
- *
- * A running run whose thread has not changed for STALLED_AFTER_MS is recorded stalled. The
- * requester hears about each quiet period once, in the same write as the status. Waiting on a
- * person is not a stall, and the work item itself stays in progress.
- *
- * @module ChannelWorkerReports
+ * Reconciles worker projections into ledger events for the assigned task generation.
+ * Completion waits for approvals, background work, pull request watches and restart continuations.
+ * Replaying an observation must not deliver the same transition or stall notice twice.
  */
 import {
   ChannelGatewayError,
@@ -47,6 +28,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { botReportStillDue } from "../threadResults/delegatedBotReports.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
@@ -566,12 +548,27 @@ const make = Effect.gen(function* () {
         remoteLaunchChildren(childWork, latest.task.generation),
         latest.task.observed?.needsYou,
       );
-      const resultRead = yield* readThreadResult(records.value.thread, current).pipe(
+      const readResult = readThreadResult(records.value.thread, current).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
-        Effect.option,
       );
+      // Read the retry marker and the accepted report in one snapshot.
+      const resultRead = yield* (
+        session && current.status === "completed"
+          ? sql.withTransaction(
+              Effect.all({
+                result: readResult,
+                finalReportDue: botReportStillDue(
+                  sql,
+                  worker.threadId,
+                  resultRuns.map((run) => run.id),
+                ),
+              }),
+            )
+          : readResult.pipe(Effect.map((result) => ({ result, finalReportDue: false })))
+      ).pipe(Effect.option);
       if (resultRead._tag === "None" && current.status === "completed") return latest !== stored;
-      const result = resultRead._tag === "Some" ? resultRead.value : undefined;
+      const read = Option.getOrUndefined(resultRead);
+      const result = read?.result;
       const observed = observeWorker({
         result,
         pullRequests: pullRequestsFromLinks(pullRequestLinks),
@@ -700,6 +697,7 @@ const make = Effect.gen(function* () {
             ? latest.task.proposedCompletion.summary
             : "Finished.");
         const settled = settleCompletedRun({
+          finalReportDue: read?.finalReportDue ?? false,
           task: latest.task,
           runId: current.id,
           reported:
