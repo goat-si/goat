@@ -88,7 +88,9 @@ const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i+1]; };
 const drainCapable = ${JSON.stringify(signals.drain ?? false)};
 const tokenFile = path.join(home, ".goat/userdata/runtime-control.token");
-function event(type, extra = {}) { fs.appendFileSync(path.join(test, "events"), JSON.stringify({type, version, ...extra}) + "\\n"); }
+// Bounded probes inherit a file-size limit, so each writes its own event log.
+const eventFile = path.join(test, args.includes("--deadline-ms") ? "probe-events-" + process.pid : "events");
+function event(type, extra = {}) { fs.appendFileSync(eventFile, JSON.stringify({type, version, ...extra}) + "\\n"); }
 event("exec", { args });
 if (args[0] === "--version") {
   event("version", { published: fs.existsSync(path.join(state, "run-t3.sh")) ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "" });

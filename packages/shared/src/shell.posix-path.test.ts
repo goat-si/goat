@@ -22,7 +22,8 @@ it("preserves the launchctl PATH apart from its output newline", () => {
   expect(readPathFromLaunchctl(() => ' /quoted path /:"/bin"\n')).toBe(' /quoted path /:"/bin"');
 });
 
-it.effect(
+// Windows filenames cannot contain literal double quotes.
+it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "resolves commands in a POSIX PATH directory containing literal quotes and whitespace",
   () =>
     Effect.gen(function* () {
