@@ -1,3 +1,4 @@
+import { waitModeTasks } from "./goat/WaitModeTasks.ts";
 import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
@@ -10324,17 +10325,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // A wait-mode task (`settled_only`) answers the blocking delegate_task call in this
     // run, which the interrupt ends, so the task stops with the run and owes no wake.
     // Async tasks run on and still wake the thread; task_cancel stops them.
-    const waitTasks = projection.subagents.filter(
-      (task) =>
-        task.origin === "app_owned" &&
-        task.runId === run.id &&
-        (task.completionWake ?? "settled_only") === "settled_only",
-    );
-    const waitChildThreadIds = waitTasks.flatMap((task) =>
-      task.childThreadId === null || isTerminalDelegatedTaskStatus(task.status)
-        ? []
-        : [task.childThreadId],
-    );
+    const { waitTasks, waitChildThreadIds } = waitModeTasks(projection.subagents, run);
     // Stop holds the rest of the thread too. `thread.stop` also drops every wake its
     // delegated tasks owe, or on a wake run, the cohort that woke it.
     const stopRemainingWork = () =>
