@@ -348,7 +348,7 @@ it.live("rejects an incompatible candidate before asking it about home ownership
       f.nodeEntry,
       source.replace(
         needle,
-        'if (args[0] === "__ssh-helper" && args[1] === "home-owned") { event("bad-home-probe"); process.exit(1); } else ' +
+        'if (args[0] === "__ssh-helper" && args[1] === "home-owned") { fs.writeFileSync(path.join(test, "bad-home-probe"), ""); process.exit(1); } else ' +
           needle,
       ),
     );
@@ -356,7 +356,7 @@ it.live("rejects an incompatible candidate before asking it about home ownership
     assert.isTrue(Result.isFailure(result));
     if (Result.isFailure(result)) assert.include(String(result.failure), "incompatible");
     const events = yield* f.fs.readFileString(`${f.test}/events`);
-    assert.notInclude(events, '"type":"bad-home-probe"');
+    assert.isFalse(yield* f.fs.exists(`${f.test}/bad-home-probe`));
     assert.notInclude(events, '"args":["serve"');
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );
