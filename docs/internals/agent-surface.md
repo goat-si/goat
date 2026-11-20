@@ -545,7 +545,10 @@ carries a `clientRequestId`, and routed calls set `meta.host`.
 **Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
 middleware swaps the name for the listed one before Effect's MCP core sees the request,
 because the core checks one visibility predicate for both `tools/list` and
-`tools/call` and cannot hide a tool that stays callable. The call therefore gets the
+`tools/call` and cannot hide a tool that stays callable. A 2026-07-28 caller repeats
+the name in the `Mcp-Name` header, which the core requires to match the body, so the
+header is swapped too, but only when it named the same legacy tool: a pair that
+disagreed as sent stays refused. The call therefore gets the
 listed tool's argument refusal, access checks, and result, plus
 `_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
 toolkit registers, whichever name the caller used, so each tool keeps one series.
