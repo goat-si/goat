@@ -5,6 +5,7 @@ import {
   isGoatBotSessionThreadId,
   type OrchestrationV2AppThread,
   type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   type RunId,
   type ThreadId,
   type ThreadResult,
@@ -16,6 +17,7 @@ import {
   botReportAwaitsDelegates,
   clearBotReportDue,
   markBotReportDue,
+  settlementReportRun,
 } from "./delegatedBotReports.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -159,6 +161,7 @@ const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
 export const readThreadResult = Effect.fn("ThreadResultService.readThreadResult")(function* (
   thread: Pick<OrchestrationV2AppThread, "id" | "branch" | "pullRequests" | "linkedPullRequest">,
   run: Pick<OrchestrationV2Run, "id" | "status">,
+  reportRunId: RunId | null = run.id,
 ) {
   const checkState = yield* readObservedCheckState(thread.id, run.id).pipe(
     Effect.catch((cause) =>
@@ -173,12 +176,35 @@ export const readThreadResult = Effect.fn("ThreadResultService.readThreadResult"
     ...buildThreadResult({
       thread,
       run,
-      stored: yield* readStoredThreadResultReport(thread.id, run.id),
+      stored:
+        reportRunId === null ? null : yield* readStoredThreadResultReport(thread.id, reportRunId),
       observedCheck: checkState.check,
     }),
     observedCheckPending: run.status === "completed" && checkState.pending,
   };
 });
+
+export const readWorkerSettlement = Effect.fn("ThreadResultService.readWorkerSettlement")(
+  function* (
+    thread: Parameters<typeof readThreadResult>[0],
+    run: OrchestrationV2Run,
+    ownedRuns: ReadonlyArray<OrchestrationV2Run>,
+    delegates?: ReadonlyArray<OrchestrationV2Subagent>,
+  ) {
+    if (!delegates || run.status !== "completed")
+      return { result: yield* readThreadResult(thread, run), finalReportDue: false };
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const reportRun = yield* settlementReportRun(sql, thread.id, run, ownedRuns, delegates);
+        return {
+          result: yield* readThreadResult(thread, run, reportRun),
+          finalReportDue: reportRun === null,
+        };
+      }),
+    );
+  },
+);
 
 const make = Effect.gen(function* () {
   const reports = yield* PubSub.unbounded<ThreadId>();

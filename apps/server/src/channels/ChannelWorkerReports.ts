@@ -28,8 +28,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
-import { botReportStillDue } from "../threadResults/delegatedBotReports.ts";
-import { readThreadResult } from "../threadResults/ThreadResultService.ts";
+import { readThreadResult, readWorkerSettlement } from "../threadResults/ThreadResultService.ts";
 import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import {
@@ -548,24 +547,12 @@ const make = Effect.gen(function* () {
         remoteLaunchChildren(childWork, latest.task.generation),
         latest.task.observed?.needsYou,
       );
-      const readResult = readThreadResult(records.value.thread, current).pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-      );
-      // Read the retry marker and the accepted report in one snapshot.
-      const resultRead = yield* (
-        session && current.status === "completed"
-          ? sql.withTransaction(
-              Effect.all({
-                result: readResult,
-                finalReportDue: botReportStillDue(
-                  sql,
-                  worker.threadId,
-                  resultRuns.map((run) => run.id),
-                ),
-              }),
-            )
-          : readResult.pipe(Effect.map((result) => ({ result, finalReportDue: false })))
-      ).pipe(Effect.option);
+      const resultRead = yield* readWorkerSettlement(
+        records.value.thread,
+        current,
+        resultRuns,
+        session ? subagents : undefined,
+      ).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.option);
       if (resultRead._tag === "None" && current.status === "completed") return latest !== stored;
       const read = Option.getOrUndefined(resultRead);
       const result = read?.result;

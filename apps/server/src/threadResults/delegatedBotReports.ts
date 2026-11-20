@@ -1,12 +1,14 @@
 import {
   isOrchestrationV2WorkActive,
   type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
 import { subagentHoldsCompletion } from "@goat/provider-core/server/subagentProjection";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import { resolveSessionRun } from "../channels/channelBotSessionRuns.ts";
@@ -57,6 +59,7 @@ export const botReportAwaitsDelegates = Effect.fn("ThreadResults.botReportAwaits
   },
 );
 
+const encodeRunIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const prefix = "delegated-report-due:";
 const key = (runId: RunId) => prefix + runId;
 
@@ -72,17 +75,40 @@ export const markBotReportDue = (sql: SqlClient.SqlClient, runId: RunId) =>
 export const clearBotReportDue = (sql: SqlClient.SqlClient, runId: RunId) =>
   sql`DELETE FROM channel_runtime_state WHERE key = ${key(runId)}`;
 
-/** A newer accepted report for this generation also answers a rejection in an earlier run. */
-export const botReportStillDue = (
+/** A restart can finish its predecessor's work. A new user turn must supply its own report. */
+export const settlementReportRun = Effect.fn("ThreadResults.settlementReportRun")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
-  orderedRuns: ReadonlyArray<RunId>,
-) =>
-  sql<{ due: number }>`
-    SELECT pending.key IS NOT NULL AS due
-    FROM json_each(${JSON.stringify(orderedRuns)}) AS owned
+  current: OrchestrationV2Run,
+  ownedRuns: ReadonlyArray<OrchestrationV2Run>,
+  children: ReadonlyArray<OrchestrationV2Subagent>,
+) {
+  const delegates = children.filter((child) => child.origin === "app_owned" && !child.promotedAt);
+  const rows = yield* sql<{ runId: RunId; reportedAt: string | null; due: number }>`
+    SELECT owned.value AS runId, report.reported_at AS reportedAt, pending.key IS NOT NULL AS due
+    FROM json_each(${encodeRunIds(ownedRuns.map((run) => run.id))}) AS owned
     LEFT JOIN channel_runtime_state AS pending ON pending.key = ${prefix} || owned.value
     LEFT JOIN thread_run_results AS report ON report.thread_id = ${threadId} AND report.run_id = owned.value
     WHERE pending.key IS NOT NULL OR report.run_id IS NOT NULL
     ORDER BY owned.key DESC LIMIT 1
-  `.pipe(Effect.map((rows) => rows[0]?.due === 1));
+  `;
+  const latest = rows[0];
+  if (latest?.due) return null;
+  if (!delegates.length) return current.id;
+  if (!latest?.reportedAt) return null;
+  const reportedAt = Date.parse(latest.reportedAt);
+  if (
+    delegates.some(
+      (child) => child.completedAt && DateTime.toEpochMillis(child.completedAt) > reportedAt,
+    )
+  )
+    return null;
+  let candidate = current.id;
+  for (const run of ownedRuns.toReversed()) {
+    if (run.id !== candidate) continue;
+    if (run.id === latest.runId) return run.id;
+    if (!run.restartContinuationOfRunId) break;
+    candidate = run.restartContinuationOfRunId;
+  }
+  return null;
+});
