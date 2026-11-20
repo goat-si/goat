@@ -48,7 +48,6 @@ import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
   WorktreePreparingHeader,
-  WorktreeWorkingHeader,
   WorktreeSetupCard,
   type WorktreeSetupCardProps,
 } from "./worktree-setup-card";
@@ -312,7 +311,6 @@ export interface ThreadFeedHandle {
 export interface ThreadFeedProps {
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
-  readonly setupWorkingStartedAt?: string | null;
   readonly preparingWorktree?: boolean;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
@@ -2360,7 +2358,6 @@ export const ThreadFeed = memo(function ThreadFeed({
     offline: props.offline,
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
-    setupWorkingStartedAt: props.setupWorkingStartedAt,
     preparingWorktree: props.preparingWorktree,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
@@ -2483,7 +2480,6 @@ export const ThreadFeed = memo(function ThreadFeed({
   }
   const setupPresentation = worktreeSetupPresentation({
     hasSetup: !!props.worktreeSetup,
-    working: !!props.setupWorkingStartedAt,
     preparing: !!props.preparingWorktree,
   });
   const setupAnchorIndex = presentedFeed.findIndex(
@@ -2999,8 +2995,6 @@ export const ThreadFeed = memo(function ThreadFeed({
           </FeedEntryShimmerContext>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
-          ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
-            <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
           ) : setupPresentation === "preparing" && info.index === setupAnchorIndex ? (
             <WorktreePreparingHeader />
           ) : null}
