@@ -11,11 +11,17 @@ import * as Option from "effect/Option";
 
 import {
   BearerConnectionProfile,
+  PenConnectionProfile,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "./catalog.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
-import { BearerConnectionTarget, RelayConnectionTarget, SshConnectionTarget } from "./model.ts";
+import {
+  BearerConnectionTarget,
+  PenConnectionTarget,
+  RelayConnectionTarget,
+  SshConnectionTarget,
+} from "./model.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -470,5 +476,33 @@ describe("learned routes", () => {
     });
     expect(moved).not.toBeNull();
     expect(profileOf(moved![0]!)).toMatchObject({ httpBaseUrl: "https://desk.local:3773/" });
+  });
+});
+describe("pull request routing trust beside a Pen route", () => {
+  const penId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
+  const pen: ConnectionRoute = {
+    target: new PenConnectionTarget({
+      environmentId: ENVIRONMENT_ID,
+      label: "Pen",
+      connectionId: penId,
+    }),
+    profile: Option.some(
+      new PenConnectionProfile({
+        environmentId: ENVIRONMENT_ID,
+        label: "Pen",
+        connectionId: penId,
+        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+        nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+        noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      }),
+    ),
+  };
+  const lanOnly: ConnectionCatalogEntry = { enabled: true, ...LAN };
+  const withPen: ConnectionCatalogEntry = { ...lanOnly, alternateRoutes: [pen] };
+
+  it("asks again once a Pen route is added, naming the member it pins", () => {
+    const key = pullRequestRoutingConnectionKey(withPen);
+    expect(key).not.toBeNull();
+    expect(key).not.toBe(pullRequestRoutingConnectionKey(lanOnly));
   });
 });

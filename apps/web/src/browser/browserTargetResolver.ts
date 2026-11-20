@@ -1,6 +1,7 @@
 import type { BrowserNavigationTarget, EnvironmentId, PreviewUrlResolution } from "@goat/contracts";
 import { isLoopbackHost, normalizePreviewUrl } from "@goat/shared/preview";
 import { isLocalLoopbackHost, isPrivateNetworkHost } from "@goat/shared/hostClassification";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
 
 import type { ConnectionTarget } from "@goat/client-runtime/connection";
 
@@ -18,6 +19,9 @@ export {
 const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
   if (!connection) throw new Error(`Environment ${environmentId} is not connected.`);
+  // A Pen route's address is this desktop's gateway, not the environment's own loopback.
+  if (isPenRouteUrl(connection.httpBaseUrl))
+    throw new Error("Ports of an environment reached through Pen are not reachable from here.");
   return new URL(connection.httpBaseUrl);
 };
 

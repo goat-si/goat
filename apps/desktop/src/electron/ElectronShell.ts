@@ -5,6 +5,7 @@ import {
   remoteSchemeForEditor,
   type SystemSettingsPane,
 } from "@goat/contracts";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -45,6 +46,8 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
 
   try {
     const url = new URL(rawUrl);
+    // A Pen route URL carries this app's capability; another browser would keep it in its history.
+    if (isPenRouteUrl(url)) return Option.none();
     return SAFE_WEB_PROTOCOLS.has(url.protocol) ||
       isRemoteEditorUrl(url) ||
       isLocalEditorFileUrl(url)

@@ -48,8 +48,18 @@ export interface TrustedPenSelf {
   readonly selfName: string;
 }
 
+export interface NativePenPin {
+  readonly meshId: string;
+  readonly nodeId: string;
+  readonly noisePub: string;
+}
+
+export type NativePenMembership = "member" | "not-member" | "unavailable";
+
 export interface DesktopPenMembersShape {
   readonly state: Effect.Effect<DesktopPenMembersState>;
+  readonly requireMember?: (pin: NativePenPin) => Effect.Effect<NativePenMembership>;
+  readonly subscribeMembership?: (listener: (view: PenMembershipView) => void) => () => void;
   /**
    * Fails unless ssh, as configured now, reaches exactly that member over this target's alias.
    * `requireReady` is for a new credential: it also needs a live member list naming the member.
@@ -73,13 +83,16 @@ export class DesktopPenMembers extends Context.Reference<DesktopPenMembersShape>
   },
 ) {}
 
-const settles = (reason: string) => reason === "not-in-pen-config" || reason === "no-recorded-key";
+// Not yet written by Pen, or not readable just now: both can settle without a new snapshot.
+const settles = (reason: string) =>
+  reason === "not-in-pen-config" || reason === "no-recorded-key" || reason === "unreadable";
 const sameState = Schema.toEquivalence(DesktopPenMembersState);
 
 export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: DesktopPenMembersDeps) {
   let current: DesktopPenMembersState = { kind: "unavailable", seq: 0, reason: "stale" };
   // Set the moment Pen reports it: a member a snapshot removed is refused before any inspection.
   let membership: PenMembershipView = { kind: "unavailable", reason: "stale" };
+  const listeners = new Set<(view: PenMembershipView) => void>();
 
   const set = (next: PublishedState) =>
     Effect.suspend(() => {
@@ -115,6 +128,13 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
     deps,
     (view) => {
       membership = view;
+      for (const listener of listeners) {
+        try {
+          listener(view);
+        } catch {
+          // A listener that failed once must still hear the next view: it may be a revocation.
+        }
+      }
     },
     Effect.fnUntraced(function* (view, turn) {
       if (view.kind !== "ready") return yield* set(view);
@@ -180,7 +200,32 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
     return undefined;
   });
 
-  return { state: Effect.sync(() => current), requireTrusted } satisfies DesktopPenMembersShape;
+  const requireMember = Effect.fn("DesktopPenMembers.requireMember")((pin: NativePenPin) =>
+    Effect.sync((): NativePenMembership => {
+      const view = membership;
+      if (view.kind === "unavailable") return "unavailable";
+      if (view.kind === "not-member") return "not-member";
+      const matches = view.snapshot.members.filter((member) => member.nodeId === pin.nodeId);
+      return view.snapshot.mesh === pin.meshId &&
+        view.snapshot.self !== pin.nodeId &&
+        matches.length === 1 &&
+        matches[0]?.noisePub === pin.noisePub &&
+        !view.snapshot.revoked.some((member) => member.nodeId === pin.nodeId)
+        ? "member"
+        : "not-member";
+    }),
+  );
+  const subscribeMembership = (listener: (view: PenMembershipView) => void) => {
+    listeners.add(listener);
+    return () => void listeners.delete(listener);
+  };
+
+  return {
+    state: Effect.sync(() => current),
+    requireTrusted,
+    requireMember,
+    subscribeMembership,
+  } satisfies DesktopPenMembersShape;
 });
 
 export const layer = Layer.effect(

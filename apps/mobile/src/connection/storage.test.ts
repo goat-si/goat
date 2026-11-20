@@ -54,6 +54,45 @@ describe("mobile connection catalog storage", () => {
     }),
   );
 
+  it.effect.each(["the Pen field", "the shared list", "the hub list"] as const)(
+    "a Pen record the client cannot read in %s keeps the catalog and its pairings",
+    (place) =>
+      Effect.gen(function* () {
+        const memory = makeStorage({});
+        const store = () =>
+          CredentialStore.ConnectionCredentialStore.pipe(
+            Effect.provide(
+              ConnectionStorage.layer.pipe(
+                Layer.provide(
+                  Layer.succeed(MobileSecureStorage.MobileSecureStorage, memory.storage),
+                ),
+              ),
+            ),
+          );
+        yield* (yield* store()).put("desk", new BearerConnectionCredential({ token: "kept" }));
+        // A newer or broken writer left a Pen record this client cannot read.
+        const saved = JSON.parse(memory.values.get(CONNECTION_CATALOG_KEY) ?? "{}");
+        const broken = {
+          _tag: "PenConnectionTarget",
+          environmentId: "e",
+          label: "Pen",
+          connectionId: 7,
+        };
+        memory.values.set(
+          CONNECTION_CATALOG_KEY,
+          JSON.stringify(
+            place === "the Pen field"
+              ? { ...saved, penTargets: [null] }
+              : place === "the hub list"
+                ? { ...saved, hubProxyTargets: [{ index: 0, value: broken }] }
+                : { ...saved, targets: [...saved.targets, broken] },
+          ),
+        );
+        expect(Option.getOrNull(yield* (yield* store()).get("desk"))?.token).toBe("kept");
+        expect(memory.deleted).toEqual([]);
+      }),
+  );
+
   it.effect("refuses a future catalog without deleting or rewriting it", () =>
     Effect.gen(function* () {
       const raw = JSON.stringify({ schemaVersion: 99 });

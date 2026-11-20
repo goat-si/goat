@@ -8,6 +8,7 @@ import {
 } from "@goat/client-runtime/connection";
 import {
   ConnectionCatalogDocument as RuntimeConnectionCatalogDocument,
+  isConnectionCatalogStorage,
   type ConnectionCatalogDocument as RuntimeConnectionCatalogDocumentType,
 } from "@goat/client-runtime/platform";
 import type {
@@ -55,12 +56,8 @@ const RuntimeConnectionCatalogDocumentJson = Schema.fromJsonString(
 const encodeRuntimeConnectionCatalogDocumentJson = Schema.encodeEffect(
   RuntimeConnectionCatalogDocumentJson,
 );
-const decodeRuntimeConnectionCatalogDocumentJsonOption = Schema.decodeUnknownOption(
-  RuntimeConnectionCatalogDocumentJson,
-);
 /** A wrong key can decrypt to valid padding; only a real catalog counts as recovered. */
-const isConnectionCatalog = (plaintext: string) =>
-  Option.isSome(decodeRuntimeConnectionCatalogDocumentJsonOption(plaintext));
+const isConnectionCatalog = isConnectionCatalogStorage;
 
 const DesktopConnectionCatalogStoreWriteOperation = Schema.Literals([
   "create-temporary-file-name",

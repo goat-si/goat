@@ -60,7 +60,7 @@ export class ConnectionRegistrationStore extends Context.Service<
     readonly register: (
       registration: ConnectionRegistration,
       routes: ReadonlyArray<PersistedConnectionTarget>,
-    ) => Effect.Effect<void, ConnectionPersistenceError>;
+    ) => Effect.Effect<boolean, ConnectionPersistenceError>;
     /**
      * `routes` must not be empty.
      */
@@ -68,8 +68,10 @@ export class ConnectionRegistrationStore extends Context.Service<
       environmentId: EnvironmentId,
       routes: ReadonlyArray<PersistedConnectionTarget>,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
+    /** `keepHidden` keeps the routes the closed Pen gate holds back; the rest of the environment goes. */
     readonly remove: (
       environmentId: EnvironmentId,
+      options?: { readonly keepHidden?: boolean },
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly setEnabled: (
       environmentId: EnvironmentId,

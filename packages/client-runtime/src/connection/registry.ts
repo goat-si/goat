@@ -16,7 +16,6 @@ import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   type ConnectionCatalogEntry,
   type ConnectionCredential,
-  type ConnectionProfile,
   type ConnectionRegistration,
   type ConnectionRoute,
   type PlatformConnectionRegistration,
@@ -41,7 +40,7 @@ import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
-import { withRoutes } from "./registryRoutes.ts";
+import { loadCatalogRoute, savedCatalogEntry, withoutKey, withRoutes } from "./registryRoutes.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -55,6 +54,7 @@ import {
   findRouteToSameAddress,
   hasSavedBearerRoute,
   mergeLearnedRoutes,
+  routeIsShown,
   routesAfterRemoving,
   upsertRoute,
   type ReportedEndpoint,
@@ -210,51 +210,25 @@ export const make = Effect.gen(function* () {
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
-  const loadRoute = Effect.fn("EnvironmentRegistry.loadRoute")(function* (
-    target: ConnectionTarget,
-  ) {
-    const profile: Option.Option<ConnectionProfile> =
-      target._tag === "BearerConnectionTarget" ||
-      target._tag === "SshConnectionTarget" ||
-      target._tag === "HubProxyConnectionTarget"
-        ? yield* profiles.get(target.connectionId)
-        : Option.none();
-    return { target, profile } satisfies ConnectionRoute;
-  });
+  const loadRoute = loadCatalogRoute(profiles);
   const persistedRoutesByEnvironment = new Map<EnvironmentId, Array<ConnectionTarget>>();
   for (const target of persistedTargets) {
     const routes = persistedRoutesByEnvironment.get(target.environmentId) ?? [];
     routes.push(target);
     persistedRoutesByEnvironment.set(target.environmentId, routes);
   }
+  // A route the closed Pen gate holds back stays in the catalog and out of every live entry.
   const initialEntries = new Map(
-    yield* Effect.forEach(
+    (yield* Effect.forEach(
       persistedRoutesByEnvironment,
       Effect.fn("EnvironmentRegistry.loadCatalogEntry")(function* ([environmentId, targets]) {
         const loaded = yield* Effect.forEach(targets, loadRoute, { concurrency: "unbounded" });
-        const seen = new Set<string>();
-        const usable = loaded.filter((route) => {
-          const id = connectionRouteId(route.target);
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return !(id.startsWith("learned:") && Option.isNone(route.profile));
-        });
-        const routes = usable.length > 0 ? usable : loaded.slice(0, 1);
-        const first = routes[0]!;
-        return [
-          environmentId,
-          entryWithRoutes(
-            {
-              target: first.target,
-              profile: first.profile,
-              enabled: !disabledEnvironmentIds.has(environmentId),
-            },
-            routes,
-          ),
-        ] as const;
+        const enabled = !disabledEnvironmentIds.has(environmentId);
+        const entry = savedCatalogEntry(loaded, enabled);
+        return entry === undefined ? [] : [[environmentId, entry] as const];
       }),
       { concurrency: "unbounded" },
-    ),
+    )).flat(),
   );
   const entries =
     yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(initialEntries);
@@ -263,8 +237,9 @@ export const make = Effect.gen(function* () {
     ReadonlyMap<EnvironmentId, EnvironmentServiceScope>
   >(new Map());
   const platformEnvironmentIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(new Set());
+  // The saved environments this channel lists; one it holds only hidden Pen routes for is not.
   const persistedEnvironmentIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(
-    new Set(persistedRoutesByEnvironment.keys()),
+    new Set(initialEntries.keys()),
   );
   const started = yield* Ref.make(false);
   const withLeaseLock = yield* makeLeaseLock;
@@ -463,6 +438,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  // The catalog keeps each route the closed Pen gate holds back in its slot (setRoutesInCatalog).
   const persistedRoutes = (entry: ConnectionCatalogEntry) =>
     connectionRoutes(entry).map((route) => route.target as PersistedConnectionTarget);
 
@@ -478,6 +454,8 @@ export const make = Effect.gen(function* () {
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
+        // A Pen route the closed gate holds back is never saved or shown through here.
+        if (!routeIsShown(route)) return false;
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return false;
         }
@@ -486,6 +464,7 @@ export const make = Effect.gen(function* () {
         }
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
         let entry = registered;
+        let addressesChanged = false;
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);
           if (
@@ -505,12 +484,20 @@ export const make = Effect.gen(function* () {
               connectionRouteId(existing.target) === connectionRouteId(route.target),
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
-          if (next.addressesChanged) {
-            yield* forgetRoutingTrust(environmentId, "register-connection");
-          }
+          addressesChanged = next.addressesChanged;
           entry = next.entry;
         }
-        yield* registrations.register(registration, persistedRoutes(entry));
+        // The newest catalog may refuse it (a Pen route another environment saved meanwhile);
+        // then nothing changed, so the trust given to the saved routes is left alone.
+        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) return false;
+        // Trust is keyed by the saved routes, so a stale one never covers the new routes; a
+        // failed clean-up is logged rather than leaving the catalog and the live list apart.
+        if (addressesChanged)
+          yield* forgetRoutingTrust(environmentId, "register-connection").pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not clear pull request routing trust.", { error }),
+            ),
+          );
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );
@@ -599,11 +586,9 @@ export const make = Effect.gen(function* () {
           if (persisted) {
             const removed = yield* registrations.remove(target.environmentId).pipe(
               Effect.tap(() =>
-                Ref.update(persistedEnvironmentIds, (current) => {
-                  const next = new Set(current);
-                  next.delete(target.environmentId);
-                  return next;
-                }),
+                Ref.update(persistedEnvironmentIds, (current) =>
+                  withoutKey(current, target.environmentId),
+                ),
               ),
               Effect.as(true),
               Effect.catch((error) =>
@@ -697,17 +682,11 @@ export const make = Effect.gen(function* () {
             Effect.exit,
           );
           if (Exit.isFailure(revoked)) return false;
-          yield* Ref.update(platformEnvironmentIds, (current) => {
-            const next = new Set(current);
-            next.delete(environmentId);
-            return next;
-          });
+          yield* Ref.update(platformEnvironmentIds, (current) =>
+            withoutKey(current, environmentId),
+          );
           yield* closeServiceScope(environmentId);
-          yield* SubscriptionRef.update(entries, (current) => {
-            const next = new Map(current);
-            next.delete(environmentId);
-            return next;
-          });
+          yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
           if (entry !== undefined && entry.target._tag === "BearerConnectionTarget") {
             yield* credentials.remove(entry.target.connectionId).pipe(
               Effect.catch((error) =>
@@ -778,6 +757,7 @@ export const make = Effect.gen(function* () {
   /** Callers hold its lease lock. */
   const removeLocked = Effect.fn("EnvironmentRegistry.removeLocked")(function* (
     environmentId: EnvironmentId,
+    options?: { readonly keepHiddenRoutes?: boolean },
   ) {
     if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
       return yield* new PlatformEnvironmentRemovalError({
@@ -787,18 +767,12 @@ export const make = Effect.gen(function* () {
     const entry = yield* getEntry(environmentId);
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
-    yield* registrations.remove(environmentId);
-    yield* Ref.update(persistedEnvironmentIds, (current) => {
-      const next = new Set(current);
-      next.delete(environmentId);
-      return next;
-    });
+    // The environment goes as on dev; a route the closed Pen gate holds back stays saved, alone.
+    const keepHidden = options?.keepHiddenRoutes === true;
+    yield* registrations.remove(environmentId, { keepHidden });
+    yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
-    yield* SubscriptionRef.update(entries, (current) => {
-      const next = new Map(current);
-      next.delete(environmentId);
-      return next;
-    });
+    yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
     yield* Effect.all(
       [
         cache.clear(environmentId).pipe(
@@ -978,7 +952,8 @@ export const make = Effect.gen(function* () {
         const route = routes.find((candidate) => connectionRouteId(candidate.target) === routeId);
         if (route === undefined) return;
         const remaining = routesAfterRemoving(routes, routeId);
-        if (remaining.length === 0) return yield* removeLocked(environmentId);
+        if (remaining.length === 0)
+          return yield* removeLocked(environmentId, { keepHiddenRoutes: true });
         yield* replaceRoutesLocked(entry, remaining);
         yield* forkSshDisconnect(environmentId, route);
       }),

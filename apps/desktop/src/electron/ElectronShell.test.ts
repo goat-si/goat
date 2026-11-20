@@ -2,6 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
+
 const { openExternalMock, writeTextMock } = vi.hoisted(() => ({
   openExternalMock: vi.fn(),
   writeTextMock: vi.fn(),
@@ -23,6 +26,18 @@ describe("ElectronShell", () => {
     openExternalMock.mockReset();
     writeTextMock.mockReset();
   });
+
+  it.effect("never hands a Pen route URL to another program", () =>
+    Effect.gen(function* () {
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(
+        `http://127.0.0.1:4100/pen-route/${"a".repeat(43)}/api/assets/thread/file`,
+      );
+
+      assert.equal(result, false);
+      assert.deepEqual(openExternalMock.mock.calls, []);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
 
   it.effect("opens remote SSH editor URLs", () =>
     Effect.gen(function* () {

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -204,5 +205,32 @@ it.effect("a departure a restart cut short is still revoked once this machine is
     yield* after.apply(rejoined);
     expect(yield* works).toBe(false);
     expect(yield* sessions.listPenMemberSessions).toEqual([]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a damaged departure record revokes nothing on its own", () =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStore;
+    const config = yield* Config.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const a = yield* sessions.issue({ penMemberNode: id("a") });
+    // Writes are atomic, so only something outside GOAT leaves half a record.
+    yield* fs.makeDirectory(config.stateDir, { recursive: true });
+    yield* fs.writeFileString(`${config.stateDir}/pen-member-sessions.json`, '{"mesh":"');
+    const { apply } = yield* PenMemberSessions.make().pipe(
+      Effect.provideService(PenMembershipWatch, {
+        current: Effect.succeed(ready("a")),
+        changes: Stream.never,
+        marks: Effect.succeed({ closed: 0, left: 0 }),
+      }),
+    );
+    yield* apply(ready("a"));
+    expect(
+      yield* sessions.verify(a.token, MAIN_LISTENER).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      ),
+    ).toBe(true);
+    expect(yield* sessions.listPenMemberSessions).toHaveLength(1);
   }).pipe(Effect.provide(layer)),
 );

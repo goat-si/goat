@@ -801,6 +801,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("EnvironmentAuth.
         const auth = onMainListenerAuth(yield* EnvironmentAuth.EnvironmentAuth);
         const state = yield* auth.getSessionState(makeBearerRequest(token) as never);
         expect(state.authenticated).toBe(true);
+        expect(state.proxiedByHub).toBeUndefined();
         expect(state.permissions).toEqual(expect.arrayContaining([...AuthStandardClientScopes]));
         const principal = yield* auth.authenticateHttpRequest(makeBearerRequest(token));
         yield* auth.revokeSession(principal.sessionId);

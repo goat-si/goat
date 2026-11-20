@@ -9,6 +9,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
+import { penRoutePin } from "./penPin.ts";
 
 export const PullRequestRoutingPermission = Schema.Literals(["off", "read", "read-write"]);
 export type PullRequestRoutingPermission = typeof PullRequestRoutingPermission.Type;
@@ -22,7 +23,8 @@ export type StoredPullRequestRoutingPermission = typeof StoredPullRequestRouting
 /**
  * Trust belongs to the saved endpoints, never to an environment id advertised
  * by a server alone. With several routes the key covers all of them, sorted so
- * reordering keeps trust but adding or changing an address revokes it.
+ * reordering keeps trust but adding or changing an address revokes it. A Pen route is keyed by
+ * the member it pins.
  */
 export function pullRequestRoutingConnectionKey(entry: ConnectionCatalogEntry): string | null {
   const routes = [
@@ -45,6 +47,12 @@ function routeConnectionKey(
   if (target._tag === "RelayConnectionTarget")
     return JSON.stringify([target._tag, target.environmentId]);
   const profile = Option.getOrNull(entry.profile);
+  if (target._tag === "PenConnectionTarget") {
+    const pin = penRoutePin(target, profile ?? undefined);
+    return pin === undefined
+      ? null
+      : JSON.stringify([target._tag, target.environmentId, pin.meshId, pin.nodeId, pin.noisePub]);
+  }
   if (target._tag === "SshConnectionTarget") {
     if (profile?._tag !== "SshConnectionProfile") return null;
     const { alias, hostname, username, port } = profile.target;

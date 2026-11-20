@@ -37,6 +37,8 @@ import { useTurnItemDetail } from "~/state/queries";
 import { mcpAppEnvironment } from "~/state/mcpApps";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { observeResize } from "~/lib/observeResize";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
+import { PenFrameNotice } from "~/components/files/PenFrameNotice";
 
 const commandFailure = (result: {
   readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"];
@@ -466,6 +468,8 @@ export function McpAppFrame(props: {
           <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
             The {app.server} app left its page and was stopped
           </p>
+        ) : src !== null && isPenRouteUrl(src) ? (
+          <PenFrameNotice className="size-full" />
         ) : src !== null ? (
           <iframe
             ref={attachFrame}

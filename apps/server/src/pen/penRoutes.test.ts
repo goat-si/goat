@@ -47,9 +47,21 @@ describe("Pen route table, default deny (mesh link design §5)", () => {
     ).toBe("admit");
   });
 
+  it("admits only proxy session reads and the frameParts socket query", () => {
+    expect(admit("GET", "/api/auth/session", bearer)).toEqual({
+      kind: "admit",
+      grants: [{ credential: "proxy" }],
+    });
+    expect(kind(admit("GET", "/api/auth/session"))).toBe(401);
+    expect(kind(admit("GET", "/ws?frameParts=1", bearer, true))).toBe("admit");
+    expect(kind(admit("GET", "/ws?frameParts=1&unknown=1", bearer, true))).toBe(404);
+  });
+
   it("refuses everything else with 404 before any handler", () => {
     for (const [method, url] of [
-      ["GET", "/api/auth/session"],
+      ["HEAD", "/api/auth/session"],
+      ["POST", "/api/auth/session"],
+      ["GET", "/api/auth/session?x=1"],
       ["POST", "/api/auth/ws-ticket"],
       ["GET", "/api/orchestration/threads/a/b/c"],
       ["OPTIONS", "/mcp"],

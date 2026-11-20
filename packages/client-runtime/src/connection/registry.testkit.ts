@@ -41,6 +41,7 @@ import {
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "./model.ts";
+import { keepHiddenTargets } from "../platform/storageDocument.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as EnvironmentRegistry from "./registry.ts";
@@ -132,6 +133,11 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     readonly beforeRegistrationRegister?: (
       registration: ConnectionRegistration,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
+    /** The catalog refuses this registration, as it refuses a Pen route another one saved. */
+    readonly refuseRegistration?: (registration: ConnectionRegistration) => boolean;
+    readonly beforeRoutesSet?: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
     readonly beforeRegistrationRemove?: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
@@ -193,40 +199,61 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     register: (registration, routes) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRegister?.(registration) ?? Effect.void;
+        if (options?.refuseRegistration?.(registration) === true) return false;
+        // As registerConnectionInCatalog: a Pen route another environment saved is not taken over.
+        if (
+          registration._tag === "PenConnectionRegistration" &&
+          (yield* Ref.get(storedTargets)).some(
+            (target) =>
+              target._tag === "PenConnectionTarget" &&
+              target.connectionId === registration.target.connectionId &&
+              target.environmentId !== registration.target.environmentId,
+          )
+        )
+          return false;
         yield* Ref.update(storedTargets, (current) =>
           replaceRoutes(current, registration.target.environmentId, routes),
         );
         switch (registration._tag) {
           case "RelayConnectionRegistration":
-            return;
+            return true;
           case "BearerConnectionRegistration":
           case "SshConnectionRegistration":
           case "HubProxyConnectionRegistration":
+          case "PenConnectionRegistration":
             yield* Ref.update(storedProfiles, (current) => {
               const next = new Map(current);
               next.set(registration.profile.connectionId, registration.profile);
               return next;
             });
-            if (registration._tag === "HubProxyConnectionRegistration") return;
+            if (
+              registration._tag === "HubProxyConnectionRegistration" ||
+              registration._tag === "PenConnectionRegistration"
+            )
+              return true;
             yield* Ref.update(storedCredentials, (current) => {
               const next = new Map(current);
               next.set(registration.target.connectionId, registration.credential);
               return next;
             });
-            return;
         }
+        return true;
       }),
     setRoutes: (environmentId, routes) =>
-      Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
-    remove: (environmentId) =>
+      (options?.beforeRoutesSet?.(environmentId) ?? Effect.void).pipe(
+        Effect.andThen(
+          Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
+        ),
+      ),
+    remove: (environmentId, removal) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRemove?.(environmentId) ?? Effect.void;
-        const removed = (yield* Ref.get(storedTargets)).filter(
-          (target) => target.environmentId === environmentId,
+        const before = yield* Ref.get(storedTargets);
+        const after = replaceRoutes(before, environmentId, [], removal?.keepHidden !== true);
+        const removed = before.filter(
+          (target) => target.environmentId === environmentId && !after.includes(target),
         );
-        yield* Ref.update(storedTargets, (current) =>
-          current.filter((target) => target.environmentId !== environmentId),
-        );
+        yield* Ref.update(storedTargets, () => after);
         for (const target of removed) {
           if (target._tag === "BearerConnectionTarget" || target._tag === "SshConnectionTarget") {
             yield* Ref.update(storedProfiles, (current) => {
@@ -243,6 +270,12 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
         }
         yield* Ref.update(storedRemoteTokens, (current) => {
           const next = new Map(current);
+          next.delete(environmentId);
+          return next;
+        });
+        // As removeConnectionFromCatalog: a removed environment keeps no off switch.
+        yield* Ref.update(storedDisabled, (current) => {
+          const next = new Set(current);
           next.delete(environmentId);
           return next;
         });
@@ -495,11 +528,15 @@ export function hasRoutes(targets: ReadonlyArray<ConnectionTarget>, environmentI
   return routesOf(targets, environmentId).length > 0;
 }
 
+/** As setRoutesInCatalog: a saved route the closed Pen gate holds back stays in its slot. */
 function replaceRoutes(
   current: ReadonlyArray<ConnectionTarget>,
   environmentId: EnvironmentId,
-  routes: ReadonlyArray<ConnectionTarget>,
+  given: ReadonlyArray<ConnectionTarget>,
+  dropHidden = false,
 ): ReadonlyArray<ConnectionTarget> {
+  const saved = current.filter((target) => target.environmentId === environmentId);
+  const routes = dropHidden ? given : keepHiddenTargets(saved, given, connectionRouteId);
   const firstIndex = current.findIndex((target) => target.environmentId === environmentId);
   const others = current.filter((target) => target.environmentId !== environmentId);
   const insertAt =

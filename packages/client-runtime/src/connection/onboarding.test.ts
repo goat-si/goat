@@ -187,6 +187,7 @@ function layerPairingOnboarding(
             credentialWrites.push(registration.target.connectionId);
             expect(registration.credential.token).toBe("token");
           }
+          return true;
         }),
       setEnabled: () => Effect.void,
       setRoutes: () => Effect.void,

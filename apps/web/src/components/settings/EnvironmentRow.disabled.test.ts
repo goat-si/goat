@@ -1,6 +1,8 @@
 import {
   BearerConnectionProfile,
   BearerConnectionTarget,
+  PenConnectionProfile,
+  PenConnectionTarget,
   RelayConnectionTarget,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
@@ -52,6 +54,28 @@ function present(entry: ConnectionCatalogEntry): EnvironmentPresentation {
 const comingSoon = `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
 
 describe("saved Connect routes while disabled", () => {
+  it("labels a machine reached only through Pen as Pen", () => {
+    const penId = `pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn`;
+    const entry: ConnectionCatalogEntry = {
+      enabled: true,
+      target: new PenConnectionTarget({
+        environmentId,
+        label: "Saved machine",
+        connectionId: penId,
+      }),
+      profile: Option.some(
+        new PenConnectionProfile({
+          environmentId,
+          label: "Saved machine",
+          connectionId: penId,
+          meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        }),
+      ),
+    };
+    expect(environmentTransportLabel(present(entry))).toBe("Pen");
+  });
   it("retains relay-only entries with coming-soon labels and excludes them from onboarding", () => {
     const entry = { ...relay, enabled: true };
     const before = structuredClone(entry);

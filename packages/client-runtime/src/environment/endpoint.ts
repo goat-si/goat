@@ -1,4 +1,5 @@
 import { hubProxyNodePath, HUB_PROXY_ROUTE_PREFIX } from "@goat/contracts";
+import { penRoutePrefix } from "@goat/shared/penRouteUrl";
 
 export * from "@goat/shared/advertisedEndpoint";
 
@@ -9,7 +10,7 @@ const HUB_NODE_ROUTE = new RegExp(`^.*?${HUB_PROXY_ROUTE_PREFIX}/[^/]+`);
  * keep using the origin root.
  */
 export const environmentRoutePrefix = (url: URL): string =>
-  url.pathname.match(HUB_NODE_ROUTE)?.[0] ?? "";
+  url.pathname.match(HUB_NODE_ROUTE)?.[0] ?? penRoutePrefix(url) ?? "";
 
 export const environmentEndpointUrl = (httpBaseUrl: string, pathname: string): string => {
   const url = new URL(httpBaseUrl);

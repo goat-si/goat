@@ -4,7 +4,10 @@ import { page } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-import { HtmlRenderDocument } from "./BrowserDocumentFrame";
+import { BrowserDocumentFrame, HtmlRenderDocument } from "./BrowserDocumentFrame";
+
+// These cases are the open viewer's; a closed one recognizes no Pen route URL.
+vi.mock("@goat/shared/penViewerGate", () => ({ PEN_VIEWER_ENABLED: true }));
 
 const sizeChanged = (height: number) => ({
   jsonrpc: "2.0",
@@ -13,6 +16,25 @@ const sizeChanged = (height: number) => ({
 });
 
 describe("HtmlRenderDocument", () => {
+  it("runs no page from a Pen route, whose URL carries the route's capability", async () => {
+    const src = `http://127.0.0.1:1234/pen-route/${"a".repeat(43)}/api/assets/page.html`;
+    for (const htmlRender of [true, false]) {
+      await using screen = await render(
+        <BrowserDocumentFrame src={src} title="Page" pdf={false} htmlRender={htmlRender} />,
+      );
+      await expect
+        .element(screen.getByText("Pages from a machine reached through Pen can't run here yet."))
+        .toBeVisible();
+      expect(document.querySelector("iframe")).toBeNull();
+    }
+    // Chat renders an agent's HTML through HtmlRenderDocument itself, inline and full screen.
+    await using screen = await render(<HtmlRenderDocument src={src} title="Report" />);
+    await expect
+      .element(screen.getByText("Pages from a machine reached through Pen can't run here yet."))
+      .toBeVisible();
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
   it("reports the page's first height and ignores messages from other windows", async () => {
     using pageUrl = (() => {
       const page = `<script>parent.postMessage(${JSON.stringify(sizeChanged(321))}, "*");</script>`;
