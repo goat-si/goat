@@ -86,7 +86,7 @@ import {
   type HubConsentGenerations,
   makeHubConsentGenerations,
 } from "./hub/hubConsentGenerations.ts";
-import { withDisposableStamp } from "./hub/disposable/disposableSwitch.ts";
+import { withSettingsWriteConsent } from "./settingsWriteConsent.ts";
 import {
   agentWorkspaceTerminalSettingsMethods,
   rejectAgentWorkspaceTerminalPolicyChange,
@@ -843,7 +843,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Ref.get(currentSettingsRef).pipe(
       Effect.flatMap((current) =>
-        withDisposableStamp(update)(current).pipe(
+        withSettingsWriteConsent(update)(current).pipe(
           Effect.flatMap((next) => normalizeChangedAcpCustomModels(current, next, "test settings")),
         ),
       ),
@@ -1913,7 +1913,7 @@ const make = Effect.gen(function* () {
       }
       const updated = yield* normalizeChangedAcpCustomModels(
         current,
-        clearRetargetedSettingsSecrets(current, yield* withDisposableStamp(update)(current)),
+        clearRetargetedSettingsSecrets(current, yield* withSettingsWriteConsent(update)(current)),
         settingsPath,
       );
       for (const [id, provider] of Object.entries(updated.secretProviders)) {

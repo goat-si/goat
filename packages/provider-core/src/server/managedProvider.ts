@@ -61,6 +61,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     readonly getSnapshot: Effect.Effect<ServerProvider>;
     readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
   }) => Effect.Effect<void>;
+  /**
+   * Independent, generation-scoped usage enrichment. Clear the old reading on
+   * each base check; this source cannot assert it still belongs to the login.
+   */
+  readonly enrichUsageLimits?: (input: {
+    readonly settings: Settings;
+    readonly snapshot: ServerProvider;
+  }) => Effect.Effect<ServerProvider["usageLimits"]>;
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean | ((snapshot: ServerProvider) => boolean);
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
@@ -111,7 +119,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
               ...nextSnapshot,
               auth: { ...nextSnapshot.auth, label: state.usageAuthLabel ?? undefined },
             },
-        state.snapshot.usageLimits,
+        input.enrichUsageLimits &&
+          (!nextSnapshot.installed || nextSnapshot.auth.status === "unauthenticated")
+          ? undefined
+          : state.snapshot.usageLimits,
       );
       if (Equal.equals(state.snapshot, merged)) {
         return [null, state] as const;
@@ -134,18 +145,48 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       yield* Fiber.interrupt(previousFiber).pipe(Effect.ignore);
     }
 
-    if (!input.enrichSnapshot || !snapshot.enabled) {
+    if ((!input.enrichSnapshot && !input.enrichUsageLimits) || !snapshot.enabled) {
       return;
     }
 
-    const fiber = yield* input
-      .enrichSnapshot({
+    const enrichment =
+      input.enrichSnapshot?.({
         settings,
         snapshot,
         getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
         publishSnapshot: (nextSnapshot) => publishEnrichedSnapshot(generation, nextSnapshot),
-      })
-      .pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(scope));
+      }) ?? Effect.void;
+    const usage =
+      snapshot.installed && snapshot.auth.status !== "unauthenticated"
+        ? (input.enrichUsageLimits?.({ settings, snapshot }).pipe(
+            Effect.flatMap((limits) =>
+              Ref.modify(snapshotStateRef, (state) => {
+                if (
+                  state.enrichmentGeneration !== generation ||
+                  !state.snapshot.installed ||
+                  state.snapshot.auth.status === "unauthenticated" ||
+                  Equal.equals(state.snapshot.usageLimits, limits)
+                ) {
+                  return [null, state] as const;
+                }
+                const next = withUsageLimits(state.snapshot, limits);
+                return [next, { ...state, snapshot: next }] as const;
+              }),
+            ),
+            Effect.flatMap((next) =>
+              next === null ? Effect.void : PubSub.publish(changesPubSub, next).pipe(Effect.asVoid),
+            ),
+          ) ?? Effect.void)
+        : Effect.void;
+    const guardedEnrichment = enrichment.pipe(Effect.ignoreCause({ log: true }));
+    const fiber = yield* (
+      input.enrichUsageLimits
+        ? Effect.all([guardedEnrichment, usage.pipe(Effect.ignoreCause())], {
+            concurrency: "unbounded",
+            discard: true,
+          })
+        : guardedEnrichment
+    ).pipe(Effect.forkIn(scope));
 
     yield* Ref.set(enrichmentFiberRef, fiber);
   });
@@ -200,9 +241,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     const { snapshot: nextSnapshot, generation: nextGeneration } = yield* Ref.modify(
       snapshotStateRef,
       (state) => {
-        const generation = input.enrichSnapshot
-          ? state.enrichmentGeneration + 1
-          : state.enrichmentGeneration;
+        const generation =
+          input.enrichSnapshot || input.enrichUsageLimits
+            ? state.enrichmentGeneration + 1
+            : state.enrichmentGeneration;
         // Failed reads retain limits only for the same account and original workspace.
         const previous = state.snapshot.auth;
         const differs = (a: string | undefined, b: string | undefined) =>
@@ -217,11 +259,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           input.keepsReportedUsage?.(state.snapshot, probedSnapshot) !== false
             ? state.snapshot.usageLimits
             : usageBeforeProbe;
-        const usageLimits = switchedAccount
-          ? probedSnapshot.usageLimits
-          : probedSnapshot.usageLimits === undefined && published !== usageBeforeProbe
-            ? published
-            : resolveUsageLimitsAfterProbe({ published, probed: probedSnapshot.usageLimits });
+        const usageLimits =
+          switchedAccount || input.enrichUsageLimits
+            ? probedSnapshot.usageLimits
+            : probedSnapshot.usageLimits === undefined && published !== usageBeforeProbe
+              ? published
+              : resolveUsageLimitsAfterProbe({ published, probed: probedSnapshot.usageLimits });
         const workspaceId =
           usageLimits === probedSnapshot.usageLimits ? undefined : state.snapshot.auth.workspaceId;
         const usageAuthLabel =
