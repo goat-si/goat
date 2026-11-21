@@ -8,6 +8,7 @@ export const FIRST_V2_MIGRATION_ID = 55;
 const CHANNEL_LEDGER_MIGRATION = "ChannelLedger";
 const WORK_TRIGGER_LEDGER_FENCE = "ChannelLedgerRequiresWorkTriggerAuthority";
 export const WORK_TRIGGER_FENCE_MIGRATION_NAME = "WorkTriggerAuthorityFence";
+export const REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME = "RemoteDispatchEnvironment";
 
 // Older builds already reject a changed name at a required V2 migration id.
 export const canonicalMigrationName = (name: string) =>
@@ -23,6 +24,7 @@ const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
+const DRAFT_REMOTE_DISPATCH_ENVIRONMENT_ID = 178;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -117,7 +119,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
-  "RemoteDispatchEnvironment",
+  REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -151,21 +153,19 @@ const findPenMemberInsertion = <E>(
     : undefined;
 };
 
-function legacyFirstBindId<E>(
+function legacyGoatTailMove<E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
   history: ReadonlyArray<LedgerRow>,
 ) {
-  const current = entries.find(
-    ([id, name]) => id > LEGACY_FIRST_BIND_ID && name === FIRST_BIND_MIGRATION_NAME,
-  );
-  const tail = history.filter((row) => row.migration_id >= LEGACY_FIRST_BIND_ID);
-  return current !== undefined &&
-    tail.length === 1 &&
-    tail.some(
-      (row) => row.migration_id === LEGACY_FIRST_BIND_ID && row.name === FIRST_BIND_MIGRATION_NAME,
-    )
-    ? current[0]
-    : undefined;
+  for (const [fromId, name] of [
+    [LEGACY_FIRST_BIND_ID, FIRST_BIND_MIGRATION_NAME],
+    [DRAFT_REMOTE_DISPATCH_ENVIRONMENT_ID, REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME],
+  ] as const) {
+    const [last, next] = history.filter((row) => row.migration_id >= fromId);
+    if (last?.migration_id !== fromId || last.name !== name || next !== undefined) continue;
+    const current = entries.find(([id, currentName]) => id > fromId && currentName === name);
+    if (current !== undefined) return { fromId, toId: current[0], name };
+  }
 }
 
 /** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
@@ -298,15 +298,15 @@ export function memoryMigrationProblem<E>(
 ): Migrator.MigrationError | undefined {
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
-  const firstBindId = legacyFirstBindId(entries, history);
+  const tailMove = legacyGoatTailMove(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
       const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
       const recordedId =
-        row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
-          ? firstBindId
+        tailMove !== undefined && row.name === tailMove.name
+          ? tailMove.toId
           : row.migration_id +
             (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
@@ -432,10 +432,10 @@ export const plannedGoatLedger = <E>(
     }
   }
   const penMember = findPenMemberInsertion(entries, history);
-  const firstBindId = legacyFirstBindId(entries, history);
+  const tailMove = legacyGoatTailMove(entries, history);
   const insertions =
-    firstBindId !== undefined
-      ? entries.filter(([id]) => id >= LEGACY_FIRST_BIND_ID && id < firstBindId)
+    tailMove !== undefined
+      ? entries.filter(([id]) => id >= tailMove.fromId && id < tailMove.toId)
       : penMember === undefined
         ? []
         : [penMember];
@@ -451,7 +451,7 @@ export const plannedGoatLedger = <E>(
   const skipped = skippedV2Migrations(
     entries,
     moved,
-    firstBindId ?? Math.max(lowestGoatBefore - 1, highestUpstreamBelowGoat(entries, moved)),
+    tailMove?.toId ?? Math.max(lowestGoatBefore - 1, highestUpstreamBelowGoat(entries, moved)),
     undefined,
     Math.max(0, ...history.map((row) => row.migration_id)),
   );

@@ -28,7 +28,7 @@ import Migration0089 from "../persistence/Migrations/114_RemoteDispatchObservati
 import Migration0101 from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
 import Migration0137 from "../persistence/Migrations/147_RemoteDispatchDeleteIntent.ts";
 import Migration0143 from "../persistence/Migrations/153_RemoteDispatchHostOutage.ts";
-import RemoteDispatchEnvironment from "../persistence/Migrations/178_RemoteDispatchEnvironment.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/184_RemoteDispatchEnvironment.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";

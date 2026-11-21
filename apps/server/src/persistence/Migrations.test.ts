@@ -98,8 +98,9 @@ describe("runMigrations", () => {
         (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
         VALUES ('legacy', 'thread', 'origin', 'box', 'worker', 'read-key', 'wake', 'running',
           '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 178 }), [
-          [178, "RemoteDispatchEnvironment"],
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 184 }), [
+          ...migrationManifest.filter(([id]) => id > 177 && id < 184),
+          [184, "RemoteDispatchEnvironment"],
         ]);
         assert.deepStrictEqual(
           yield* sql`

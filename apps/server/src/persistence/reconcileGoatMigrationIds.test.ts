@@ -794,3 +794,40 @@ it.effect("relocates ScheduledTaskRuns without changing populated receipts or as
     assert.deepStrictEqual(yield* runMigrations(), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("reuses the draft dispatch migration id without losing a recorded environment", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 177 });
+    const draft = migrationEntries.find(([, name]) => name === "RemoteDispatchEnvironment")!;
+    yield* Migrator.make({})({
+      loader: Migrator.fromRecord({ "178_RemoteDispatchEnvironment": draft[2] }),
+    });
+    yield* sql`INSERT INTO remote_dispatches
+      (correlation_id, kind, origin_thread_id, host, remote_thread_id, remote_environment_id, read_key, delivery, state, created_at, updated_at)
+      VALUES ('draft', 'thread', 'origin', 'box', 'worker', 'verified', 'read-key', 'wake', 'running',
+        '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
+    const interveningMigration = sql`ALTER TABLE remote_dispatches ADD COLUMN fixture_column TEXT`;
+    const incoming = [
+      ...migrationEntries.filter(([id]) => id < 178),
+      [178, "InterveningMigrationFixture", interveningMigration],
+      [184, draft[1], draft[2]],
+    ] as const;
+
+    assert.deepStrictEqual(yield* reconcileGoatMigrationIds(incoming), [
+      [178, "InterveningMigrationFixture"],
+    ]);
+    assert.deepStrictEqual(
+      (yield* history).filter(([id]) => id >= 178),
+      [
+        [178, "InterveningMigrationFixture"],
+        [184, "RemoteDispatchEnvironment"],
+      ],
+    );
+    assert.deepStrictEqual(
+      yield* sql`SELECT remote_environment_id, fixture_column FROM remote_dispatches WHERE correlation_id = 'draft'`,
+      [{ remote_environment_id: "verified", fixture_column: null }],
+    );
+    assert.deepStrictEqual(yield* reconcileGoatMigrationIds(incoming), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

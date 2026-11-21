@@ -44,7 +44,7 @@ import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
-import RemoteDispatchEnvironment from "../persistence/Migrations/178_RemoteDispatchEnvironment.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/184_RemoteDispatchEnvironment.ts";
 import { forceStopDelegatedTask } from "../orchestration-v2/delegatedForceStop.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";

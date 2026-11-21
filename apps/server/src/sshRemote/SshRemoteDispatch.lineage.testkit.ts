@@ -22,7 +22,7 @@ import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
-import RemoteDispatchEnvironment from "../persistence/Migrations/178_RemoteDispatchEnvironment.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/184_RemoteDispatchEnvironment.ts";
 import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
