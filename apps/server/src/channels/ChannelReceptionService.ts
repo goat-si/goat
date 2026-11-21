@@ -15,6 +15,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
+import { readNotesForRequester as readNotesFor } from "./slack/slackNoteAccess.ts";
 import {
   type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -78,12 +79,7 @@ import { type ApprovalVia, senderOf } from "./channelSenderAuthority.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
-import {
-  channelBotFilesFor,
-  listChannelBotSkills,
-  quotedFromInput,
-  readChannelBotNotes,
-} from "./channelBotNotes.ts";
+import { channelBotFilesFor, listChannelBotSkills, quotedFromInput } from "./channelBotNotes.ts";
 import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
@@ -528,7 +524,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readChannelBotNotes(botFiles, read.query);
+          const notes = yield* readNotesFor(viewer, botFiles, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
             yield* visibleTasks(viewer, conversationId),
@@ -1016,8 +1012,8 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const notes = yield* readChannelBotNotes(botFiles, message.text);
                 const viewer = yield* viewerNow(requester, message.connectionId);
+                const notes = yield* readNotesFor(viewer, botFiles, message.text);
                 const recent = viewer.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];

@@ -116,7 +116,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
           WHEN json_type(t.task_json, '$.conversationId') IS NOT 'text' THEN 0
           WHEN json_extract(t.task_json, '$.taskId') != p.task_id THEN 0
           WHEN json_extract(t.task_json, '$.conversationId') != p.conversation_id THEN 0
-          WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = p.conversation_id AND c.owner_id = ${scope.ownerId} AND c.kind = 'goat') THEN 0
+          WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = p.conversation_id AND c.owner_id = ${scope.ownerId} AND c.kind IN ('goat', 'slack')) THEN 0
           WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') = 'turn' THEN 0
           WHEN json_extract(t.task_json, '$.title') LIKE ${pattern} ESCAPE ${escape} THEN 1
           ELSE 0 END AS matches

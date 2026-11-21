@@ -13,6 +13,9 @@
  */
 import {
   AuthEnvironmentScopes,
+  MAIN_BOT_ID,
+  SLACK_BOT_BINDING_LIMIT,
+  SlackBotBindings,
   resolveSlackAccess,
   RuntimeMode,
   SlackChannelConnectionId,
@@ -42,6 +45,7 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as ChannelBotProfiles from "../ChannelBotProfiles.ts";
 import { isGoatBotHome } from "../ChannelBotHome.ts";
 import { unlinkedIdentity } from "../ChannelGateway.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
@@ -72,6 +76,7 @@ const StoredConnection = Schema.Struct({
   userAccess: Schema.optional(SlackUserAccess),
   unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  botBindings: Schema.optionalKey(SlackBotBindings),
   owner: Schema.optional(StoredOwner),
 });
 type StoredConnection = typeof StoredConnection.Type;
@@ -129,6 +134,7 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const sdk = yield* SlackSdk.SlackSdk;
   const runtime = yield* SlackChannelRuntime.SlackChannelRuntime;
+  const profiles = yield* Effect.serviceOption(ChannelBotProfiles.ChannelBotProfiles);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
@@ -206,6 +212,7 @@ export const make = Effect.gen(function* () {
         enabled: connection.enabled,
         channelScope: access.channelScope,
         allowedChannelIds: connection.allowedChannelIds,
+        ...(connection.botBindings === undefined ? {} : { botBindings: connection.botBindings }),
         ...(access.userAccess === "workspace"
           ? { unlinkedRuntimeModeCeiling: access.unlinkedRuntimeModeCeiling }
           : {}),
@@ -269,6 +276,7 @@ export const make = Effect.gen(function* () {
         ...(connection.teamId === undefined ? {} : { teamId: connection.teamId }),
         ...(connection.botUserId === undefined ? {} : { botUserId: connection.botUserId }),
         allowedChannelIds: connection.allowedChannelIds,
+        ...(connection.botBindings === undefined ? {} : { botBindings: connection.botBindings }),
         ...resolveSlackAccess(connection),
         ...(connection.defaultTarget === undefined
           ? {}
@@ -424,6 +432,37 @@ export const make = Effect.gen(function* () {
           return yield* snapshot(yield* clearCredentials(base));
         }
 
+        if (input.botBindings !== undefined) {
+          const ids = new Set(input.botBindings.map((binding) => binding.channelId));
+          if (
+            ids.size !== input.botBindings.length ||
+            ids.size > SLACK_BOT_BINDING_LIMIT ||
+            input.botBindings.some((binding) => !/^[CG][A-Z0-9]{1,31}$/u.test(binding.channelId))
+          ) {
+            return yield* fail("invalid_input");
+          }
+          const changed = input.botBindings.filter(
+            (binding) =>
+              binding.botId !== MAIN_BOT_ID &&
+              !base.botBindings?.some(
+                (saved) => binding.channelId === saved.channelId && binding.botId === saved.botId,
+              ),
+          );
+          if (changed.length > 0) {
+            if (Option.isNone(profiles)) return yield* fail("adapter_unavailable");
+            const bots = yield* profiles.value
+              .list(resolvedOwner)
+              .pipe(Effect.catch(persistenceFailed("read-bot-binding-targets")));
+            if (
+              changed.some(
+                (binding) =>
+                  !bots.some((bot) => bot.botId === binding.botId && bot.hidden !== true),
+              )
+            )
+              return yield* fail("invalid_input");
+          }
+        }
+
         // Validate new tokens before anything is written.
         if (input.appToken !== undefined) {
           const appToken = input.appToken;
@@ -491,6 +530,7 @@ export const make = Effect.gen(function* () {
             ? {}
             : { teamId: identity.teamId, botUserId: identity.botUserId }),
           allowedChannelIds,
+          ...(input.botBindings === undefined ? {} : { botBindings: input.botBindings }),
           channelScope,
           userAccess: input.userAccess ?? storedAccess.userAccess,
           unlinkedRuntimeModeCeiling:

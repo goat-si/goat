@@ -423,7 +423,7 @@ const make = Effect.gen(function* () {
     }>`SELECT t.task_json, t.updated_at, t.task_id FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
-        AND c.kind = 'goat'
+        AND c.kind IN ('goat', 'slack')
         AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
           AND (t.status NOT IN ('completed', 'failed', 'cancelled')
             OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
@@ -551,7 +551,9 @@ const make = Effect.gen(function* () {
     }>`SELECT t.task_id, t.conversation_id, t.task_json FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND c.kind IN ('goat', 'slack')`.pipe(
+      Effect.mapError(failed),
+    );
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(

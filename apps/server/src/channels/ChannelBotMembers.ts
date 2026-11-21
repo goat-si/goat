@@ -298,6 +298,7 @@ const make = Effect.gen(function* () {
             const counts = yield* memberCounts(owner.ownerId);
             if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
               return yield* fail("bot_limit");
+            yield* ChannelBotProfiles.assertBotNameAvailable(sql, owner.ownerId, input.name);
             const botId = newBotId();
             const created: MemberRecord = {
               botId,

@@ -15,7 +15,9 @@ import {
   ChannelGatewayError,
   type ChannelDeliveryErrorCode,
   type ChannelReplyAddress,
+  type ChannelOutboundMessage,
   type RuntimeMode,
+  type SlackBotBindings,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -82,11 +84,17 @@ const shouldRedeliver = (exit: Exit.Exit<unknown, ChannelGatewayError>) =>
     onSome: (error) => error.reason === "persistence_failed",
   });
 
+const boundBot = (bindings: SlackBotBindings | undefined, channelId: string) => {
+  const binding = bindings?.find((entry) => entry.channelId === channelId);
+  return binding === undefined ? {} : { boundBotId: binding.botId };
+};
+
 export const handleSlackEnvelope = (
   envelope: SlackSocketEnvelope,
   input: {
     readonly connectionId: string;
     readonly classifier: SlackClassifierConfig;
+    readonly botBindings?: SlackBotBindings;
     readonly owner: ChannelConnectionOwner;
     /** Set when people without a linked account may start work, at this ceiling. */
     readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
@@ -138,7 +146,13 @@ export const handleSlackEnvelope = (
                 connectionId: input.connectionId,
                 receivedAt,
               }),
-              context,
+              {
+                ...context,
+                slackRouting: {
+                  ...boundBot(input.botBindings, classification.event.channelId),
+                  allowName: envelope.type === "events_api",
+                },
+              },
             ),
           );
           break;
@@ -204,6 +218,7 @@ export interface SlackActiveSession {
   readonly generation: number;
   readonly teamId: string;
   readonly botUserId: string;
+  readonly customizeReplies?: boolean;
   readonly botApi: SlackBotApi;
 }
 
@@ -277,6 +292,14 @@ const deliveryFailed = (
  * last. The delivery is one outbox row, so once a part is posted a later failure is reported as
  * unknown: a retry would post the earlier parts again.
  */
+const SLACK_GOAT_ICON =
+  "https://raw.githubusercontent.com/goat-si/goat/3afb4afcc06deb0e7702ac843187f6e6cafec975/apps/web/public/icon-192x192.png";
+
+const replyText = (message: ChannelOutboundMessage, active: SlackActiveSession) =>
+  message.slackBotName === undefined || active.customizeReplies === true
+    ? message.text
+    : message.slackBotName + ": " + message.text;
+
 export function makeSlackChannelTransport(input: {
   readonly activeSession: (
     connectionId: string,
@@ -311,7 +334,7 @@ export function makeSlackChannelTransport(input: {
     edit: ({ message, externalMessageId }) =>
       progressWrite(message.destination, (active, channel) => {
         const [text, ...rest] = formatSlackOutboundMessages({
-          text: message.text,
+          text: replyText(message, active),
           mentionUserId: message.mentionActorId,
         });
         if (text === undefined || rest.length > 0) return Effect.succeed(REFUSED);
@@ -356,8 +379,26 @@ export function makeSlackChannelTransport(input: {
         if (destination.teamId !== active.teamId) {
           return yield* deliveryFailed("not_sent", "unknown");
         }
+        const notice = message.slackPrivateNotice;
+        if (notice !== undefined) {
+          const text = formatSlackOutboundMessages({ text: notice.text })[0];
+          if (text === undefined) return yield* deliveryFailed("not_sent", "unknown");
+          const sent = yield* slackCall("chat.postEphemeral", () =>
+            active.botApi.postEphemeral({
+              channel: destination.channelId,
+              threadTs: destination.rootTs,
+              userId: notice.userId,
+              text,
+            }),
+          ).pipe(Effect.mapError(slackDeliveryError));
+          return {
+            deliveryId: message.deliveryId,
+            acceptedAt: yield* nowIso,
+            externalMessageId: sent.ts,
+          };
+        }
         const posts = slackOutboundPosts({
-          text: message.text,
+          text: replyText(message, active),
           mentionUserId: message.mentionActorId,
           options: message.options,
         });
@@ -367,6 +408,9 @@ export function makeSlackChannelTransport(input: {
             channel: destination.channelId,
             threadTs: destination.rootTs,
             text,
+            ...(active.customizeReplies === true && message.slackBotName !== undefined
+              ? { username: message.slackBotName, iconUrl: SLACK_GOAT_ICON }
+              : {}),
             ...(blocks === undefined ? {} : { blocks }),
           };
           const posted = yield* slackCall("chat.postMessage", () =>

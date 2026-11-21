@@ -64,6 +64,7 @@ export interface SlackAuthIdentity {
   readonly teamId: string;
   readonly botUserId: string;
   readonly botId: string | undefined;
+  readonly customizeReplies?: boolean;
 }
 
 /** Web API calls made with the bot token (`xoxb-`). */
@@ -73,8 +74,16 @@ export interface SlackBotApi {
     readonly channel: string;
     readonly threadTs: string;
     readonly text: string;
+    readonly username?: string;
+    readonly iconUrl?: string;
     /** Block Kit for choice buttons. Absent when the message has no options. */
     readonly blocks?: ReadonlyArray<SlackChoiceBlock> | undefined;
+  }) => Promise<{ readonly ts: string }>;
+  readonly postEphemeral: (input: {
+    readonly channel: string;
+    readonly threadTs: string;
+    readonly userId: string;
+    readonly text: string;
   }) => Promise<{ readonly ts: string }>;
   /** chat.update of a message this bot posted; text only, which drops any blocks. */
   readonly updateMessage: (input: {
@@ -99,6 +108,7 @@ const SlackSdkOperation = Schema.Literals([
   "auth.test",
   "apps.connections.open",
   "chat.postMessage",
+  "chat.postEphemeral",
   "chat.update",
   "chat.delete",
   "socket.start",
@@ -319,13 +329,17 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
           teamId: response.team_id,
           botUserId: response.user_id,
           botId: nonEmpty(response.bot_id) ? response.bot_id : undefined,
+          customizeReplies:
+            response.response_metadata?.scopes?.includes("chat:write.customize") === true,
         };
       }, rejectWith("auth.test")),
-    postMessage: ({ channel, threadTs, text, blocks }) => {
+    postMessage: ({ channel, threadTs, text, blocks, username, iconUrl }) => {
       const message = {
         channel,
         thread_ts: threadTs,
         text,
+        ...(username === undefined ? {} : { username }),
+        ...(iconUrl === undefined ? {} : { icon_url: iconUrl }),
         unfurl_links: false,
         unfurl_media: false,
         // The port's blocks are the buttons this adapter builds; the Web API accepts them.
@@ -339,6 +353,15 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
         return { ts: response.ts };
       }, rejectWith("chat.postMessage"));
     },
+    postEphemeral: ({ channel, threadTs, userId, text }) =>
+      client.chat
+        .postEphemeral({ channel, thread_ts: threadTs, user: userId, text })
+        .then((response) => {
+          if (!nonEmpty(response.message_ts)) {
+            throw new SlackSdkFailure({ operation: "chat.postEphemeral", category: "unconfirmed" });
+          }
+          return { ts: response.message_ts };
+        }, rejectWith("chat.postEphemeral")),
     // A bot token edits and deletes only its own messages; as_user is never sent.
     updateMessage: ({ channel, ts, text }) =>
       client.chat.update({ channel, ts, text }).then(() => undefined, rejectWith("chat.update")),

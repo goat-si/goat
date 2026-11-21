@@ -138,7 +138,7 @@ export const historyStatement = (
   }>`SELECT t.task_id, t.created_at, CASE
       WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c
         WHERE c.conversation_id = t.conversation_id AND c.owner_id = ${input.ownerId}
-          AND c.kind = 'goat') THEN NULL
+          AND c.kind IN ('goat', 'slack')) THEN NULL
       WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' THEN t.task_json
       WHEN EXISTS (SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
         -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelBotMembers from "../ChannelBotMembers.ts";
@@ -19,6 +20,8 @@ import * as ChannelRuntime from "../ChannelRuntime.ts";
 import { CHANNEL_COPY } from "../channelCopy.ts";
 import { inputIdFor } from "../channelIds.ts";
 import { defaultScript, makeHarness, owner, ownerId, setupBot } from "../testkit/ChannelHarness.ts";
+import * as SlackChannelSettings from "../SlackChannelSettings.ts";
+import * as SlackChannelSettingsLive from "./SlackChannelSettings.live.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
 import { channelMention, directMessage, eventCallback } from "./slackChannelTestSupport.ts";
 import { makeFakeSlackSdk, type FakeSlackSdk } from "./slackSdkFake.ts";
@@ -36,8 +39,11 @@ const ROOT_TS = "1760000000.000100";
 const slackScenario = () => {
   const sdk = makeFakeSlackSdk();
   const harness = makeHarness({ fakeSlackTransport: false });
-  const layer = SlackChannelRuntime.layer.pipe(
+  const runtime = SlackChannelRuntime.layer.pipe(Layer.provide(sdk.layer));
+  const layer = SlackChannelSettingsLive.layer.pipe(
     Layer.provide(sdk.layer),
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provideMerge(runtime),
     Layer.provideMerge(harness.layer),
   );
   return { sdk, harness, layer };
@@ -208,6 +214,11 @@ describe("Slack runtime on the channel core", () => {
         );
         assert.strictEqual(rejected?.snapshot.state, "rejected");
         assert.isFalse(sdk.posted.some((post) => post.threadTs === root));
+        const notice = sdk.ephemeral.find((post) => post.threadTs === root);
+        assert.strictEqual(notice?.userId, "U0ALICE");
+        assert.include(notice?.text ?? "", "Reachable bots");
+        for (const unavailable of ["Hidden", "Retired", "Scout"])
+          assert.notInclude(notice?.text ?? "", unavailable);
       }
       assert.lengthOf((yield* tasks).tasks, 0);
     }).pipe(Effect.provide(layer));
@@ -235,6 +246,9 @@ describe("Slack runtime on the channel core", () => {
       );
       assert.strictEqual(rejected?.snapshot.state, "rejected");
       assert.lengthOf(sdk.posted, publicCount);
+      assert.strictEqual(sdk.ephemeral.length, 1);
+      assert.strictEqual(sdk.ephemeral[0]?.userId, "U0ALICE");
+      assert.include(sdk.ephemeral[0]?.text ?? "", "Scout was deleted");
       assert.lengthOf((yield* tasks).tasks, 0);
     }).pipe(Effect.provide(layer));
   });
@@ -280,6 +294,106 @@ describe("Slack runtime on the channel core", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("keeps a binding through an older settings save and rejects invalid bindings", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const scout = yield* createBot("Scout");
+      const settings = yield* SlackChannelSettings.SlackChannelSettings;
+      const binding = { channelId: "C0ALLOWED", botId: scout.botId };
+      const saved = yield* settings.configure(
+        {
+          enabled: true,
+          appToken: "xapp-1-test",
+          botToken: "xoxb-test",
+          botBindings: [binding],
+          allowedChannelIds: [binding.channelId],
+          userAccess: "linked",
+        },
+        owner,
+      );
+      assert.deepStrictEqual(saved.botBindings, [binding]);
+      const updated = yield* settings.configure(
+        { connectionId: saved.connectionId, enabled: true },
+        owner,
+      );
+      assert.deepStrictEqual(updated.botBindings, [binding]);
+      for (const botBindings of [
+        [binding, binding],
+        [{ ...binding, botId: BotId.make("other-owner") }],
+      ]) {
+        const failure = yield* Effect.flip(
+          settings.configure(
+            {
+              connectionId: saved.connectionId,
+              enabled: true,
+              botBindings,
+            },
+            owner,
+          ),
+        );
+        assert.strictEqual(failure.reason, "invalid_input");
+      }
+      const runtime = yield* SlackChannelRuntime.SlackChannelRuntime;
+      yield* runtime.streamStatus.pipe(
+        Stream.filter(
+          (event) => event.connectionId === saved.connectionId && event.status === "connected",
+        ),
+        Stream.runHead,
+      );
+      yield* receive(sdk, channelMention({ text: "<@U0BOT> Scout: hello" }), "EvUnlinkedBound");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const rejected = yield* ledger.getInput(
+        inputIdFor({
+          ownerId,
+          kind: "slack",
+          connectionId: saved.connectionId,
+          idempotencyKey: "T0TEAM:EvUnlinkedBound",
+        }),
+      );
+      assert.strictEqual(rejected?.snapshot.state, "rejected");
+      assert.isEmpty(sdk.ephemeral);
+      assert.include(sdk.posted[0]?.text ?? "", CHANNEL_COPY.unlinkedInput.slice(0, 20));
+      const cleared = yield* settings.configure(
+        {
+          connectionId: saved.connectionId,
+          enabled: true,
+          botBindings: [],
+        },
+        owner,
+      );
+      assert.deepStrictEqual(cleared.botBindings, []);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("uses the member's sender name when Slack grants customization", () => {
+    const { sdk, layer } = slackScenario();
+    sdk.script.authTest = () =>
+      Promise.resolve({
+        teamId: "T0TEAM",
+        botUserId: "U0BOT",
+        botId: "B0BOT",
+        customizeReplies: true,
+      });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const scout = yield* createBot("Scout");
+      const builder = yield* createBot("Builder");
+      yield* connect(sdk, { botBindings: [{ channelId: "C0ALLOWED", botId: builder.botId }] });
+      yield* linkAlice(sdk);
+      const routed = yield* receive(
+        sdk,
+        channelMention({ text: "<@U0BOT> Scout: do: check the build" }),
+        "EvCustomize",
+      );
+      assert.strictEqual(routed?.botId, scout.botId);
+      const post = sdk.posted.find((entry) => entry.threadTs === ROOT_TS);
+      assert.strictEqual(post?.username, "Scout");
+      assert.match(post?.iconUrl ?? "", /^https:\/\//u);
+      assert.notInclude(post?.text ?? "", "Scout:");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("stores one input and one task for an event Slack sends twice", () => {
     const { sdk, layer } = slackScenario();

@@ -187,6 +187,7 @@ import Migration0170 from "./Migrations/170_RepairStaleTitleRegeneration.ts";
 import Migration0175 from "./Migrations/175_AcpSessionOwnerIndex.ts";
 import Migration0176 from "./Migrations/176_ChannelWorkerLaunchHeads.ts";
 import Migration0177 from "./Migrations/177_WorkTriggerAuthorityFence.ts";
+import Migration0179 from "./Migrations/179_SlackConversationBot.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -370,6 +371,7 @@ export const migrationEntries = [
   [175, "AcpSessionOwnerIndex", Migration0175],
   [176, "ChannelWorkerLaunchHeads", Migration0176],
   [177, WORK_TRIGGER_FENCE_MIGRATION_NAME, Migration0177],
+  [179, "SlackConversationBot", Migration0179],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

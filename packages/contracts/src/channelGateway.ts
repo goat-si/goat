@@ -138,6 +138,15 @@ export const ChannelOutboundMessage = Schema.Struct({
   chip: Schema.optional(ChannelTaskChip),
   /** The original requester to tag, such as a Slack user id. */
   mentionActorId: Schema.optional(TrimmedNonEmptyString),
+  /** A Slack notice visible only to this user. */
+  slackPrivateNotice: Schema.optionalKey(
+    Schema.Struct({
+      userId: TrimmedNonEmptyString,
+      text: TrimmedNonEmptyString,
+    }),
+  ),
+  /** Display name of the member bot posting a Slack reply. */
+  slackBotName: Schema.optionalKey(TrimmedNonEmptyString),
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   questionId: Schema.optional(ChannelQuestionId),
