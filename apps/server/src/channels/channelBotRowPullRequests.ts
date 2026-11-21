@@ -100,12 +100,13 @@ export const threadPullRequestSource = (
 };
 
 export interface RemotePullRequestColumns {
-  readonly remote_observation: string | null;
+  readonly remote_pull_requests_json: string | null;
   readonly remote_dispatch_state: string | null;
 }
 
 export const remotePullRequestColumns = (sql: SqlClient.SqlClient) =>
-  sql`d.observation AS remote_observation, d.state AS remote_dispatch_state`;
+  sql`CASE WHEN json_valid(d.observation) THEN d.observation -> '$.pullRequests'
+    END AS remote_pull_requests_json, d.state AS remote_dispatch_state`;
 
 export const joinRemoteLaunch = (sql: SqlClient.SqlClient) =>
   sql`LEFT JOIN remote_dispatches d
@@ -117,16 +118,16 @@ export const joinRemoteLaunch = (sql: SqlClient.SqlClient) =>
     AND d.kind = 'thread' AND d.reports_supported != 0`;
 
 const decodeRemotePullRequests = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ pullRequests: Schema.Array(ChannelTaskPullRequest) })),
+  Schema.fromJsonString(Schema.Array(ChannelTaskPullRequest)),
 );
 
 export const remoteLaunchPullRequests = (columns: RemotePullRequestColumns) => {
-  if (columns.remote_observation === null) return {};
-  const observation = decodeRemotePullRequests(columns.remote_observation);
-  return Option.isNone(observation)
+  if (columns.remote_pull_requests_json === null) return {};
+  const pullRequests = decodeRemotePullRequests(columns.remote_pull_requests_json);
+  return Option.isNone(pullRequests)
     ? {}
     : botRowPullRequests([], {
-        pullRequests: observation.value.pullRequests,
+        pullRequests: pullRequests.value,
         refreshed:
           columns.remote_dispatch_state === "running" || columns.remote_dispatch_state === "idle",
       });
