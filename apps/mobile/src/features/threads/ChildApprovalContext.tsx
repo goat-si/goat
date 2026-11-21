@@ -2,22 +2,30 @@ import { threadKey } from "@goat/client-runtime/state/entities";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { Pressable, Text, View } from "react-native";
 
-export interface WaitingWorker {
-  readonly thread: ScopedThreadRef;
+export type WaitingWorker = {
   readonly title: string;
-  readonly canOpen?: boolean;
-}
+} & (
+  | { readonly thread: ScopedThreadRef; readonly observationKey?: string }
+  | { readonly thread: null; readonly observationKey: string }
+);
 
 export function ChildApprovalContext(props: {
   readonly approvals: ReadonlyArray<WaitingWorker>;
   readonly onOpenWorker: (thread: ScopedThreadRef) => void;
 }) {
-  const workers = new Map(props.approvals.map((entry) => [threadKey(entry.thread), entry]));
+  const workers = new Map(
+    props.approvals.map((entry) => [
+      entry.thread === null
+        ? entry.observationKey
+        : (entry.observationKey ?? threadKey(entry.thread)),
+      entry,
+    ]),
+  );
   return (
     <View className="mx-3.5 my-2 gap-1">
       <Text className="font-goat-bold text-sm text-foreground">{workers.size} waiting</Text>
-      {[...workers].map(([key, { thread, title, canOpen }]) =>
-        canOpen === false ? null : (
+      {[...workers].map(([key, { thread, title }]) =>
+        thread === null ? null : (
           <Pressable
             key={key}
             accessibilityRole="button"

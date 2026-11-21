@@ -100,6 +100,12 @@ vi.mock("./openBotLibraryFile", () => ({
 // lets go of one.
 const threadReads = vi.hoisted(() => ({
   approvals: new Map<string, ReadonlyArray<unknown>>(),
+  shells: [] as Array<{
+    environmentId: string;
+    id: string;
+    title: string;
+    source: { launchedBy?: { environmentId: string } };
+  }>,
   held: [] as string[],
   released: [] as string[],
   itemsAtom: null as
@@ -126,12 +132,22 @@ vi.mock("../../state/threads", async () => {
     // The visit write is the transport; a test that needs it stands in for useAtomCommand.
     threadEnvironment: { visit: "visit", respondToApproval: "respond" },
     childThreadApprovalsAtom: () => Atom.make([]),
+    environmentThreadShells: {
+      threadShellsAtom: Atom.make(() => threadReads.shells),
+      threadShellAtom: (ref: { environmentId: string; threadId: string }) =>
+        Atom.make(
+          () =>
+            threadReads.shells.find(
+              (shell) => shell.environmentId === ref.environmentId && shell.id === ref.threadId,
+            ) ?? null,
+        ),
+    },
     environmentThreadDetails: {
       quietVisibleTurnItemsAtom: (ref: { environmentId: string; threadId: string }) =>
         quiet(keyOf(ref)),
       historyAtom: () => whole,
-      pendingRequestsAtom: (ref: { threadId: string }) =>
-        Atom.make({ approvals: threadReads.approvals.get(ref.threadId) ?? [] }),
+      pendingRequestsAtom: (ref: { environmentId: string; threadId: string }) =>
+        Atom.make({ approvals: threadReads.approvals.get(keyOf(ref)) ?? [] }),
     },
   };
 });

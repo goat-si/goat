@@ -1,11 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { threadKey } from "@goat/client-runtime/state/entities";
+import { findRemoteShell } from "@goat/client-runtime/state/remote-launches";
 import type { ChildThreadApproval } from "@goat/client-runtime/state/thread-requests";
 import {
   AuthOrchestrationReadScope,
   type ChannelTaskId,
   type EnvironmentId,
+  type ScopedThreadRef,
   type ThreadId,
 } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
@@ -13,7 +15,11 @@ import { useMemo, type ComponentType } from "react";
 
 import { environmentPresentations } from "../../state/presentation";
 import { environmentSession, readEnvironmentScope, sessionHasScope } from "../../state/session";
-import { childThreadApprovalsAtom, environmentThreadDetails } from "../../state/threads";
+import {
+  childThreadApprovalsAtom,
+  environmentThreadDetails,
+  environmentThreadShells,
+} from "../../state/threads";
 import type { WaitingWorker } from "../threads/ChildApprovalContext";
 import { ChildThreadApprovals } from "../threads/ChildThreadApprovals";
 import { goatBotComputerConnectedNow } from "./goatBotComputerLink";
@@ -39,26 +45,32 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
             ? get(childThreadApprovalsAtom(scopeThreadRef(environmentId, threadId)))
             : [];
         const byRequest = new Map<string, ChildThreadApproval>();
-        const workers = new Map<string, WaitingWorker>();
-        const addWorker = (thread: WaitingWorker["thread"], title: string) => {
-          const key = threadKey(thread);
-          const known = workers.get(key);
-          if (known !== undefined) return known;
-          const canOpen =
-            get(environmentPresentations.presentationAtom(thread.environmentId))?.connection
-              .phase === "connected" &&
-            sessionHasScope(
-              get(environmentSession.sessionStateAtom(thread.environmentId)),
-              AuthOrchestrationReadScope,
-            );
-          const worker = { thread, title, canOpen };
-          workers.set(key, worker);
-          return worker;
+        const childWorkers = new Map<string, WaitingWorker>();
+        const observedWorkers = new Map<string, WaitingWorker>();
+        const canOpen = (id: EnvironmentId) =>
+          get(environmentPresentations.presentationAtom(id))?.connection.phase === "connected" &&
+          sessionHasScope(get(environmentSession.sessionStateAtom(id)), AuthOrchestrationReadScope);
+        const shellOf = (thread: ScopedThreadRef) =>
+          get(environmentThreadShells.threadShellAtom(thread));
+        const remoteShellOf = (dispatcher: EnvironmentId, id: ThreadId) => {
+          const candidates = [...get(environmentPresentations.presentationsAtom).keys()].flatMap(
+            (target) => {
+              const shell = shellOf(scopeThreadRef(target, id));
+              return shell === null ? [] : [shell];
+            },
+          );
+          return findRemoteShell(candidates, dispatcher, id);
         };
         const addApproval = (entry: ChildThreadApproval) =>
           byRequest.set(JSON.stringify([threadKey(entry.thread), entry.approval.requestId]), entry);
         for (const entry of children) {
-          if (addWorker(entry.thread, entry.title).canOpen) addApproval(entry);
+          const key = threadKey(entry.thread);
+          if (canOpen(entry.thread.environmentId)) {
+            childWorkers.set(key, entry);
+            addApproval(entry);
+          } else {
+            childWorkers.set(key, { thread: null, title: entry.title, observationKey: key });
+          }
         }
         // Task observations also cover standalone workers outside the chat's subagent lineage.
         for (const chip of chips.values()) {
@@ -66,23 +78,51 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
           const worker = chip.worker;
           if (worker === undefined) continue;
           for (const need of chip.observed?.needsYou ?? []) {
+            if (need.kind !== "approval") continue;
             const request = need.approval;
-            if (need.kind !== "approval" || (request !== undefined && request.host !== worker.host))
-              continue;
-            const thread = scopeThreadRef(
-              worker.environmentId,
-              request?.threadId ?? worker.threadId,
-            );
-            if (!addWorker(thread, chip.title).canOpen || request === undefined) continue;
+            const host = request === undefined ? worker.host : request.host;
+            const id = request?.threadId ?? worker.threadId;
+            const observationKey = JSON.stringify([host ?? null, id]);
+            let observed = observedWorkers.get(observationKey);
+            if (observed === undefined) {
+              const direct =
+                host === worker.host
+                  ? worker.environmentId
+                  : host === undefined
+                    ? environmentId
+                    : null;
+              const remote = direct === null ? remoteShellOf(worker.environmentId, id) : null;
+              const target = direct ?? remote?.environmentId;
+              const ref = target === undefined ? null : scopeThreadRef(target, id);
+              if (ref !== null) childWorkers.delete(threadKey(ref));
+              const thread = ref !== null && canOpen(ref.environmentId) ? ref : null;
+              const title =
+                (thread === null ? null : (remote ?? shellOf(thread))?.title) ??
+                (direct === worker.environmentId && id === worker.threadId
+                  ? chip.title
+                  : host === undefined
+                    ? id
+                    : `${host} · ${id}`);
+              observed =
+                thread === null
+                  ? { thread: null, title, observationKey }
+                  : { thread, title, observationKey };
+              observedWorkers.set(observationKey, observed);
+            }
+            const { thread, title } = observed;
+            if (thread === null || request === undefined) continue;
             const key = JSON.stringify([threadKey(thread), request.requestId]);
             if (byRequest.has(key)) continue;
             const approval = get(
               environmentThreadDetails.pendingRequestsAtom(thread),
             )?.approvals.find((entry) => entry.requestId === request.requestId);
-            if (approval !== undefined) addApproval({ thread, title: chip.title, approval });
+            if (approval !== undefined) addApproval({ thread, title, approval });
           }
         }
-        return { approvals: [...byRequest.values()], workers: [...workers.values()] };
+        return {
+          approvals: [...byRequest.values()],
+          workers: [...childWorkers.values(), ...observedWorkers.values()],
+        };
       }),
     [environmentId, threadId, taskId, chips],
   );
