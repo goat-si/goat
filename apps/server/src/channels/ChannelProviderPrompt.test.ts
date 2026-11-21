@@ -139,7 +139,7 @@ describe("GOAT Bot thread transcripts", () => {
           yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
           assert.include(provider.started[0]?.message.text ?? "", note);
           assert.notInclude(JSON.stringify(yield* read), note);
-        }).pipe(Effect.provide(layerMcpRead), Effect.provide(harness.layer));
+        }).pipe(Effect.provide(layerMcpRead.pipe(Layer.provideMerge(harness.layer))));
       });
     },
   );
