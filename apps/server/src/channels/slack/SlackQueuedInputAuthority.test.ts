@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelQuestionId, ProviderDriverKind, ProviderTurnId } from "@goat/contracts";
+import { ChannelQuestionId, CommandId, ProviderDriverKind, ProviderTurnId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -31,14 +31,15 @@ import { channelMention, directMessage } from "./slackChannelTestSupport.ts";
 
 describe("Provider start for queued Slack inputs", () => {
   it.effect.each([
-    { kind: "follow-up", revoked: "sender", provenance: "recorded" },
-    { kind: "follow-up", revoked: "requester", provenance: "recorded" },
-    { kind: "follow-up", revoked: "workspace access", provenance: "recorded" },
-    { kind: "answer", revoked: "sender", provenance: "recorded" },
-    { kind: "follow-up", revoked: "sender", provenance: "legacy" },
+    { kind: "follow-up", change: "sender revoked", provenance: "recorded" },
+    { kind: "follow-up", change: "requester revoked", provenance: "recorded" },
+    { kind: "follow-up", change: "workspace access revoked", provenance: "recorded" },
+    { kind: "answer", change: "sender revoked", provenance: "recorded" },
+    { kind: "follow-up", change: "sender revoked", provenance: "legacy" },
+    { kind: "follow-up", change: "runtime mode raised above both grants", provenance: "recorded" },
   ] as const)(
-    "refuses a queued Slack $kind after revoking $revoked with $provenance provenance",
-    ({ kind, revoked, provenance }) =>
+    "refuses a queued Slack $kind with $change and $provenance provenance",
+    ({ kind, change, provenance }) =>
       Effect.gen(function* () {
         const provider = yield* nextTurnSelectionHarness(
           "slack-queued-followup",
@@ -66,7 +67,7 @@ describe("Provider start for queued Slack inputs", () => {
         });
         yield* Effect.gen(function* () {
           yield* setupBot;
-          const guest = revoked === "workspace access";
+          const guest = change === "workspace access revoked";
           const settings = yield* SlackChannelSettings.SlackChannelSettings;
           const connection = yield* settings.configure(
             {
@@ -175,7 +176,19 @@ describe("Provider start for queued Slack inputs", () => {
               RETURNING key`;
             assert.lengthOf(removed, 1);
           }
-          if (guest) {
+          if (change === "runtime mode raised above both grants") {
+            assert.strictEqual(task.target?.runtimeMode, "auto-accept-edits");
+            yield* orchestrator.dispatch({
+              type: "thread.runtime-mode.set",
+              commandId: CommandId.make("operator-raises-queued-slack-thread-mode"),
+              threadId,
+              runtimeMode: "full-access",
+            });
+            assert.strictEqual(
+              (yield* orchestrator.getThreadShell(threadId))?.runtimeMode,
+              "full-access",
+            );
+          } else if (guest) {
             yield* settings.configure(
               {
                 connectionId: connection.connectionId,
@@ -188,7 +201,7 @@ describe("Provider start for queued Slack inputs", () => {
             assert.isTrue(
               yield* ledger.unlinkIdentity({
                 connectionId: connection.connectionId,
-                externalActorId: revoked === "sender" ? "U0BOB" : "U0ALICE",
+                externalActorId: change === "sender revoked" ? "U0BOB" : "U0ALICE",
               }),
             );
           }
@@ -215,14 +228,20 @@ describe("Provider start for queued Slack inputs", () => {
             Stream.runDrain,
           );
           yield* worker.drain();
-          assert.lengthOf(provider.started, 1);
+          assert.deepStrictEqual(
+            provider.started.slice(1).map((turn) => turn.runtimePolicy.runtimeMode),
+            [],
+          );
           const records = yield* orchestrator.getThreadRecords(threadId, ["runs", "turnItems"], {
             turnItemRunIds: [queued.id],
           });
           assert.strictEqual(records.runs.find((run) => run.id === queued.id)?.status, "failed");
           assert.isTrue(
             records.turnItems.some(
-              (item) => item.type === "error" && item.failure.code === "permission_changed",
+              (item) =>
+                item.type === "error" &&
+                item.failure.code === "permission_changed" &&
+                item.failure.message === "The requester’s permission to start this work changed.",
             ),
           );
           yield* runtime.drain;

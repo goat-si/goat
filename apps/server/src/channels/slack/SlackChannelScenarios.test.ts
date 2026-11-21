@@ -215,28 +215,58 @@ describe("Slack runtime on the channel core", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("reserves a longer stored name after deletion and allows an exact replacement", () => {
+  it.effect.each(["Ops: East", "Ops:  East"])(
+    "reserves the deleted name %j and allows a replacement with the same routing name",
+    (name) => {
+      const { sdk, layer } = slackScenario();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* createBot("Ops");
+        const east = yield* createBot(name);
+        yield* (yield* ChannelBotMembers.ChannelBotMembers).remove({ botId: east.botId }, owner);
+        yield* connect(sdk);
+        yield* linkAlice(sdk);
+        const text = "<@U0BOT> " + name + ": Check the build";
+        const rejected = yield* receive(sdk, channelMention({ text }), "EvDeletedLongest");
+        assert.strictEqual(rejected?.snapshot.state, "rejected");
+        assert.strictEqual(sdk.ephemeral.at(-1)?.userId, "U0ALICE");
+        assert.isFalse(sdk.posted.some((post) => post.threadTs === ROOT_TS));
+        const replacement = yield* createBot("OPS: EAST");
+        const routed = yield* receive(
+          sdk,
+          channelMention({ text, ts: "1760000000.000102" }),
+          "EvReplacedLongest",
+        );
+        assert.strictEqual(routed?.botId, replacement.botId);
+        assert.strictEqual(routed?.message.text, "Check the build");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("keeps existing whitespace-equivalent bot names private", () => {
     const { sdk, layer } = slackScenario();
     return Effect.gen(function* () {
       yield* setupBot;
       yield* createBot("Ops");
-      const east = yield* createBot("Ops: East");
-      yield* (yield* ChannelBotMembers.ChannelBotMembers).remove({ botId: east.botId }, owner);
+      yield* createBot("Ops: East");
+      const duplicate = yield* createBot("Duplicate");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.name', 'Ops:  East')
+        WHERE json_extract(value_json, '$.botId') = ${duplicate.botId} AND key LIKE 'bot-profile:%'`;
       yield* connect(sdk);
       yield* linkAlice(sdk);
-      const text = "<@U0BOT> Ops: East: Check the build";
-      const rejected = yield* receive(sdk, channelMention({ text }), "EvDeletedLongest");
-      assert.strictEqual(rejected?.snapshot.state, "rejected");
-      assert.strictEqual(sdk.ephemeral.at(-1)?.userId, "U0ALICE");
-      assert.isFalse(sdk.posted.some((post) => post.threadTs === ROOT_TS));
-      const replacement = yield* createBot("OPS: EAST");
-      const routed = yield* receive(
+      const rejected = yield* receive(
         sdk,
-        channelMention({ text, ts: "1760000000.000102" }),
-        "EvReplacedLongest",
+        channelMention({ text: "<@U0BOT> Ops:  East: Check the build" }),
+        "EvWhitespaceCollision",
       );
-      assert.strictEqual(routed?.botId, replacement.botId);
-      assert.strictEqual(routed?.message.text, "Check the build");
+      assert.strictEqual(rejected?.snapshot.state, "rejected");
+      assert.isFalse(sdk.posted.some((post) => post.threadTs === ROOT_TS));
+      const notice = sdk.ephemeral.at(-1);
+      assert.strictEqual(notice?.userId, "U0ALICE");
+      assert.include(notice?.text ?? "", "Reachable bots");
+      assert.notInclude(notice?.text ?? "", "East");
+      assert.isEmpty((yield* tasks).tasks);
     }).pipe(Effect.provide(layer));
   });
 
