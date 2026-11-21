@@ -29,6 +29,15 @@ export const fenceWorkerReleaseRollback = Effect.fn("fenceWorkerReleaseRollback"
     WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE})`;
 });
 
+export const reconcileWorkerReleaseRollback = Effect.fn("reconcileWorkerReleaseRollback")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // The predecessor wrote its fence in the same transaction as the first work routine.
+    yield* sql`UPDATE effect_sql_migrations SET name = ${WORKER_RELEASE_LEDGER_FENCE}
+      WHERE name = ${WORK_TRIGGER_LEDGER_FENCE}`;
+  },
+);
+
 export const hasPersistedWorkTriggers = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql`

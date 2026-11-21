@@ -101,6 +101,14 @@ it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale
             yield* sql`DELETE FROM channel_worker_generations WHERE task_id = ${taskId}`;
             yield* sql`UPDATE channel_tasks SET status = 'dispatching', worker_thread_id = NULL
               WHERE task_id = ${taskId}`;
+            yield* sql`CREATE TEMP TRIGGER refuse_generation_repair
+              BEFORE INSERT ON channel_worker_generations
+              BEGIN SELECT RAISE(ABORT, 'generation repair unavailable'); END`;
+            assert.isEmpty(yield* runMigrations());
+            assert.isEmpty(
+              yield* sql`SELECT 1 FROM channel_worker_generations WHERE task_id = ${taskId}`,
+            );
+            yield* sql`DROP TRIGGER refuse_generation_repair`;
           } else {
             const retired = workerLaunchIdsFor(taskId, generation - 1);
             yield* sql`UPDATE channel_worker_generations

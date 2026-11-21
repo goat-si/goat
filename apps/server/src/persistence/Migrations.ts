@@ -13,10 +13,12 @@ import {
   FIRST_V2_MIGRATION_ID,
   goatMigrationIdsMove,
   reconcileGoatMigrationIds,
+  reconcileWorkerReleaseRollback,
   WORKER_GENERATIONS_MIGRATION_NAME,
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
+import { reconcileChannelWorkerGenerations } from "./reconcileChannelWorkerGenerations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
 
@@ -460,10 +462,12 @@ const failIfDatabaseNewerThanBuild = Effect.fn("failIfDatabaseNewerThanBuild")(f
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
+  readonly skipStartupRepairs?: boolean;
 }
 
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
+  skipStartupRepairs = false,
 }: RunMigrationsOptions = {}) {
   // The desktop waits past its readiness budgets until the finished line follows this one.
   const announced = yield* hasPendingMigrations();
@@ -510,6 +514,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
         );
       }
       executed.push(...(yield* run({ loader: makeMigrationLoader(id) })));
+    }
+    if (toMigrationInclusive === undefined && !skipStartupRepairs) {
+      yield* reconcileWorkerReleaseRollback();
+      yield* reconcileChannelWorkerGenerations();
     }
     return executed;
   }).pipe(Effect.catchTags({ MigrationError: failIfDatabaseNewerThanBuild }));
