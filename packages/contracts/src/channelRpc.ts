@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ChannelAttentionFeedInput, ChannelAttentionFeedResult } from "./channelBotAttention.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 
@@ -83,6 +84,12 @@ const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus,
 const ChannelListOpenAsksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listOpenAsks, {
   payload: ChannelListOpenAsksInput,
   success: ChannelListOpenAsksResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotAttentionRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotAttention, {
+  payload: ChannelAttentionFeedInput,
+  success: ChannelAttentionFeedResult,
   error: ChannelRpcError,
 });
 
@@ -250,6 +257,7 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
   ChannelListOpenAsksRpc,
+  ChannelListBotAttentionRpc,
   ChannelSubscribeTaskChangesRpc,
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,

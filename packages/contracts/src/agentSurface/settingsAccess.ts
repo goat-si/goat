@@ -56,6 +56,7 @@ export const SETTINGS_ACCESS = {
   memoryModelSelection: path("memory.settings_update"),
   goatBotModelSelection: agent,
   goatBotSessionRouting: agent,
+  goatBotAlerts: person("A person chooses which bot events appear in device notifications."),
   channelAutoPlacement: agent,
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,

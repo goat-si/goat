@@ -92,6 +92,9 @@ export const taskRetryEventIdFor = (taskId: ChannelTaskId, clientRequestId: stri
 /** Keeps a retried attempt's worker thread tied to its task after the ledger lets go of it. */
 export const retiredWorkerKeyFor = (threadId: string) => "retired-worker:" + threadId;
 
+export const attentionEventIdFor = (taskId: ChannelTaskId, generation: number, identity: string) =>
+  stableId("channel-attention", [taskId, String(generation), identity]);
+
 export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-question", [taskId, String(version)]) as ChannelQuestionId;
 

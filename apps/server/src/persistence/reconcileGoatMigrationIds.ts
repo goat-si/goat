@@ -100,6 +100,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "TurnItemInlineWorkOutput",
   "RepairStaleTitleRegeneration",
   "AcpSessionOwnerIndex",
+  "ChannelBotAttention",
 ]);
 
 type MigrationEntry<E> = readonly [
