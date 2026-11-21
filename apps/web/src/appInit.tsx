@@ -21,6 +21,7 @@ import { startAgentOpenedPreviews } from "./components/preview/agentOpenedPrevie
 import { startMainAppLocationTracking } from "./components/sidebar/mainAppLocation";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { startDesktopUpdateLaunchNotice } from "./components/sidebar/updateEverythingRun";
+import { startGoatBotAttentionNotifications } from "./components/goatBot/GoatBotAttentionNotifier";
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
 import { isElectron } from "./env";
@@ -176,6 +177,7 @@ export function startAppServices(): AppRouter {
   startLegacyThreadMigrationToast();
   startPermissionUpdateNotices(router);
   startThreadNotifications(appAtomRegistry, router);
+  startGoatBotAttentionNotifications(appAtomRegistry, router);
   startGuideRunNotifications(appAtomRegistry, router);
   if (isElectron) {
     startDesktopUpdateLaunchNotice();

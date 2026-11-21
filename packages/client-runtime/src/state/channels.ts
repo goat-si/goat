@@ -388,6 +388,14 @@ export function createChannelEnvironmentAtoms<R, E>(
       label: "environment-data:channel:list-bot-threads-page",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
     }),
+    listBotAttention: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:list-bot-attention",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotAttention,
+    }),
+    readAttentionTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:read-attention-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.getTask,
+    }),
     listOpenAsks: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-open-asks",
       tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,

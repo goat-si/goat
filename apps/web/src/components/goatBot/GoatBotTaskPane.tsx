@@ -30,6 +30,7 @@ import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMem
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { GoatBotAlertRequest } from "./GoatBotAlertTask";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { GOAT_BOT_TASK_PANE_WIDTH } from "./goatBotLayout";
 import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
@@ -43,6 +44,7 @@ export function GoatBotTaskPane({
   session,
   taskId,
   taskTitle,
+  attentionRequest,
   onClose,
   narrow,
 }: {
@@ -50,6 +52,7 @@ export function GoatBotTaskPane({
   readonly session: ReturnType<typeof useGoatBotSession>;
   readonly taskId: ChannelTaskId;
   readonly taskTitle?: string | undefined;
+  readonly attentionRequest?: string | undefined;
   readonly onClose: () => void;
   readonly narrow: boolean;
 }) {
@@ -380,6 +383,17 @@ export function GoatBotTaskPane({
         environmentId={environmentId}
         taskId={taskId}
       >
+        {attentionRequest !== undefined &&
+        !timelineRows.some(
+          (row) => row.kind === "bot" && row.answerQuestionId === attentionRequest,
+        ) ? (
+          <GoatBotAlertRequest
+            environmentId={environmentId}
+            taskId={taskId}
+            botId={member?.botId}
+            requestId={attentionRequest}
+          />
+        ) : null}
         <GoatBotStepsReader rows={timelineRows}>
           {/* Typed answers stay through a reconnect, while the bot's thread is unknown. */}
           <GoatBotTypedAnswersScope
@@ -389,6 +403,7 @@ export function GoatBotTaskPane({
             <GoatBotTimeline
               key={`${session.source?.identity ?? ""}:${taskId}`}
               taskDetails
+              attentionRequest={attentionRequest}
               rows={timelineRows}
               baselineIds={session.source?.baselineIds}
               sourceIds={session.source?.sourceIds}
