@@ -759,5 +759,7 @@
   "1e6c081708cf5864": "Limit reached, delete a view first",
   "79c3a969207c8760": "This view exceeds the allowed field length.",
   "856812e7e1fc445e": "Tool calls in chat",
-  "d24e3cd7bcf08490": "Keep awake while agents work"
+  "d24e3cd7bcf08490": "Keep awake while agents work",
+  "7fdde2b893ba1b9d": "Removed",
+  "e58ce271d835b447": "Added"
 }
