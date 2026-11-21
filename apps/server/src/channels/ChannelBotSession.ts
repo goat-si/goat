@@ -7,7 +7,6 @@ import {
   ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
-  type ChannelTaskSender,
   type ChatAttachment,
   CommandId,
   isChannelChildWorkActive,
@@ -79,6 +78,7 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
+import { sessionForwardDelivery } from "./channelSessionForwardEvent.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { sessionCarriesNotes } from "./channelProviderBrief.ts";
 import { sessionFollowUpText } from "./channelWorkerBrief.ts";
@@ -600,11 +600,7 @@ const make = Effect.gen(function* () {
       readonly queued: ReturnType<typeof turnSteerIdsFor>;
     },
     attachments: ReadonlyArray<ChatAttachment>,
-    forward: {
-      readonly sequence: number;
-      readonly sender?: ChannelTaskSender | undefined;
-      readonly inputId?: ChannelInputId | undefined;
-    },
+    forward: ReturnType<typeof sessionForwardDelivery>,
   ) {
     const task = stored.task;
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
@@ -747,11 +743,7 @@ const make = Effect.gen(function* () {
       sessionFollowUpText(event.payload),
       ids,
       event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
-      {
-        sequence: pending.sequence,
-        sender: event.payload.sender,
-        inputId: event.actor === "user" ? event.payload.inputId : undefined,
-      },
+      sessionForwardDelivery(pending.sequence, event),
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "permission_changed" && result.senderName !== undefined)
@@ -812,11 +804,7 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
       [],
-      {
-        sequence: pending.sequence,
-        sender: event.payload.sender,
-        inputId: event.actor === "user" ? event.payload.inputId : undefined,
-      },
+      sessionForwardDelivery(pending.sequence, event),
     );
     if (result._tag === "failed" || result._tag === "permission_changed") {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))

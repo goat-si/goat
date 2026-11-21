@@ -520,6 +520,7 @@ export function layerWithRegistry<Error>(
           layerStores,
           layerProviderSessionManagerProvided,
           layerEventSinkProvided,
+          layerServerConfig,
         ),
       ),
     );

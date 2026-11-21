@@ -738,10 +738,7 @@ export function makeHarness(
       isScratchProject: () => Effect.succeed(false),
     }),
     layerSettings,
-  ).pipe(
-    // Server config, platform services, and the attachment files the gateway claims into.
-    Layer.provideMerge(layerFiles),
-  );
+  ).pipe(Layer.provideMerge(layerFiles));
 
   const layerLaunchDependencies = Layer.mergeAll(
     layerOrchestrator,
