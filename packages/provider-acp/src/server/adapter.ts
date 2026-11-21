@@ -2,6 +2,7 @@ import {
   hasAcpDeferredBackgroundWork,
   idleReportedSubagents,
   makeAcpAwaitBackgroundTasks,
+  makeDeferredFinalizeScheduler,
 } from "./deferredBackground.ts";
 import {
   AcpModelSelectionError,
@@ -230,10 +231,6 @@ import { acpPerTurnPromptUsage } from "./promptUsage.ts";
 export { acpPerTurnPromptUsage } from "./promptUsage.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
-
-// Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
-const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
-const ACP_OPEN_REPLY_QUIET_LIMIT: Duration.Input = "2 minutes";
 
 /**
  * Emit first chunks and segment-close events immediately; coalesce later chunks into full-text snapshots.
@@ -6753,29 +6750,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* options.testHooks?.afterTurnFinalized?.() ?? Effect.void;
         });
 
-        scheduleDeferredFinalize = Effect.fn("scheduleDeferredFinalize")(function* (context) {
-          if (!flavor.deferFinalizeForBackgroundWork) return;
-          if (!context.promptSettled || context.finalized || context.interrupted) return;
-          if (hasDeferredBackgroundWork(context)) return;
-          context.backgroundFinalizeGeneration += 1;
-          const generation = context.backgroundFinalizeGeneration;
-          const debounce = context.replyOpen
-            ? ACP_OPEN_REPLY_QUIET_LIMIT
-            : ACP_DEFERRED_FINALIZE_DEBOUNCE;
-          yield* Effect.gen(function* () {
-            yield* Effect.sleep(debounce);
-            if (
-              context.finalized ||
-              context.interrupted ||
-              context.backgroundFinalizeGeneration !== generation
-            ) {
-              return;
-            }
-            if (hasDeferredBackgroundWork(context)) return;
-            const status = context.promptSettledStatus ?? "completed";
-            yield* finalizeTurn(context, status);
-          }).pipe(Effect.forkIn(sessionScope), Effect.asVoid);
-          yield* options.testHooks?.onDeferredFinalizeScheduled?.(debounce) ?? Effect.void;
+        scheduleDeferredFinalize = makeDeferredFinalizeScheduler({
+          flavor,
+          hasDeferredBackgroundWork,
+          finalizeTurn,
+          sessionScope,
+          onScheduled: options.testHooks?.onDeferredFinalizeScheduled,
         });
 
         const promptInactivityPaused = Effect.fn("AcpAdapterV2.promptInactivityPaused")(function* (
@@ -7526,12 +7506,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* idleReportedSubagents(context, flavor, emitSubagent);
                     if (context.finalized) return;
-                    if (
+                    const deferred =
                       flavor.deferFinalizeForBackgroundWork === true &&
                       !context.interrupted &&
-                      hasDeferredBackgroundWork(context)
-                    ) {
+                      hasDeferredBackgroundWork(context);
+                    const pendingReply =
+                      !deferred &&
+                      flavor.deferFinalizeForBackgroundWork === true &&
+                      status === "completed" &&
+                      !context.interrupted &&
+                      flavor.hasPendingReply !== undefined
+                        ? yield* flavor.hasPendingReply(context.nativeThreadId)
+                        : false;
+                    if (context.finalized) return;
+                    if (deferred || pendingReply) {
                       yield* closeTextStreams(context);
+                      if (pendingReply) {
+                        context.replyOpen = true;
+                        yield* scheduleDeferredFinalize(context);
+                      }
                       yield* (
                         options.testHooks?.afterPromptSettledWithBackgroundWork?.() ?? Effect.void
                       );
