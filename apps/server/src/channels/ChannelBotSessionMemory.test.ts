@@ -202,7 +202,9 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
         } else {
           assert.lengthOf(harness.world.launches, 0);
         }
-        assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "failed");
+        const failed = (yield* ledger.getTask(task.taskId))?.task;
+        assert.strictEqual(failed?.status, "failed");
+        assert.include(failed?.resultSummary ?? "", "permission to start this work changed");
       }).pipe(Effect.provide(harness.layer));
     },
   );

@@ -15,7 +15,11 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import { readNotesForRequester as readNotesFor } from "./slack/slackNoteAccess.ts";
+import {
+  canReadChannelBotNotes,
+  readNotesForRequester as readNotesFor,
+  recheckReceptionNotes,
+} from "./slack/slackNoteAccess.ts";
 import {
   type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -83,6 +87,7 @@ import { channelBotFilesFor, listChannelBotSkills, quotedFromInput } from "./cha
 import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
+  boundReceptionTail,
   canSeeTask,
   journalFor,
   matchMemoryLines,
@@ -195,20 +200,6 @@ export class ChannelReceptionService extends Context.Service<
     ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelReceptionService") {}
-
-/** Keeps the newest tail entries that fit the byte budget. */
-const boundTail = (
-  entries: ReadonlyArray<ChannelReceptionInput["tail"][number]>,
-): ChannelReceptionInput["tail"] => {
-  const kept: Array<ChannelReceptionInput["tail"][number]> = [];
-  let bytes = 0;
-  for (const entry of entries.toReversed()) {
-    bytes += entry.text.length;
-    if (bytes > CHANNEL_RECEPTION_TAIL_LIMITS.bytes) break;
-    kept.unshift(entry);
-  }
-  return kept;
-};
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
@@ -350,7 +341,7 @@ const make = Effect.gen(function* () {
       });
   };
 
-  const generateOutcome = (input: ChannelReceptionInput) =>
+  const generateOutcome = (input: ChannelReceptionInput, connectionId?: string) =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.option);
       const generateReception = textGeneration.generateChannelReception;
@@ -360,7 +351,10 @@ const make = Effect.gen(function* () {
       }
       return yield* generateReception({
         cwd: serverConfig.stateDir,
-        input,
+        input:
+          connectionId === undefined
+            ? input
+            : yield* recheckReceptionNotes(input, scopesNow(input.requester, connectionId)),
         modelSelection: settings.value.textGenerationModelSelection,
       }).pipe(
         Effect.timeoutOption(CHANNEL_RECEPTION_TIMEOUT_MS),
@@ -1032,7 +1026,7 @@ const make = Effect.gen(function* () {
                   conversationId,
                   originKind: message.kind,
                   inputText: inboundTextWithFiles(message),
-                  tail: boundTail(
+                  tail: boundReceptionTail(
                     tail.flatMap((entry) =>
                       entry.inputId === inputId
                         ? []
@@ -1083,7 +1077,9 @@ const make = Effect.gen(function* () {
                   ...routinePromptFields(routine, workProject),
                   requester,
                 };
-                const first = yield* generateOutcome({
+                const generateForInput = (input: ChannelReceptionInput) =>
+                  generateOutcome(input, message.connectionId);
+                const first = yield* generateForInput({
                   ...base,
                   readsAllowed: workProject === undefined,
                 });
@@ -1122,12 +1118,21 @@ const make = Effect.gen(function* () {
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
-                const { journal: _journal, recentThreads: _recent, ...rest } = base;
+                const {
+                  journal: _journal,
+                  recentThreads: _recent,
+                  notes: firstNotes,
+                  ...rest
+                } = base;
                 const recentNow = current.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
-                const second = yield* generateOutcome({
+                const second = yield* generateForInput({
                   ...rest,
+                  requester: current,
+                  ...(firstNotes !== undefined && canReadChannelBotNotes(current)
+                    ? { notes: firstNotes }
+                    : {}),
                   ...(journalNow === "" ? {} : { journal: journalNow }),
                   ...(recentNow.length === 0 ? {} : { recentThreads: recentNow }),
                   readsAllowed: false,

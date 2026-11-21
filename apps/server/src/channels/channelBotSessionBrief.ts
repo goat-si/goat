@@ -5,8 +5,13 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a revision is a content hash.
 import * as NodeCrypto from "node:crypto";
 
-import { canSeeTask } from "./channelBotRecall.ts";
-import type { ChannelRequester, ChannelTask } from "@goat/contracts";
+import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
+import {
+  CHANNEL_RECEPTION_TAIL_LIMITS,
+  type ChannelRequester,
+  type ChannelTask,
+} from "@goat/contracts";
+import type * as ChannelLedger from "./ChannelLedger.ts";
 import * as Effect from "effect/Effect";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
@@ -88,6 +93,54 @@ export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
     ),
     section(SESSION_PREFIX_HEADINGS[5], parts.message),
   ].join("\n\n");
+
+export const freezeSessionPrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  task: ChannelTask,
+  standing: string,
+  requester: ChannelRequester,
+  message: string,
+  notes: string,
+) {
+  const visible = yield* ledger
+    .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
+    .pipe(
+      Effect.map((page) =>
+        page.tasks.filter((other) => canSeeTask(requester, other, task.conversationId)),
+      ),
+      Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
+    );
+  const tail = yield* ledger.readConversationTail(
+    task.conversationId,
+    CHANNEL_RECEPTION_TAIL_LIMITS.messages,
+  );
+  const open = visibleOpenWork(
+    yield* ledger.listConversationTasks(task.conversationId),
+    task,
+    requester,
+  );
+  return frozenSessionPrefix({
+    standing,
+    notes,
+    journal: journalFor(visible),
+    tail: tail.flatMap((entry) =>
+      entry.inputId === task.originInputId
+        ? []
+        : [
+            { role: "user" as const, text: entry.text },
+            ...(entry.replyText === undefined
+              ? []
+              : [{ role: "assistant" as const, text: entry.replyText }]),
+          ],
+    ),
+    openWork: open.map((other) => ({
+      taskId: other.taskId,
+      title: other.title,
+      status: other.status,
+    })),
+    message,
+  });
+});
 
 export const sessionContextRevision = (text: string) =>
   NodeCrypto.createHash("sha256").update(text).digest("hex").slice(0, 16);

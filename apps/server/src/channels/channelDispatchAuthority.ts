@@ -1,5 +1,6 @@
 import type { ChannelRequester, ChannelTask, MemoryTaskGrantCeiling } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -15,6 +16,24 @@ export const sessionMemoryCeiling = (
   const recorded = target?.memoryGrantCeiling ?? "none";
   return MEMORY_GRANT_RANK[allowed] < MEMORY_GRANT_RANK[recorded] ? allowed : recorded;
 };
+
+export const makeDispatchConfirmation = Effect.fn("channel.makeDispatchConfirmation")(function* (
+  required: boolean,
+  allowed: Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>,
+) {
+  const refused = yield* Ref.make(false);
+  return {
+    options: required
+      ? {
+          confirm: allowed.pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.tap((allowed) => (allowed ? Effect.void : Ref.set(refused, true))),
+          ),
+        }
+      : {},
+    refused: Ref.get(refused),
+  };
+});
 
 /**
  * A linked account as it stands now on its own connection: scopes narrowed to its link and the

@@ -61,7 +61,12 @@ import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { prepareChannelWorkerWorkspace } from "./channelRoutineOwnWork.ts";
-import { requesterForDispatch, workerMemoryCeiling } from "./channelDispatchAuthority.ts";
+import {
+  makeDispatchConfirmation,
+  requesterForDispatch,
+  sessionMemoryCeiling,
+  workerMemoryCeiling,
+} from "./channelDispatchAuthority.ts";
 import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
@@ -435,13 +440,22 @@ const make = Effect.gen(function* () {
         target,
         ledger.recordLaunchHead,
       ).pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projects));
-      const canDispatch = dispatchGrant(task);
-      const current = yield* canDispatch;
-      if (
-        current === undefined ||
-        (brief.context.notesPath !== undefined && !canReadChannelBotNotes(current))
-      )
-        return yield* refuseDispatch(stored, owner);
+      const hasSlackNotes =
+        requester.originKind === "slack" && brief.context.notesPath !== undefined;
+      const canDispatch = dispatchGrant(task).pipe(
+        Effect.map(
+          (current) =>
+            current !== undefined &&
+            (!hasSlackNotes ||
+              (canReadChannelBotNotes(current) &&
+                sessionMemoryCeiling(current, target) === (target.memoryGrantCeiling ?? "none"))),
+        ),
+      );
+      if (!(yield* canDispatch)) return yield* refuseDispatch(stored, owner);
+      const confirmation = yield* makeDispatchConfirmation(
+        task.routineWork === true || hasSlackNotes,
+        canDispatch,
+      );
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
       const launched = yield* launches
         .launch({
@@ -454,14 +468,7 @@ const make = Effect.gen(function* () {
           runtimeMode: target.runtimeMode,
           interactionMode: target.interactionMode,
           workspaceStrategy,
-          ...(task.routineWork === true
-            ? {
-                confirm: canDispatch.pipe(
-                  Effect.map((requester) => requester !== undefined),
-                  Effect.orElseSucceed(() => false),
-                ),
-              }
-            : {}),
+          ...confirmation.options,
           initialMessage: {
             messageId: ids.messageId,
             text: brief.deliveredText,
@@ -475,6 +482,8 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.result);
       if (launched._tag === "Failure") {
+        if (hasSlackNotes && (yield* confirmation.refused))
+          return yield* refuseDispatch(stored, owner);
         yield* Effect.logWarning("channel worker launch failed", {
           taskId: task.taskId,
           cause: launched.failure,

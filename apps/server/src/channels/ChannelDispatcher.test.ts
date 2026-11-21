@@ -428,7 +428,9 @@ it.effect("refuses a local worker when Slack memory is revoked at launch", () =>
     yield* barrier.release;
     yield* Fiber.join(dispatch);
     assert.lengthOf(harness.world.launches, 0);
-    assert.strictEqual((yield* onlyTask).status, "failed");
+    const failed = yield* onlyTask;
+    assert.strictEqual(failed.status, "failed");
+    assert.include(failed.resultSummary ?? "", "permission to start this work changed");
   }).pipe(Effect.provide(harness.layer));
 });
 
