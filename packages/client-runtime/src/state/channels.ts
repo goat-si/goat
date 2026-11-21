@@ -139,14 +139,16 @@ export function createChannelEnvironmentAtoms<R, E>(
     const batches = Arr.chunksOf(input.checkSnoozes, CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT).map(
       (checkSnoozes) => checkBotSnoozeBatch({ environmentId, input: { ...input, checkSnoozes } }),
     );
-    return Atom.make((get) =>
-      AsyncResult.map(AsyncResult.all(batches.map((batch) => get(batch))), (answers) => ({
-        rows: [],
-        mainMessageCount: 0,
-        ...(answers.every((answer) => answer.activeSnoozes !== undefined)
-          ? { activeSnoozes: answers.flatMap((answer) => answer.activeSnoozes ?? []) }
-          : {}),
-      })),
+    return Atom.readable(
+      (get) =>
+        AsyncResult.map(AsyncResult.all(batches.map((batch) => get(batch))), (answers) => ({
+          rows: [],
+          mainMessageCount: 0,
+          ...(answers.every((answer) => answer.activeSnoozes !== undefined)
+            ? { activeSnoozes: answers.flatMap((answer) => answer.activeSnoozes ?? []) }
+            : {}),
+        })),
+      (refresh) => batches.forEach(refresh),
     ).pipe(Atom.setIdleTTL("2 seconds"));
   });
   const checkBotSnoozes = (request: SnoozeCheckInput) =>

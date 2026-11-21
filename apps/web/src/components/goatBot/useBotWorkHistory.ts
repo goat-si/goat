@@ -39,7 +39,18 @@ export function useBotWorkHistory(
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
-  const snoozeInput = botWorkHistorySnoozeInput(walk, current, capabilities, botId);
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const foldScope = JSON.stringify([environmentId, botId]);
+  const pages = snoozedPages?.scope === foldScope ? snoozedPages : undefined;
+  if (snoozedPages !== pages) setSnoozedPages(undefined);
+  const snoozeInput = botWorkHistorySnoozeInput(
+    walk,
+    current,
+    capabilities,
+    botId,
+    [],
+    pages?.rows,
+  );
   const snoozes = useEnvironmentQuery(
     snoozeInput === null
       ? null
@@ -49,32 +60,23 @@ export function useBotWorkHistory(
     snoozeInput === null || snoozes === undefined
       ? undefined
       : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
-  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
-  const foldScope = JSON.stringify([environmentId, botId, current.readAt]);
-  if (snoozedPages !== undefined && snoozedPages.scope !== foldScope) setSnoozedPages(undefined);
+  const readSnoozedPage = useStableCallback(async (cursor: string) => {
+    const result = await read({
+      environmentId,
+      input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
+    });
+    return result._tag === "Success" ? result.value : undefined;
+  });
+  const canReadSnoozedPages = capabilities?.goatBotTaskSnooze === true;
   const fold = botSnoozeFold({
     scope: foldScope,
     first: current,
-    pages: snoozedPages,
+    loaded,
+    activeSnoozes: snoozes,
+    pages,
     setPages: setSnoozedPages,
-    read:
-      capabilities?.goatBotTaskSnooze !== true
-        ? null
-        : async (cursor) => {
-            const result = await read({
-              environmentId,
-              input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
-            });
-            return result._tag === "Success" ? result.value : undefined;
-          },
+    read: canReadSnoozedPages ? readSnoozedPage : null,
   });
-  const loadMoreSnoozed = useStableCallback(() => fold.continuation?.loadMore());
-  const loadingSnoozed = fold.continuation?.loading;
-  const failedSnoozed = fold.continuation?.failed ?? false;
-  const snoozedContinuation =
-    loadingSnoozed === undefined
-      ? undefined
-      : { loading: loadingSnoozed, failed: failedSnoozed, loadMore: loadMoreSnoozed };
   const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded, snoozeCheck });
   const [written, setWritten] = useState("[[],[],[]]");
   if (view.reported !== written) {
@@ -111,7 +113,7 @@ export function useBotWorkHistory(
   }
   return {
     supported: view.supported,
-    snoozeList: { snoozed: fold.rows, snoozedContinuation },
+    snoozeList: { snoozed: fold.rows, snoozedContinuation: fold.continuation },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

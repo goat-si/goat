@@ -9,9 +9,18 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 
-const mock = vi.hoisted(() => ({ read: vi.fn() }));
-vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotThreadsPage: {} } }));
+const mock = vi.hoisted(() => ({
+  read: vi.fn(),
+  check: vi.fn(),
+  active: undefined as ChannelListBotThreadsResult["activeSnoozes"],
+}));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: { listBotThreadsPage: {}, checkBotSnoozes: mock.check },
+}));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => mock.read }));
+vi.mock("~/state/query", () => ({
+  useEnvironmentQuery: () => ({ data: { activeSnoozes: mock.active } }),
+}));
 import { useBotWorkHistory } from "./useBotWorkHistory";
 
 const env = EnvironmentId.make("round3");
@@ -39,13 +48,32 @@ function KeyedHistory(props: { list: ChannelListBotThreadsResult; botId?: BotId 
 function History({
   list,
   botId = null,
+  snooze = false,
 }: {
   list: ChannelListBotThreadsResult;
   botId?: BotId | null;
+  snooze?: boolean;
 }) {
-  const history = useBotWorkHistory(env, botId, capabilities, list, true);
+  const history = useBotWorkHistory(
+    env,
+    botId,
+    snooze ? { ...capabilities, goatBotTaskSnooze: true } : capabilities,
+    list,
+    true,
+  );
   return (
     <>
+      {history.snoozeList.snoozedContinuation && (
+        <button
+          disabled={history.snoozeList.snoozedContinuation.loading}
+          onClick={history.snoozeList.snoozedContinuation.loadMore}
+        >
+          Show more snoozed tasks
+        </button>
+      )}
+      {history.snoozeList.snoozed.map((row) => (
+        <p key={row.task.taskId}>Snoozed: {row.task.title}</p>
+      ))}
       {history.hasMore && <button onClick={history.loadMore}>Read history</button>}
       <button onClick={() => history.markRead(taskId, "2026-11-13T01:00:00Z")}>Read valid</button>
       <button onClick={() => history.markRead(taskId, "invalid")}>Read invalid</button>
@@ -116,6 +144,8 @@ it("drops a pending page for the previous bot", async () => {
 });
 function setup() {
   mock.read.mockReset();
+  mock.check.mockReset();
+  mock.active = undefined;
 }
 
 it("a page that arrives after Pin, still saying unpinned, does not change the pinned row", async () => {
@@ -428,4 +458,51 @@ it("a launch the current list stops listing is not kept as a stale in-progress r
   await screen.rerender(<History list={current([old])} />);
   await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   expect(screen.getByText("remote remote-2").query()).toBeNull();
+});
+
+it("retains a snoozed continuation during and after Home refresh and removes an unsnoozed row", async () => {
+  setup();
+  const until = "2026-11-13T02:00:00Z";
+  const older = { ...old, view: { ...old.view, snoozedUntil: until } };
+  const first = {
+    ...older,
+    task: { ...older.task, taskId: ChannelTaskId.make("first"), title: "First page" },
+    view: { ...older.view, taskId: ChannelTaskId.make("first") },
+  };
+  const snapshot = (minute: number, cursor = "next-snoozed") => ({
+    ...current([]),
+    readAt: `2026-11-13T00:0${minute}:00Z`,
+    snoozed: [first],
+    snoozedNextCursor: cursor,
+  });
+  const continuation = Promise.withResolvers<{
+    _tag: "Success";
+    value: ChannelListBotThreadsResult;
+  }>();
+  mock.read.mockReturnValueOnce(continuation.promise);
+  await using screen = await render(<History list={snapshot(0)} snooze />);
+  const more = screen.getByRole("button", { name: "Show more snoozed tasks" });
+  await userEvent.click(more);
+  await screen.rerender(<History list={snapshot(1)} snooze />);
+  await expect.element(more).toBeDisabled();
+  mock.active = [{ taskId, until }];
+  await act(() =>
+    continuation.resolve({ _tag: "Success", value: { ...current([]), snoozed: [older] } }),
+  );
+  const loaded = screen.getByText("Snoozed: Old task");
+  await expect.element(loaded).toBeVisible();
+  await screen.rerender(<History list={snapshot(2)} snooze />);
+  await expect.element(loaded).toBeVisible();
+  expect(mock.read).toHaveBeenCalledTimes(1);
+  expect(mock.check).toHaveBeenCalledWith({
+    environmentId: env,
+    input: { checkSnoozes: [taskId] },
+  });
+
+  mock.active = [];
+  await screen.rerender(<History list={snapshot(3)} snooze />);
+  await expect.element(loaded).not.toBeInTheDocument();
+  await expect.element(more).not.toBeInTheDocument();
+  await screen.rerender(<History list={snapshot(4, "new-boundary")} snooze />);
+  await expect.element(more).toBeEnabled();
 });

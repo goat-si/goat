@@ -108,15 +108,30 @@ export function useMobileBotWorkHistory(input: {
     () => input.fallbackTasks?.map((task) => ChannelTaskId.make(task.key)),
     [input.fallbackTasks],
   );
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const pages = snoozedPages?.scope === owner ? snoozedPages : undefined;
+  if (snoozedPages !== pages) setSnoozedPages(undefined);
   const snoozeInput = useMemo(
-    () => botWorkHistorySnoozeInput(walk, current, input.capabilities, botId, fallbackTaskIds),
-    [walk, current, input.capabilities, botId, fallbackTaskIds],
+    () =>
+      botWorkHistorySnoozeInput(
+        walk,
+        current,
+        input.capabilities,
+        botId,
+        fallbackTaskIds,
+        pages?.rows,
+      ),
+    [walk, current, input.capabilities, botId, fallbackTaskIds, pages?.rows],
   );
-  const snoozes = useEnvironmentQuery(
-    environmentId === null || !enabled || snoozeInput === null
-      ? null
-      : channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }),
-  ).data?.activeSnoozes;
+  const checkEnabled = environmentId !== null && enabled && snoozeInput !== null;
+  const snoozeQuery = useEnvironmentQuery(
+    checkEnabled ? channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }) : null,
+  );
+  const snoozes = snoozeQuery.data?.activeSnoozes;
+  const retrySnoozeCheck =
+    checkEnabled && (snoozeQuery.error != null || (snoozeQuery.isSuccess && snoozes === undefined))
+      ? snoozeQuery.refresh
+      : undefined;
   const checked = useKeptWhileOffline(snoozes ?? null, scope, !enabled);
   const snoozeCheck =
     snoozeInput === null || snoozes === undefined
@@ -128,13 +143,12 @@ export function useMobileBotWorkHistory(input: {
       checked === null && snoozeInput !== null ? new Set(snoozeInput.checkSnoozes) : undefined,
     [checked, snoozeInput],
   );
-  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
-  const foldScope = JSON.stringify([scope, current.readAt]);
-  if (snoozedPages !== undefined && snoozedPages.scope !== foldScope) setSnoozedPages(undefined);
   const fold = botSnoozeFold({
-    scope: foldScope,
+    scope: owner,
     first: current,
-    pages: snoozedPages,
+    loaded: input.loaded,
+    activeSnoozes: checked ?? undefined,
+    pages,
     setPages: setSnoozedPages,
     read:
       !enabled || environmentId === null || input.capabilities?.goatBotTaskSnooze !== true
@@ -228,6 +242,7 @@ export function useMobileBotWorkHistory(input: {
       snoozedContinuation: fold.continuation,
       activeSnoozes,
       uncheckedSnoozes,
+      retrySnoozeCheck,
     },
     markRead,
     currentTaskIds: view.currentTaskIds,

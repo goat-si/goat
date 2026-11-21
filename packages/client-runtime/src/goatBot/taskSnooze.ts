@@ -25,10 +25,12 @@ export function withoutSnoozedBotTasks(
 }
 
 type SnoozedTasks = NonNullable<ChannelListBotThreadsResult["snoozed"]>;
+type SnoozeRead = Pick<ChannelListBotThreadsResult, "rows" | "snoozed" | "snoozedNextCursor">;
 const NO_SNOOZED_TASKS: SnoozedTasks = [];
 export type BotSnoozeFoldPages = {
   readonly scope: string;
   readonly rows: SnoozedTasks;
+  readonly firstCursor: string | undefined;
   readonly nextCursor: string | undefined;
   readonly loading: boolean;
   readonly failed: boolean;
@@ -42,7 +44,9 @@ export type BotSnoozeFoldContinuation = {
 
 export function botSnoozeFold(input: {
   readonly scope: string;
-  readonly first: Pick<ChannelListBotThreadsResult, "snoozed" | "snoozedNextCursor"> | null;
+  readonly first: SnoozeRead;
+  readonly loaded: boolean;
+  readonly activeSnoozes?: ChannelListBotThreadsResult["activeSnoozes"];
   readonly pages: BotSnoozeFoldPages | undefined;
   readonly setPages: (
     update: (prior: BotSnoozeFoldPages | undefined) => BotSnoozeFoldPages | undefined,
@@ -51,13 +55,22 @@ export function botSnoozeFold(input: {
 }) {
   const { scope, first, setPages, read } = input;
   const pages = input.pages?.scope === scope ? input.pages : undefined;
-  const cursor = pages === undefined ? first?.snoozedNextCursor : pages.nextCursor;
-  const rows = pages?.rows ?? first?.snoozed ?? NO_SNOOZED_TASKS;
+  const firstCursor = first.snoozedNextCursor;
+  const exhausted = input.loaded && firstCursor === undefined;
+  const cursor = exhausted
+    ? undefined
+    : (pages?.nextCursor ?? (pages?.firstCursor === firstCursor ? undefined : firstCursor));
+  const firstRows = first.snoozed ?? NO_SNOOZED_TASKS;
+  const rows =
+    pages === undefined || exhausted
+      ? firstRows
+      : reconcileSnoozePages(first, pages.rows, input.activeSnoozes);
   async function loadMore() {
     if (cursor === undefined || read === null || pages?.loading) return;
     const pending = {
       scope,
-      rows,
+      rows: mergeSnoozeRows(pages?.rows ?? NO_SNOOZED_TASKS, firstRows),
+      firstCursor,
       nextCursor: cursor,
       loading: true,
       failed: false,
@@ -67,10 +80,9 @@ export function botSnoozeFold(input: {
     setPages((prior) => {
       if (prior !== pending) return prior;
       if (result === undefined) return { ...pending, loading: false, failed: true };
-      const seen = new Set(rows.map((row) => row.task.taskId));
       return {
-        scope,
-        rows: [...rows, ...(result.snoozed ?? []).filter((row) => !seen.has(row.task.taskId))],
+        ...pending,
+        rows: mergeSnoozeRows(pending.rows, result.snoozed ?? NO_SNOOZED_TASKS),
         nextCursor: result.snoozedNextCursor,
         loading: false,
         failed: false,
@@ -84,4 +96,37 @@ export function botSnoozeFold(input: {
         ? undefined
         : { loading: pages?.loading ?? false, failed: pages?.failed ?? false, loadMore },
   };
+}
+
+function mergeSnoozeRows(earlier: SnoozedTasks, latest: SnoozedTasks): SnoozedTasks {
+  const rows = new Map(earlier.map((row) => [row.task.taskId, row]));
+  for (const row of latest) rows.set(row.task.taskId, row);
+  return [...rows.values()];
+}
+
+function reconcileSnoozePages(
+  first: SnoozeRead,
+  cached: SnoozedTasks,
+  active: ChannelListBotThreadsResult["activeSnoozes"],
+): SnoozedTasks {
+  const firstRows = first.snoozed ?? NO_SNOOZED_TASKS;
+  const known = new Set(firstRows.map((row) => row.task.taskId));
+  for (const row of first.rows) if (row.kind === "task") known.add(row.task.taskId);
+  const untilByTask =
+    active === undefined ? undefined : new Map(active.map((row) => [row.taskId, row.until]));
+  return [
+    ...firstRows,
+    ...cached.flatMap((row) => {
+      if (known.has(row.task.taskId)) return [];
+      if (untilByTask === undefined) return [row];
+      const until = untilByTask.get(row.task.taskId);
+      return until === undefined
+        ? []
+        : [
+            row.view.snoozedUntil === until
+              ? row
+              : { ...row, view: { ...row.view, snoozedUntil: until } },
+          ];
+    }),
+  ];
 }

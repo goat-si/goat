@@ -46,6 +46,7 @@ export function mobileBotTaskListItems(props: {
   readonly snoozed?: ReadonlyArray<TaskRow>;
   readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
   readonly activeSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
+  readonly retrySnoozeCheck?: (() => void) | undefined;
   readonly uncheckedSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
   readonly showSnoozed?: boolean;
   readonly onToggleSnoozed?: () => void;
@@ -89,22 +90,45 @@ export function mobileBotTaskListItems(props: {
       !props.activeSnoozes?.has(card.key as ChannelTaskId) &&
       !props.uncheckedSnoozes?.has(card.key as ChannelTaskId),
   );
-  if (listed.size + others.length + earlier.length + snoozed.length === 0) {
-    return props.failed
+  const retrySnoozeCheck = props.retrySnoozeCheck;
+  const snoozeFailure: MobileBotHomeItem[] =
+    retrySnoozeCheck === undefined
       ? []
       : [
           {
-            key: "tasks-empty",
+            key: "snooze-check-failed",
             render: () => (
-              <MobileBotPanelEmpty
-                title="No recent tasks"
-                next={`Ask ${props.botName} in chat to start work.${history?.supported ? "" : " Unpinned tasks that finished more than three days ago aren't listed here."}`}
-              />
+              <>
+                <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+                  Couldn't check snoozed work.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={retrySnoozeCheck}
+                  className="min-h-[44px] justify-center"
+                >
+                  <Text className="text-foreground">Try again</Text>
+                </Pressable>
+              </>
             ),
           },
-          // Older work can still be read behind Show more when nothing recent is listed.
-          ...historyTail(props, 0),
         ];
+  if (listed.size + others.length + earlier.length + snoozed.length === 0) {
+    if (snoozeFailure.length > 0) return [...snoozeFailure, ...historyTail(props, 0)];
+    if (props.failed) return [];
+    return [
+      {
+        key: "tasks-empty",
+        render: () => (
+          <MobileBotPanelEmpty
+            title="No recent tasks"
+            next={`Ask ${props.botName} in chat to start work.${history?.supported ? "" : " Unpinned tasks that finished more than three days ago aren't listed here."}`}
+          />
+        ),
+      },
+      // Older work can still be read behind Show more when nothing recent is listed.
+      ...historyTail(props, 0),
+    ];
   }
   const act = (row: TaskRow, action: string) => {
     if (action === "pin") props.onUpdate({ taskId: row.task.taskId, pinned: !row.view.pinnedAt });
@@ -274,6 +298,7 @@ export function mobileBotTaskListItems(props: {
       ),
     });
   }
+  items.push(...snoozeFailure);
   if (earlier.length > 0) items.push(label("section:earlier", "Earlier in chat"));
   for (const card of earlier) {
     items.push({

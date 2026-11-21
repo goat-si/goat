@@ -51,6 +51,7 @@ export function botWorkHistorySnoozeInput(
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   botId: BotId | null,
   fallbackTaskIds: ReadonlyArray<ChannelTaskId> = [],
+  snoozedPages: ChannelListBotThreadsResult["snoozed"] = [],
 ) {
   if (capabilities?.goatBotTaskSnooze !== true) return null;
   const listed = taskRows(current.rows);
@@ -59,6 +60,7 @@ export function botWorkHistorySnoozeInput(
     ...new Set([
       ...walk.entries.map((entry) => entry.task.task.taskId),
       ...fallbackTaskIds.filter((id) => !folded.has(id)),
+      ...snoozedPages.map((row) => row.task.taskId).filter((id) => !folded.has(id)),
     ]),
   ].filter((id) => !listed.has(id));
   return checkSnoozes.length === 0
