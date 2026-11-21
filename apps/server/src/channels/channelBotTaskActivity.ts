@@ -2,6 +2,7 @@ import {
   CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   ChannelGatewayError,
   ChannelTaskEvent,
+  GOAT_BOT_SESSION_THREAD_PREFIX,
   IsoDateTime,
   PositiveInt,
   TrimmedNonEmptyString,
@@ -22,11 +23,6 @@ import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import { launchesStatement, openableLaunch } from "./channelBotThreadHistory.ts";
-import {
-  threadPullRequestColumns,
-  taskActivityPullRequestLinks,
-  type ThreadPullRequestColumns,
-} from "./channelBotRowPullRequests.ts";
 import type { ChannelLedgerError } from "./channelLedgerError.ts";
 
 const decodeChild = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelChildWork));
@@ -53,41 +49,78 @@ const legacyStatuses: Partial<Record<ChannelTaskEventType, ChannelTaskStatus>> =
   "task.retry.requested": "received",
 };
 
-/** PR observations have their own timeline, independent of when a worker started or ended. */
-const readLaunchLinks = (sql: SqlClient.SqlClient, taskId: ChannelTaskId, ownerId: string) =>
-  sql`
-  WITH launches AS (
-    SELECT json_extract(s.value_json, '$.surface') AS surface,
-      json_extract(s.value_json, '$.destination.threadId') AS thread_id,
-      json_extract(s.value_json, '$.destination.host') AS host,
-      json_extract(s.value_json, '$.destination.correlationId') AS correlation_id,
-      json_extract(s.value_json, '$.callerThreadId') AS caller_id
-    FROM channel_runtime_state s INDEXED BY channel_child_work_launches
-    WHERE json_extract(s.value_json, '$.taskId') = ${taskId} AND ${openableLaunch(sql)}
-      AND json_extract(s.value_json, '$.ownerId') = ${ownerId}
-  ), links AS (
-    SELECT json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.repository') AS repository,
-      json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.number') AS number,
-      json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.linkedAt') AS at
-    FROM launches l
-    JOIN orchestration_v2_projection_threads p ON p.thread_id = l.thread_id
-    JOIN json_each(CASE WHEN json_valid(p.payload_json) THEN
-      CASE WHEN json_type(p.payload_json, '$.pullRequests') = 'array' THEN json_extract(p.payload_json, '$.pullRequests') END END) link
-    WHERE l.surface = 'thread_launch' AND l.host IS NULL
-      AND json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.source') != 'stack-dismissed'
-    UNION ALL
-    SELECT json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.repository'), json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.number'), d.updated_at
-    FROM launches l JOIN remote_dispatches d ON d.correlation_id = l.correlation_id
-      AND d.origin_thread_id = l.caller_id AND d.host = l.host AND d.remote_thread_id = l.thread_id
-    JOIN json_each(CASE WHEN json_valid(d.observation) THEN
-      CASE WHEN json_type(d.observation, '$.pullRequests') = 'array' THEN json_extract(d.observation, '$.pullRequests') END END) link
-    WHERE l.surface = 'ssh_thread_launch' AND d.reports_supported != 0
-  )
-  SELECT repository, number, MIN(at) AS linkedAt FROM links
-  WHERE typeof(repository) = 'text' AND typeof(number) = 'integer' AND number > 0 AND at IS NOT NULL
-  GROUP BY repository, number
-  ORDER BY linkedAt DESC, repository, number LIMIT ${limit}
-`.pipe(
+/** Bound the PR snapshot sources before expanding their link arrays. */
+const readLaunchLinks = (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly task: ChannelTask;
+    readonly ownerId: string;
+    readonly environmentId: EnvironmentId;
+  },
+) => {
+  const { task, ownerId, environmentId } = input;
+  const current = task.worker;
+  const localThread =
+    current === undefined ||
+    current.host !== undefined ||
+    isGoatBotSessionThreadId(current.threadId)
+      ? null
+      : current.threadId;
+  return sql`
+    WITH launches AS NOT MATERIALIZED (
+      SELECT json_extract(s.value_json, '$.surface') AS surface,
+        json_extract(s.value_json, '$.destination.threadId') AS thread_id,
+        json_extract(s.value_json, '$.destination.host') AS host,
+        json_extract(s.value_json, '$.destination.correlationId') AS correlation_id,
+        json_extract(s.value_json, '$.callerThreadId') AS caller_id
+      FROM channel_runtime_state s INDEXED BY channel_child_work_launches
+      WHERE json_extract(s.value_json, '$.taskId') = ${task.taskId} AND ${openableLaunch(sql)}
+        AND json_extract(s.value_json, '$.ownerId') = ${ownerId}
+    ), bindings AS (
+      SELECT json_extract(event_json, '$.payload.worker.threadId') AS thread_id
+      FROM channel_task_events
+      WHERE task_id = ${task.taskId} AND type = 'task.worker.bound' AND json_valid(event_json)
+        AND json_extract(event_json, '$.payload.worker.environmentId') = ${environmentId}
+        AND json_extract(event_json, '$.payload.worker.host') IS NULL
+      ORDER BY task_version DESC LIMIT ${limit}
+    ), recent_local AS (
+      SELECT p.thread_id
+      FROM launches l JOIN orchestration_v2_projection_threads p ON p.thread_id = l.thread_id
+      WHERE l.surface = 'thread_launch' AND l.host IS NULL
+      ORDER BY p.updated_at DESC, p.thread_id LIMIT ${limit}
+    ), local_threads AS (
+      SELECT thread_id FROM recent_local
+      UNION SELECT thread_id FROM bindings
+      UNION SELECT ${localThread}
+    ), local_snapshots AS (
+      SELECT p.payload_json AS snapshot
+      FROM local_threads t JOIN orchestration_v2_projection_threads p ON p.thread_id = t.thread_id
+      WHERE t.thread_id NOT LIKE ${GOAT_BOT_SESSION_THREAD_PREFIX + "%"}
+      ORDER BY p.updated_at DESC, p.thread_id LIMIT ${limit}
+    ), remote_snapshots AS (
+      SELECT d.observation AS snapshot
+      FROM launches l JOIN remote_dispatches d ON d.correlation_id = l.correlation_id
+        AND d.origin_thread_id = l.caller_id AND d.host = l.host AND d.remote_thread_id = l.thread_id
+      WHERE l.surface = 'ssh_thread_launch' AND d.reports_supported != 0 AND d.observation IS NOT NULL
+      ORDER BY d.updated_at DESC, d.correlation_id LIMIT ${limit}
+    ), links AS (
+      SELECT CASE WHEN link.type = 'object' THEN link.value END AS value
+      FROM (SELECT snapshot FROM local_snapshots UNION ALL SELECT snapshot FROM remote_snapshots) s
+      JOIN json_each(CASE WHEN json_valid(s.snapshot) THEN CASE
+        WHEN json_type(s.snapshot, '$.pullRequests') = 'array'
+        THEN json_extract(s.snapshot, '$.pullRequests') END END) link
+      WHERE link.type = 'object'
+    ), facts AS (
+      SELECT json_extract(value, '$.repository') AS repository,
+        json_extract(value, '$.number') AS number, json_extract(value, '$.linkedAt') AS at
+      FROM links WHERE COALESCE(json_extract(value, '$.source'), '') != 'stack-dismissed'
+    )
+    SELECT repository, number, MIN(at) AS linkedAt
+    FROM facts
+    WHERE typeof(repository) = 'text' AND typeof(number) = 'integer' AND number > 0 AND at IS NOT NULL
+    GROUP BY repository, number
+    ORDER BY linkedAt DESC, repository, number LIMIT ${limit}
+  `.pipe(
     Effect.map((rows) =>
       rows.flatMap((row) => {
         const link = decodeLink(row);
@@ -95,6 +128,7 @@ const readLaunchLinks = (sql: SqlClient.SqlClient, taskId: ChannelTaskId, ownerI
       }),
     ),
   );
+};
 
 const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
   function* (
@@ -121,20 +155,7 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
       const child = decodeChild(row.value_json);
       return Option.isSome(child) ? [child.value] : [];
     });
-    const worker = task.worker;
-    const workerLinks =
-      worker === undefined || worker.host !== undefined || isGoatBotSessionThreadId(worker.threadId)
-        ? []
-        : yield* sql<ThreadPullRequestColumns>`
-          SELECT ${threadPullRequestColumns(sql)}
-          FROM orchestration_v2_projection_threads p WHERE p.thread_id = ${worker.threadId}
-        `;
-    const links = [
-      ...workerLinks.flatMap((row) =>
-        row.pull_requests_json === null ? [] : taskActivityPullRequestLinks(row.pull_requests_json),
-      ),
-      ...(yield* readLaunchLinks(sql, task.taskId, input.ownerId)),
-    ];
+    const links = yield* readLaunchLinks(sql, input);
     const rows = yield* sql<{
       readonly event_json: string;
       readonly type: string;
@@ -161,18 +182,11 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
     const [coverage] = yield* sql<{ readonly updated_at: string }>`
     SELECT updated_at FROM channel_runtime_state WHERE key = 'bot-task-activity-since'
   `;
-    // Worker observations store the current PR snapshot. Use its latest recorded observation
-    // only where no local thread supplies the actual link time.
-    const observed = task.observed?.pullRequests ?? [];
-    const [lastObservation] =
-      observed.length === 0
+    const observed = (task.observed?.pullRequests ?? []).flatMap((pr) =>
+      pr.linkedAt === undefined
         ? []
-        : yield* sql<{ readonly occurred_at: string }>`
-    SELECT occurred_at FROM channel_task_events WHERE task_id = ${task.taskId}
-      AND type = 'task.worker.observed'
-      AND json_array_length(event_json, '$.payload.observed.pullRequests') > 0
-    ORDER BY task_version DESC LIMIT 1
-  `;
+        : [{ repository: pr.repository, number: pr.number, linkedAt: pr.linkedAt }],
+    );
     const entries: ChannelBotTaskActivityEntry[] = [];
     let incomplete = launches.length > limit || children.length < launchRows.length;
     for (const row of rows) {
@@ -261,13 +275,9 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
         });
     }
     const linked = new Set<string>();
-    for (const { repository, number, linkedAt } of [
-      ...links.toSorted((a, b) => a.linkedAt.localeCompare(b.linkedAt)),
-      ...observed.map((pr) => ({
-        ...pr,
-        linkedAt: lastObservation?.occurred_at ?? task.updatedAt,
-      })),
-    ]) {
+    for (const { repository, number, linkedAt } of [...links, ...observed].toSorted((a, b) =>
+      a.linkedAt.localeCompare(b.linkedAt),
+    )) {
       const key = repository + "#" + number;
       if (linked.has(key)) continue;
       linked.add(key);

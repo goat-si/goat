@@ -1,6 +1,5 @@
 import {
   CHANNEL_BOT_ROW_PULL_REQUESTS,
-  CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   PositiveInt,
   IsoDateTime,
   PullRequestState,
@@ -73,18 +72,6 @@ const decodeColumns = Schema.decodeUnknownOption(
   ),
 );
 
-export const taskActivityPullRequestLinks = (json: string) => {
-  const decoded = decodeColumns(json);
-  if (Option.isNone(decoded)) return [];
-  return (decoded.value[0] ?? [])
-    .toSorted((a, b) => (b.linkedAt ?? "").localeCompare(a.linkedAt ?? ""))
-    .filter((link) => link.linkedAt !== undefined && link.source !== "stack-dismissed")
-    .slice(0, CHANNEL_BOT_TASK_ACTIVITY_LIMIT)
-    .flatMap(({ repository, number, linkedAt }) =>
-      linkedAt === undefined ? [] : [{ repository, number, linkedAt }],
-    );
-};
-
 const pullRequestKey = (item: { readonly repository: string; readonly number: number }) =>
   item.repository + "#" + item.number;
 
@@ -120,7 +107,7 @@ export const observedPullRequestSource = (task: ChannelTask): PullRequestSource 
 
 const RANK = { open: 0, none: 1, merged: 2, closed: 3 } as const;
 const shown = (
-  { url: _url, state, ...item }: ChannelTaskPullRequest,
+  { url: _url, linkedAt: _linkedAt, state, ...item }: ChannelTaskPullRequest,
   refreshed: boolean,
 ): BotRowPullRequest =>
   // Merged and closed show from any source (a closed one can reopen, which only a refresh

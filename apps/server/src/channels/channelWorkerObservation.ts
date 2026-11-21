@@ -132,6 +132,7 @@ export const pullRequestsFromLinks = (
   links:
     | ReadonlyArray<
         Pick<ThreadPullRequestLink, "repository" | "number" | "url" | "source"> & {
+          readonly linkedAt?: string | undefined;
           readonly snapshot: { readonly state: PullRequestState } | null;
           readonly watch?: unknown;
         }
@@ -144,6 +145,7 @@ export const pullRequestsFromLinks = (
       repository: link.repository,
       number: link.number,
       url: link.url,
+      ...(link.linkedAt === undefined ? {} : { linkedAt: link.linkedAt }),
       ...(link.snapshot === null ? {} : { state: link.snapshot.state }),
       watching: link.watch !== undefined,
     }))

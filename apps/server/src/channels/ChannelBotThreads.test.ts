@@ -169,6 +169,7 @@ describe("ChannelBotThreads", () => {
         number: 3,
         watching: false,
         url: "https://github.com/example/remote-build/pull/3",
+        linkedAt: time,
       };
       yield* sql`INSERT INTO remote_dispatches (
         correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state,
@@ -191,6 +192,7 @@ describe("ChannelBotThreads", () => {
                 number: 12,
                 watching: false,
                 url: "https://github.com/example/build/pull/12",
+                linkedAt: "2026-10-12T00:01:00.000Z",
               },
             ],
             needsYou: [],
@@ -266,10 +268,14 @@ describe("ChannelBotThreads", () => {
       });
       yield* sql`UPDATE remote_dispatches SET updated_at = '2026-10-12T00:03:30.000Z'
         WHERE correlation_id = 'ssh-build-dispatch'`;
+      assert.strictEqual((yield* read()).activity?.entries[0]?.type, "worker_finished");
+      const newer = { ...pr, number: 4, linkedAt: "2026-10-12T00:03:30.000Z" };
+      yield* sql`UPDATE remote_dispatches SET observation = ${JSON.stringify({ pullRequests: [pr, newer], needsYou: [] })}
+        WHERE correlation_id = 'ssh-build-dispatch'`;
       assert.include((yield* read()).activity?.entries[0], {
         type: "pr_linked",
         repo: "example/remote-build",
-        number: 3,
+        number: 4,
       });
       yield* TestClock.adjust("2 minutes");
       for (let index = 0; index < 26; index++) {
@@ -305,6 +311,35 @@ describe("ChannelBotThreads", () => {
           .map((entry) => entry.at)
           .toSorted()
           .reverse(),
+      );
+      const workerId = task.worker.threadId;
+      const pullRequests = [
+        {
+          repository: "example/first-worker",
+          number: 5,
+          source: "created",
+          linkedAt: "2026-10-12T00:05:00.000Z",
+        },
+      ];
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${workerId}, 'project:build', 'Build', 'codex', 'full-access', 'default', ${time}, ${time}, ${JSON.stringify({ pullRequests })})`;
+      yield* TestClock.adjust("2 minutes");
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.failed",
+        payload: { generation: task.generation, reason: "Checks failed." },
+      });
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.retry.requested",
+        payload: { generation: task.generation + 1 },
+      });
+      assert.isTrue(
+        (yield* read()).activity?.entries.some(
+          (entry) =>
+            entry.type === "pr_linked" &&
+            entry.repo === "example/first-worker" &&
+            entry.number === 5,
+        ),
       );
     }).pipe(
       Effect.provide(

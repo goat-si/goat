@@ -482,7 +482,7 @@ export const CHANNEL_BOT_ROW_PULL_REQUESTS = 5;
  * that stopped running), so its last state may be stale.
  */
 export const BotRowPullRequest = ChannelTaskPullRequest.mapFields(
-  ({ url: _url, ...fields }) => fields,
+  ({ url: _url, linkedAt: _linkedAt, ...fields }) => fields,
 );
 export type BotRowPullRequest = typeof BotRowPullRequest.Type;
 const botRowPullRequestFields = {

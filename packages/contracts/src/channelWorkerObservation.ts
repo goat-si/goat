@@ -22,6 +22,7 @@ export const ChannelTaskPullRequest = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   url: TrimmedNonEmptyString,
+  linkedAt: Schema.optionalKey(IsoDateTime),
   /** Absent until the host has been read once. */
   state: Schema.optional(PullRequestState),
   /** The server watches the pull request and wakes the worker on checks, comments or conflicts. */
