@@ -1,4 +1,10 @@
-import { BotId, EventId, type RunId, type ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  EventId,
+  type ChannelIngestInput,
+  type RunId,
+  type ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
@@ -12,6 +18,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as OrchestratorMcp from "../mcp/OrchestratorMcpService.ts";
@@ -26,6 +34,12 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import { taskIdFor } from "./channelIds.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { ask, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
@@ -74,6 +88,62 @@ const finishRecordedRun = Effect.fn("channelTest.finishRecordedRun")(function* (
       },
     ],
   });
+});
+
+const iMessageRequester = Effect.fn("channelTest.iMessageRequester")(function* () {
+  const connectionId = "imessage-test";
+  const externalActorId = "+15555550100";
+  const chatGuid = "iMessage;-;" + externalActorId;
+  const replyAddress = { kind: "imessage", connectionId, chatGuid } as const;
+  const context = {
+    ...memoryRpcContext,
+    caller: { type: "transport", kind: "imessage", connectionId },
+  } as const;
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const identities = yield* ChannelIdentityService.ChannelIdentityService;
+  const { code } = yield* identities.createLink(
+    {
+      connectionId,
+      runtimeModeCeiling: context.runtimeModeCeiling,
+      grantedScopes: context.grantedScopes,
+    },
+    context,
+  );
+  yield* gateway.linkIdentity(
+    { connectionId, externalActorId, code, idempotencyKey: "test-imessage-link", replyAddress },
+    context,
+  );
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const sql = yield* SqlClient.SqlClient;
+  const reception = yield* ChannelReceptionService.ChannelReceptionService;
+  return {
+    send: Effect.fn("channelTest.sendIMessage")(function* (text: string, key: string) {
+      yield* runtime.drain;
+      const { inputId } = yield* gateway.ingest(
+        {
+          kind: "imessage",
+          connectionId,
+          conversationKey: chatGuid,
+          externalMessageId: key,
+          idempotencyKey: key,
+          actor: { externalActorId },
+          replyAddress,
+          text,
+          attachments: [],
+          receivedAt: "2026-11-21T00:00:00Z",
+          intent: "message",
+        },
+        context,
+      );
+      yield* reception.receive(inputId, runtime.ownerToken);
+      yield* runtime.drain;
+      return (yield* ledger.getTask(taskIdFor(inputId, 0)))?.task;
+    }),
+    revoke: sql`UPDATE channel_identities
+      SET granted_scopes_json = '["orchestration:read", "orchestration:operate"]'
+      WHERE connection_id = ${connectionId} AND external_actor_id = ${externalActorId}`,
+  };
 });
 
 describe("GOAT Bot thread transcripts", () => {
@@ -143,74 +213,156 @@ describe("GOAT Bot thread transcripts", () => {
       });
     },
   );
-  it.effect("settles a warm queued turn whose app session is revoked before provider start", () =>
+  it.effect.each(["app", "iMessage"] as const)(
+    "settles a warm queued turn whose %s requester loses memory before provider start",
+    (origin) =>
+      Effect.gen(function* () {
+        const provider = yield* nextTurnSelectionHarness("channel-queued-private");
+        const harness = sessionHarness({
+          realWorkerLaunch: true,
+          botWorkspaceRoot: provider.cwd,
+          workerAdapter: provider.adapter,
+        });
+        yield* Effect.gen(function* () {
+          yield* setupBot;
+          const fs = yield* FileSystem.FileSystem;
+          const files = channelBotFilesFor(
+            yield* Path.Path,
+            (yield* ServerConfig.ServerConfig).stateDir,
+          );
+          yield* appendChannelBotNote(
+            fs,
+            files,
+            "Always check the Juniper runbook.",
+            "2026-11-21T00:00:00Z",
+            "fixture",
+          );
+          const sessions = yield* SessionStore.SessionStore;
+          const issue = sessions.issue({
+            subject: memoryRpcContext.principalId,
+            scopes: memoryRpcContext.grantedScopes,
+          });
+          const opener = yield* issue;
+          const queuedSender = yield* issue;
+          const external = origin === "iMessage" ? yield* iMessageRequester() : undefined;
+          const first = yield* (
+            external?.send("look: check the deploy", "warm-first") ??
+              ask("look: check the deploy", "warm-first", {
+                ...memoryRpcContext,
+                authSessionId: opener.sessionId,
+              })
+          );
+          const threadId = first?.worker?.threadId;
+          const firstRun = first?.worker?.runId;
+          if (threadId === undefined || firstRun === undefined)
+            return yield* Effect.die("No warm session");
+          const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+          yield* starts.start({ threadId, runId: firstRun });
+          const started = provider.started[0];
+          if (started === undefined) return yield* Effect.die("No first provider turn");
+          assert.include(started.message.text, "Always check the Juniper runbook.");
+          if (origin === "iMessage") {
+            yield* TestClock.adjust("55 seconds");
+            yield* (yield* ChannelRuntime.ChannelRuntime).expireOverdue;
+          }
+          const second = yield* (
+            external?.send("look: verify the health page", "warm-queued") ??
+              ask("look: verify the health page", "warm-queued", {
+                ...memoryRpcContext,
+                authSessionId: queuedSender.sessionId,
+              })
+          );
+          const queued = second?.worker?.runId;
+          assert.strictEqual(second?.worker?.threadId, threadId);
+          if (second === undefined || queued === undefined)
+            return yield* Effect.die("No queued warm run");
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const readRun = threads
+            .getThreadRecords(threadId, ["runs"])
+            .pipe(Effect.map((records) => records.runs.find((run) => run.id === queued)));
+          assert.strictEqual((yield* readRun)?.status, "queued");
+          if (external === undefined) yield* sessions.revoke(queuedSender.sessionId);
+          else yield* external.revoke;
+
+          yield* finishRecordedRun(threadId, firstRun);
+          yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
+          assert.strictEqual((yield* readRun)?.status, "starting");
+          yield* starts.start({ threadId, runId: queued });
+          assert.lengthOf(provider.started, 1);
+          assert.strictEqual((yield* readRun)?.status, "failed");
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          yield* runtime.drain;
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          assert.strictEqual((yield* ledger.getTask(second.taskId))?.task.status, "failed");
+          const sql = yield* SqlClient.SqlClient;
+          const failures = yield* sql<{ reason: string }>`
+          SELECT json_extract(event_json, '$.payload.reason') AS reason FROM channel_task_events
+          WHERE task_id = ${second.taskId} AND type = 'task.failed'
+        `;
+          assert.deepStrictEqual(
+            failures.map(({ reason }) => reason),
+            ["permission_changed"],
+          );
+        }).pipe(
+          Effect.provide(
+            harness.layer.pipe(
+              Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+            ),
+          ),
+        );
+      }),
+  );
+  it.effect("withholds bot notes and refuses new work from an MCP caller with a memory grant", () =>
     Effect.gen(function* () {
-      const provider = yield* nextTurnSelectionHarness("channel-queued-private");
-      const harness = sessionHarness({
-        realWorkerLaunch: true,
-        botWorkspaceRoot: provider.cwd,
-        workerAdapter: provider.adapter,
-      });
+      const harness = makeHarness();
+      const original = harness.script.current;
+      const reception: Array<string | undefined> = [];
+      harness.script.current = (input) => {
+        if (input.mode === "input") reception.push(input.notes);
+        return original(input);
+      };
       yield* Effect.gen(function* () {
         yield* setupBot;
-        const fs = yield* FileSystem.FileSystem;
-        const files = channelBotFilesFor(
-          yield* Path.Path,
-          (yield* ServerConfig.ServerConfig).stateDir,
-        );
+        const note = "Always check the Juniper runbook.";
         yield* appendChannelBotNote(
-          fs,
-          files,
-          "Always check the Juniper runbook.",
+          yield* FileSystem.FileSystem,
+          channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir),
+          note,
           "2026-11-21T00:00:00Z",
           "fixture",
         );
-        const sessions = yield* SessionStore.SessionStore;
-        const issue = sessions.issue({
-          subject: memoryRpcContext.principalId,
-          scopes: memoryRpcContext.grantedScopes,
-        });
-        const opener = yield* issue;
-        const queuedSender = yield* issue;
-        const first = yield* ask("look: check the deploy", "warm-first", {
+        const requestNamespace = "test-mcp";
+        const input: ChannelIngestInput = {
+          kind: "mcp",
+          connectionId: "mcp",
+          conversationKey: "default",
+          externalMessageId: "mcp-no-notes",
+          idempotencyKey: "mcp-no-notes",
+          actor: {},
+          replyAddress: {
+            kind: "mcp",
+            connectionId: "mcp",
+            requestNamespace,
+            conversationKey: "default",
+          },
+          text: "do: check the Juniper rollout",
+          attachments: [],
+          receivedAt: "2026-11-21T00:00:00Z",
+          intent: "message",
+        };
+        const { inputId } = yield* (yield* ChannelGateway.ChannelGateway).ingest(input, {
           ...memoryRpcContext,
-          authSessionId: opener.sessionId,
+          principalId: "mcp:" + requestNamespace,
+          caller: { type: "mcp", requestNamespace },
         });
-        const threadId = first.worker?.threadId;
-        const firstRun = first.worker?.runId;
-        if (threadId === undefined || firstRun === undefined)
-          return yield* Effect.die("No warm session");
-        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
-        yield* starts.start({ threadId, runId: firstRun });
-        const started = provider.started[0];
-        if (started === undefined) return yield* Effect.die("No first provider turn");
-        const second = yield* ask("look: verify the health page", "warm-queued", {
-          ...memoryRpcContext,
-          authSessionId: queuedSender.sessionId,
-        });
-        const queued = second.worker?.runId;
-        assert.strictEqual(second.worker?.threadId, threadId);
-        if (queued === undefined) return yield* Effect.die("No queued warm run");
-        const threads = yield* ThreadManagement.ThreadManagementService;
-        const readRun = threads
-          .getThreadRecords(threadId, ["runs"])
-          .pipe(Effect.map((records) => records.runs.find((run) => run.id === queued)));
-        assert.strictEqual((yield* readRun)?.status, "queued");
-        yield* sessions.revoke(queuedSender.sessionId);
-
-        yield* finishRecordedRun(threadId, firstRun);
-        yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
-        assert.strictEqual((yield* readRun)?.status, "starting");
-        yield* starts.start({ threadId, runId: queued });
-        assert.lengthOf(provider.started, 1);
-        assert.strictEqual((yield* readRun)?.status, "failed");
-      }).pipe(
-        Effect.provide(
-          harness.layer.pipe(
-            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
-          ),
-        ),
-      );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.deepStrictEqual(reception, [undefined]);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const reply = (yield* ledger.getInput(inputId))?.snapshot.reply?.text ?? "";
+        assert.include(reply, "Only people can start new work");
+        assert.isUndefined(yield* ledger.getTask(taskIdFor(inputId, 0)));
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.provide(harness.layer));
     }),
   );
   it.effect("rotates real warm runs after saving and clearing bot instructions", () =>
@@ -241,14 +393,17 @@ describe("GOAT Bot thread transcripts", () => {
           return { threadId, input };
         });
 
-        const first = yield* run(1);
         const instruction = "Check the release checklist before reporting.";
+        const first = yield* run(1);
+        assert.notInclude(first.input, instruction);
         yield* update(instruction);
         const edited = yield* run(2);
         assert.notStrictEqual(edited.threadId, first.threadId);
         assert.include(edited.input, instruction);
+        const reused = yield* run(3);
+        assert.strictEqual(reused.threadId, edited.threadId);
         yield* update("");
-        const cleared = yield* run(3);
+        const cleared = yield* run(4);
         assert.notStrictEqual(cleared.threadId, edited.threadId);
         assert.notInclude(cleared.input, instruction);
       }).pipe(Effect.provide(harness.layer));

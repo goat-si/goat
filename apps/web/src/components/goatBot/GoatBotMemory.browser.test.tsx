@@ -91,7 +91,7 @@ it("says when there are no notes yet", async () => {
   await expect.element(screen.getByText("No notes yet")).toBeVisible();
 });
 
-it("a member's tab says the notes are shared and a long file says only the newest show", async () => {
+it("a member uses the older server’s shared notes view and unscoped list request", async () => {
   setup({ data: { revision: "r1", notes: [newer], truncated: true } });
   const member = decodeProfile({
     botId: "research",
@@ -115,6 +115,7 @@ it("a member's tab says the notes are shared and a long file says only the newes
     .element(screen.getByText("Every bot on this computer shares these notes with GOAT Bot."))
     .toBeVisible();
   await expect.element(screen.getByText(/^memory.md is larger than 64 KB/)).toBeVisible();
+  expect(state.requested).toHaveBeenCalledWith({ environmentId, input: {} });
 });
 
 it("Ask to forget drafts the quoted note and nothing else", async () => {

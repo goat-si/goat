@@ -78,7 +78,7 @@ it("sends a member's model only when the person changed it", async () => {
   expect(server.inputs).toEqual([{ botId: "docs", defaultModelSelection: null }]);
 });
 
-it("leaves the model out of a profile edit and off a server that cannot take it", async () => {
+it("omits model and instructions on an older server when saving a name", async () => {
   setup(false);
   const onClose = vi.fn();
   await using _screen = await render(
@@ -87,6 +87,7 @@ it("leaves the model out of a profile edit and off a server that cannot take it"
   );
   await expect.element(page.getByRole("textbox", { name: "Name" })).toBeVisible();
   await expect.element(page.getByText("Model", { exact: true })).not.toBeInTheDocument();
+  await expect.element(page.getByRole("textbox", { name: "Instructions" })).not.toBeInTheDocument();
   await userEvent.fill(page.getByRole("textbox", { name: "Name" }), "Docs Bot");
   await userEvent.click(page.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
