@@ -50,3 +50,23 @@ export function routeThreadIdentity(environmentId: EnvironmentId | null, threadI
     ? null
     : scopedThreadKey(environmentId, ThreadId.make(threadId));
 }
+
+export function useReturnToThread() {
+  const navigation = useNavigation();
+  return (thread: { readonly environmentId: string; readonly threadId: string }) => {
+    const params = navigation
+      .getState()
+      ?.routes.findLast((route) => route.name === "Thread")?.params;
+    const same =
+      params &&
+      "environmentId" in params &&
+      params.environmentId === thread.environmentId &&
+      "threadId" in params &&
+      params.threadId === thread.threadId;
+    navigation.dispatch(
+      same
+        ? StackActions.popTo("Thread", thread, { merge: true })
+        : StackActions.replace("Thread", thread),
+    );
+  };
+}
