@@ -624,11 +624,11 @@ it("runs a healthy or paused timer on demand and gives webhook routines delivery
   state.runNow.mockResolvedValue(AsyncResult.success({ task: timer }));
   await render();
   await press("Work");
-  expect(container.textContent).toContain("Signed deliveries to the webhook URL start work");
   const runButtons = [...container.querySelectorAll("button")].filter(
     (button) => button.textContent === "Run now",
   );
   expect(runButtons).toHaveLength(1);
+  expect(container.textContent).toContain("Signed deliveries to the webhook URL start work");
   await act(async () => runButtons[0]?.click());
   expect(state.runNow).toHaveBeenCalledOnce();
   expect(state.runNow).toHaveBeenCalledWith(expect.anything(), {

@@ -133,6 +133,7 @@ vi.mock("../../state/threads", async () => {
     threadEnvironment: { visit: "visit", respondToApproval: "respond" },
     childThreadApprovalsAtom: () => Atom.make([]),
     environmentThreadShells: {
+      childThreadInputsAtom: () => Atom.make([]),
       threadShellsAtom: Atom.make(() => threadReads.shells),
       threadShellAtom: (ref: { environmentId: string; threadId: string }) =>
         Atom.make(

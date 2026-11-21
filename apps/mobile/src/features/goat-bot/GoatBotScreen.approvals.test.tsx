@@ -5,9 +5,10 @@ import {
   ChannelTaskChip,
   ChannelTaskId,
   EnvironmentId,
+  HubNodesSnapshot,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { act } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -24,10 +25,44 @@ import { appAtomRegistry } from "../../state/atom-registry";
 const fixture = vi.hoisted(() => ({
   respond: vi.fn(),
 }));
+const hubRoutes = Schema.decodeUnknownSync(HubNodesSnapshot)({
+  hubEnvironmentId: "main",
+  notices: [],
+  nodes: [
+    { host: "mini", environmentId: "remote", status: "online" },
+    { host: "restricted-host", environmentId: "denied", status: "online" },
+    { host: "offline-host", environmentId: "offline", status: "offline" },
+  ].map(({ host, environmentId, status }) => ({
+    nodeId: environmentId,
+    environmentId,
+    label: host,
+    kind: "ssh",
+    status,
+    lastSeenAt: null,
+    addedBy: null,
+    routes: [
+      {
+        routeId: `ssh:${host}`,
+        source: "registered",
+        target: { kind: "ssh", alias: host, hostname: null, username: null, port: null },
+        status,
+        checkedAt: null,
+        lastSeenAt: null,
+        lastError: null,
+      },
+    ],
+  })),
+});
+vi.mock("../../state/server", () => ({
+  serverEnvironment: {
+    hubNodesLive: () => Atom.make(AsyncResult.success(hubRoutes)),
+  },
+}));
 const canOperate = Atom.make(false);
 const presentations = vi.hoisted(
   () =>
     new Map([
+      ["main", { connection: { phase: "connected" } }],
       ["work", { connection: { phase: "connected" } }],
       ["remote", { connection: { phase: "connected" } }],
       ["denied", { connection: { phase: "connected" } }],
@@ -92,7 +127,8 @@ const to = (worker: string, host = "studio", requestId = "approval") => ({
     host,
   },
 });
-const chip = Schema.decodeUnknownSync(ChannelTaskChip)({
+const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
+const chip = decodeChip({
   taskId,
   conversationId: "conversation",
   taskVersion: 1,
@@ -113,10 +149,11 @@ const chip = Schema.decodeUnknownSync(ChannelTaskChip)({
       to("connected", "mini", "second-approval"),
       to("unavailable", "unknown"),
       to("restricted", "restricted-host"),
+      to("copied", "offline-host"),
     ],
   },
 });
-const offlineChip = Schema.decodeUnknownSync(ChannelTaskChip)({
+const offlineChip = decodeChip({
   ...chip,
   taskId: "offline-task",
   title: "Update examples",
@@ -138,6 +175,7 @@ it("counts observed workers on the task screen before requests load, and links o
       source: { launchedBy: { environmentId: "work" } },
     },
     { environmentId: "denied", id: "restricted", title: "Restricted child", source: {} },
+    { environmentId: "remote", id: "copied", title: "Readable copy", source: {} },
   );
   const pending = [
     {
@@ -149,6 +187,7 @@ it("counts observed workers on the task screen before requests load, and links o
   ];
   threadReads.approvals.set("work\u0000connected", pending);
   threadReads.approvals.set("remote\u0000connected", pending);
+  threadReads.approvals.set("remote\u0000copied", pending);
   Object.assign(screenSession, {
     supportsTaskThreads: true,
     environmentId: "main",
@@ -166,7 +205,7 @@ it("counts observed workers on the task screen before requests load, and links o
   );
   const view = await render(show(taskId));
   try {
-    expect(view.container.textContent).toContain("5 waiting");
+    expect(view.container.textContent).toContain("6 waiting");
     const buttons = () => [...view.container.querySelectorAll("button")];
     const links = () =>
       buttons().filter((button) => button.getAttribute("aria-label")?.startsWith("Open worker"));
@@ -188,9 +227,9 @@ it("counts observed workers on the task screen before requests load, and links o
     expect(fixture.respond).not.toHaveBeenCalled();
 
     await act(async () => appAtomRegistry.set(canOperate, true));
-    const remoteApproval = buttons()
-      .filter((button) => button.textContent === "Allow once")
-      .at(-1);
+    const approvalButtons = buttons().filter((button) => button.textContent === "Allow once");
+    expect(approvalButtons).toHaveLength(2);
+    const remoteApproval = approvalButtons.at(-1);
     expect(remoteApproval?.disabled).toBe(false);
     await act(async () => remoteApproval?.click());
     expect(fixture.respond).toHaveBeenCalledWith({
@@ -205,6 +244,52 @@ it("counts observed workers on the task screen before requests load, and links o
   } finally {
     threadReads.approvals.clear();
     threadReads.shells.length = 0;
+    await view.unmount();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("counts every observed worker on Bot Home with only four approval details open", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  setupTaskNavigation();
+  const chips = Array.from({ length: 12 }, (_, index) =>
+    decodeChip({
+      ...chip,
+      taskId: `task-${index}`,
+      worker: { environmentId: "work", threadId: `worker-${index}`, host: "studio" },
+      observed: { pullRequests: [], needsYou: [to(`worker-${index}`)] },
+    }),
+  );
+  for (const { worker } of chips) {
+    threadReads.approvals.set(`work\u0000${worker?.threadId}`, [
+      {
+        requestId: "approval",
+        requestKind: "file-change",
+        responseCapability: "live",
+        createdAt: at,
+      },
+    ]);
+  }
+  Object.assign(screenSession, {
+    supportsTaskThreads: true,
+    environmentId: "main",
+    threadId: "bot",
+    taskChips: new Map(chips.map((entry) => [entry.taskId, entry])),
+  });
+  const view = await render(
+    <RegistryContext value={appAtomRegistry}>
+      <GoatBotScreen visible approvalCards={MobileBotApprovals} />
+    </RegistryContext>,
+  );
+  try {
+    expect(view.container.textContent).toContain("12 waiting");
+    const buttons = [...view.container.querySelectorAll("button")];
+    expect(buttons.filter((button) => button.textContent === "Allow once")).toHaveLength(4);
+    expect(
+      buttons.filter((button) => button.getAttribute("aria-label")?.startsWith("Open worker")),
+    ).toHaveLength(12);
+  } finally {
+    threadReads.approvals.clear();
     await view.unmount();
     vi.unstubAllGlobals();
   }
