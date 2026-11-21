@@ -6,11 +6,11 @@ import { workerLaunchIdsFor } from "../channels/channelIds.ts";
 
 const PAGE_SIZE = 128;
 
-interface WorkerGeneration {
+type WorkerGeneration = {
   readonly task_id: ChannelTaskId;
   readonly generation: number;
   readonly worker_thread_id: ThreadId;
-}
+};
 
 export const reconcileChannelWorkerGenerations = Effect.fn("reconcileChannelWorkerGenerations")(
   function* () {
