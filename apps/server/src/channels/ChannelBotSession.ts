@@ -275,7 +275,6 @@ const make = Effect.gen(function* () {
       refused,
     });
 
-  /** The files the person sent with an input, as the gateway stored them for the bot thread. */
   const inputAttachments = (inputId: ChannelInputId) =>
     ledger
       .getInput(inputId)
@@ -472,7 +471,6 @@ const make = Effect.gen(function* () {
     if (requester === undefined) return yield* failPermission(initial, owner);
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
-    // The memory the session may use, lowered to what the requester's scopes allow now.
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ceiling = { ...target, memoryGrantCeiling };
     const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
@@ -516,9 +514,9 @@ const make = Effect.gen(function* () {
     const message = instruction + "\n\n" + formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
     const freeze = (text: string) => freezeChannelBrief(ledger, initial, owner, text, context);
-    const confirm = (notesPath: string | undefined) =>
+    const confirm = (holdsNotes: boolean) =>
       makeDispatchConfirmation(
-        context.notesPath !== undefined || notesPath !== undefined,
+        context.notesPath !== undefined || holdsNotes,
         dispatchRequester(initial.task).pipe(
           Effect.map(
             (current) =>
@@ -541,7 +539,10 @@ const make = Effect.gen(function* () {
           owner,
           requester,
           attachments,
-          yield* confirm(brief.context.notesPath),
+          yield* confirm(
+            brief.context.notesPath !== undefined ||
+              (yield* sessionCarriesNotes(sql, row.thread_id)),
+          ),
         );
       }
       const busy = Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value));
@@ -581,7 +582,7 @@ const make = Effect.gen(function* () {
       owner,
       requester,
       attachments,
-      yield* confirm(brief.context.notesPath),
+      yield* confirm(brief.context.notesPath !== undefined),
     );
   });
 

@@ -1,3 +1,6 @@
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   goatBotForgetNoteMessage,
@@ -32,8 +35,10 @@ import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   environmentId,
+  goatInput,
   linkSlackUser,
   memoryRpcContext,
+  setupBot,
   memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
@@ -199,6 +204,31 @@ const edit = (
 ) => ({ taskId: turn.task.taskId, inputId: turn.inputId, kind: "edit", quote });
 
 describe("notes changes from a GOAT Bot session turn", () => {
+  it.effect("asks for confirmation before the main warm session can save shared notes", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      yield* fs.writeFileString(files.notes, NOTES_HEADER);
+      const text = "remember that I deploy on Fridays";
+      const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        goatInput(text, "main-warm-remember"),
+        memoryRpcContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const turn = yield* boundTurn(harness, input.inputId);
+      const result = yield* callNotes(harness, turn.caller, remember(turn, fridays, text));
+      assert.strictEqual(result.outcome, "refused");
+      assert.include(result.message ?? "", "Remember for all bots:");
+      assert.strictEqual(yield* fs.readFileString(files.notes), NOTES_HEADER);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
     "remember from a session turn on the default routing saves one line with its source",
     () => {
