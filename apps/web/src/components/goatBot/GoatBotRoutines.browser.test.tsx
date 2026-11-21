@@ -32,7 +32,11 @@ vi.mock("~/state/entities", () => ({
     modelSelection: { instanceId: "codex", model: "gpt-5" },
   }),
 }));
-vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
+vi.mock("~/state/session", async (original) => ({
+  ...(await original<typeof import("~/state/session")>()),
+  useEnvironmentScope: () => true,
+}));
+vi.mock("../settings/WebhookEndpointField", () => ({ WebhookEndpointField: () => null }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
@@ -656,6 +660,7 @@ it("creates a pull-request trigger with a project and required signature and lis
   const workTrigger: BotRoutineSource = {
     ...savedCheckIn,
     title: "Pull request opened",
+    routineMode: "work",
     schedule: {
       type: "webhook",
       signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" },

@@ -5,13 +5,19 @@ import {
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, ScheduledTask, ThreadId } from "@goat/contracts";
+import {
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type ScheduledTask,
+  type ThreadId,
+} from "@goat/contracts";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useNowMinuteMs } from "../../lib/clock";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
@@ -132,6 +138,7 @@ function MobileRoutineRow(props: {
   const canRunNow = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(environmentId),
   );
+  const canManageTrigger = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -193,7 +200,7 @@ function MobileRoutineRow(props: {
         </Pressable>
         <ThemedSwitch
           accessibilityLabel={`${row.enabled ? "Pause" : "Resume"} ${row.title}`}
-          disabled={busy || !canOperate}
+          disabled={busy || !canOperate || (row.workTrigger && !canManageTrigger)}
           value={row.enabled}
           onValueChange={(enabled) => void toggle(enabled)}
         />
@@ -207,7 +214,15 @@ function MobileRoutineRow(props: {
         />
       ) : null}
       {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
-      {row.lastFailed && canRunNow ? (
+      {expanded && row.workTrigger ? (
+        <Text className="text-foreground-muted">
+          {row.enabled
+            ? "Signed deliveries to the webhook URL start work in its project."
+            : "This trigger is paused."}{" "}
+          Manage the URL and signing secret on web or desktop.
+        </Text>
+      ) : null}
+      {!row.workTrigger && row.lastFailed && canRunNow ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ disabled: running }}
