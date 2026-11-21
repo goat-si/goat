@@ -62,7 +62,11 @@ export const currentRequester = Effect.fn("channel.currentRequester")(function* 
   connectionId: string | undefined,
   inputId?: ChannelInputId,
 ) {
-  if (snapshot.originKind === "goat" && inputId !== undefined) {
+  if (
+    snapshot.originKind === "goat" &&
+    inputId !== undefined &&
+    snapshot.grantedScopes.some((scope) => scope === "memory:read" || scope === "memory:write")
+  ) {
     const ledger = yield* ChannelLedger.ChannelLedger;
     const live = yield* ledger.inputSessionScopes(inputId);
     if (live !== undefined)
