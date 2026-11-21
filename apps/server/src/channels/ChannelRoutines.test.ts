@@ -656,6 +656,140 @@ it.effect.each(["paused during launch", "revoked during recovery"] as const)(
     }),
 );
 
+it.effect.each(["paused", "revoked", "input missing", "settled generation"] as const)(
+  "refuses a work trigger %s while release is planning its commit",
+  (change) =>
+    Effect.gen(function* () {
+      const planning = yield* Deferred.make<void>();
+      const commit = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        realWorkerLaunch: true,
+        beforeWorkerCapabilities: Effect.gen(function* () {
+          const span = yield* Effect.currentSpan.pipe(Effect.orElseSucceed(() => undefined));
+          if (span?.name !== "Orchestrator.dispatchPreparedRunRelease") return;
+          yield* Deferred.succeed(planning, undefined);
+          yield* Deferred.await(commit);
+        }),
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        const sessions = yield* SessionStore.SessionStore;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const session = yield* issueTriggerOwner;
+        const input = yield* admit("do: inspect fixtures", change, botThreadId, {
+          sessionId: session.sessionId,
+          projectId,
+        });
+        yield* runtime.drain;
+        const { taskId, worker } = yield* onlyTask;
+        if (worker === undefined) return assert.fail("Expected a bound worker");
+        yield* Deferred.await(planning);
+        if (change === "paused")
+          yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+        if (change === "revoked") yield* sessions.revoke(session.sessionId);
+        if (change === "input missing")
+          yield* sql`DELETE FROM scheduled_task_channel_inputs WHERE firing_id=${input.firingId}`;
+        if (change === "settled generation")
+          yield* sql`UPDATE channel_tasks SET status='failed' WHERE task_id=${taskId}`;
+        yield* Deferred.succeed(commit, undefined);
+        const prepared = yield* preparationSettled(worker.threadId);
+        assert.lengthOf(
+          yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
+            WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
+          0,
+        );
+        assert.strictEqual(prepared.runs[0]?.status, "failed");
+        const reason =
+          change === "input missing"
+            ? "work trigger was deleted"
+            : change === "settled generation"
+              ? "generation is no longer active"
+              : change;
+        assert.include(prepared.thread.lastError ?? "", reason);
+      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+    }),
+);
+
+it.effect("workspace Retry cannot start a denied trigger after its firing settled", () =>
+  Effect.gen(function* () {
+    const preparing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let branchReads = 0;
+    const harness = makeHarness({
+      realWorkerLaunch: true,
+      getWorkerBranch: () =>
+        Effect.gen(function* () {
+          if (branchReads++ === 0) return null;
+          yield* Deferred.succeed(preparing, undefined);
+          yield* Deferred.await(release);
+          return null;
+        }),
+    });
+    yield* Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const session = yield* issueTriggerOwner;
+      const input = yield* admit("do: inspect fixtures", "workspace retry", botThreadId, {
+        sessionId: session.sessionId,
+        projectId,
+      });
+      yield* runtime.drain;
+      const { worker } = yield* onlyTask;
+      if (worker?.runId === undefined) return assert.fail("Expected a bound worker run");
+      yield* Deferred.await(preparing);
+      yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+      yield* Deferred.succeed(release, undefined);
+      yield* preparationSettled(worker.threadId);
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "failed");
+      assert.strictEqual((yield* firing(input.firingId))?.status, "failed");
+      yield* sql`UPDATE scheduled_tasks SET enabled=1 WHERE task_id=${input.taskId}`;
+      const retry = yield* launches
+        .retryPreparation({
+          commandId: CommandId.make("retry-denied-trigger"),
+          threadId: worker.threadId,
+          runId: worker.runId,
+        })
+        .pipe(Effect.result);
+      assert.strictEqual(retry._tag, "Failure");
+      assert.lengthOf(
+        yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
+          WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
+        0,
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  }),
+);
+
+it.effect("a person's launch can use channel-like thread and message ids", () => {
+  const harness = makeHarness({ realWorkerLaunch: true });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const { threadId } = yield* launches.launch({
+      commandId: CommandId.make("person-launch"),
+      threadId: ThreadId.make("channel-worker:fixture"),
+      projectId,
+      title: "Ordinary launch",
+      modelSelection,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      workspaceStrategy: { type: "root" },
+      createdBy: "user",
+      creationSource: "web",
+      initialMessage: {
+        messageId: MessageId.make("channel-worker-message:fixture"),
+        text: "Inspect fixtures",
+        attachments: [],
+      },
+    });
+    const prepared = yield* preparationSettled(threadId);
+    assert.strictEqual(prepared.runs[0]?.status, "starting");
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("event reception cannot steer, stop, or answer existing work", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {

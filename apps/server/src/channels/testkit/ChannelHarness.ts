@@ -98,7 +98,6 @@ const refusingAdapter = {
   driver: ProviderDriverKind.make("codex"),
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-  openSession: () => Effect.die("the GOAT bot must never start a provider session"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
@@ -338,6 +337,7 @@ export function makeHarness(
     readonly realWorkerLaunch?: boolean;
     readonly getWorkerBranch?: GitWorkflow.GitWorkflowService["Service"]["currentBranch"];
     readonly workerAdapter?: ProviderAdapter.ProviderAdapterV2["Service"];
+    readonly beforeWorkerCapabilities?: Effect.Effect<void>;
     /** Other machines over SSH; defaults to a machine that knows no SSH hosts. */
     readonly sshRemote?: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch>;
     /** The state database; defaults to a fresh in-memory one. A file lets a test restart. */
@@ -363,6 +363,8 @@ export function makeHarness(
     ProviderAdapterRegistry.layerFromAdapters([
       options.workerAdapter ?? {
         ...refusingAdapter,
+        getCapabilities: () =>
+          Effect.as(options.beforeWorkerCapabilities ?? Effect.void, CodexProviderCapabilitiesV2),
         openSession: () =>
           Effect.sync(() => providerCalls.push("openSession")).pipe(
             Effect.andThen(Effect.die("the GOAT bot must never start a provider session")),

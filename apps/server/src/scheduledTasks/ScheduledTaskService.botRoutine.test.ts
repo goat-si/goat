@@ -722,6 +722,61 @@ it.effect("a second accepted signed delivery waits for intake and keeps its deli
   );
 });
 
+it.effect("a completed signed delivery keeps firing evidence after its run is pruned", () =>
+  withWebhookService(
+    ({ service, sql, runs }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const { task } = yield* service.upsert(
+          yield* routineInput({
+            routineMode: "work",
+            schedule: { type: "webhook", signature: eventSignature },
+          }),
+          eventTriggerOwner,
+        );
+        const threadId = task.threadId;
+        if (threadId === null || threadId === undefined)
+          return assert.fail("Expected a bot thread");
+        const deliveries = [];
+        for (let index = 0; index < 8; index++) {
+          yield* TestClock.adjust("1 second");
+          const result = yield* waitForSpan(
+            service.triggerWebhook(signedEvent(task, String(index))),
+            "ScheduledTaskService.runWebhookDelivery",
+          );
+          if (result._tag !== "accepted") return assert.fail("Expected an accepted delivery");
+          deliveries.push(result.deliveryId);
+          const firing = yield* runs.deliveryReceipt(result.deliveryId);
+          if (firing === null) return assert.fail("Expected a firing to settle");
+          const at = DateTime.formatIso(yield* DateTime.now);
+          yield* runs.finishChannelFiring({
+            firingId: firing.firingId,
+            outcome: { type: "accepted", threadId },
+            at,
+          });
+          yield* runs.finishChannelFiring({
+            firingId: firing.firingId,
+            outcome: { type: "completed" },
+            at,
+          });
+        }
+        const deliveryId = deliveries[0]!;
+        assert.isNull(yield* runs.deliveryReceipt(deliveryId));
+        assert.deepInclude(
+          (yield* service.getWebhookDelivery({ id: task.id, deliveryId })).delivery,
+          { outcome: "accepted", firingAccepted: true },
+        );
+        assert.deepInclude(
+          (yield* service.listWebhookDeliveries({ id: task.id })).deliveries.find(
+            (delivery) => delivery.id === deliveryId,
+          ),
+          { outcome: "accepted", firingAccepted: true },
+        );
+      }),
+    {},
+  ),
+);
+
 it.effect("a signed delivery after a rebind starts its own coalescing window", () => {
   const workers = new Map<string, Effect.Effect<void>>();
   return withWebhookService(
