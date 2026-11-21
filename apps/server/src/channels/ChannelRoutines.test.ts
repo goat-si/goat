@@ -674,7 +674,6 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
       yield* Effect.gen(function* () {
         yield* setupBot;
         const sql = yield* SqlClient.SqlClient;
-        const sessions = yield* SessionStore.SessionStore;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const session = yield* issueTriggerOwner;
         const input = yield* admit("do: inspect fixtures", change, botThreadId, {
@@ -687,7 +686,9 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
         yield* Deferred.await(planning);
         if (change === "paused")
           yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
-        if (change === "revoked") yield* sessions.revoke(session.sessionId);
+        // The revocation commits before the session's live-scope cache is invalidated.
+        if (change === "revoked")
+          yield* sql`UPDATE auth_sessions SET revoked_at=${AT} WHERE session_id=${session.sessionId}`;
         if (change === "input missing")
           yield* sql`DELETE FROM scheduled_task_channel_inputs WHERE firing_id=${input.firingId}`;
         if (change === "settled generation")
@@ -699,14 +700,14 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
             WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
           0,
         );
-        assert.strictEqual(prepared.runs[0]?.status, "failed");
-        const reason =
-          change === "input missing"
-            ? "work trigger was deleted"
-            : change === "settled generation"
-              ? "generation is no longer active"
-              : change;
-        assert.include(prepared.thread.lastError ?? "", reason);
+        const reason = {
+          paused: "paused",
+          revoked: "revoked",
+          "input missing": "work trigger was deleted",
+          "settled generation": "generation is no longer active",
+        }[change];
+        const denial = prepared.turnItems.find((item) => item.type === "error")?.failure;
+        assert.include(denial?.message ?? "", reason);
       }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
     }),
 );
@@ -731,9 +732,8 @@ it.effect("workspace Retry cannot start a denied trigger after its firing settle
       const sql = yield* SqlClient.SqlClient;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const session = yield* issueTriggerOwner;
       const input = yield* admit("do: inspect fixtures", "workspace retry", botThreadId, {
-        sessionId: session.sessionId,
+        sessionId: (yield* issueTriggerOwner).sessionId,
         projectId,
       });
       yield* runtime.drain;

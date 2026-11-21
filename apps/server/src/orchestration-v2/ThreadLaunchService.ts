@@ -93,7 +93,7 @@ import {
 } from "./goat/ThreadLaunchError.ts";
 export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
-import { makeChannelWorkerReleaseAuthority } from "../channels/channelWorkerReleaseAuthority.ts";
+import { makePreparedWorkerRelease } from "../channels/channelWorkerReleaseAuthority.ts";
 import {
   preparationRunStopped,
   watchPreparationInterruption,
@@ -154,7 +154,7 @@ const make = Effect.gen(function* () {
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
-  const authorizeWorkerRelease = yield* makeChannelWorkerReleaseAuthority(threads);
+  const releasePreparedWorker = yield* makePreparedWorkerRelease(threads.dispatch);
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
   // Optional so harnesses that never launch into a real folder need not provide it.
@@ -267,17 +267,14 @@ const make = Effect.gen(function* () {
     log: Ref.Ref<PreparationLog>,
   ) {
     const releaseRun = (id: RunId) =>
-      authorizeWorkerRelease(threadId, id).pipe(
-        Effect.andThen(
-          threads
-            .dispatch({
-              type: "prepared-run.release",
-              commandId: CommandId.make(`${input.commandId}:release`),
-              threadId,
-              runId: id,
-            })
-            .pipe(Effect.mapError(mapError(input, "release-run", threadId))),
-        ),
+      releasePreparedWorker(
+        {
+          type: "prepared-run.release",
+          commandId: CommandId.make(`${input.commandId}:release`),
+          threadId,
+          runId: id,
+        },
+        mapError(input, "release-run", threadId),
       );
     const note = (line: string) =>
       Ref.update(log, (current) => appendPreparationLine(current, line));

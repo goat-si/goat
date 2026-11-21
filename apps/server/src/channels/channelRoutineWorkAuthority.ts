@@ -3,12 +3,14 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SessionStore from "../auth/SessionStore.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import { decodeRoutinePayload, routineOwnerOf } from "../scheduledTasks/scheduledBotRoutines.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 
 export const makeRoutineWorkAuthority = Effect.fn("channel.makeRoutineWorkAuthority")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const sessions = yield* Effect.serviceOption(SessionStore.SessionStore);
+  const authSessions = yield* AuthSessions.make;
 
   return Effect.fn("channel.routineWorkAuthority")(function* (inputId: ChannelInputId) {
     const [row] = yield* sql<{
@@ -51,11 +53,21 @@ export const makeRoutineWorkAuthority = Effect.fn("channel.makeRoutineWorkAuthor
     )
       return { error: "The GOAT Bot work trigger changed after this delivery arrived." } as const;
 
-    const current = Option.isNone(sessions)
-      ? []
-      : yield* sessions.value
-          .readActiveScopes(AuthSessionId.make(owner.value.sessionId))
-          .pipe(Effect.orElseSucceed(() => []));
+    const sessionId = AuthSessionId.make(owner.value.sessionId);
+    // Revocation commits before SessionStore removes its cached scopes.
+    const persisted = yield* authSessions.getById({ sessionId });
+    const current =
+      Option.isNone(sessions) ||
+      Option.isNone(persisted) ||
+      persisted.value.revokedAt !== null ||
+      persisted.value.subject !== owner.value.principalId
+        ? []
+        : yield* sessions.value.readActiveScopes(sessionId).pipe(
+            Effect.map((scopes) =>
+              scopes.filter((scope) => persisted.value.scopes.includes(scope)),
+            ),
+            Effect.orElseSucceed(() => []),
+          );
     const scopes = payload.value.grantedScopes.filter(
       (scope) => owner.value.grantedScopes.includes(scope) && current.includes(scope),
     );
