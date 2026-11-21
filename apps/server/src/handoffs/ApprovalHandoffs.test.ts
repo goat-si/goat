@@ -82,32 +82,46 @@ const readApprovals = () =>
     }),
   );
 
-it.effect("reconciles an approval raised before worker binding only when its run binds", () => {
-  const worker = ThreadId.make("channel-worker:before-bind");
-  return withApprovals(
-    ({ approvals, orchestrator }) =>
-      Effect.gen(function* () {
-        const task = yield* workerTask("task:before-bind", "dispatching");
-        const [run] = (yield* orchestrator.getThreadRecords(worker, ["runs"])).runs;
-        const handoff = yield* ask(approvals, worker);
-        expect((yield* readApprovals()).events).toEqual([]);
+it.effect.each(["pending", "declined"] as const)(
+  "reconciles a %s approval raised before worker binding only when its run binds",
+  (state) => {
+    const worker = ThreadId.make("channel-worker:before-bind");
+    return withApprovals(
+      ({ approvals, handoffs, orchestrator }) =>
+        Effect.gen(function* () {
+          const task = yield* workerTask("task:before-bind", "dispatching");
+          const [run] = (yield* orchestrator.getThreadRecords(worker, ["runs"])).runs;
+          const handoff = yield* ask(approvals, worker);
+          expect((yield* readApprovals()).events).toEqual([]);
 
-        const bound = yield* bind(task, worker, RunId.make("unrelated-run"));
-        expect((yield* readApprovals()).events).toEqual([]);
-        const exact = yield* bind(bound, worker, run!.id);
-        yield* bind(exact, worker, run!.id);
-        expect((yield* readApprovals()).events).toMatchObject([
-          {
-            kind: "approval",
-            taskId: task.taskId,
-            generation: task.generation,
-            request: { kind: "handoff", threadId: worker, requestId: handoff.handoffId },
-          },
-        ]);
-      }),
-    { threadId: worker },
-  );
-});
+          if (state === "declined") {
+            yield* handoffs.respond(
+              {
+                threadId: worker,
+                handoffId: handoff.handoffId,
+                action: "declined",
+              },
+              person,
+            );
+          }
+
+          const bound = yield* bind(task, worker, RunId.make("unrelated-run"));
+          expect((yield* readApprovals()).events).toEqual([]);
+          const exact = yield* bind(bound, worker, run!.id);
+          yield* bind(exact, worker, run!.id);
+          expect((yield* readApprovals()).events).toMatchObject([
+            {
+              kind: "approval",
+              taskId: task.taskId,
+              generation: task.generation,
+              request: { kind: "handoff", threadId: worker, requestId: handoff.handoffId },
+            },
+          ]);
+        }),
+      { threadId: worker },
+    );
+  },
+);
 
 it.effect("keeps a cleared shared-session approval alert on the task that owns its run", () => {
   const worker = ThreadId.make("goat-bot-session:shared");
