@@ -185,6 +185,7 @@ export function MobileBotWork(props: {
     capabilities,
     current: props.taskId ? null : listData,
     loaded: threads.successResult !== null,
+    home: threads,
     enabled: enabled && open && !props.taskId,
     scope: JSON.stringify([workOwner, sheet.generation]),
     owner: workOwner,

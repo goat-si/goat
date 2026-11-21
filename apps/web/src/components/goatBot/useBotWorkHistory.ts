@@ -34,8 +34,9 @@ export function useBotWorkHistory(
   botId: BotId | null,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   current: ChannelListBotThreadsResult,
-  loaded: boolean,
+  home: { readonly loaded: boolean; readonly isPending: boolean; readonly refresh: () => void },
 ) {
+  const { loaded } = home;
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
@@ -72,6 +73,7 @@ export function useBotWorkHistory(
     scope: foldScope,
     first: current,
     loaded,
+    home,
     activeSnoozes: snoozes,
     pages,
     setPages: setSnoozedPages,
@@ -113,7 +115,11 @@ export function useBotWorkHistory(
   }
   return {
     supported: view.supported,
-    snoozeList: { snoozed: fold.rows, snoozedContinuation: fold.continuation },
+    snoozeList: {
+      snoozed: fold.rows,
+      snoozedContinuation: fold.continuation,
+      snoozedLimitReached: fold.limitReached,
+    },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

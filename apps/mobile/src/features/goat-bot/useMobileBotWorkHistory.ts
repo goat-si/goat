@@ -45,6 +45,7 @@ export function useMobileBotWorkHistory(input: {
   readonly current: ChannelListBotThreadsResult | null;
   /** A settled read of the current list. */
   readonly loaded: boolean;
+  readonly home: { readonly isPending: boolean; readonly refresh: () => void };
   /** The computer is connected and lists this bot's tasks; offline nothing is read. */
   readonly enabled: boolean;
   /** One opening of Home on one computer for one bot: pages belong to it. */
@@ -147,6 +148,7 @@ export function useMobileBotWorkHistory(input: {
     scope: owner,
     first: current,
     loaded: input.loaded,
+    home: input.home,
     activeSnoozes: checked ?? undefined,
     pages,
     setPages: setSnoozedPages,
@@ -240,6 +242,7 @@ export function useMobileBotWorkHistory(input: {
     snoozeList: {
       snoozed: fold.rows,
       snoozedContinuation: fold.continuation,
+      snoozedLimitReached: fold.limitReached,
       activeSnoozes,
       uncheckedSnoozes,
       retrySnoozeCheck,

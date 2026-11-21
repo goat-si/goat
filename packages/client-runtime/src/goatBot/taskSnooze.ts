@@ -1,4 +1,5 @@
 import type { BotThreadRow, ChannelListBotThreadsResult } from "@goat/contracts";
+import { BOT_WORK_HISTORY_LIMIT } from "./botWorkHistory.ts";
 
 export const BOT_TASK_SNOOZE_CHOICES = [
   { id: "hour", label: "1 hour" },
@@ -50,6 +51,7 @@ export function botSnoozeFold(input: {
   readonly scope: string;
   readonly first: SnoozeRead;
   readonly loaded: boolean;
+  readonly home: { readonly isPending: boolean; readonly refresh: () => void };
   readonly activeSnoozes?: ChannelListBotThreadsResult["activeSnoozes"];
   readonly pages: BotSnoozeFoldPages | undefined;
   readonly setPages: (
@@ -57,7 +59,7 @@ export function botSnoozeFold(input: {
   ) => void;
   readonly read: ((cursor: string) => Promise<ChannelListBotThreadsResult | undefined>) | null;
 }) {
-  const { scope, first, setPages, read } = input;
+  const { scope, first, home, setPages, read } = input;
   const pages = input.pages?.scope === scope ? input.pages : undefined;
   const firstCursor = first.snoozedNextCursor;
   const revision = first.snoozedRevision;
@@ -70,12 +72,15 @@ export function botSnoozeFold(input: {
       ? firstCursor
       : continuation.nextCursor;
   const firstRows = first.snoozed ?? NO_SNOOZED_TASKS;
-  const rows =
+  const reconciled =
     pages === undefined || exhausted
       ? firstRows
       : reconcileSnoozePages(first, pages.rows, input.activeSnoozes);
+  const limitReached = reconciled.length >= BOT_WORK_HISTORY_LIMIT;
+  const rows = limitReached ? reconciled.slice(0, BOT_WORK_HISTORY_LIMIT) : reconciled;
+  const loading = pages?.loading === true || home.isPending;
   async function loadMore() {
-    if (cursor === undefined || read === null || pages?.loading) return;
+    if (cursor === undefined || read === null || loading || limitReached) return;
     const pending = {
       scope,
       rows,
@@ -87,15 +92,20 @@ export function botSnoozeFold(input: {
     };
     setPages(() => pending);
     const result = await read(cursor).catch(() => undefined);
+    const revisionChanged =
+      result !== undefined && revision !== undefined && result.snoozedRevision !== revision;
+    if (revisionChanged) home.refresh();
     setPages((prior) => {
       if (prior !== pending) return prior;
       if (result === undefined) return { ...pending, loading: false, failed: true };
-      if (revision !== undefined && result.snoozedRevision !== revision)
-        return { ...pending, loading: false };
+      if (revisionChanged) return { ...pending, loading: false };
+      const merged = mergeSnoozeRows(pending.rows, result.snoozed ?? NO_SNOOZED_TASKS);
+      const overflow = merged.length > BOT_WORK_HISTORY_LIMIT;
       return {
         ...pending,
-        rows: mergeSnoozeRows(pending.rows, result.snoozed ?? NO_SNOOZED_TASKS),
-        nextCursor: result.snoozedNextCursor,
+        rows: overflow ? merged.slice(0, BOT_WORK_HISTORY_LIMIT) : merged,
+        // Reconciliation may free space for the rest of this page.
+        nextCursor: overflow ? cursor : result.snoozedNextCursor,
         loading: false,
         failed: false,
       };
@@ -103,10 +113,11 @@ export function botSnoozeFold(input: {
   }
   return {
     rows,
+    limitReached,
     continuation:
-      cursor === undefined || read === null
+      cursor === undefined || read === null || limitReached
         ? undefined
-        : { loading: pages?.loading ?? false, failed: continuation?.failed ?? false, loadMore },
+        : { loading, failed: continuation?.failed ?? false, loadMore },
   };
 }
 

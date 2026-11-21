@@ -559,7 +559,9 @@ it("keeps the 51st snoozed task out of Earlier in chat and opens it from Show mo
   await act(async () => more?.click());
   expect(loadMore).toHaveBeenCalledOnce();
 
-  const calls = await show({ ...options, snoozed: rows });
+  const calls = await show({ ...options, snoozed: rows, snoozedLimitReached: true });
+  expect(container.textContent).toContain("Snoozed work limit reached.");
+  expect(container.querySelector('[aria-label="Show more snoozed tasks"]')).toBeNull();
   const lastRow = [...container.querySelectorAll("button")].find(
     (button) => button.textContent === last.task.title,
   );

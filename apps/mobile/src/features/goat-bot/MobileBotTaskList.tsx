@@ -45,6 +45,7 @@ export function mobileBotTaskListItems(props: {
   readonly showAllFinished: boolean;
   readonly snoozed?: ReadonlyArray<TaskRow>;
   readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
+  readonly snoozedLimitReached?: boolean | undefined;
   readonly activeSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
   readonly retrySnoozeCheck?: (() => void) | undefined;
   readonly uncheckedSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
@@ -258,6 +259,8 @@ export function mobileBotTaskListItems(props: {
           ),
         });
     const continuation = props.snoozedContinuation;
+    if (props.showSnoozed && props.snoozedLimitReached)
+      items.push(label("snoozed-limit", "Snoozed work limit reached."));
     if (props.showSnoozed && continuation) {
       if (continuation.failed) items.push(label("snoozed-failed", "Couldn't load snoozed work."));
       items.push({

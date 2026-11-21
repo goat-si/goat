@@ -90,6 +90,7 @@ opens in its own thread.
 Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
 **Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
 ends or the task changes status. Questions and approvals still appear in **Needs you**.
+Use **Show more** in **Snoozed** to see up to 500 snoozed tasks.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past

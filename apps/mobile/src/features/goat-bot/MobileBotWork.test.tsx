@@ -518,6 +518,70 @@ it("checks the chat fallback task and fetches the second Snoozed page from Home"
   expect(state.openTask).toHaveBeenCalledWith("task-050", "Snoozed task 51");
 });
 
+it("reloads mobile Home when the Snoozed page has a newer revision", async () => {
+  reset();
+  state.snoozeCapable = true;
+  const at = "2026-10-12T00:00:00.000Z";
+  const snoozed = (taskId: string, title: string) =>
+    decodeRow({
+      kind: "task",
+      task: { taskId, title, status: "completed", updatedAt: at },
+      view: { taskId, pinnedAt: null, doneAt: null, readThrough: null, snoozedUntil: at },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    });
+  const snapshot = (snoozedRevision: string, snoozedNextCursor: string) => ({
+    rows: [],
+    mainMessageCount: 0,
+    snoozed: [snoozed("first", "First snoozed task")],
+    snoozedRevision,
+    snoozedNextCursor,
+  });
+  Object.assign(state.task, {
+    isSuccess: true,
+    isPending: false,
+    data: snapshot("before", "old-cursor"),
+  });
+  state.snoozePage
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        rows: [],
+        mainMessageCount: 0,
+        snoozedRevision: "after",
+        snoozed: [snoozed("stale", "Stale page")],
+      }),
+    )
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        rows: [],
+        mainMessageCount: 0,
+        snoozedRevision: "after",
+        snoozed: [snoozed("next", "Next snoozed task")],
+      }),
+    );
+
+  await render();
+  await press("Work");
+  await press("Snoozed");
+  await press("Show more");
+  expect(state.task.refresh).toHaveBeenCalledOnce();
+  expect(container.querySelector('[aria-label="Show more snoozed tasks"]')).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(container.textContent).not.toContain("Stale page");
+
+  Object.assign(state.task, { isPending: false, data: snapshot("after", "new-cursor") });
+  await render();
+  await press("Show more");
+  expect(container.textContent).toContain("Next snoozed task");
+  expect(state.snoozePage.mock.calls.map(([, request]) => request.input.snoozedAfter)).toEqual([
+    "old-cursor",
+    "new-cursor",
+  ]);
+});
+
 it("shows a failed snooze check and retries before showing unchecked chat work", async () => {
   reset();
   state.snoozeCapable = true;

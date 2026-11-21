@@ -906,7 +906,7 @@ it("sends the same one-hour preset at -75, -45, and +45 minute client skew", asy
   );
 });
 
-it("opens the 51st snoozed task through the web fold's Show more", async () => {
+it("shows the next snoozed task and explains when the fold reaches its limit", async () => {
   setup();
   const snoozed = Array.from({ length: 51 }, (_, index) => {
     const row = taskRow(
@@ -933,4 +933,9 @@ it("opens the 51st snoozed task through the web fold's Show more", async () => {
   expect(loadMore).toHaveBeenCalledOnce();
   await screen.rerender(view([], { ...props, snoozed }));
   await expect.element(screen.getByRole("button", { name: /^Delayed task 51/ })).toBeVisible();
+  await screen.rerender(view([], { ...props, snoozed, snoozedLimitReached: true }));
+  await expect.element(screen.getByText("Snoozed work limit reached.")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Show more snoozed tasks" }))
+    .not.toBeInTheDocument();
 });

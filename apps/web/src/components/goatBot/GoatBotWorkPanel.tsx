@@ -175,7 +175,7 @@ export function GoatBotWorkPanel({
       remoteWork: current.remoteWork,
       mainMessageCount: current.mainMessageCount ?? 0,
     },
-    loaded && !failed,
+    { loaded: loaded && !failed, isPending: current.pending, refresh },
   );
   const { rows, remoteWork, snoozeList } = history;
   const offline = environment?.connection.phase === "offline";
@@ -356,8 +356,7 @@ export function GoatBotWorkPanel({
                 threadId={threadId}
                 botName={botName}
                 rows={rows}
-                snoozed={snoozeList.snoozed}
-                snoozedContinuation={snoozeList.snoozedContinuation}
+                {...snoozeList}
                 supportsSnooze={current.supportsSnooze}
                 remoteWork={remoteWork}
                 chips={current.chips}

@@ -19,7 +19,7 @@ type Entry = {
   remoteWork: readonly BotRemoteWork[];
   truncated: boolean;
 };
-const HISTORY_LIMIT = 500;
+export const BOT_WORK_HISTORY_LIMIT = 500;
 /** A Home's walk through a bot's older work; each client holds it in its Home's own state. */
 export const EMPTY_WALK = {
   entries: [] as readonly Entry[],
@@ -221,7 +221,7 @@ export function botWorkHistoryView(input: {
   };
   const merged = mergeBotThreadHistory(current, supported ? [history] : []);
   const older = walk.entries.filter((entry) => !listed.has(entry.task.task.taskId)).length;
-  const full = older >= HISTORY_LIMIT;
+  const full = older >= BOT_WORK_HISTORY_LIMIT;
   const hasMore =
     input.loaded && supported && !full && (!walk.started || walk.cursor !== undefined);
   const useMerged = merged.supported && supported;

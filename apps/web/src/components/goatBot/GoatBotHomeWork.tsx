@@ -78,6 +78,7 @@ export function GoatBotHomeWork({
   rows,
   snoozed = NO_SNOOZED,
   snoozedContinuation,
+  snoozedLimitReached,
   supportsSnooze = false,
   remoteWork = NO_REMOTE,
   chips = NO_CHIPS,
@@ -104,6 +105,7 @@ export function GoatBotHomeWork({
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly snoozed?: ReadonlyArray<TaskRow> | undefined;
   readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
+  readonly snoozedLimitReached?: boolean | undefined;
   readonly supportsSnooze?: boolean | undefined;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
   /** Each task's newest chip in the conversation, which says what its worker asks the person. */
@@ -283,6 +285,11 @@ export function GoatBotHomeWork({
                 Show more
               </Button>
             </div>
+          )}
+          {showSnoozed && snoozedLimitReached && (
+            <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+              Snoozed work limit reached.
+            </p>
           )}
         </>
       )}

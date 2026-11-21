@@ -49,17 +49,19 @@ function History({
   list,
   botId = null,
   snooze = false,
+  home = { loaded: true, isPending: false, refresh: () => {} },
 }: {
   list: ChannelListBotThreadsResult;
   botId?: BotId | null;
   snooze?: boolean;
+  home?: Parameters<typeof useBotWorkHistory>[4];
 }) {
   const history = useBotWorkHistory(
     env,
     botId,
     snooze ? { ...capabilities, goatBotTaskSnooze: true } : capabilities,
     list,
-    true,
+    home,
   );
   return (
     <>
@@ -548,4 +550,61 @@ it("finds the 52nd snooze after Home refreshes with the same first-page cursor",
   await expect.element(screen.getByText("Snoozed: Task 52")).toBeVisible();
   expect(loaded.all()).toHaveLength(1);
   await expect.element(more).not.toBeInTheDocument();
+});
+
+it("refreshes Home when Show more finds a newer snooze revision", async () => {
+  setup();
+  const until = "2026-11-13T02:00:00Z";
+  const snoozed = (title: string) => {
+    const taskId = ChannelTaskId.make(title);
+    return {
+      ...old,
+      task: { ...old.task, taskId, title },
+      view: { ...old.view, taskId, snoozedUntil: until },
+    };
+  };
+  const snapshot = (snoozedRevision: string, snoozedNextCursor: string) => ({
+    ...current([]),
+    snoozed: [snoozed("First snoozed task")],
+    snoozedRevision,
+    snoozedNextCursor,
+  });
+  const next = snoozed("Next snoozed task");
+  mock.active = [{ taskId: next.task.taskId, until }];
+  mock.read
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { ...current([]), snoozedRevision: "after", snoozed: [snoozed("Stale page")] },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { ...current([]), snoozedRevision: "after", snoozed: [next] },
+    });
+  const refresh = vi.fn();
+  const before = snapshot("before", "old-cursor");
+  await using screen = await render(
+    <History list={before} home={{ loaded: true, isPending: false, refresh }} snooze />,
+  );
+  const more = screen.getByRole("button", { name: "Show more snoozed tasks" });
+  await userEvent.click(more);
+  expect(refresh).toHaveBeenCalledOnce();
+  await screen.rerender(
+    <History list={before} home={{ loaded: true, isPending: true, refresh }} snooze />,
+  );
+  await expect.element(more).toBeDisabled();
+  await expect.element(screen.getByText("Snoozed: Stale page")).not.toBeInTheDocument();
+
+  await screen.rerender(
+    <History
+      list={snapshot("after", "new-cursor")}
+      home={{ loaded: true, isPending: false, refresh }}
+      snooze
+    />,
+  );
+  await userEvent.click(more);
+  await expect.element(screen.getByText("Snoozed: Next snoozed task")).toBeVisible();
+  expect(mock.read.mock.calls.map(([request]) => request.input.snoozedAfter)).toEqual([
+    "old-cursor",
+    "new-cursor",
+  ]);
 });

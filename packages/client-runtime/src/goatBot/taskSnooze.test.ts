@@ -36,6 +36,7 @@ it("reopens an exhausted continuation on a changed snooze set without dropping l
       scope: "env:bot",
       first: { ...result(revision, [first]), snoozedNextCursor: "same-cursor" },
       loaded: true,
+      home: { isPending: false, refresh: () => {} },
       activeSnoozes,
       pages,
       setPages: (update) => {
@@ -53,4 +54,37 @@ it("reopens an exhausted continuation on a changed snooze set without dropping l
   activeSnoozes.push({ taskId: added.task.taskId, until: at });
   expect(fold("after").continuation).toBeUndefined();
   expect(fold("after").rows).toEqual([first, loaded, added]);
+});
+
+it("caps the Snoozed fold at 500 rows even when the last page crosses the limit", async () => {
+  const snoozed = Array.from({ length: 501 }, (_, index) => row(`task-${index + 1}`));
+  const first = { rows: [], snoozed: snoozed.slice(0, 50), snoozedNextCursor: "50" };
+  let pages: BotSnoozeFoldPages | undefined;
+  const read = vi.fn(async (cursor: string): Promise<ChannelListBotThreadsResult> => {
+    const start = Number(cursor);
+    return {
+      rows: [],
+      mainMessageCount: 0,
+      snoozed: snoozed.slice(start, start + 41),
+      ...(start + 41 < snoozed.length ? { snoozedNextCursor: String(start + 41) } : {}),
+    };
+  });
+  const fold = () =>
+    botSnoozeFold({
+      scope: "env:bot",
+      first,
+      loaded: true,
+      home: { isPending: false, refresh: () => {} },
+      pages,
+      setPages: (update) => {
+        pages = update(pages);
+      },
+      read,
+    });
+
+  for (let page = 0; page < 11; page++) await fold().continuation?.loadMore();
+  expect(fold().rows).toEqual(snoozed.slice(0, 500));
+  expect(pages?.rows).toHaveLength(500);
+  expect(fold().continuation).toBeUndefined();
+  expect(fold().limitReached).toBe(true);
 });
