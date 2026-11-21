@@ -27,6 +27,13 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("renders TextEdit soft line breaks while hiding deleted breaks", () => {
+    const expected = html(String.raw`{\rtf1\ansi First line\line Second line}`);
+    expect(html(String.raw`{\rtf1\ansi First line\uc0\u8232 Second line}`)).toEqual(expected);
+    expect(html(String.raw`{\rtf1\ansi First line\u8232?Second line{\deleted\u8232?}}`)).toEqual(
+      expected,
+    );
+  });
   it("starts a new line at section and column breaks without duplicate breaks", () => {
     expect(
       html(
