@@ -8,7 +8,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("bot work upgrade", (
   it.effect("preserves a pre-snooze task and its view while adding the status revision", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 177 });
+      yield* runMigrations({ toMigrationInclusive: 179 });
       const time = "2026-10-12T00:00:00.000Z";
       yield* sql`INSERT INTO channel_conversations
         (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
@@ -20,7 +20,9 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("bot work upgrade", (
       yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
         VALUES ('task-view:owner:task', ${view}, ${time})`;
 
-      yield* runMigrations();
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 180 }), [
+        [180, "ChannelBotTaskSnooze"],
+      ]);
       const [task] = yield* sql<{ readonly status: string; readonly status_version: number }>`
         SELECT status, status_version FROM channel_tasks WHERE task_id = 'task'`;
       assert.deepStrictEqual(task, { status: "running", status_version: 0 });
