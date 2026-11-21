@@ -412,3 +412,63 @@ it.effect(
       {},
     ),
 );
+
+it.effect("a paused work trigger keeps its mode on older saves and needs a secret to enable", () =>
+  withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const captured = {
+          memoryGrantCeiling: "none" as const,
+          owner: {
+            principalId: owner.principalId,
+            grantedScopes: ["orchestration:operate", "settings:write"] as const,
+            sessionId: "routine-owner-session",
+          },
+        };
+        const signature = { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" };
+        const input = yield* routineInput({
+          enabled: false,
+          schedule: { type: "webhook", signature },
+        });
+        const draft = { ...input, routineMode: "work" as const };
+        const { task } = yield* service.upsert(draft, captured);
+        assert.propertyVal(task, "routineMode", "work");
+        assert.strictEqual(task.webhook?.hasSecret, false);
+        assert.include(
+          (yield* Effect.flip(service.setEnabled({ id: task.id, enabled: true }, captured)))
+            .message,
+          "signing secret",
+        );
+        assert.include(
+          (yield* Effect.flip(service.upsert({ ...draft, enabled: true }, captured))).message,
+          "signing secret",
+        );
+        const saved = yield* service.upsert(
+          {
+            ...input,
+            title: "Older client edit",
+            schedule: {
+              type: "webhook",
+              signature: { ...signature, encoding: "hex", secret: "synthetic-signing-secret" },
+            },
+          },
+          captured,
+        );
+        assert.propertyVal(saved.task, "routineMode", "work");
+        assert.strictEqual(saved.task.webhook?.hasSecret, true);
+        for (const update of [
+          service.upsert(draft),
+          service.upsert({ ...input, threadId: null, threadMode: "new_thread" }),
+          service.setEnabled({ id: task.id, enabled: true }),
+        ]) {
+          assert.include((yield* Effect.flip(update)).message, "person");
+        }
+        assert.strictEqual(
+          (yield* service.setEnabled({ id: task.id, enabled: true }, captured)).task.enabled,
+          true,
+        );
+      }),
+    {},
+  ),
+);
