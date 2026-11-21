@@ -141,7 +141,7 @@ export default mergeConfig(
       // css-tree's prebuilt ESM build inlines the data its lib/ entry reads with createRequire.
       alias: {
         "jsonc-parser": "jsonc-parser/lib/esm/main.js",
-        "css-tree": "css-tree/dist/csstree.esm",
+        "css-tree$": "css-tree/dist/csstree.esm",
       },
       deps: {
         // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.

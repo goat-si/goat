@@ -73,6 +73,7 @@ const verifyBuiltServe = Effect.fn("verifyBuiltServe")(function* () {
           GOAT_TELEMETRY_ENABLED: "false",
         },
         extendEnv: false,
+        forceKillAfter: "5 seconds",
       },
     ),
   );
@@ -96,8 +97,7 @@ const verifyBuiltServe = Effect.fn("verifyBuiltServe")(function* () {
     pollUntilReady.pipe(Effect.timeout(Duration.seconds(30))),
     server.exitCode.pipe(Effect.as(false)),
   ).pipe(Effect.orElseSucceed(() => false));
-  yield* server.kill({ killSignal: "SIGTERM" }).pipe(Effect.ignore);
-  yield* server.exitCode.pipe(Effect.timeout(Duration.seconds(10)), Effect.ignore);
+  yield* server.kill({ killSignal: "SIGTERM", forceKillAfter: "5 seconds" }).pipe(Effect.ignore);
   if (ready) {
     yield* Effect.log(`[built-serve] The built server answered 200 on port ${String(port)}.`);
     return;
