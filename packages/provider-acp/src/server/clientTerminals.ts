@@ -16,6 +16,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
+import { gitForWindowsBash, SpawnExecutableResolution } from "@goat/shared/shell";
 
 const MAX_LIVE_TERMINALS = 16;
 const MAX_UNRELEASED_TERMINALS = 64;
@@ -142,18 +143,29 @@ export interface AcpClientTerminalsOptions {
 function acpTerminalCommand(input: {
   readonly request: EffectAcpSchema.CreateTerminalRequest;
   readonly shellCommands?: boolean | undefined;
+  /** Windows only: the shell source runs here instead of Node's cmd.exe. */
+  readonly posixShell: string | undefined;
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly forceKillAfter: Duration.Input;
   readonly nice: string | undefined;
 }) {
+  const isShellSource = input.shellCommands === true && (input.request.args?.length ?? 0) === 0;
   const launch =
-    input.shellCommands === true && (input.request.args?.length ?? 0) === 0
-      ? toolPriorityShellLaunch(input.nice, input.request.command)
-      : {
-          ...toolPriorityLaunch(input.nice, input.request.command, input.request.args ?? []),
+    isShellSource && input.posixShell !== undefined
+      ? {
+          ...toolPriorityLaunch(input.nice, input.posixShell, [
+            "-c",
+            `chcp.com 65001 >/dev/null 2>&1\n${input.request.command}`,
+          ]),
           shell: false,
-        };
+        }
+      : isShellSource
+        ? toolPriorityShellLaunch(input.nice, input.request.command)
+        : {
+            ...toolPriorityLaunch(input.nice, input.request.command, input.request.args ?? []),
+            shell: false,
+          };
   return ChildProcess.make(launch.command, launch.args, {
     cwd: input.request.cwd ?? input.defaultCwd,
     ...(input.environment === undefined ? {} : { env: input.environment }),
@@ -181,6 +193,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
   const isWindows = yield* HostProcess.isWindows;
+  const resolveExecutable = yield* SpawnExecutableResolution;
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
   let nextTerminalNumber = 1;
@@ -263,6 +276,23 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
             ),
             (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
           ]);
+          // Agents that send shell source write bash; Node's shell on Windows is cmd.exe.
+          const gitExecutable =
+            isWindows && options.shellCommands === true && (request.args?.length ?? 0) === 0
+              ? resolveExecutable("git", "win32", environment)
+              : undefined;
+          const posixShell =
+            gitExecutable === undefined ? undefined : gitForWindowsBash(gitExecutable);
+          if (
+            isWindows &&
+            options.shellCommands === true &&
+            (request.args?.length ?? 0) === 0 &&
+            posixShell === undefined
+          ) {
+            return yield* terminalRequestError(
+              "Git Bash is required to run ACP shell commands on Windows.",
+            );
+          }
           const terminalScope = yield* Scope.make();
           const child = yield* restore(
             spawner
@@ -270,6 +300,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                 acpTerminalCommand({
                   request,
                   shellCommands: options.shellCommands,
+                  posixShell,
                   defaultCwd: options.defaultCwd,
                   environment,
                   forceKillAfter,
