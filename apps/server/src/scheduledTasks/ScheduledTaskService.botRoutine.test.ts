@@ -664,6 +664,7 @@ const eventSignature = {
 
 it.effect("a second accepted signed delivery waits for intake and keeps its delivery id", () => {
   const workers = new Map<string, Effect.Effect<void>>();
+  let frames = 0;
   return withWebhookService(
     ({ service, sql, runs }) =>
       Effect.gen(function* () {
@@ -689,6 +690,9 @@ it.effect("a second accepted signed delivery waits for intake and keeps its deli
         assert.deepStrictEqual(yield* sql`SELECT delivery_id FROM scheduled_task_webhook_pending`, [
           { delivery_id: second.deliveryId },
         ]);
+        const before = frames;
+        yield* drainPendingDispatch(workers);
+        assert.strictEqual(frames, before, "a busy retry must not frame the payload again");
         const receipt = yield* runs.deliveryReceipt(first.deliveryId);
         if (receipt === null) return assert.fail("First firing should exist");
         yield* runs.finishChannelFiring({
@@ -704,7 +708,12 @@ it.effect("a second accepted signed delivery waits for intake and keeps its deli
         assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 2);
         assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
       }),
-    { workers },
+    {
+      workers,
+      onFrame: () => {
+        frames += 1;
+      },
+    },
   );
 });
 
