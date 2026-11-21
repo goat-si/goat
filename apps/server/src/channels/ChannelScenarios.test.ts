@@ -1,3 +1,4 @@
+import { memberNoteFiles, memberNoteInput, setupMemberNotes } from "./testkit/memberNotes.ts";
 import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -2335,13 +2336,13 @@ describe("notes require a request in the current input", () => {
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         yield* runtime.drain;
         const ledger = yield* ChannelLedger.ChannelLedger;
         const gateway = yield* ChannelGateway.ChannelGateway;
         const receipt = yield* gateway.ingest(
-          goatInput("Always reply in Korean, remember that", "superseded-note"),
+          yield* memberNoteInput("Always reply in Korean, remember that", "superseded-note"),
           memoryRpcContext,
         );
         const newerId = ChannelReceptionId.make("reception:newer-note-pass");
@@ -2373,8 +2374,7 @@ describe("notes require a request in the current input", () => {
         assert.isUndefined(stored.snapshot.reply);
         // A note is saved before reply completion; retrying this input must not append another.
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+        const files = yield* memberNoteFiles;
         const firstNotes = yield* fs.readFileString(files.notes);
         const marker = " (asked in " + receipt.inputId + ")";
         assert.strictEqual(
