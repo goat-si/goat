@@ -57,5 +57,9 @@
   "8a79ebeceb89b809": "Esto elimina las vistas guardadas que no se pueden leer.",
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "00ad8aeed0a6c461": "Cancelar",
-  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo."
+  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
+  "a034d65164bb39de": "Copiar",
+  "0165ef55eb6c8a99": "Copiar como Markdown",
+  "439737cb6de2a5b3": "Copiar URL de la imagen",
+  "d3d24474c922eef2": "Copiar {count} URL de imágenes"
 }
