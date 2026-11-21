@@ -14,7 +14,9 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -25,6 +27,7 @@ import * as ServerConfig from "../config.ts";
 import * as OrchestratorMcp from "../mcp/OrchestratorMcpService.ts";
 import { layerOrchestratorService } from "../mcp/OrchestratorMcpService.testkit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ProviderTurnStart from "../orchestration-v2/ProviderTurnStartService.ts";
 import { nextTurnSelectionHarness } from "../orchestration-v2/testkit/SteeringHarness.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -365,65 +368,111 @@ describe("GOAT Bot thread transcripts", () => {
       }).pipe(Effect.provide(harness.layer));
     }),
   );
-  it.effect("redispatches a queued warm run with the bot instructions edited before start", () =>
-    Effect.gen(function* () {
-      const provider = yield* nextTurnSelectionHarness("channel-queued-profile");
-      const harness = sessionHarness({
-        realWorkerLaunch: true,
-        botWorkspaceRoot: provider.cwd,
-        workerAdapter: provider.adapter,
-      });
-      yield* Effect.gen(function* () {
-        yield* setupBot;
-        const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
-        const update = (instructions: string) =>
-          profiles.update({ botId: BotId.make("main"), instructions }, owner);
-        const old = "Use the old release checklist.";
-        const edited = "Use the new release checklist.";
-        yield* update(old);
-        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
-        const first = yield* ask("look: check the deploy", "profile-first");
-        const { threadId, runId: firstRun } = first.worker!;
-        if (firstRun === undefined) return yield* Effect.die("No first run");
-        yield* starts.start({ threadId, runId: firstRun });
-        assert.include(provider.started[0]?.message.text, old);
+  it.effect.each(["before start", "during preparation"] as const)(
+    "redispatches a queued warm run with the bot instructions edited %s",
+    (editTiming) =>
+      Effect.gen(function* () {
+        const provider = yield* nextTurnSelectionHarness("channel-queued-profile");
+        const preparing = yield* Deferred.make<void>();
+        const editedDuringPreparation = yield* Deferred.make<void>();
+        let pausePreparation = false;
+        const workerAdapter = {
+          ...provider.adapter,
+          openSession: (...args: Parameters<typeof provider.adapter.openSession>) =>
+            provider.adapter
+              .openSession(...args)
+              .pipe(
+                Effect.tap(() =>
+                  pausePreparation
+                    ? Deferred.succeed(preparing, undefined).pipe(
+                        Effect.andThen(Deferred.await(editedDuringPreparation)),
+                      )
+                    : Effect.void,
+                ),
+              ),
+        };
+        const harness = sessionHarness({
+          realWorkerLaunch: true,
+          botWorkspaceRoot: provider.cwd,
+          workerAdapter,
+        });
+        yield* Effect.gen(function* () {
+          yield* setupBot;
+          const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+          const update = (instructions: string) =>
+            profiles.update({ botId: BotId.make("main"), instructions }, owner);
+          const old = "Use the old release checklist.";
+          const edited = "Use the new release checklist.";
+          yield* update(old);
+          const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+          const first = yield* ask("look: check the deploy", "profile-first");
+          const { threadId, runId: firstRun } = first.worker!;
+          if (firstRun === undefined) return yield* Effect.die("No first run");
+          yield* starts.start({ threadId, runId: firstRun });
+          assert.include(provider.started[0]?.message.text, old);
 
-        const second = yield* ask("look: check the status page", "profile-queued");
-        assert.strictEqual(second.worker?.threadId, threadId);
-        const queued = second.worker?.runId;
-        if (queued === undefined) return yield* Effect.die("No queued run");
-        const threads = yield* ThreadManagement.ThreadManagementService;
-        const readQueued = threads
-          .getThreadRecords(threadId, ["runs"])
-          .pipe(Effect.map(({ runs }) => runs.find((run) => run.id === queued)));
-        assert.strictEqual((yield* readQueued)?.status, "queued");
-        yield* update(edited);
+          const second = yield* ask("look: check the status page", "profile-queued");
+          assert.strictEqual(second.worker?.threadId, threadId);
+          const queued = second.worker?.runId;
+          if (queued === undefined) return yield* Effect.die("No queued run");
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const readQueued = threads
+            .getThreadRecords(threadId, ["runs"])
+            .pipe(Effect.map(({ runs }) => runs.find((run) => run.id === queued)));
+          assert.strictEqual((yield* readQueued)?.status, "queued");
+          if (editTiming === "before start") yield* update(edited);
 
-        yield* finishRecordedRun(threadId, firstRun);
-        yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
-        assert.strictEqual((yield* readQueued)?.status, "starting");
-        yield* starts.start({ threadId, runId: queued });
-        assert.deepStrictEqual(
-          provider.started.map((turn) => turn.runId),
-          [firstRun],
-        );
+          yield* finishRecordedRun(threadId, firstRun);
+          yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
+          assert.strictEqual((yield* readQueued)?.status, "starting");
+          const startQueued = starts.start({ threadId, runId: queued });
+          if (editTiming === "before start") yield* startQueued;
+          else {
+            const sessionId = provider.started[0]?.providerThread.providerSessionId;
+            if (sessionId == null) return yield* Effect.die("No provider session to reopen");
+            yield* (yield* ProviderSessionManager.ProviderSessionManagerV2).close(sessionId);
+            pausePreparation = true;
+            const starting = yield* Effect.forkScoped(startQueued);
+            yield* Effect.raceFirst(
+              Deferred.await(preparing),
+              Fiber.join(starting).pipe(
+                Effect.andThen(Effect.die("The queued run did not reopen its provider session")),
+              ),
+            );
+            yield* update(edited);
+            pausePreparation = false;
+            yield* Deferred.succeed(editedDuringPreparation, undefined);
+            yield* Fiber.join(starting);
+          }
+          assert.deepStrictEqual(
+            provider.started.map((turn) => turn.runId),
+            [firstRun],
+          );
 
-        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-        const replacement = (yield* current(second.taskId)).worker;
-        assert.isDefined(replacement);
-        assert.notStrictEqual(replacement?.threadId, threadId);
-        if (replacement?.runId === undefined) return yield* Effect.die("No replacement run");
-        yield* starts.start({ threadId: replacement.threadId, runId: replacement.runId });
-        assert.deepStrictEqual(
-          provider.started.map((turn) => turn.runId),
-          [firstRun, replacement.runId],
-        );
-        const input = provider.started[1]?.message.text ?? "";
-        assert.include(input, "check the status page");
-        assert.include(input, edited);
-        assert.notInclude(input, old);
-      }).pipe(Effect.provide(harness.layer));
-    }),
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          yield* runtime.drain;
+          const redispatched = yield* current(second.taskId);
+          assert.strictEqual(redispatched.generation, second.generation + 1);
+          const replacement = redispatched.worker;
+          assert.notStrictEqual(replacement?.threadId, threadId);
+          if (replacement?.runId === undefined) return yield* Effect.die("No replacement run");
+          yield* starts.start({ threadId: replacement.threadId, runId: replacement.runId });
+          assert.deepStrictEqual(
+            provider.started.map((turn) => turn.runId),
+            [firstRun, replacement.runId],
+          );
+          const input = provider.started[1]?.message.text ?? "";
+          assert.include(input, "check the status page");
+          assert.include(input, edited);
+          assert.notInclude(input, old);
+          yield* finishRecordedRun(replacement.threadId, replacement.runId);
+          yield* runtime.drain;
+          const finished = yield* current(second.taskId);
+          assert.strictEqual(finished.status, "completed");
+          assert.strictEqual(finished.generation, redispatched.generation);
+          assert.strictEqual(finished.worker?.runId, replacement.runId);
+        }).pipe(Effect.provide(harness.layer));
+      }),
   );
   it.effect("rotates real warm runs after saving and clearing bot instructions", () =>
     Effect.gen(function* () {

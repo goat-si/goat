@@ -49,6 +49,7 @@ import {
   workerLaunchIdsFor,
 } from "./channelIds.ts";
 import { channelRunFailure, failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
+import { CHANNEL_SESSION_PROFILE_CHANGED } from "./channelSessionProfileFence.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
@@ -715,6 +716,15 @@ const make = Effect.gen(function* () {
       }
       const failure = yield* channelRunFailure(threads, current, session);
       if (failure === undefined) return latest !== stored;
+      if (failure.reason === CHANNEL_SESSION_PROFILE_CHANGED && latest.task.status === "running") {
+        const redispatched = yield* commitTransition(
+          ledger,
+          latest,
+          { type: "task.retry.requested", payload: { generation: task.generation + 1 } },
+          { owner, pendingAnswerMessageId: null, completionHold: null },
+        );
+        return redispatched !== undefined || latest !== stored;
+      }
       yield* commitTransition(
         ledger,
         latest,

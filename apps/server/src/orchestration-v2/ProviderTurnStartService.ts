@@ -21,6 +21,7 @@ export {
 } from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
 import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
+import { channelSessionProfileRefusal } from "../channels/channelSessionProfileFence.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
@@ -276,6 +277,27 @@ export const layer: Layer.Layer<
         attempt,
         expectedStartStatus,
       });
+      const profileRefusal =
+        !observeOnly &&
+        attempt.reason === "initial" &&
+        (attempt.inputDelivery === undefined || attempt.inputDelivery === "unsent") &&
+        run.startedAt === null &&
+        isGoatBotSessionThreadId(run.threadId) &&
+        Option.isSome(sql)
+          ? channelSessionProfileRefusal(sql.value, run.threadId, message.id)
+          : undefined;
+      const profileFailure = profileRefusal === undefined ? undefined : yield* profileRefusal;
+      if (profileFailure !== undefined) {
+        yield* settleRunBeforeStart({
+          signal: "channel-session-profile",
+          status: "failed",
+          now: yield* DateTime.now,
+          providerInstanceId: run.providerInstanceId,
+          itemProviderThreadId: providerThread.id,
+          item: { type: "error", title: "GOAT Bot session profile check", failure: profileFailure },
+        });
+        return;
+      }
       if (turnMessage.attachments.length === 0 && turnMessage.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
           turnMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
@@ -1348,6 +1370,19 @@ export const layer: Layer.Layer<
                 turn.providerThreadId === providerThread.id && turn.runAttemptId === attempt.id,
             )
           : undefined;
+      const memoryRefusal =
+        !observeOnly && Option.isSome(providerInputRefusal)
+          ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
+          : undefined;
+      const inputRefusal =
+        memoryRefusal !== undefined && profileRefusal !== undefined
+          ? memoryRefusal.pipe(
+              Effect.filterOrElse(
+                (refusal) => refusal !== undefined,
+                () => profileRefusal,
+              ),
+            )
+          : (memoryRefusal ?? profileRefusal);
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -1392,15 +1427,7 @@ export const layer: Layer.Layer<
             sameNativeThread &&
             !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
-        ...(!observeOnly && Option.isSome(providerInputRefusal)
-          ? {
-              providerInputRefusal: providerInputRefusal.value(
-                run.threadId,
-                providerMessage.id,
-                run.memoryGrantCeiling,
-              ),
-            }
-          : {}),
+        ...(inputRefusal === undefined ? {} : { providerInputRefusal: inputRefusal }),
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,

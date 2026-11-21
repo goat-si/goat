@@ -50,6 +50,12 @@ export interface SessionCurrent {
   readonly notes: string | undefined;
 }
 
+export const sessionProfileIsCurrent = (contextText: string | null, identity: BotIdentity) =>
+  // A row without its prefix predates frozen prefixes and carries no identity.
+  contextText === null
+    ? identitySection(identity) === ""
+    : identityIsCurrent(contextText, identity);
+
 /**
  * The rotation reason for an active session: its cache or context first, then a changed profile,
  * then changed notes. A failed notes read never rotates; the next good read decides.
@@ -61,14 +67,7 @@ export const sessionRotationReason = (
   current: SessionCurrent,
 ) =>
   sessionRotationDue(usage, nowMs) ??
-  // A row without its prefix predates frozen prefixes and carries no identity.
-  ((
-    contextText === null
-      ? identitySection(current.identity) === ""
-      : identityIsCurrent(contextText, current.identity)
-  )
-    ? undefined
-    : ("profile" as const)) ??
+  (sessionProfileIsCurrent(contextText, current.identity) ? undefined : ("profile" as const)) ??
   (current.notes === undefined ||
   (contextText !== null && notesAreCurrent(contextText, current.notes))
     ? undefined
