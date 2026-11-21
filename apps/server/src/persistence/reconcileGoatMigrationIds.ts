@@ -170,22 +170,25 @@ function legacyFirstBindId<E>(
     : undefined;
 }
 
-function findWorkerLaunchHeadsInsertion<E>(
+function legacyBotAttentionId<E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
   history: ReadonlyArray<LedgerRow>,
 ) {
-  const tail = history.filter((row) => row.migration_id >= LEGACY_BOT_ATTENTION_ID);
-  if (
-    tail.length !== 1 ||
-    tail[0]?.migration_id !== LEGACY_BOT_ATTENTION_ID ||
-    tail[0]?.name !== BOT_ATTENTION_MIGRATION_NAME
-  ) {
-    return undefined;
-  }
-  const heads = entries.find(([, name]) => name === "ChannelWorkerLaunchHeads");
-  return heads !== undefined &&
-    entries.some(([id, name]) => name === BOT_ATTENTION_MIGRATION_NAME && id === heads[0] + 1)
-    ? heads
+  const latest = history.reduce<LedgerRow | undefined>(
+    (highest, row) =>
+      highest === undefined || row.migration_id > highest.migration_id ? row : highest,
+    undefined,
+  );
+  const current = entries.find(([, name]) => name === BOT_ATTENTION_MIGRATION_NAME);
+  if (latest?.name !== BOT_ATTENTION_MIGRATION_NAME || current === undefined) return undefined;
+  return latest.migration_id === LEGACY_BOT_ATTENTION_ID ||
+    (latest.migration_id === LEGACY_BOT_ATTENTION_ID + 1 &&
+      latest.migration_id < current[0] &&
+      history.some(
+        (row) =>
+          row.migration_id === LEGACY_BOT_ATTENTION_ID && row.name === "ChannelWorkerLaunchHeads",
+      ))
+    ? latest.migration_id
     : undefined;
 }
 
@@ -320,18 +323,18 @@ export function memoryMigrationProblem<E>(
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
-  const workerHeads = findWorkerLaunchHeadsInsertion(entries, history);
+  const legacyAttention = legacyBotAttentionId(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
+      if (row.migration_id === legacyAttention) return [];
       const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
       const recordedId =
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
           ? firstBindId
           : row.migration_id +
-            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0) +
-            (workerHeads !== undefined && row.name === BOT_ATTENTION_MIGRATION_NAME ? 1 : 0);
+            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
     }),
   );
@@ -456,15 +459,12 @@ export const plannedGoatLedger = <E>(
   }
   const penMember = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
-  const workerHeads = findWorkerLaunchHeadsInsertion(entries, history);
-  const insertions = [
-    ...(firstBindId !== undefined
+  const insertions =
+    firstBindId !== undefined
       ? entries.filter(([id]) => id >= LEGACY_FIRST_BIND_ID && id < firstBindId)
       : penMember === undefined
         ? []
-        : [penMember]),
-    ...(workerHeads === undefined ? [] : [workerHeads]),
-  ];
+        : [penMember];
   const moved = [
     ...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)),
     ...goatRows,
@@ -496,7 +496,16 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   yield* assertMemoryMigrationsCompatible(entries);
   const history = yield* readHistory;
   if (history === undefined) return [];
-  const plan = plannedGoatLedger(entries, history);
+  const legacyAttention = legacyBotAttentionId(entries, history);
+  // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
+  if (legacyAttention !== undefined) {
+    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${legacyAttention}
+      AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
+  }
+  const plan = plannedGoatLedger(
+    entries,
+    history.filter((row) => row.migration_id !== legacyAttention),
+  );
   if (plan === undefined) return [];
   if (plan instanceof Migrator.MigrationError) return yield* plan;
   const { moved, goatRows, insertions } = plan;

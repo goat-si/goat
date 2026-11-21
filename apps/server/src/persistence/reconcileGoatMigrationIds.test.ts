@@ -3,9 +3,11 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
+import channelBotAttention from "./Migrations/178_ChannelBotAttention.ts";
 
 import {
   assertMemoryMigrationsCompatible,
+  fenceWorkTriggerRollback,
   GOAT_MIGRATION_NAMES,
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
@@ -136,6 +138,60 @@ const prePenMemberMemoryNames = [
   "MemoryCompactMoveReceipts",
   "MemoryOriginCatchup",
 ];
+
+it.effect.each([176, 177])(
+  "upgrades a dev database at migration %s without replacing earlier history",
+  (id) =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: id });
+      if (id === 177) yield* fenceWorkTriggerRollback();
+      const sql = yield* SqlClient.SqlClient;
+      const before = yield* history;
+      assert.deepStrictEqual(before.at(-1), migrationManifest.find(([entry]) => entry === id));
+      assert.isTrue(yield* hasPendingMigrations());
+
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([entry]) => entry > id),
+      );
+      assert.deepStrictEqual((yield* history).slice(0, before.length), before);
+      assert.deepStrictEqual((yield* history).slice(-3), [
+        [176, "ChannelWorkerLaunchHeads"],
+        [177, "WorkTriggerAuthorityFence"],
+        [178, "ChannelBotAttention"],
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_bot_attention`, []);
+      assert.isFalse(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+describe("bot attention ledger before worker launch heads", () => {
+  it.effect.each([176, 177])("preserves an alert written by the PR preview at migration %s", (id) =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: id - 1 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({ [`${id}_ChannelBotAttention`]: channelBotAttention }),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO channel_bot_attention (
+        owner_id, bot_id, task_id, event_id, kind, generation, occurred_at
+      ) VALUES ('owner', 'main', 'task', 'alert', 'question', 1, '2026-11-21T00:00:00Z')`;
+      assert.isTrue(yield* hasPendingMigrations());
+
+      yield* runMigrations();
+
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* sql`SELECT sequence, event_id FROM channel_bot_attention`, [
+        { sequence: 1, event_id: "alert" },
+      ]);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
+      assert.isFalse(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
 
 describe("memory reliability ledger before migration 158 AuthSessionPenMember", () => {
   it.effect.each([1, prePenMemberMemoryNames.length])(

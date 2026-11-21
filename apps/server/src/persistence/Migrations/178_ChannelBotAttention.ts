@@ -16,4 +16,6 @@ export default Effect.gen(function* () {
   )`;
   yield* sql`CREATE INDEX IF NOT EXISTS channel_bot_attention_owner_sequence
     ON channel_bot_attention (owner_id, sequence)`;
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_bot_attention_expiry
+    ON channel_bot_attention (occurred_at, sequence)`;
 });

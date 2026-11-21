@@ -15,6 +15,7 @@ import {
 } from "@goat/contracts/channel-bot-attention";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { attentionEventIdFor } from "./channelIds.ts";
 import { waitingAsks } from "./channelWaitingTasks.ts";
@@ -22,6 +23,27 @@ import { waitingAsks } from "./channelWaitingTasks.ts";
 const RETENTION_DAYS = 7;
 const EVENT_LIMIT = 500;
 const PAGE_SIZE = 50;
+const expiryCutoff = Effect.map(DateTime.now, (now) =>
+  DateTime.formatIso(DateTime.subtract(now, { days: RETENTION_DAYS })),
+);
+
+export const startBotAttentionExpiry = Effect.fn("channel.startBotAttentionExpiry")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  yield* Effect.gen(function* () {
+    const cutoff = yield* expiryCutoff;
+    yield* sql`DELETE FROM channel_bot_attention WHERE sequence IN (
+      SELECT sequence FROM channel_bot_attention WHERE occurred_at <= ${cutoff}
+      ORDER BY occurred_at, sequence LIMIT ${EVENT_LIMIT}
+    )`;
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not expire GOAT Bot attention events", { cause }),
+    ),
+    Effect.repeat(Schedule.spaced("15 minutes")),
+    Effect.forkScoped,
+  );
+});
 
 interface Ask {
   readonly kind: "question" | "approval" | "sign_in";
@@ -92,28 +114,26 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
         ${entry.requestId ?? null}, ${next.generation}, ${event.occurredAt})
       ON CONFLICT(event_id) DO NOTHING`;
   }
-  const cutoff = DateTime.formatIso(
-    DateTime.subtract(yield* DateTime.now, { days: RETENTION_DAYS }),
-  );
+  const cutoff = yield* expiryCutoff;
   yield* sql`DELETE FROM channel_bot_attention WHERE owner_id = ${ownerId} AND (
-    occurred_at < ${cutoff} OR sequence < COALESCE((
+    occurred_at <= ${cutoff} OR sequence < COALESCE((
       SELECT sequence FROM channel_bot_attention WHERE owner_id = ${ownerId}
       ORDER BY sequence DESC LIMIT 1 OFFSET ${EVENT_LIMIT - 1}
     ), 0)
   )`;
 });
 
-export const readBotAttention = Effect.fn("channel.readBotAttention")(function* (
+export const readBotAttention = Effect.fn("channel.readBotAttention")(function* <E>(
   sql: SqlClient.SqlClient,
   input: {
     readonly ownerId: string;
     readonly environmentId: EnvironmentId;
     readonly mode: GoatBotAlerts;
-    readonly names: ReadonlyMap<BotId, string>;
+    readonly resolveName: (botId: BotId) => Effect.Effect<string | undefined, E>;
     readonly request: ChannelAttentionFeedInput;
   },
 ) {
-  const { ownerId, environmentId, names, mode } = input;
+  const { ownerId, environmentId, resolveName, mode } = input;
   const cursor = input.request.cursor;
   if (cursor === undefined) {
     const rows = yield* sql<{ sequence: number }>`SELECT COALESCE(MAX(sequence), 0) AS sequence
@@ -125,9 +145,7 @@ export const readBotAttention = Effect.fn("channel.readBotAttention")(function* 
       events: [],
     } satisfies ChannelAttentionFeedResult;
   }
-  const cutoff = DateTime.formatIso(
-    DateTime.subtract(yield* DateTime.now, { days: RETENTION_DAYS }),
-  );
+  const cutoff = yield* expiryCutoff;
   const rows = yield* sql<{
     sequence: number;
     bot_id: BotId;
@@ -139,9 +157,13 @@ export const readBotAttention = Effect.fn("channel.readBotAttention")(function* 
     occurred_at: string;
   }>`SELECT sequence, bot_id, task_id, event_id, kind, request_id, generation, occurred_at
     FROM channel_bot_attention
-    WHERE owner_id = ${ownerId} AND sequence > ${cursor} AND occurred_at >= ${cutoff}
+    WHERE owner_id = ${ownerId} AND sequence > ${cursor} AND occurred_at > ${cutoff}
     ORDER BY sequence LIMIT ${PAGE_SIZE + 1}`;
   const page = rows.slice(0, PAGE_SIZE);
+  const names = new Map<BotId, string | undefined>();
+  for (const botId of new Set(page.map((row) => row.bot_id))) {
+    names.set(botId, yield* resolveName(botId));
+  }
   const events = page.flatMap((row): ReadonlyArray<ChannelAttentionEvent> => {
     const botName = names.get(row.bot_id);
     if (botName === undefined) return [];

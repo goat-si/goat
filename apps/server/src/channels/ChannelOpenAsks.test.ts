@@ -280,6 +280,7 @@ describe("open asks across bots", () => {
         assert.strictEqual(events, 500);
         assert.lengthOf(yield* sql`SELECT sequence FROM channel_bot_attention`, 500);
         yield* TestClock.adjust("8 days");
+        assert.deepStrictEqual(yield* sql`SELECT sequence FROM channel_bot_attention`, []);
         assert.deepStrictEqual((yield* members.attentionFeed(owner, { cursor: 0 })).events, []);
       }).pipe(Effect.provide(harness.layer));
     },

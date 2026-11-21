@@ -455,16 +455,21 @@ const make = Effect.gen(function* () {
   )(function* (owner: Owner, request: ChannelAttentionFeedInput) {
     const settings = yield* serverSettings.getSettings;
     const environmentId = yield* environment.getEnvironmentId;
-    const bots = yield* profiles.list(owner);
-    const names = new Map<BotId, string>([
-      [BotId.make(MAIN_BOT_ID), ChannelBotProfiles.DEFAULT_BOT_IDENTITY.name],
-    ]);
-    for (const bot of bots) names.set(bot.botId, bot.name);
     return yield* readBotAttention(sql, {
       ownerId: owner.ownerId,
       environmentId,
       mode: settings.goatBotAlerts,
-      names,
+      resolveName: Effect.fn("ChannelBotMembers.attentionName")(function* (botId: BotId) {
+        const bot = yield* ledger.getBotById(owner.ownerId, botId);
+        const profile =
+          bot === undefined
+            ? undefined
+            : yield* ChannelBotProfiles.readProfileRecord(sql, owner.ownerId, botId);
+        return profile?.role === "member" && profile.state === "deleted"
+          ? undefined
+          : (profile?.name ??
+              (botId === MAIN_BOT_ID ? ChannelBotProfiles.DEFAULT_BOT_IDENTITY.name : undefined));
+      }),
       request,
     });
   }, Effect.mapError(failed));

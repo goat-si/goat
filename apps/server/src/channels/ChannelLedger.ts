@@ -8,6 +8,7 @@ import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
+import { startBotAttentionExpiry } from "./channelBotAttention.ts";
 import { writeChannelTaskEvent } from "./channelTaskEventCommit.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
@@ -935,6 +936,7 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toLedgerError("acceptInput")));
 
+  yield* startBotAttentionExpiry(sql);
   const changes = yield* makeChannelTaskChanges(sql);
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
