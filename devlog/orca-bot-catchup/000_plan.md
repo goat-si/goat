@@ -55,7 +55,7 @@ Earlier GOAT Bot research this builds on: `~/Developer/codex/049_goat-bot-uiux-c
 | [120](120_hand_to_bot.md) A bot follows a thread               | G18                        | C4    | 020                              | —                     |
 | [130](130_linear.md) Linear                                    | G19                        | C4    | 010                              | D5 (needs an account) |
 
-Every unit changes a wire contract, persisted state or authority, so every unit is C4: a full plan at its start, failing-first tests including the denied, revoked and mixed-version cases, `vp run check:changed`, a fresh independent review, and a merge through `node scripts/merge-pr.ts` only when `goat-ci-result` is SUCCESS on the exact head. Each visible change carries its own real-client captures (test-goat-app on web, test-goat-mobile on the iOS simulator or Android emulator, with the Replay provider) before merge. Three integrated passes then walk whole journeys across units: **M1** after 010–030 (an event starts a bot, its task says what done means, the person is alerted and answers), **M2** after 040–080, **M3** at the end.
+Every unit changes a wire contract, persisted state or authority, so every unit is C4: a full plan at its start, failing-first tests including the denied, revoked and mixed-version cases, `vp run check:changed`, a fresh independent review, and a merge through `node scripts/merge-pr.ts` only when `goat-ci-result` is SUCCESS on the exact head. Before merge, every unit carries real-client captures on **each client surface it changes** — web/desktop through test-goat-app, iOS simulator and Android emulator through test-goat-mobile, with the Replay provider — and its unit doc lists them; a surface left unchanged is named as such in the PR. Three integrated passes then walk whole journeys across units: **M1** after 010–030 (an event starts a bot, its task says what done means, the person is alerted and answers), **M2** after 040–080, **M3** at the end.
 
 ## Decisions
 
@@ -75,4 +75,5 @@ Every unit meets its acceptance criteria with fresh evidence recorded in [900_le
 
 ## Review history
 
-- 2026-11-21: first independent audit returned FAIL with nine blockers (trigger authority and settlement, alert delivery path, Slack thread routing, enforcement points for memory and tools, import posture, agent authority, follow provenance, verification floors). All nine were folded into the unit docs above; re-audit recorded in 900.
+- 2026-11-21: first independent audit returned FAIL with nine blockers (trigger authority and settlement, alert delivery path, Slack thread routing, enforcement points for memory and tools, import posture, agent authority, follow provenance, verification floors). All nine were folded in at a0e26fef649.
+- 2026-11-21: second independent audit (fresh reviewer) returned FAIL: B3, B7, B8 closed; B1, B2, B4, B5, B6, B9 still open, plus five new blockers (local notification permission without Connect, Slack routing must not grant memory, Slack tasks must open, offline cache contents, export secret policy). All were folded in the next commit; verdicts are recorded in 900.

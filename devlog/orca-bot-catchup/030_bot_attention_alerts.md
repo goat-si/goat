@@ -11,8 +11,9 @@ Nothing tells a person that a bot asked a question, needs an approval, failed or
 1. **Attention feed** (server): a bounded table written in the same transaction as the transitions that create an ask or end a task (`channelTaskWrites.ts`, `channelRunOutcome.ts`). Each event: stable `eventId`, `kind` (`question | approval | sign_in | failed | finished`), `environmentId`, `botId`, `taskId`, `requestId?`, `generation` (so a retried attempt can alert again), time. Retained 7 days or 500 rows per owner. Clients read it with a cursor through a new read-authorized RPC; the same person-scoped authority as open asks.
 2. **Setting**: `goatBotAlerts: "needs_you" | "needs_you_and_results" | "off"` (default `needs_you`) as a `person` key in `SETTINGS_ACCESS` (`packages/contracts/src/agentSurface/settingsAccess.ts`), in Settings → GOAT Bot.
 3. **Web/desktop**: GOAT-owned `apps/web/src/components/goatBot/GoatBotAttentionNotifier.tsx` beside `ThreadNotificationCoordinator`; one OS notification per `eventId` (persisted cursor, so reconnect does not repeat), none while that bot's task is focused. Copy is generic: "Scout has a question" — bot name only, no task title or excerpt. Click re-reads the target with current authority, then opens the task and its request; a request already answered opens the task with the recorded answer.
-4. **Mobile**: map feed events to `apps/mobile/src/features/agent-awareness/notificationPayload.ts` targets and post local notifications while the app is running. iOS: alerts stop when the system suspends the app; the docs say so and the PR records the measured limit. Android: add a general `postLocalAlert` to the native module. `notificationNavigation.ts` routes cold and warm taps after re-reading the target.
-5. **Docs**: `docs/user/mobile-notifications.md` states what works over direct pairing (alerts while the app runs) and what waits on slice B.
+4. **Mobile permission without Connect**: the Notifications settings screen today shows a Connect placeholder and ties permission success to Connect registration (`apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx:58`, :128). Add a local-alert permission flow (ask, denied with a link to system settings, off) that works with Connect unavailable.
+5. **Mobile delivery**: map feed events to `apps/mobile/src/features/agent-awareness/notificationPayload.ts` targets and post local notifications while the app is running. iOS: alerts stop when the system suspends the app; the docs say so and the PR records the measured limit. Android: add a general `postLocalAlert` to the native module. `notificationNavigation.ts` routes cold and warm taps after re-reading the target.
+6. **Docs**: `docs/user/mobile-notifications.md` states what works over direct pairing (alerts while the app runs) and what waits on slice B.
 
 ## Slice B — a closed phone (stops at D2)
 
@@ -33,4 +34,4 @@ Needs a sender: GOAT Connect's relay or APNs/FCM keys GOAT does not hold. D2 opt
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review; before merge, captures on web and the Android emulator with the Replay showcase approval. Slice B: NOT RUN until D2.
+Focused tests; `vp run check:changed`; independent review. Before merge, with the Replay showcase approval on a directly paired client and Connect unavailable: web/desktop capture; Android emulator capture of allow, deny and off; iOS simulator capture while running plus the measured behavior after suspension. Slice B: NOT RUN until D2.

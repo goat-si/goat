@@ -9,11 +9,12 @@ New bot always starts blank (`docs/user/goat-bot.md:23`). Orca seeds name, instr
 ## Change
 
 1. **Catalog**: GOAT-owned `packages/shared/src/goatBotTemplates.ts` with five starters: CI watcher (Check failed trigger), PR reviewer (Pull request opened trigger), Release notes (weekly routine), Standup (weekday check-in), Issue triager (webhook trigger). Each has name, face, purpose, instructions, paused routines/triggers, and a first message.
-2. **Create**: the existing create input (`packages/contracts/src/channelGateway.ts:417`) gains optional `templateId`; it reuses `clientRequestId`, so a retry returns the same bot. Automations are created paused under the creating person; a failure leaves the bot with a status note "1 routine could not be added" and a **Retry** that re-runs only the missing automations, idempotently.
-3. **First message**: opens as an editable draft in the composer, not sent.
-4. **Clients**: **From a template** beside New bot on web/desktop (also in the command palette) and in the mobile New bot sheet, showing exactly what will be created, with every automation marked Paused.
-5. **Agents**: template listing for agents belongs to 110.
-6. **Docs**: `docs/user/goat-bot.md` Bots.
+2. **Older hosts**: templates are capability-gated like other optional profile fields (`packages/contracts/src/channelGateway.ts:402`); a host that would drop `templateId` never shows the picker, so selecting a template cannot silently create a blank bot.
+3. **Create**: the existing create input (`packages/contracts/src/channelGateway.ts:417`) gains optional `templateId`; it reuses `clientRequestId`, so a retry returns the same bot. Automations are created paused under the creating person; a failure leaves the bot with a status note "1 routine could not be added" and a **Retry** that re-runs only the missing automations, idempotently.
+4. **First message**: opens as an editable draft in the composer, not sent.
+5. **Clients**: **From a template** beside New bot on web/desktop (also in the command palette) and in the mobile New bot sheet, showing exactly what will be created, with every automation marked Paused.
+6. **Agents**: template listing for agents belongs to 110.
+7. **Docs**: `docs/user/goat-bot.md` Bots.
 
 ## Tests (failing first)
 
@@ -27,4 +28,4 @@ New bot always starts blank (`docs/user/goat-bot.md:23`). Orca seeds name, instr
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review; before merge, web and mobile captures of the picker.
+Focused tests, including an older-host stub that hides the picker; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator captures of the picker and the unsent draft.

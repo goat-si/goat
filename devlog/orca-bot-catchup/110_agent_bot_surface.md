@@ -24,4 +24,4 @@ An agent's proposal appears as a card on every client; accepting creates the rev
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review; before merge, web capture of the card. Waits on D4.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator captures of the proposal card. Waits on D4.

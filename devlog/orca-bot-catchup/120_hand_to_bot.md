@@ -23,4 +23,4 @@ A running thread followed by Scout appears in Scout's Home with its PR; Scout re
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review; before merge, web capture.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator captures of the thread menu and the followed thread in Home.
