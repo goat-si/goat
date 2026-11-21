@@ -2,6 +2,7 @@ import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { decodeRow, decodeTaskId, listDueTasks } from "./scheduledTaskRowDecode.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
+import { prepareScheduledWebhook } from "./prepareScheduledWebhook.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import { withRecentRuns } from "./scheduledTaskRecentRuns.ts";
 import * as ScheduledTaskRuns from "./ScheduledTaskRuns.ts";
@@ -32,14 +33,12 @@ import {
   type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookDeliveryOutcome,
-  type ScheduledTaskWebhookFilter,
   type ScheduledTaskWebhookUrlUnavailableReason,
   scheduledTaskThreadMode,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -70,6 +69,7 @@ import {
   acceptWebhookDedupe,
   decodePendingRequest,
   decodePendingTask,
+  type PendingWebhookTask,
   encodePendingTask,
   dedupeError,
   releaseWebhookReplay,
@@ -80,6 +80,7 @@ import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerificatio
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
+  routineBindingRevision,
   ROUTINE_MESSAGE_PREFIX,
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
@@ -143,24 +144,18 @@ export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<
   },
 ) {}
 
-class WebhookDeliverySkipped extends Data.TaggedError("WebhookDeliverySkipped")<{
-  readonly reason: string;
-}> {}
-
 interface RateWindow {
   readonly accepted: ReadonlyArray<{ readonly at: number }>;
   readonly rejectedLogged: boolean;
 }
 
-import type {
-  WebhookDeliveryOutcome,
-  WebhookTriggerRequest,
-  WebhookTriggerResult,
+import {
+  WebhookDeliverySkipped,
+  type WebhookDeliveryOutcome,
+  type WebhookTriggerRequest,
+  type WebhookTriggerResult,
 } from "./webhookTriggerTypes.ts";
 export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResult };
-
-const webhookFilters = (filters: ReadonlyArray<ScheduledTaskWebhookFilter> | undefined) =>
-  filters?.length ? { filters } : {};
 
 /** Server-captured authority; never decoded from a public task mutation. */
 export interface CapturedTaskMemoryGrant {
@@ -185,6 +180,7 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly delete: (
       input: ScheduledTaskDeleteInput,
+      owner?: RoutineOwner,
     ) => Effect.Effect<ScheduledTaskDeleteResult, ScheduledTaskError>;
     /** Deletes only tasks that still target this thread, including their webhook deliveries. */
     readonly deleteForThread: (threadId: ThreadId) => Effect.Effect<void, ScheduledTaskError>;
@@ -202,6 +198,7 @@ export class ScheduledTaskService extends Context.Service<
     >;
     readonly rotateWebhookToken: (
       input: ScheduledTaskRotateWebhookTokenInput,
+      owner?: RoutineOwner,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly listWebhookDeliveries: (
       input: ScheduledTaskListWebhookDeliveriesInput,
@@ -559,14 +556,14 @@ export const layer = Layer.effect(
     );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
-      task: ScheduledTask,
+      task: PendingWebhookTask,
       trigger: "scheduled" | "manual" | "webhook",
       webhook?: {
         readonly deliveryId: string;
         readonly prompt: string;
         readonly dispatched: Ref.Ref<"accepted" | "failed" | "unknown">;
         /** Set once this attempt's receipt admission commits; launch can only follow it. */
-        readonly admitted: Ref.Ref<boolean>;
+        readonly admitted: Ref.Ref<boolean | "deferred">;
       },
     ) {
       const run = Effect.uninterruptibleMask((restore) =>
@@ -617,7 +614,10 @@ export const layer = Layer.effect(
           // it waited for its turn.
           if (webhook !== undefined) {
             const reason =
-              active.createdAt !== task.createdAt
+              active.createdAt !== task.createdAt ||
+              active.routineMode !== task.routineMode ||
+              (task.routineMode === "work" &&
+                (task.projectId !== active.projectId || task.threadId !== active.threadId))
                 ? "The task was replaced before this delivery ran."
                 : active.schedule.type !== "webhook"
                   ? "The task's trigger changed before this delivery ran."
@@ -638,6 +638,8 @@ export const layer = Layer.effect(
             `${routine.type === "linkable" ? ROUTINE_MESSAGE_PREFIX : "scheduled-task-message:"}${fireKey}`,
           );
           const admission = Effect.gen(function* () {
+            if (active.routineMode === "work")
+              yield* botRoutines.verifyAdmission(task, webhook?.deliveryId, routine);
             const claim = yield* scheduledRuns.begin({
               task: active,
               firingId: commandId,
@@ -654,13 +656,16 @@ export const layer = Layer.effect(
                 owner: routine.owner,
                 firingId: commandId,
                 at: startedAtIso,
+                ...(webhook === undefined ? {} : { webhook }),
               });
             return claim;
           });
           const claim = yield* webhook === undefined && routine.type !== "linkable"
             ? admission
             : sql.withTransaction(admission);
-          if (webhook !== undefined) yield* Ref.set(webhook.admitted, true);
+          if (webhook !== undefined)
+            yield* Ref.set(webhook.admitted, claim.deferred ? "deferred" : true);
+          if (claim.deferred) return { task: active, threadId: null, firing: null };
           yield* notifyChanged;
           if (routine.type === "linkable")
             return {
@@ -1008,6 +1013,7 @@ export const layer = Layer.effect(
       // keep their run history, and so real load failures propagate instead
       // of silently resetting an existing row.
       const existingTask = yield* findTask(id);
+      const routineMode = input.routineMode ?? existingTask?.routineMode;
       const resolvedMode = resolveThreadMode(input, existingTask);
       const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
       // A bound thread belongs to its project, so moving the task leaves it for a new one.
@@ -1015,79 +1021,27 @@ export const layer = Layer.effect(
         existingTask !== null &&
         existingTask.projectId !== input.projectId &&
         keptThreadId === existingTask.threadId;
-      const threadId = resolvedMode === "new_thread" || movedOffThread ? null : keptThreadId;
-      // Keep the existing next_run_at when the schedule itself is untouched:
-      // editing a title or prompt must not postpone (or resurrect) a due
-      // run — only schedule/enabled changes restart the clock.
-      const schedule: ScheduledTask["schedule"] =
-        input.schedule.type === "webhook"
-          ? {
-              type: "webhook",
-              signature:
-                input.schedule.signature == null
-                  ? null
-                  : {
-                      header: input.schedule.signature.header.toLowerCase(),
-                      encoding: input.schedule.signature.encoding,
-                      prefix: input.schedule.signature.prefix,
-                    },
-              maxDeliveryAgeMinutes: input.schedule.maxDeliveryAgeMinutes ?? null,
-              ...(input.schedule.dedupe === undefined
-                ? existingTask?.schedule.type === "webhook" &&
-                  existingTask.schedule.dedupe !== undefined
-                  ? { dedupe: existingTask.schedule.dedupe }
-                  : {}
-                : { dedupe: input.schedule.dedupe }),
-              ...webhookFilters(
-                // Omitted keeps the stored filters, so a client that predates
-                // them can re-save a task without clearing them.
-                input.schedule.filters ??
-                  (existingTask?.schedule.type === "webhook"
-                    ? existingTask.schedule.filters
-                    : undefined),
-              ),
-            }
-          : input.schedule;
-      const webhook =
-        input.schedule.type === "webhook"
-          ? yield* Effect.gen(function* () {
-              const existing = existingTask === null ? null : yield* findWebhookCredentials(id);
-              const token = existing?.token ?? (yield* newWebhookToken);
-              const signature = input.schedule.type === "webhook" ? input.schedule.signature : null;
-              // A secretRef is a value the user entered for an agent; this
-              // save consumes it, so it cannot be used again. A replay of a
-              // save that already used it keeps the secret that save stored.
-              const replay = input.commandId !== undefined && existing?.secret != null;
-              const fromRef =
-                signature?.secretRef === undefined
-                  ? undefined
-                  : yield* secretRequests
-                      .consume({ ref: signature.secretRef, projectId: input.projectId })
-                      .pipe(
-                        Effect.catch((error) =>
-                          replay
-                            ? Effect.succeed(undefined)
-                            : Effect.fail(taskError(error.message, { taskId: id })),
-                        ),
-                      );
-              // A ref, when given, is the only source: a plain secret sent
-              // alongside it must not replace what a replayed save stored.
-              const provided = signature?.secretRef === undefined ? signature?.secret : fromRef;
-              const secret = signature == null ? null : (provided ?? existing?.secret ?? null);
-              const secretChanged =
-                signature == null || provided !== undefined || existing === null;
-              if (signature != null && secret === null) {
-                return yield* taskError("A webhook signature check needs a signing secret.", {
-                  taskId: id,
-                });
-              }
-              const secretRef =
-                signature?.secretRef !== undefined && fromRef !== undefined
-                  ? signature.secretRef
-                  : null;
-              return { token, secret, secretChanged, secretRef };
-            })
-          : { token: null, secret: null, secretChanged: true, secretRef: null };
+      const threadId =
+        routineMode === "work"
+          ? input.threadId === undefined
+            ? (existingTask?.threadId ?? null)
+            : input.threadId
+          : resolvedMode === "new_thread" || movedOffThread
+            ? null
+            : keptThreadId;
+      const owner = yield* botRoutines.checkUpsert(
+        { taskId: id, threadId, schedule: input.schedule, routineMode },
+        captured?.owner,
+        existingTask,
+      );
+      const { schedule, webhook } = yield* prepareScheduledWebhook({
+        input,
+        existingTask,
+        id,
+        work: routineMode === "work",
+        findWebhookCredentials: findWebhookCredentials(id),
+        newWebhookToken,
+      }).pipe(Effect.provideService(SecretRequests.SecretRequests, secretRequests));
       const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
         input.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(input.projectId))
@@ -1104,13 +1058,10 @@ export const layer = Layer.effect(
         ((input.threadId ?? null) === null || threadId === null)
       )
         return yield* taskError("Important updates requires an existing thread.", { taskId: id });
-      const owner = yield* botRoutines.checkUpsert(
-        { taskId: id, threadId, schedule },
-        captured?.owner,
-      );
       const task: ScheduledTask = {
         id,
         notificationPolicy,
+        ...(routineMode === "work" ? { routineMode } : {}),
         title: input.title,
         prompt: input.prompt,
         enabled: input.enabled,
@@ -1121,8 +1072,9 @@ export const layer = Layer.effect(
         threadMode: owner === null ? resolvedMode : "continue",
         workspaceStrategy,
         modelSelection: input.modelSelection,
-        memoryGrantCeiling: captured?.memoryGrantCeiling ?? "none",
-        runtimeMode: input.runtimeMode,
+        memoryGrantCeiling:
+          routineMode === "work" ? "none" : (captured?.memoryGrantCeiling ?? "none"),
+        runtimeMode: routineMode === "work" ? "approval-required" : input.runtimeMode,
         interactionMode: input.interactionMode,
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
@@ -1137,8 +1089,7 @@ export const layer = Layer.effect(
         runCount: existingTask?.runCount ?? 0,
       };
       const save = saveTask(task, input.requireExisting === true, webhook);
-      yield* botRoutines.saveWithOwner(save, id, owner);
-      yield* notifyChanged;
+      yield* botRoutines.saveWithOwner(save, task, owner);
       return { task: (yield* findTask(id)) ?? task };
     });
 
@@ -1146,7 +1097,9 @@ export const layer = Layer.effect(
       "ScheduledTaskService.setEnabled",
     )(function* (input, captured) {
       const existing = yield* loadTask(input.id);
-      const memoryGrantCeiling = captured?.memoryGrantCeiling ?? "none";
+      yield* botRoutines.checkEnable(existing, input.enabled, captured?.owner);
+      const memoryGrantCeiling =
+        existing.routineMode === "work" ? "none" : (captured?.memoryGrantCeiling ?? "none");
       if (
         existing.enabled === input.enabled &&
         (existing.memoryGrantCeiling ?? "none") === memoryGrantCeiling
@@ -1175,7 +1128,6 @@ export const layer = Layer.effect(
       if (updated.length === 0) {
         return yield* taskError("Schedule task not found.", { taskId: input.id });
       }
-      yield* notifyChanged;
       return {
         task: {
           ...existing,
@@ -1219,12 +1171,14 @@ export const layer = Layer.effect(
         { discard: true },
       );
 
-    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input, owner) =>
+      transactionalMutation(
+        Effect.gen(function* () {
+          if ((yield* findTask(input.id))?.routineMode === "work")
+            yield* botRoutines.requireWorkOwner(input.id, owner);
+          yield* deleteRow(input.id);
+        }),
+      ).pipe(Effect.andThen(forgetWebhookTask(input.id)), Effect.as({ id: input.id }));
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,
@@ -1261,6 +1215,7 @@ export const layer = Layer.effect(
       const moved = yield* sql<{ task_id: ScheduledTaskId }>`
         UPDATE scheduled_tasks SET project_id = ${input.projectId}
         WHERE project_id != ${input.projectId} AND thread_id IN ${sql.in(input.threadIds)}
+          AND (CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END) IS NOT 'work'
         RETURNING task_id
       `.pipe(
         Effect.mapError((cause) =>
@@ -1291,8 +1246,9 @@ export const layer = Layer.effect(
 
     const rotateWebhookToken: ScheduledTaskService["Service"]["rotateWebhookToken"] = Effect.fn(
       "ScheduledTaskService.rotateWebhookToken",
-    )(function* (input) {
+    )(function* (input, owner) {
       const task = yield* loadTask(input.id);
+      if (task.routineMode === "work") yield* botRoutines.requireWorkOwner(input.id, owner);
       if (task.schedule.type !== "webhook") {
         return yield* taskError("Only webhook tasks have a URL token.", { taskId: input.id });
       }
@@ -1313,7 +1269,6 @@ export const layer = Layer.effect(
       if (updated.length === 0) {
         return yield* taskError("Schedule task was deleted or replaced.", { taskId: input.id });
       }
-      yield* notifyChanged;
       return { task: yield* loadTask(input.id) };
     });
 
@@ -1428,6 +1383,8 @@ export const layer = Layer.effect(
       return sql`
         DELETE FROM scheduled_task_webhook_deliveries
         WHERE task_id = ${taskId} AND ${rowBucket} = ${retentionBucket}
+          AND NOT EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p
+            WHERE p.delivery_id = scheduled_task_webhook_deliveries.delivery_id)
           AND delivery_id NOT IN (
             SELECT delivery_id FROM scheduled_task_webhook_deliveries
             WHERE task_id = ${taskId} AND ${rowBucket} = ${retentionBucket}
@@ -1597,6 +1554,10 @@ export const layer = Layer.effect(
     ) {
       return yield* sql.withTransaction(
         Effect.gen(function* () {
+          if (yield* botRoutines.handedOff(deliveryId)) {
+            yield* sql`DELETE FROM scheduled_task_webhook_pending WHERE delivery_id=${deliveryId}`;
+            return "handed_off" as const;
+          }
           const proof = yield* scheduledRuns.deliveryDispatch(deliveryId);
           const receipt = yield* scheduledRuns.deliveryReceipt(deliveryId);
           if (receipt !== null)
@@ -1617,7 +1578,7 @@ export const layer = Layer.effect(
     });
 
     const runWebhookDelivery = Effect.fn("ScheduledTaskService.runWebhookDelivery")(function* (
-      task: ScheduledTask,
+      task: PendingWebhookTask,
       deliveryId: string,
       prompt: string,
     ) {
@@ -1627,10 +1588,15 @@ export const layer = Layer.effect(
           Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
         ]);
       const dispatched = yield* Ref.make<"accepted" | "failed" | "unknown">("unknown");
-      const admitted = yield* Ref.make(false);
+      const admitted = yield* Ref.make<boolean | "deferred">(false);
       return yield* runTask(task, "webhook", { deliveryId, prompt, dispatched, admitted }).pipe(
         Effect.flatMap(({ firing }) =>
           Effect.gen(function* () {
+            if ((yield* Ref.get(admitted)) === "deferred") return false;
+            if (task.routineMode === "work" && (yield* botRoutines.handedOff(deliveryId))) {
+              yield* cleanupDelivery(deliveryId);
+              return true;
+            }
             const status =
               firing?.dispatchStatus ?? (yield* scheduledRuns.deliveryDispatch(deliveryId));
             if (status === "accepted") yield* runOutcome("started");
@@ -1641,19 +1607,26 @@ export const layer = Layer.effect(
             } else
               yield* Effect.logWarning("Webhook dispatch outcome is unknown", { taskId: task.id });
             yield* cleanupDelivery(deliveryId);
+            return true;
           }),
         ),
         Effect.catchTags({
           WebhookDeliverySkipped: (skipped) =>
             Effect.gen(function* () {
               const proof = yield* scheduledRuns.deliveryDispatch(deliveryId);
-              if (proof === "accepted") return;
-              yield* runOutcome("skipped");
-              yield* markDeliveryFailed(deliveryId, skipped.reason);
-              yield* releaseFailedDelivery(deliveryId);
+              if (proof !== "accepted") {
+                yield* runOutcome("skipped");
+                yield* sql.withTransaction(
+                  Effect.gen(function* () {
+                    yield* markDeliveryFailed(deliveryId, skipped.reason);
+                    yield* releaseFailedDelivery(deliveryId);
+                    yield* sql`DELETE FROM scheduled_task_webhook_pending WHERE delivery_id = ${deliveryId}`;
+                  }),
+                );
+              }
+              return true;
             }),
         }),
-        Effect.as(true),
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             yield* Effect.logWarning("Webhook dispatch failed", { taskId: task.id, cause });
@@ -1758,7 +1731,9 @@ export const layer = Layer.effect(
       ) {
         return yield* notFound;
       }
-      const task = yield* decodeRow(row);
+      const decoded = yield* decodeRow(row);
+      const revision = routineBindingRevision(row.owner_json);
+      const task = revision === undefined ? decoded : { ...decoded, bindingRevision: revision };
       yield* Effect.annotateCurrentSpan({ "scheduled_task.id": task.id });
       const schedule = task.schedule;
       if (schedule.type !== "webhook") return yield* notFound;
@@ -1870,8 +1845,9 @@ export const layer = Layer.effect(
             return { _tag: "disabled" as const };
           }
           const signature = schedule.signature;
-          if (signature !== null) {
+          if (signature !== null || task.routineMode === "work") {
             const verified =
+              signature !== null &&
               row.webhook_secret !== null &&
               verifyWebhookSignature({
                 signature,
@@ -1905,11 +1881,15 @@ export const layer = Layer.effect(
             });
           });
           const failedFilter = findFailedWebhookFilter(schedule.filters ?? [], request);
-          if (failedFilter !== null) {
+          const filtered =
+            failedFilter === null
+              ? yield* botRoutines.ownWorkFilter(task, request)
+              : describeFailedWebhookFilter(failedFilter);
+          if (filtered !== undefined) {
             if (yield* takeFilteredLogSlot(task.id, DateTime.toEpochMillis(now))) {
               yield* log("filtered", {
                 signatureVerified: signature !== null,
-                error: describeFailedWebhookFilter(failedFilter),
+                error: filtered,
               });
             }
             yield* refundRejectionSlot;
@@ -1941,7 +1921,9 @@ export const layer = Layer.effect(
             }>`SELECT COUNT(*) AS count FROM scheduled_task_webhook_pending
               WHERE task_id = ${task.id} AND state IN ('pending', 'dispatching', 'running')`;
             if (
-              (row?.count ?? 0) + ((yield* Ref.get(webhookQueued)).get(queueKey) ?? 0) >=
+              (row?.count ?? 0) +
+                ((yield* Ref.get(webhookQueued)).get(queueKey) ?? 0) +
+                (task.routineMode === "work" ? yield* botRoutines.outstanding(task.id) : 0) >=
               WEBHOOK_MAX_QUEUED_PER_TASK
             )
               return yield* Effect.fail("queue_full" as const);
@@ -2051,6 +2033,7 @@ export const layer = Layer.effect(
           const reserveImmediate = Effect.gen(function* () {
             yield* checkCapacity;
             yield* reserve;
+            if (task.routineMode === "work") return;
             yield* Ref.update(webhookQueued, (counts) =>
               new Map(counts).set(queueKey, (counts.get(queueKey) ?? 0) + 1),
             );
@@ -2227,18 +2210,29 @@ export const layer = Layer.effect(
     });
     yield* scheduler.register("webhook-coalescing", dispatchPending());
 
+    const transactionalMutation = <A>(operation: Effect.Effect<A, ScheduledTaskError>) =>
+      sql.withTransaction(operation).pipe(
+        Effect.catchTags({
+          SqlError: (cause) => Effect.fail(taskError("Could not update schedule task.", { cause })),
+        }),
+        Effect.tap(() => notifyChanged),
+      );
+
     return ScheduledTaskService.of({
       list,
       subscribeList,
-      upsert: (input, captured) => upsert(input, captured).pipe(Effect.flatMap(projectTaskResult)),
+      upsert: (input, captured) =>
+        transactionalMutation(upsert(input, captured)).pipe(Effect.flatMap(projectTaskResult)),
       setEnabled: (input, captured) =>
-        setEnabled(input, captured).pipe(Effect.flatMap(projectTaskResult)),
+        transactionalMutation(setEnabled(input, captured)).pipe(Effect.flatMap(projectTaskResult)),
       delete: deleteTask,
       deleteForThread,
       moveThreadTasks,
       runNow: (input) => runNow(input).pipe(Effect.flatMap(projectTaskResult)),
-      rotateWebhookToken: (input) =>
-        rotateWebhookToken(input).pipe(Effect.flatMap(projectTaskResult)),
+      rotateWebhookToken: (input, owner) =>
+        transactionalMutation(rotateWebhookToken(input, owner)).pipe(
+          Effect.flatMap(projectTaskResult),
+        ),
       listWebhookDeliveries,
       getWebhookDelivery,
       triggerWebhook,

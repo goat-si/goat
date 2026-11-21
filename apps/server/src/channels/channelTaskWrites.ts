@@ -240,6 +240,7 @@ export const makeCreatedTasks = (input: {
   readonly requester: ChannelRequester;
   readonly notesChangeRequested?: ChannelTask["notesChangeRequested"] | undefined;
   readonly includePrimary?: boolean | undefined;
+  readonly routineWork?: boolean | undefined;
   readonly bot?: ChannelBotRef | undefined;
   readonly deliveries?: Array<ChannelLedger.ChannelOutboxInsert> | undefined;
   readonly now: string;
@@ -283,6 +284,7 @@ export const makeCreatedTasks = (input: {
       originBindingId: input.originBindingId,
       originAddress: input.originAddress,
       originInputId: input.inputId,
+      ...(input.routineWork === true ? { routineWork: true as const } : {}),
       requester: input.requester,
       title: spec.title,
       instruction: spec.instruction,

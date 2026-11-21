@@ -2,6 +2,7 @@ import type { ChannelRequester, ChannelTask, MemoryTaskGrantCeiling } from "@goa
 import * as Effect from "effect/Effect";
 import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 
+import * as ChannelLedger from "./ChannelLedger.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 
@@ -46,6 +47,22 @@ export const currentRequester = Effect.fn("channel.currentRequester")(function* 
 export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(function* (
   task: ChannelTask,
 ) {
+  if (task.routineWork === true) {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const grant = yield* ledger.routineWorkAuthority(task.originInputId);
+    if (
+      "error" in grant ||
+      grant.projectId !== task.projectId ||
+      (task.target !== undefined &&
+        (task.target.projectId !== task.projectId || task.target.remote !== undefined))
+    )
+      return undefined;
+    return {
+      ...task.requester,
+      grantedScopes: grant.scopes,
+      runtimeModeCeiling: "approval-required" as const,
+    };
+  }
   const address = task.originAddress;
   const requester =
     address.kind === "slack" || address.kind === "imessage"
@@ -75,4 +92,21 @@ export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(fu
       return undefined;
   }
   return requester;
+});
+
+/** Reapply the current requester grant without widening a worker's recorded memory ceiling. */
+export const workerMemoryCeiling = Effect.fn("channel.workerMemoryCeiling")(function* (
+  task: ChannelTask,
+) {
+  if (task.routineWork === true) return "none" as const;
+  const requester = yield* currentRequester(
+    task.requester,
+    task.originAddress.kind === "slack" || task.originAddress.kind === "imessage"
+      ? task.originAddress.connectionId
+      : undefined,
+  );
+  if (requester === undefined) return "none" as const;
+  return task.target === undefined
+    ? captureMemoryGrantCeiling(requester.grantedScopes, false)
+    : sessionMemoryCeiling(requester, task.target);
 });

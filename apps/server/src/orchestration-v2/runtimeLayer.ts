@@ -1,3 +1,4 @@
+import { layerBackfillChannelWorkerHeads } from "../channels/channelRoutineOwnWork.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
@@ -359,6 +360,7 @@ const layerHandoffsProvided = Handoffs.layer.pipe(
   Layer.provide(Layer.mergeAll(layerThreadManagementProvided, layerSecretRequestsProvided)),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
+  Layer.provide(layerBackfillChannelWorkerHeads),
   Layer.provide(
     Layer.mergeAll(
       layerThreadLaunchProvided,

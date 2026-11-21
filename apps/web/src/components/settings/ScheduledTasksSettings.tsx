@@ -1,3 +1,4 @@
+import { WebhookEndpointField } from "./WebhookEndpointField";
 import { resolvePastedPath } from "@goat/shared/path";
 import * as Schema from "effect/Schema";
 import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
@@ -19,7 +20,6 @@ import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import {
   ClockIcon as Clock3Icon,
-  CopyIcon,
   InboxIcon,
   EllipsisIcon as MoreHorizontalIcon,
   PencilIcon,
@@ -65,17 +65,9 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
-import { requestConfirmDialog } from "../../confirmDialog";
-import { webhookAddress } from "@goat/client-runtime/webhook-address";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useNavigate } from "@tanstack/react-router";
 import { useNowMinute } from "../../hooks/useNowMinute";
-import {
-  useEnvironment,
-  useEnvironmentHttpBaseUrl,
-  type EnvironmentPresentation,
-} from "../../state/environments";
+import { useEnvironment, type EnvironmentPresentation } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
@@ -811,7 +803,8 @@ function WebhookDeliveriesDialog({
                     <span className="text-muted-foreground">
                       <ScheduledRelativeLabel value={delivery.receivedAt} />
                     </span>
-                    {delivery.outcome === "filtered" && delivery.error ? (
+                    {(delivery.outcome === "filtered" || delivery.outcome === "dispatch_failed") &&
+                    delivery.error ? (
                       <span className="text-muted-foreground">{delivery.error}</span>
                     ) : null}
                     {delivery.missingFields.length > 0 ? (
@@ -856,96 +849,6 @@ function DeliveryBlock({ title, children }: { title: string; children: ReactNode
         {children}
       </pre>
     </div>
-  );
-}
-
-function WebhookEndpointField({
-  environmentId,
-  task,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly task: ScheduledTask | null;
-}) {
-  const canRotate = useAtomValue(
-    serverEnvironment.rotateScheduledTaskWebhookToken.permissionAtom(environmentId),
-  );
-  const httpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "webhook URL" });
-  const rotate = useAtomCommand(serverEnvironment.rotateScheduledTaskWebhookToken, {
-    label: "scheduled task rotate webhook token",
-  });
-  const [rotating, setRotating] = useState(false);
-  const endpoint = task?.webhook;
-  if (!task || !endpoint) {
-    return <p className="text-sm text-muted-foreground">The URL appears after you save.</p>;
-  }
-  const { address: url, copyable, note } = webhookAddress(endpoint, httpBaseUrl);
-  const rotateUrl = async () => {
-    const confirmed =
-      (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {
-        variant: "destructive",
-      })) ?? window.confirm("Rotate this webhook URL? The current URL stops working.");
-    if (!confirmed) return;
-    setRotating(true);
-    const result = await rotate({ environmentId, input: { id: task.id } });
-    setRotating(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not rotate webhook URL",
-          description: String(squashAtomCommandFailure(result)),
-        }),
-      );
-    }
-  };
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2">
-        <Input
-          readOnly
-          aria-label="Webhook URL"
-          value={url}
-          onFocus={(event) => event.currentTarget.select()}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          type="button"
-          disabled={!copyable}
-          onClick={() => copyToClipboard(url, undefined)}
-        >
-          <CopyIcon />
-          {isCopied ? "Copied" : "Copy"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          type="button"
-          disabled={rotating || !canRotate}
-          onClick={() => void rotateUrl()}
-        >
-          Rotate
-        </Button>
-      </div>
-      {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
-      {endpoint.url !== null ? <WebhookDeliveryMode environmentId={environmentId} /> : null}
-    </div>
-  );
-}
-
-function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const cloudLink = usePrimaryCloudLinkState();
-  if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      {cloudLink.data.holdWebhooksWhileOffline
-        ? "Held for up to 24 hours while this environment is offline. "
-        : "Forwarded live. Requests fail while this environment is offline. "}
-      <Link to="/settings/connections" className="underline underline-offset-2">
-        Change in Connections
-      </Link>
-    </p>
   );
 }
 

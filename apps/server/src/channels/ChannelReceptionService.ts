@@ -119,7 +119,12 @@ import {
   approvalRequestDetail,
   nativeQuestionDeliveries,
 } from "./channelNativeQuestionCards.ts";
-import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
+import {
+  makeRoutineInputs,
+  ROUTINE_COPY,
+  routineDecision,
+  routinePromptFields,
+} from "./channelRoutineInputs.ts";
 import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
@@ -854,6 +859,7 @@ const make = Effect.gen(function* () {
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
       const routine = yield* routineInputs.isRoutineInput(inputId);
+      const workProject = routine ? yield* routineInputs.workProject(inputId) : undefined;
       const viewChoice = routine ? undefined : yield* taskViewChoice(stored);
       if (viewChoice === undefined && (yield* tt.shouldRefuseTaskThread(ledger, stored))) {
         yield* tt.refuseTaskThread(ledger, stored, owner);
@@ -865,7 +871,6 @@ const make = Effect.gen(function* () {
       const conversationId = stored.snapshot.conversationId;
       const origin = message.replyAddress;
       const mention = tt.mentionFor(origin, message.actor.externalActorId);
-
       if (!isHome) {
         yield* ledger.failReception({
           owner,
@@ -887,7 +892,6 @@ const make = Effect.gen(function* () {
         yield* wake.wake;
         return;
       }
-
       if (origin.kind === "goat" && !routine) {
         // The task and answer the accepted copy decided stay on the message (TimelineRecords).
         yield* timeline
@@ -901,15 +905,10 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.ignore);
       }
-
-      // The person as they stand now: a Slack link removed or narrowed since the message
-      // arrived counts.
       const judgedNow = currentRequester(requester, message.connectionId).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
-      // Whether this message's sender may direct someone's task: their own task on this
-      // connection, or another's within that person's limits.
       const directs = (who: ChannelRequester | undefined, task: ChannelTask) =>
         who !== undefined && mayDirect(who, message.connectionId, task);
       const tasks = yield* ledger.listConversationTasks(conversationId);
@@ -1018,9 +1017,7 @@ const make = Effect.gen(function* () {
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
                 const notes = yield* readChannelBotNotes(botFiles, message.text);
-                // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
-                // Titles of the owner's threads are other work, so only someone who may read it sees them.
                 const recent = viewer.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
@@ -1087,11 +1084,15 @@ const make = Effect.gen(function* () {
                   ...(journal === "" ? {} : { journal }),
                   ...(skills.length === 0 ? {} : { skills }),
                   identity: identity.value,
-                  ...(routine ? { routine } : {}),
+                  ...routinePromptFields(routine, workProject),
                   requester,
                 };
-                const first = yield* generateOutcome({ ...base, readsAllowed: true });
-                if (!first.ok || first.result.action.type !== "read") return first;
+                const first = yield* generateOutcome({
+                  ...base,
+                  readsAllowed: workProject === undefined,
+                });
+                if (workProject !== undefined || !first.ok || first.result.action.type !== "read")
+                  return first;
                 // One round of reads, then the answer. Reads run within what this requester
                 // may see; a second request to read is answered with what the pass wrote.
                 // The first pass can take most of a minute; judge the link again before reading.
@@ -1171,7 +1172,7 @@ const make = Effect.gen(function* () {
         yield* wake.wake;
         return;
       }
-      const decision = routineDecision(outcome.result, routine);
+      const decision = routineDecision(outcome.result, routine, workProject, message.text);
       if (decision.action.type === "no_update") {
         // Nothing needs the person: the input settles with no reply delivered or shown.
         yield* ledger.completeReception({
@@ -1229,7 +1230,6 @@ const make = Effect.gen(function* () {
         droppedNoteNotice(editRefusal);
       let replyText = decision.replyText;
       let finalDecision = decision;
-      // Nothing was saved, so the model's reply, which says it was, gives way to the notice.
       if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
@@ -1261,7 +1261,6 @@ const make = Effect.gen(function* () {
       }
 
       if (action.type === "create_task" || action.type === "run_turn") {
-        // People start work; agents may only report on or answer existing work.
         const mayStart =
           requester.originKind !== "mcp" &&
           requester.grantedScopes.includes("orchestration:operate");
@@ -1271,7 +1270,6 @@ const make = Effect.gen(function* () {
         } else {
           // A new turn is its own task, queued as its own run in the conversation's session;
           // only a follow_up naming a task joins that task's run.
-          // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
             mayChangeNotes &&
             action.notesChangeRequested !== undefined &&
@@ -1285,6 +1283,7 @@ const make = Effect.gen(function* () {
             originBindingId: stored.snapshot.bindingId,
             originAddress: origin,
             requester,
+            routineWork: workProject !== undefined,
             ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
             bot,
             deliveries,

@@ -41,7 +41,7 @@ import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 import * as Repository from "../project/RepositoryIdentityResolver.ts";
 import * as Settings from "../serverSettings.ts";
-import receiptsMigration from "../persistence/Migrations/176_TurnMemoryReceipts.ts";
+import receiptsMigration from "../persistence/Migrations/178_TurnMemoryReceipts.ts";
 import { recordTurnMemory } from "./TurnMemoryReceipts.ts";
 import * as Recall from "./MemoryRecall.ts";
 import * as Service from "./MemoryService.ts";

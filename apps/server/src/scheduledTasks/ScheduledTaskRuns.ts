@@ -58,7 +58,7 @@ export class ScheduledTaskRuns extends Context.Service<
       readonly triggerKind: "scheduled" | "manual" | "webhook";
       readonly webhookDeliveryId: string | null;
     }) => Effect.Effect<
-      { readonly created: boolean; readonly dispatch: boolean },
+      { readonly created: boolean; readonly dispatch: boolean; readonly deferred?: true },
       ScheduledTaskError
     >;
     readonly finishDispatch: (input: {
@@ -399,6 +399,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           }
           const busy =
             yield* sql`SELECT 1 FROM scheduled_task_runs WHERE task_id=${input.task.id} AND task_created_at=${input.task.createdAt} AND firing_id<>${input.firingId} AND (dispatch_bookkept_at IS NULL OR dispatch_status='dispatching')`;
+          if (busy.length && input.triggerKind === "webhook" && input.task.routineMode === "work")
+            return { created: false, dispatch: false, deferred: true } as const;
           if (busy.length)
             return yield* new ScheduledTaskError({
               message: "Schedule task is already running.",
@@ -700,6 +702,9 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             yield* sql`UPDATE scheduled_task_runs SET thread_id=${next.threadId},run_id=NULL,dispatch_status=${next.dispatchStatus},
               status=${next.status},completed_at=${next.completedAt},snapshot_json=${json} WHERE firing_id=${row.firing_id}`;
             const error = input.outcome.type === "failed" ? input.outcome.error : null;
+            if (row.webhook_delivery_id !== null && error !== null)
+              yield* sql`UPDATE scheduled_task_webhook_deliveries SET outcome='dispatch_failed', error=${error}
+                WHERE delivery_id=${row.webhook_delivery_id} AND outcome='accepted'`;
             yield* sql`UPDATE scheduled_tasks SET last_run_status=${legacyStatus(next.status)},last_run_error=${error},updated_at=${input.at}
               WHERE task_id=${row.task_id} AND created_at=${row.task_created_at} AND last_firing_id=${row.firing_id}`;
           }
