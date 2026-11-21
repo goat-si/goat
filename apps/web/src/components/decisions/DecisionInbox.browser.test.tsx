@@ -470,7 +470,7 @@ it("a remote approval target never chooses a request with the same id on another
     </RegistryContext.Provider>,
     { router: false },
   );
-  await screen.getByRole("button", { name: "Approve", exact: true }).click();
+  await act(async () => screen.getByRole("button", { name: "Approve", exact: true }).click());
   expect(state.approval).toHaveBeenCalledExactlyOnceWith({
     environmentId: secondary,
     input: { threadId: "second", requestId: "same", decision: "accept" },
