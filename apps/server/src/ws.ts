@@ -109,7 +109,6 @@ import {
   type ProjectMutation,
   type ProviderInstanceId,
   type PullRequestRef,
-  type ScheduledTaskListResult,
   AutomationResumeError,
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -302,6 +301,7 @@ import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import { makeScheduledTaskRpcAccess } from "./scheduledTasks/scheduledTaskRpcAccess.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -1310,14 +1310,11 @@ export const layerWsRpc = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
-      // Webhook URLs start agents; expose them only to operate-scoped sessions while keeping tasks readable.
-      const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
-        currentSession.scopes.includes(AuthOrchestrationOperateScope)
-          ? result
-          : {
-              ...result,
-              tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
-            };
+      const scheduledTaskAccess = makeScheduledTaskRpcAccess(
+        currentSession,
+        channelOwner,
+        sessions,
+      );
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
@@ -1988,25 +1985,22 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
-          scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
+          scheduledTasks.list().pipe(Effect.flatMap(scheduledTaskAccess.visibleUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
-          scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
+          scheduledTasks.subscribeList().pipe(Stream.mapEffect(scheduledTaskAccess.visibleUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
-          captureTaskMemoryCeiling.pipe(
-            Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.upsert(input, { memoryGrantCeiling, owner: channelOwner }),
-            ),
-          ),
+          scheduledTaskAccess
+            .capture(captureTaskMemoryCeiling)
+            .pipe(Effect.flatMap((captured) => scheduledTasks.upsert(input, captured))),
         [WS_METHODS.scheduledTasksSetEnabled]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(captureTaskMemoryCeiling),
-            Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.setEnabled(input, { memoryGrantCeiling }),
-            ),
+            Effect.andThen(scheduledTaskAccess.capture(captureTaskMemoryCeiling)),
+            Effect.flatMap((captured) => scheduledTasks.setEnabled(input, captured)),
           ),
         [WS_METHODS.scheduledTasksDelete]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(scheduledTasks.delete(input)),
+            Effect.andThen(scheduledTaskAccess.owner),
+            Effect.flatMap((owner) => scheduledTasks.delete(input, owner)),
           ),
         [WS_METHODS.scheduledTasksRunNow]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
@@ -2014,7 +2008,8 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.scheduledTasksRotateWebhookToken]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
+            Effect.andThen(scheduledTaskAccess.owner),
+            Effect.flatMap((owner) => scheduledTasks.rotateWebhookToken(input, owner)),
           ),
         [WS_METHODS.handoffsOpen]: (input) => handoffs.open(input, currentSessionId),
         [WS_METHODS.handoffsRespond]: (input) =>

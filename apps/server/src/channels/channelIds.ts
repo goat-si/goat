@@ -232,9 +232,11 @@ export const childWorkIdFor = (taskId: ChannelTaskId, generation: number, reques
 export const childWorkCorrelationIdFor = (childWorkId: ChannelChildWorkId) =>
   stableId("channel-child-remote", [childWorkId]);
 
-/** The remote worktree branch for one task generation. */
+export const CHANNEL_WORKER_BRANCH_PREFIX = "goat/channel-";
+
+/** The worktree branch for one task generation. */
 export const remoteBranchFor = (taskId: ChannelTaskId, generation: number) =>
-  "goat/channel-" + digest([taskId]).slice(0, 8).toLowerCase() + "-g" + generation;
+  CHANNEL_WORKER_BRANCH_PREFIX + digest([taskId]).slice(0, 8).toLowerCase() + "-g" + generation;
 
 /** The ledger event that imports one remote report; a re-imported report finds it. */
 export const remoteReportEventIdFor = (correlationId: string, sequence: number) =>

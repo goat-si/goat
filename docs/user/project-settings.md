@@ -142,6 +142,8 @@ older clients to use these notification choices consistently.
 
 ## Webhook automations
 
+To start work with a named GOAT Bot, create a [signed work trigger from its Home](./goat-bot.md#work).
+
 In **Settings → Scheduled tasks**, choose **On webhook**
 as a task's schedule to run it whenever another service calls its URL, such as
 GitHub on a new pull request or a CI job that failed. The editor shows the

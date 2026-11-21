@@ -4,6 +4,8 @@ import { type ChannelDeliveryLedgerOps, deliveryLedger } from "./channelDelivery
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
+import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
+import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
@@ -156,6 +158,10 @@ type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
   ChannelLedgerOps & {
+    readonly recordLaunchHead: (
+      input: Parameters<typeof recordChannelLaunchHead>[0],
+    ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly routineWorkAuthority: Effect.Success<ReturnType<typeof makeRoutineWorkAuthority>>;
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
       readonly ownerId: string;
@@ -978,15 +984,15 @@ const make = Effect.gen(function* () {
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
     acceptInput,
-
+    routineWorkAuthority: yield* makeRoutineWorkAuthority(),
+    recordLaunchHead: (input) =>
+      recordChannelLaunchHead(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     setTimelineSequence: (inputId, sequence) =>
       sql`UPDATE channel_inbox SET timeline_sequence = ${sequence} WHERE input_id = ${inputId}`.pipe(
         Effect.asVoid,
         Effect.mapError(toLedgerError("setTimelineSequence")),
       ),
-
     getInput: (inputId) => readInbox(inputId).pipe(Effect.mapError(toLedgerError("getInput"))),
-
     listPendingInputs: (limit) =>
       sql<{ readonly input_id: ChannelInputId }>`
         SELECT input_id FROM channel_inbox WHERE state IN ('accepted', 'processing')
@@ -995,7 +1001,6 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listPendingInputs")),
       ),
-
     // rowid breaks ties in arrival order: inputs accepted in the same millisecond keep the order
     // they were stored in.
     listReceivableInputs: (limit) =>
@@ -1013,10 +1018,8 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
-
     ...receptionLedger(sql, reception),
     ...bots,
-
     readConversationTail: (conversationId, limit) =>
       sql<{
         readonly input_id: ChannelInputId;
@@ -1040,7 +1043,6 @@ const make = Effect.gen(function* () {
         ),
         Effect.mapError(toLedgerError("readConversationTail")),
       ),
-
     searchConversation: (conversationId, query, limit, beforeInputId) => {
       const pattern = "%" + query.replace(/[\\%_]/gu, (char) => "\\" + char) + "%";
       return sql<{
@@ -1071,7 +1073,6 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("searchConversation")),
       );
     },
-
     listConversationTasks: (conversationId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
@@ -1081,7 +1082,6 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => storedTask(row).task)),
         Effect.mapError(toLedgerError("listConversationTasks")),
       ),
-
     listConversationNeedsYou: (conversationId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id

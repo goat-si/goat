@@ -248,6 +248,7 @@ export const ChannelTask = Schema.Struct({
   /** Fixed at intake; follow-up input never changes where results go. */
   originAddress: ChannelReplyAddress,
   originInputId: ChannelInputId,
+  routineWork: Schema.optional(Schema.Literal(true)),
   requester: ChannelRequester,
   title: TrimmedNonEmptyString,
   instruction: Schema.String,
