@@ -27,7 +27,7 @@ export const CHANNEL_PERMISSION_CHANGED_MESSAGE =
 export class ProviderInputRuntimeMode extends Context.Service<
   ProviderInputRuntimeMode,
   RuntimeMode
->()("goat/channels/ProviderInputRuntimeMode") {}
+>()("goat/channels/channelProviderInputAuthority/ProviderInputRuntimeMode") {}
 
 const permissionChanged = makeProviderFailure({
   class: "permission_error",
