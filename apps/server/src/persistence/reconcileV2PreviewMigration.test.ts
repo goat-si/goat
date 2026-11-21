@@ -189,7 +189,7 @@ describe("V2 preview upgrade", () => {
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
         [182, "SlackConversationBot"],
-        [179, "ChannelInputSessionAuthority"],
+        [183, "ChannelInputSessionAuthority"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -389,7 +389,7 @@ describe("V2 preview upgrade", () => {
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
         [182, "SlackConversationBot"],
-        [179, "ChannelInputSessionAuthority"],
+        [183, "ChannelInputSessionAuthority"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
