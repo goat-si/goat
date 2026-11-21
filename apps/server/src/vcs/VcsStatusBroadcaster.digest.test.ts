@@ -19,6 +19,10 @@ it.effect(
       const broadcaster = yield* Broadcaster.VcsStatusBroadcaster;
       const first = yield* broadcaster.refreshStatus("/repo");
       assert.isString(first.refsDigest);
+      assert.equal(
+        (yield* broadcaster.refreshStatus("/repo", { localOnly: true })).refsDigest,
+        first.refsDigest,
+      );
       assert.equal((yield* broadcaster.refreshStatus("/repo")).refsDigest, first.refsDigest);
       state.refSnapshot = "refs-b";
       assert.notEqual((yield* broadcaster.refreshStatus("/repo")).refsDigest, first.refsDigest);

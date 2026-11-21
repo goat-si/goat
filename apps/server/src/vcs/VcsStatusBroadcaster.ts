@@ -1,7 +1,6 @@
 import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
 import { remoteRefreshFailureDelay } from "./remoteRefreshFailureDelay.ts";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Digest the ref snapshot already in memory.
-import * as NodeCrypto from "node:crypto";
+import { statusWithRefsDigest } from "./statusWithRefsDigest.ts";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
 import { VcsRefSnapshot, refreshMovedRefs } from "./VcsRefSnapshot.ts";
 export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
@@ -483,20 +482,18 @@ export const make = Effect.gen(function* () {
   )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
     yield* acquireBranchChangesDemand(cwd);
-    const refsBeforeLocalRead = options?.localOnly ? null : yield* readRefSnapshot(cwd);
-    yield* refreshLocalStatusCore(cwd);
     if (options?.localOnly) {
+      const [refs] = yield* Effect.all([readRefSnapshot(cwd), refreshLocalStatusCore(cwd)], {
+        concurrency: "unbounded",
+      });
       // Never cache a remote here: readers take `value: null` as "read and found no PR".
       const parts = yield* getStatusParts(cwd);
-      return mergeGitStatusParts(parts.local, parts.remote);
+      return statusWithRefsDigest(mergeGitStatusParts(parts.local, parts.remote), refs);
     }
+    const refsBeforeLocalRead = yield* readRefSnapshot(cwd);
+    yield* refreshLocalStatusCore(cwd);
     const { status, refs } = yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
-    return refs === null
-      ? status
-      : {
-          ...status,
-          refsDigest: NodeCrypto.createHash("sha256").update(refs).digest("hex").slice(0, 32),
-        };
+    return statusWithRefsDigest(status, refs);
   }, Effect.scoped);
 
   type RefreshReply = Deferred.Deferred<VcsRefreshStatusResult, GitManagerServiceError>;

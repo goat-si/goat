@@ -473,6 +473,14 @@ describe("cached VCS refs", () => {
         );
         expect(yield* Ref.get(clears)).toBe(3);
 
+        yield* Effect.promise(() =>
+          atoms.refreshLocalStatusForPicker.run(registry, {
+            environmentId: TARGET.environmentId,
+            input: { cwd: "/repo", localOnly: true },
+          }),
+        );
+        expect(yield* Ref.get(clears)).toBe(3);
+
         const prepareResult = yield* Effect.promise(() =>
           createGitEnvironmentAtoms(runtime).preparePullRequestThread.run(registry, {
             environmentId: TARGET.environmentId,
@@ -496,6 +504,7 @@ describe("cached VCS refs", () => {
           [WS_METHODS.vcsRefreshStatus]: () =>
             Deferred.succeed(refreshStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseRefresh)),
+              Effect.as({}),
             ),
           [WS_METHODS.vcsSwitchRef]: () => Effect.succeed({ refName: "feature" }),
         } as unknown as WsRpcProtocolClient;
