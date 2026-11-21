@@ -18,6 +18,7 @@ it.layer(layerClaudeTextGenerationTest)("Claude image fallback", (it) => {
       {
         output: JSON.stringify({ structured_output: { branch: "fix/login-button" } }),
         rejectsImages: scenario === "auth" ? "auth" : true,
+        expectSpawnCount: scenario === "auth" ? 1 : 3,
       },
       (textGeneration) =>
         Effect.gen(function* () {
@@ -46,6 +47,21 @@ it.layer(layerClaudeTextGenerationTest)("Claude image fallback", (it) => {
           } else {
             expect(Result.isSuccess(result)).toBe(true);
             if (Result.isSuccess(result)) expect(result.success.branch).toBe("fix/login-button");
+            yield* fs.writeFile(imagePath, Buffer.from("hello"));
+            const second = yield* textGeneration
+              .generateBranchName({
+                cwd: process.cwd(),
+                message: "fix this",
+                attachments: [
+                  { type: "image", id, name: "screen.png", mimeType: "image/png", sizeBytes: 5 },
+                ],
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("claudeAgent"),
+                  model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+                },
+              })
+              .pipe(Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)));
+            expect(second.branch).toBe("fix/login-button");
           }
         }),
     ),

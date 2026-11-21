@@ -179,6 +179,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   memoryRunnerContext?: MemoryGenerationRunnerContext,
   routeModelCatalog: RouteClaudeModelCatalog = Effect.succeed,
 ) {
+  const textOnlyModels = new Set<string>();
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -391,7 +392,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     );
 
     // `claude -p` accepts images only as content blocks of a stream-json user message.
-    const imageBlocks = yield* readImageBlocks(attachments, operation);
+    const imageBlocks = textOnlyModels.has(effectiveModel)
+      ? []
+      : yield* readImageBlocks(attachments, operation);
     const imageStdin =
       imageBlocks.length > 0
         ? `${yield* encodeJsonForOperation(
@@ -537,7 +540,18 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           !/image (?:inputs? (?:are |is )?)?(?:not supported|unsupported)/i.test(
             `${result.stderr}\n${claudeErrorResult(result.stdout) ?? ""}`,
           ),
-        () => runClaudeAttempt(false),
+        () =>
+          runClaudeAttempt(false).pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                if (result.exitCode === 0) {
+                  if (textOnlyModels.size >= 128)
+                    textOnlyModels.delete(textOnlyModels.values().next().value ?? "");
+                  textOnlyModels.add(effectiveModel);
+                }
+              }),
+            ),
+          ),
       ),
       Effect.flatMap(({ stdout, stderr, exitCode }) => {
         if (exitCode === 0) return Effect.succeed(stdout);
