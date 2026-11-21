@@ -136,13 +136,6 @@ export function makeHarness(options: HarnessOptions = {}) {
     Layer.provide(layerReceipts),
   );
   const layerOutbox = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
-  const createWorktree = vi.fn(
-    options.createWorktree ??
-      ((input) =>
-        Effect.succeed({
-          worktree: { path: "/repo-worktrees/feature", refName: input.newRefName, headSha: "abc" },
-        } as never)),
-  );
   const renameBranch = vi.fn(
     options.renameBranch ?? ((input) => Effect.succeed({ branch: input.newBranch })),
   );
@@ -153,6 +146,20 @@ export function makeHarness(options: HarnessOptions = {}) {
   const deleteLocalBranch = vi.fn(
     (_input: Parameters<GitWorkflow.GitWorkflowService["Service"]["deleteLocalBranch"]>[0]) =>
       Effect.void,
+  );
+  const createWorktree = vi.fn<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>(
+    options.createWorktree ??
+      ((input, options) => {
+        const path = "/repo-worktrees/feature";
+        return (
+          options?.progress?.onWorktreeOwnership?.({
+            path,
+            release: Effect.void,
+          }) ?? Effect.void
+        ).pipe(
+          Effect.as({ worktree: { path, refName: input.newRefName, headSha: "abc" } } as never),
+        );
+      }),
   );
   const runSetup = vi.fn(
     options.runSetup ?? (() => Effect.succeed({ status: "no-script" as const })),
@@ -191,6 +198,8 @@ export function makeHarness(options: HarnessOptions = {}) {
     }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
       currentBranch: () => Effect.succeed(null),
+      verifyManagedCheckout: () => Effect.void,
+      resolveCommit: ({ revision }) => Effect.succeed({ commitSha: revision }),
       repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
       renameBranch,
@@ -200,6 +209,8 @@ export function makeHarness(options: HarnessOptions = {}) {
         (() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" })),
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(false)),
+      hasRefNamed: () => Effect.succeed(false),
+      resolveWorktreeFallbackRemote: () => Effect.succeed(null),
       inspectExistingBranch: () => Effect.succeed(null),
       listLocalBranchNames: () => Effect.succeed([]),
       remoteExists: options.remoteExists ?? (() => Effect.succeed(true)),

@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({ answer: vi.fn() }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Pressable: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppText", () => ({
@@ -49,6 +50,7 @@ vi.mock("../../state/server", () => ({
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.answer }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 import { SecretRequestCard } from "./SecretRequestCard";
 
 it("requires both fields and masks the login password before saving", async () => {

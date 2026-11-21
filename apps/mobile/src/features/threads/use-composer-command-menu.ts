@@ -8,7 +8,10 @@ import type {
   ServerProvider,
   ServerSettings,
 } from "@goat/contracts";
-import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadSearchEnvironments,
+  matchComposerThreadItems,
+} from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
   matchComposerAppItems,
@@ -31,7 +34,7 @@ import {
   useComposerDraftSelection,
   setComposerDraftContext,
 } from "../../state/use-composer-drafts";
-import { isUsageLimitsCommand, USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
+import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   detectComposerTrigger,
   replaceTextRange,
@@ -240,21 +243,7 @@ export function resolveComposerCommandSelection(input: {
   };
 }
 
-/** A typed GOAT command that send runs locally instead of sending to the provider. */
-export function resolveComposerSendIntercept(input: {
-  readonly text: string;
-  readonly attachmentCount: number;
-  readonly usageLimitsOffered: boolean;
-  /** The composer belongs to an existing thread, where /fork is always GOAT's. */
-  readonly inThread: boolean;
-}): "usage-limits" | "fork" | null {
-  if (input.usageLimitsOffered && isUsageLimitsCommand(input.text) && input.attachmentCount === 0) {
-    return "usage-limits";
-  }
-  // Attachments stay in the draft for the next message.
-  if (input.inThread && input.text.trim().toLowerCase() === "/fork") return "fork";
-  return null;
-}
+export { resolveComposerSendIntercept } from "./composerSendIntercept";
 
 export function useComposerCommandMenu({
   draftMessage,
@@ -277,6 +266,7 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onOpenModelPicker,
   modelOptions = [],
   modelProviders = [],
   onFork,
@@ -318,6 +308,7 @@ export function useComposerCommandMenu({
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
+  readonly onOpenModelPicker: () => void;
   readonly modelOptions?: ReadonlyArray<ModelOption>;
   readonly modelProviders?: ReadonlyArray<ServerProvider>;
   readonly onFork?: () => void;
@@ -407,9 +398,12 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
-  // Mounts older settled threads matching the mention, which shells may leave out.
-  useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId] : [],
+  // Older settled threads may be missing from the shells on any reachable host.
+  const threadSearch = useThreadSearch(
+    composerThreadSearchEnvironments(
+      trigger?.kind === "path" ? environmentId : null,
+      verifiedThreadHosts,
+    ),
     trigger?.kind === "path" ? trigger.query : "",
     { titlesOnly: true },
   );
@@ -717,15 +711,17 @@ export function useComposerCommandMenu({
       return;
     }
 
-    if (
-      item.type === "provider-slash-command" &&
-      item.command.name === USAGE_LIMITS_COMMAND.name &&
-      onUsageLimits
-    ) {
+    const builtInAction =
+      item.type === "slash-command" && item.command === "model"
+        ? onOpenModelPicker
+        : item.type === "provider-slash-command" && item.command.name === USAGE_LIMITS_COMMAND.name
+          ? onUsageLimits
+          : undefined;
+    if (builtInAction) {
       const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
       setSelection({ start: cleared.cursor, end: cleared.cursor });
       onChangeDraftMessage(cleared.text);
-      onUsageLimits();
+      builtInAction();
       return;
     }
 
@@ -758,7 +754,9 @@ export function useComposerCommandMenu({
         ? pullRequestProjectId === null || pullRequestRepository === null
           ? "Pull requests are unavailable for this project."
           : pullRequestSearch.error
-        : null,
+        : trigger?.kind === "path" && threadSearch.failed
+          ? "Couldn't search threads."
+          : null,
     onSelect,
   };
 }

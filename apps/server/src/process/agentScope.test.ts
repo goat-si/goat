@@ -1,3 +1,4 @@
+import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off -- fake systemd binaries live in a temp dir.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -18,6 +19,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProviderProcesses from "./providerProcesses.ts";
 import {
   AGENTS_TASKS_MAX_PERCENT,
   classifyScope,
@@ -25,6 +27,13 @@ import {
   ownedAgentSlice,
   type ScopeState,
 } from "./agentScope.ts";
+
+const GiB = 1024 ** 3;
+const mockMemory = vi.hoisted(() => ({ total: 16 * 1024 ** 3 }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  totalmem: () => mockMemory.total,
+}));
 
 const running: ScopeState = {
   loadState: "loaded",
@@ -63,7 +72,16 @@ const withFakeSystemd = <A, E>(
   {
     oomPolicy = true,
     stopFails = false,
-  }: { readonly oomPolicy?: boolean; readonly stopFails?: boolean } = {},
+    leftovers = false,
+    liveOwner = false,
+    memoryLimitStatus = () => 0,
+  }: {
+    readonly oomPolicy?: boolean;
+    readonly stopFails?: boolean;
+    readonly leftovers?: boolean;
+    readonly liveOwner?: boolean;
+    readonly memoryLimitStatus?: () => number;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-agent-scope-"));
@@ -91,6 +109,8 @@ const withFakeSystemd = <A, E>(
             return output("", 1);
           }
           const [, verb, unit = ""] = args;
+          if (verb === "set-property" && args[3] === "app-goat-agents.slice")
+            return output("", memoryLimitStatus());
           if (stopFails && verb === "stop") {
             return {
               ...output(""),
@@ -110,12 +130,17 @@ const withFakeSystemd = <A, E>(
         }),
     });
     const fileSystem = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    if (leftovers) {
+      units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
+    }
     const scope = yield* make.pipe(
       Effect.provide(
         Layer.mock(ServerSettings.ServerSettingsService)({
           getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
         }),
       ),
+      Effect.provideService(ProviderProcesses.ProviderProcesses, { hasOtherLiveOwner: liveOwner }),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provideService(HostProcess.Environment, { PATH: bin, XDG_RUNTIME_DIR: "/run/user/1" }),
@@ -127,7 +152,6 @@ const withFakeSystemd = <A, E>(
           fileSystem.writeFileString(path.replace("/sys/fs/cgroup", cgroupRoot), data, options),
       }),
     );
-    const { stateDir } = yield* ServerConfig.ServerConfig;
     return yield* body({ scope, units, calls, stateDir, cgroupRoot }).pipe(
       Effect.ensuring(Effect.sync(() => NodeFS.rmSync(bin, { recursive: true, force: true }))),
     );
@@ -333,25 +357,67 @@ describe("AgentScope service", () => {
     ),
   );
 
-  it.effect("stops agents a killed server left before the first launch", () =>
-    withFakeSystemd(({ scope, units, calls, stateDir }) =>
-      Effect.gen(function* () {
-        units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
-        const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
-        const stops = calls.filter(([, verb]) => verb === "stop");
-        expect(stops).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
-        expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
-        expect(agent.args).toContain("--property=TimeoutStopSec=10s");
-        const terminal = yield* scope.wrap({
-          command: "agent",
-          args: [],
-          name: "terminal",
-          survivesRestart: true,
-        });
-        expect(sliceOf(terminal)).toBe("app-goat-agents.slice");
-        expect(calls.filter(([, verb]) => verb === "stop")).toHaveLength(1);
-      }),
+  it.effect("retries failed memory updates and applies a live resize once across launches", () => {
+    mockMemory.total = 16 * GiB;
+    let status = 0;
+    return withFakeSystemd(
+      ({ scope, calls }) =>
+        Effect.gen(function* () {
+          const launch = scope.wrap({ command: "agent", args: [], name: "memory-test" });
+          const limits = () =>
+            calls
+              .filter(
+                ([, verb, , slice]) => verb === "set-property" && slice === "app-goat-agents.slice",
+              )
+              .map((args) => args.slice(4));
+          yield* launch;
+          const initial = [`MemoryHigh=${10 * GiB}`, `MemoryMax=${12 * GiB}`];
+          expect(limits()).toEqual([initial]);
+          mockMemory.total = 22 * GiB;
+          status = 1;
+          yield* launch;
+          yield* launch;
+          status = 0;
+          yield* Effect.all([launch, launch, launch], { concurrency: "unbounded" });
+          const grown = [`MemoryHigh=${16 * GiB}`, `MemoryMax=${18 * GiB}`];
+          expect(limits()).toEqual([initial, grown, grown, grown]);
+        }),
+      { memoryLimitStatus: () => status },
+    ).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          mockMemory.total = 16 * GiB;
+        }),
+      ),
+    );
+  });
+
+  it.effect("stops agents a killed server left before startup completes", () =>
+    withFakeSystemd(
+      ({ scope, calls, stateDir }) =>
+        Effect.gen(function* () {
+          expect(stopsOf(calls)).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
+          const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+          expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
+          expect(agent.args).toContain("--property=TimeoutStopSec=10s");
+          const terminal = yield* scope.wrap({
+            command: "agent",
+            args: [],
+            name: "terminal",
+            survivesRestart: true,
+          });
+          expect(sliceOf(terminal)).toBe("app-goat-agents.slice");
+          expect(stopsOf(calls)).toHaveLength(1);
+        }),
+      { leftovers: true },
     ),
+  );
+
+  it.effect("leaves the slice to another live server sharing this home", () =>
+    withFakeSystemd(({ calls }) => Effect.sync(() => expect(stopsOf(calls)).toEqual([])), {
+      leftovers: true,
+      liveOwner: true,
+    }),
   );
 
   it.effect("stops leftover processes only in an active agent scope", () =>

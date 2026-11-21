@@ -2,12 +2,14 @@ import { getSyntaxHighlighterPromise } from "~/lib/syntaxHighlighting";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
+import remarkGfm from "remark-gfm";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import "../index.css";
 
+import { shellEnvironment } from "../state/shell";
 import { filesystemEnvironment } from "../state/filesystem";
 import {
   selectActiveRightPanelSurface,
@@ -15,12 +17,29 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { setMarkdownTaskChecked } from "@goat/shared/markdownTaskList";
-import { remarkEnableOrderedListNumbers } from "@goat/shared/markdownPipeline";
+import {
+  CHAT_USER_MARKDOWN_REMARK_PLUGINS,
+  remarkEnableOrderedListNumbers,
+} from "@goat/shared/markdownPipeline";
 
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   workspaceSearch: vi.fn(),
   filesystemMetadata: vi.fn(),
 }));
+const bundleFixture = vi.hoisted(() => ({ enabled: false, open: vi.fn() }));
+vi.mock(import("../state/use-atom-command"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    useAtomCommand: ((
+      command: Parameters<typeof actual.useAtomCommand>[0],
+      options: Parameters<typeof actual.useAtomCommand>[1],
+    ) =>
+      command === shellEnvironment.openInEditor
+        ? bundleFixture.open
+        : actual.useAtomCommand(command, options)) as typeof actual.useAtomCommand,
+  };
+});
 const parsedSources = vi.hoisted(() => [] as string[]);
 vi.mock(import("mdast-util-from-markdown"), async (original) => {
   const actual = await original();
@@ -44,9 +63,16 @@ vi.mock(import("../state/server"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
   const noConfig = Atom.make(null);
+  const macConfig = Atom.make({
+    environment: { platform: { os: "darwin" }, capabilities: {} },
+    availableEditors: ["file-manager"],
+  });
   return {
     ...actual,
-    serverEnvironment: { ...actual.serverEnvironment, configValueAtom: (() => noConfig) as never },
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      configValueAtom: (() => (bundleFixture.enabled ? macConfig : noConfig)) as never,
+    },
   };
 });
 vi.mock(import("../state/session"), async (original) => {
@@ -150,6 +176,18 @@ function buttonsLabelled(container: HTMLElement, label: string) {
     (button) => button.getAttribute("aria-label") === label,
   );
 }
+
+it("preserves right-to-left direction in expandable markdown", async () => {
+  setup();
+  await using screen = await renderText(
+    '<details dir="rtl"><summary>تفاصيل</summary>محتوى</details>',
+  );
+  const summary = screen.getByRole("button", { name: "تفاصيل" });
+  await expect.element(summary).toBeVisible();
+  expect(getComputedStyle(summary.element()).direction).toBe("rtl");
+  await userEvent.click(summary);
+  await expect.element(screen.getByText("محتوى")).toBeVisible();
+});
 
 describe("ChatMarkdown context references", () => {
   it("draws skill and file references as link text at the sentence's size and baseline", async () => {
@@ -258,6 +296,23 @@ it("shows unavailable audio when a workspace embed has no thread", async () => {
   expect(screen.container.querySelector("audio")).toBeNull();
 });
 
+it("sizes raw HTML images with pixel units", async () => {
+  setup();
+  const image = new URL("../../public/favicon-32x32.png", import.meta.url).href;
+  await using screen = await render(
+    <ChatMarkdown
+      cwd={undefined}
+      text={`Image <img src="${image}" alt="spinner" width="14px" height="7px" />`}
+    />,
+  );
+  const locator = screen.getByAltText("spinner");
+  await vi.waitFor(() => expect((locator.element() as HTMLImageElement).naturalWidth).toBe(32));
+  const element = locator.element() as HTMLImageElement;
+  await element.decode();
+  const { width, height } = element.getBoundingClientRect();
+  expect({ width, height }).toEqual({ width: 14, height: 7 });
+});
+
 it("selects the picture source for the current theme", async () => {
   setup();
   const light = `${location.origin}/light.png`;
@@ -282,7 +337,10 @@ it("reuses the parse of a streaming reply's finished blocks when it remounts", a
     <ChatMarkdown cwd="/tmp/project" text={"Finished block\n\nStill growing"} isStreaming />
   );
   {
-    await using _first = await render(message);
+    await using first = await render(
+      <ChatMarkdown cwd="/tmp/project" text={"Finished block\n\n"} isStreaming />,
+    );
+    await first.rerender(message);
   }
   await using screen = await render(message);
   await expect.element(screen.getByText("Still growing")).toBeVisible();
@@ -297,7 +355,15 @@ it("reuses the parse of a remounted message that has stable extra plugins", asyn
     <ChatMarkdown cwd="/tmp/project" text="Cached text" extraRemarkPlugins={countingPlugins} />
   );
   {
-    await using _first = await render(message);
+    await using first = await render(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text="Cached text"
+        extraRemarkPlugins={countingPlugins}
+        isStreaming
+      />,
+    );
+    await first.rerender(message);
   }
   await using screen = await render(message);
   await expect.element(screen.getByText("Cached text")).toBeVisible();
@@ -500,6 +566,34 @@ describe("ChatMarkdown workspace file opens", () => {
 });
 
 describe("ChatMarkdown skill chips", () => {
+  it("closes skill details after opening its instructions", async () => {
+    setup();
+    const threadRef = {
+      environmentId: EnvironmentId.make("workspace"),
+      threadId: ThreadId.make("thread"),
+    };
+    const previous = useRightPanelStore.getState();
+    using _restorePanels = { [Symbol.dispose]: () => useRightPanelStore.setState(previous) };
+    await using screen = await renderText("Run $review now", {
+      threadRef,
+      skills: [
+        {
+          name: "review",
+          displayName: "Review",
+          description: "Reviews the current branch.",
+          path: "/skills/review/SKILL.md",
+          enabled: true,
+        },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
+    await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "View instructions" }));
+    await expect.element(page.getByText("Reviews the current branch.")).not.toBeInTheDocument();
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef),
+    ).toMatchObject({ kind: "file", relativePath: "/skills/review/SKILL.md" });
+  });
   it("shows the skill's details and opens its instructions", async () => {
     setup();
     const threadRef = {
@@ -659,6 +753,56 @@ describe("ChatMarkdown alert copy", () => {
   });
 });
 
+describe("ChatMarkdown user indentation copy", () => {
+  it.each([
+    { text: "   Plan\nnext" },
+    { text: "Plan\n            Deep\n                        Deeper" },
+    { text: "Plan\n\tTabbed\n \t Mixed" },
+    { text: "- item\n    more\n      deeper\n- next" },
+    { text: "Plan\n   Step one\n        Detail a", from: "Step one" },
+  ])(
+    "copies and selects user lines the same whether their typed indentation shows: $text",
+    async (copy) => {
+      setup();
+      const copied = async (extraRemarkPlugins: typeof CHAT_USER_MARKDOWN_REMARK_PLUGINS) => {
+        await using screen = await renderText(copy.text, {
+          className: "user-message-markdown",
+          lineBreaks: true,
+          parseRawHtml: false,
+          extraRemarkPlugins,
+        });
+        const markdown = screen.container.querySelector<HTMLElement>(".chat-markdown");
+        const shown = markdown?.innerText;
+        const range = document.createRange();
+        range.selectNodeContents(screen.container);
+        if (copy.from) {
+          const walker = document.createTreeWalker(screen.container, NodeFilter.SHOW_TEXT);
+          let line = walker.nextNode();
+          while (line && !line.textContent!.includes(copy.from)) line = walker.nextNode();
+          // Start mid-line, three characters into the line's text.
+          range.setStart(line!, line!.textContent!.indexOf(copy.from) + 3);
+        }
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        // A drag or anything else that reads the selection gets its text, not the copy payload.
+        return {
+          shown,
+          clipboard: {
+            payload: chatMarkdownClipboardPayload(selection),
+            selected: selection.toString(),
+          },
+        };
+      };
+      const shown = await copied(CHAT_USER_MARKDOWN_REMARK_PLUGINS);
+      // The user pipeline as it was before typed indentation was shown.
+      const baseline = await copied([[remarkGfm, { singleTilde: false }]]);
+      expect(shown.shown).not.toBe(baseline.shown);
+      expect(shown.clipboard).toEqual(baseline.clipboard);
+    },
+  );
+});
+
 describe("ChatMarkdown file chip tooltips", () => {
   it("wraps a long path so its file name stays inside the tooltip", async () => {
     setup();
@@ -758,3 +902,90 @@ describe("ChatMarkdown code block actions", () => {
     await expect.element(screen.getByRole("button", { name: "Show diagram" })).toHaveFocus();
   });
 });
+
+it("opens the same literal app path used for the bundle icon without searching duplicate basenames", async () => {
+  setup();
+  using restore = new DisposableStack();
+  restore.defer(() => {
+    bundleFixture.enabled = false;
+    bundleFixture.open.mockReset();
+  });
+  bundleFixture.enabled = true;
+  bundleFixture.open.mockResolvedValue(AsyncResult.success(undefined));
+  workspaceSearch.mockResolvedValue(
+    AsyncResult.success({ entries: [{ path: "other/Demo.app", kind: "file" }] }),
+  );
+  const environmentId = EnvironmentId.make("bundle-mac");
+  await using screen = await renderText("[Demo.app](Demo.app)", { environmentId });
+  const link = screen.getByRole("link", { name: "Demo.app" });
+  await act(async () => {
+    link
+      .element()
+      .dispatchEvent(
+        new MouseEvent("click", { bubbles: true, metaKey: true, ctrlKey: true, cancelable: true }),
+      );
+  });
+  expect(bundleFixture.open).toHaveBeenCalledWith({
+    environmentId,
+    input: { cwd: "/tmp/project/Demo.app", editor: "file-manager" },
+  });
+  expect(workspaceSearch).not.toHaveBeenCalled();
+});
+
+it("copies part of inline code without prose escapes", async () => {
+  setup();
+  await using screen = await renderText("Read `items[0]*_x` and a*b*c.");
+  const code = screen.container.querySelector("p code")!.firstChild!;
+  const range = document.createRange();
+  range.setStart(code, 0);
+  range.setEnd(code, "items[0]*_".length);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  expect(chatMarkdownClipboardPayload(selection)?.text).toBe("items[0]*_");
+});
+
+it.each([
+  {
+    source: "10. First\n11. Second\n12. Third\n\nAfter.",
+    from: "Second",
+    text: "11. Second\n12. Third\n\nAfter.",
+  },
+  {
+    source: "1. A\n2. B\n7. C\n8. D\n\nAfter.",
+    from: "D",
+    userMessage: true,
+    text: "8. D\n\nAfter.",
+  },
+  {
+    source: "1. Outer\n2. Next\n   1. Inner\n   2. Deeper\n\nAfter.",
+    from: "Deeper",
+    text: "2. 2. Deeper\n\nAfter.",
+  },
+])(
+  "keeps the shown numbers when a copy starts at $from and ends past the list",
+  async ({ source, from, userMessage, text }) => {
+    setup();
+    await using screen = await renderText(
+      source,
+      userMessage ? { extraRemarkPlugins: SOURCE_NUMBER_PLUGINS } : {},
+    );
+    const start = [...screen.container.querySelectorAll("li")]
+      .flatMap((item) => [...item.childNodes])
+      .find((node) => node.nodeType === Node.TEXT_NODE && node.textContent === from)!;
+    const after = [...screen.container.querySelectorAll("p")].at(-1)!.firstChild!;
+    const range = document.createRange();
+    range.setStart(start, 0);
+    range.setEnd(after, after.textContent!.length);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const payload = chatMarkdownClipboardPayload(selection);
+    expect(payload?.text).toBe(text);
+    // Rich paste numbers its list from the same start.
+    expect(
+      new DOMParser().parseFromString(payload!.html, "text/html").querySelector("li")?.closest("ol")
+        ?.start,
+    ).toBe(Number(text.split(".")[0]));
+  },
+);

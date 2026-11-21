@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
@@ -96,7 +97,7 @@ const fakeInstance = (
       applyUsageLimits: () => Effect.void,
     },
     orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-    textGeneration: {} as ProviderInstance["textGeneration"],
+    textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
   };
 };
 

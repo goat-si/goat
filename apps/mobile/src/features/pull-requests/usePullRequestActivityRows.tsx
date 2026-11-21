@@ -1,8 +1,10 @@
+import { byTimestamp } from "../../lib/time";
 import { useNavigation } from "@react-navigation/native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentQuery } from "../../state/query";
 import { composerPullRequests } from "../../state/pull-requests";
 import { filterPullRequestActivity, type ActivityFilter } from "./pullRequestActivityFilter";
+import { activityLinkTarget } from "./pullRequestLinkNavigation";
 import { pullRequestTimelineRows } from "./PullRequestTimeline";
 import { pullRequestTarget as requestTarget, type PullRequestParams } from "./usePullRequestDiff";
 import { usePullRequestPermissions } from "./usePullRequestPermissions";
@@ -21,7 +23,7 @@ export function usePullRequestActivityRows(params: PullRequestParams, filter: Ac
     });
     if (filter.newestFirst) {
       const notice = rows.at(-1)?.key === "truncated" ? rows.pop() : undefined;
-      rows.reverse();
+      rows.sort(byTimestamp(true));
       if (notice) rows.push(notice);
     }
     if (!rows.length)
@@ -38,6 +40,7 @@ export function usePullRequestActivityRows(params: PullRequestParams, filter: Ac
   })();
   return {
     rows,
+    ...activityLinkTarget(params.navigationUrl, result.data),
     hiddenCount: filtered?.hiddenCount ?? 0,
     pending: result.isPending && !result.data,
     error: result.error,

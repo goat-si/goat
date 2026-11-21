@@ -48,9 +48,10 @@ export const AcpRegistryIntegrity = Schema.Literals(["sha256", "registry"]);
 export type AcpRegistryIntegrity = typeof AcpRegistryIntegrity.Type;
 
 export const ACP_REGISTRY_MAX_AGENTS = 512;
+export const ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH = 120;
 
 export const AcpRegistrySearchInput = Schema.Struct({
-  query: TrimmedString.check(Schema.isMaxLength(120)),
+  query: TrimmedString.check(Schema.isMaxLength(ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH)),
   limit: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: ACP_REGISTRY_MAX_AGENTS })),
   ),
@@ -149,6 +150,7 @@ export const AcpRegistrySession = Schema.Struct({
   title: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   updatedAt: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
   importedThreadId: Schema.NullOr(ThreadId),
+  nativeHistoryPending: Schema.optionalKey(Schema.Boolean),
 });
 export type AcpRegistrySession = typeof AcpRegistrySession.Type;
 
@@ -191,6 +193,8 @@ export type AcpRegistryImportSessionInput = typeof AcpRegistryImportSessionInput
 export const AcpRegistryImportSessionResult = Schema.Struct({
   threadId: ThreadId,
   imported: Schema.Boolean,
+  nativeHistoryPending: Schema.optionalKey(Schema.Boolean),
+  nativeHistoryError: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
 });
 export type AcpRegistryImportSessionResult = typeof AcpRegistryImportSessionResult.Type;
 
@@ -274,6 +278,8 @@ export const AcpRegistryProbeModel = Schema.Struct({
   id: AcpRegistryProbeText,
   name: AcpRegistryProbeText,
   description: AcpRegistryProbeDescription,
+  // The reasoning control the agent advertises for this model; null when it has none.
+  reasoningEffort: Schema.optionalKey(Schema.NullOr(ProviderOptionDescriptor)),
 });
 export type AcpRegistryProbeModel = typeof AcpRegistryProbeModel.Type;
 
@@ -282,6 +288,7 @@ export const AcpRegistryProbeResult = Schema.Struct({
   // `ready` requires a disposable ACP session/new probe, not passive auth detection.
   ready: Schema.Literal(true),
   icon: Schema.NullOr(AcpRegistryUrl),
+  agentVersion: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
   authMethods: Schema.Array(AcpRegistryProbeAuthMethod).check(Schema.isMaxLength(32)),
   models: Schema.Array(AcpRegistryProbeModel).check(Schema.isMaxLength(256)),
   currentModelId: Schema.NullOr(AcpRegistryProbeText),

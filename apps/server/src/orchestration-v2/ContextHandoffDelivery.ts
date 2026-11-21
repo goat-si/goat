@@ -1,4 +1,9 @@
-import type { OrchestrationV2ContextHandoff, OrchestrationV2ProviderThread } from "@goat/contracts";
+import type {
+  OrchestrationV2ContextHandoff,
+  OrchestrationV2ProviderThread,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ContextHandoffBudgetError } from "@goat/provider-core/server/failure";
 import * as Effect from "effect/Effect";
@@ -21,6 +26,12 @@ const refreshRecoveryToolName = (coverage: string) =>
     )
     .replace(/\b(?:t3|goat)_thread_read\b/gu, goatCallText("thread.read"));
 
+export interface ReplayedHandoffInput {
+  readonly itemId: TurnItemId;
+  readonly threadId: ThreadId;
+  readonly runOrdinal: number;
+}
+
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(
   function* <InjectError = never, PersistError = never, BudgetError = never>(input: {
@@ -28,6 +39,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly budget: number | Effect.Effect<number, BudgetError>;
     readonly deferInline?: boolean;
+    readonly replayedInput?: ReplayedHandoffInput | undefined;
     readonly alreadyDeliveredItemIds: ReadonlySet<string>;
     readonly inject?: (
       history: ProviderAdapter.ProviderAdapterV2HistoricalContext,
@@ -60,6 +72,8 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       coverage = `Context handoff (${strategies.join(", ")}). ${pending.length} handoff records; detailed coverage references omitted. Recover an omitted item only when the request needs it, with ${goatCallText("thread.read", `{threadId:"${input.providerThread.appThreadId ?? pending[0]!.threadId}",view:"activity",itemId:"<omitted item ID>",maxCharsPerItem:4000}`)}; continue long text with textOffset=nextTextOffset until null. Follow fork/handoff source references in activity. Items included below need no read.`;
     }
     const seen = new Set(input.alreadyDeliveredItemIds);
+    const replayed = input.replayedInput;
+    if (replayed !== undefined) seen.add(replayed.itemId);
     const messages = pending
       .flatMap((handoff) => handoff.history?.messages ?? [])
       .filter((message) => {
@@ -68,7 +82,16 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
         return true;
       });
     const oldContext = pending
-      .filter((handoff) => handoff.history === undefined)
+      .filter(
+        (handoff) =>
+          handoff.history === undefined &&
+          !(
+            replayed !== undefined &&
+            handoff.threadId === replayed.threadId &&
+            handoff.coveredRunOrdinals.from <= replayed.runOrdinal &&
+            handoff.coveredRunOrdinals.to >= replayed.runOrdinal
+          ),
+      )
       .map((handoff) => handoff.summaryText)
       .join("\n\n");
     const fullCoverage =
@@ -79,7 +102,9 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       messages,
       coverage: fullCoverage,
       omittedItems: pending.reduce((sum, handoff) => sum + (handoff.history?.omittedItems ?? 0), 0),
-      omittedItemIds: pending.flatMap((handoff) => handoff.history?.omittedItemIds ?? []),
+      omittedItemIds: pending
+        .flatMap((handoff) => handoff.history?.omittedItemIds ?? [])
+        .filter((id) => id !== replayed?.itemId),
       budget,
     });
     if (historyCost(selected.messages, selected.context) > budget) {

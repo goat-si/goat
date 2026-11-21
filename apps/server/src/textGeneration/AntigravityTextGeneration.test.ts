@@ -401,6 +401,8 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
           ],
         });
         const selection = { ...memorySelection, model: ANTIGRAVITY_DEFAULT_MODEL };
+        const flags = yield* fixture.textGeneration.memoryCapabilities;
+        expect(operation === "resolveMemoryConflict" ? flags.conflict : flags.summary).toBe(true);
         const generated =
           operation === "resolveMemoryConflict"
             ? yield* fixture.textGeneration.resolveMemoryConflict!({
@@ -605,6 +607,8 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
           path.join(fixture.profileDirectory, "config", "mcp_config.json"),
           '{"mcpServers":{"synthetic":{}}}',
         );
+        const flags = yield* fixture.textGeneration.memoryCapabilities;
+        expect(operation === "resolveMemoryConflict" ? flags.conflict : flags.summary).toBe(false);
         const exit = yield* Effect.exit(
           operation === "resolveMemoryConflict"
             ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(

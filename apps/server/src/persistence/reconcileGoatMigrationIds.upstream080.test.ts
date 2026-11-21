@@ -10,15 +10,17 @@ import {
   migrationManifest,
   runMigrations,
 } from "./Migrations.ts";
+import firstBindMigration from "./Migrations/166_ScheduledTaskFirstBindIntent.ts";
+import { migrationLedgerProblem } from "./migrationPreflight.ts";
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 import {
   currentRow,
   failingAfterWork,
   fresh,
   goatNames,
-  laterGoatRows,
   history,
   isDatabaseNewerThanBuildError,
+  laterGoatRows,
   schema,
   seedOldGoatLedger,
   seedUserData,
@@ -37,7 +39,17 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), [166, "TurnMemoryReceipts"]);
+      assert.deepStrictEqual(
+        migrationManifest.filter(([id]) => id === 158 || id === 166),
+        [
+          [158, "AuthSessionPenMember"],
+          [166, "ScheduledTaskFirstBindIntent"],
+        ],
+      );
+      assert.deepStrictEqual(
+        migrationManifest.find(([id]) => id === 165),
+        [165, "MemorySuggestionQuota"],
+      );
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -61,6 +73,7 @@ describe("GOAT migrations after upstream 080-089", () => {
           [156, "DisposableMachineRequests"],
           [157, "DisposableMachineEnrollment"],
           [158, "AuthSessionPenMember"],
+          [166, "ScheduledTaskFirstBindIntent"],
         ]);
         assert.deepStrictEqual(yield* userData, before);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -76,6 +89,68 @@ describe("GOAT migrations after upstream 080-089", () => {
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* schema, before);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("a dev nightly ledger at 158 keeps its Pen migration and applies only 159", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 158 });
+      const nightlyLedger = yield* history;
+      assert.deepStrictEqual(nightlyLedger.at(-1), [158, "AuthSessionPenMember"]);
+      assert.isTrue(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* reconcileGoatMigrationIds(migrationEntries), []);
+      assert.deepStrictEqual(yield* history, nightlyLedger);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [159, "MemoryThreadLineage"],
+        [160, "MemorySaveSuggestions"],
+        [161, "MemoryHubFloor"],
+        [162, "MemoryScopeVersion"],
+        [163, "MemoryCompactMoveReceipts"],
+        [164, "MemoryOriginCatchup"],
+        [165, "MemorySuggestionQuota"],
+        [166, "ScheduledTaskFirstBindIntent"],
+        ...laterGoatRows.filter(([id]) => id > 166),
+      ]);
+      assert.deepStrictEqual(yield* snapshot, yield* fresh);
+      assert.isFalse(yield* hasPendingMigrations());
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "moves the integration build's applied first-bind migration and fills the memory gap",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 158 });
+        yield* firstBindMigration;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (159, 'ScheduledTaskFirstBindIntent')`;
+        const nightlyLedger = yield* history;
+        const broken = yield* failingAfterWork(165);
+        yield* Effect.flip(reconcileGoatMigrationIds(broken));
+        assert.deepStrictEqual(yield* history, nightlyLedger);
+        assert.isUndefined(
+          migrationLedgerProblem(
+            {
+              history: nightlyLedger.map(([migration_id, name]) => ({ migration_id, name })),
+              hasMemoryTables: true,
+            },
+            "test",
+          ),
+        );
+        assert.deepStrictEqual(yield* runMigrations(), [
+          [159, "MemoryThreadLineage"],
+          [160, "MemorySaveSuggestions"],
+          [161, "MemoryHubFloor"],
+          [162, "MemoryScopeVersion"],
+          [163, "MemoryCompactMoveReceipts"],
+          [164, "MemoryOriginCatchup"],
+          [165, "MemorySuggestionQuota"],
+          ...laterGoatRows.filter(([id]) => id > 166),
+        ]);
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("an upgrade stopped after reconciliation resumes with the remaining migrations", () =>

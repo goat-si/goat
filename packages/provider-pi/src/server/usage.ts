@@ -150,6 +150,7 @@ const makeUsageReader = (
   kind: "transcripts",
   provider: profile.driver,
   format: profile.driver === "pi" ? piUsageFormat : omoUsageFormat,
+  rateModel: (model) => model.slice(model.indexOf("/") + 1),
   directories: Effect.fn("piUsageReader.directories")(function* ({ config, environment }) {
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;

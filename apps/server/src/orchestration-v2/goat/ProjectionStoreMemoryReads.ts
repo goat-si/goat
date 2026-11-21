@@ -46,19 +46,28 @@ export const selectThreadRecords = <K extends ProjectionRecordField>(
   filter: ProjectionRecordFilter | undefined,
 ) => {
   const latestRun = latestIdleCompactionRun(projection.runs);
-  const matchingTurns = projection.providerTurns.filter(
-    (row) =>
-      (filter?.providerTurnAttemptIds === undefined ||
-        (row.runAttemptId !== null && filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
-      (filter?.providerTurnThreadIds === undefined ||
-        filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
-      (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
-      (filter?.ancestryRunIds === undefined ||
-        projection.attempts.some(
-          (attempt) =>
-            attempt.id === row.runAttemptId && filter.ancestryRunIds?.includes(attempt.runId),
-        )),
-  );
+  const matchesTurn = (row: OrchestrationV2ThreadProjection["providerTurns"][number]) =>
+    (filter?.providerTurnIds === undefined || filter.providerTurnIds.includes(row.id)) &&
+    (filter?.providerTurnAttemptIds === undefined ||
+      (row.runAttemptId !== null && filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
+    (filter?.providerTurnThreadIds === undefined ||
+      filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
+    (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
+    (filter?.ancestryRunIds === undefined ||
+      projection.attempts.some(
+        (attempt) =>
+          attempt.id === row.runAttemptId && filter.ancestryRunIds?.includes(attempt.runId),
+      ));
+  const firstTurn =
+    filter?.providerTurnLimit === 1 && filter.latestProviderTurnUsageOnly !== true
+      ? projection.providerTurns.find(matchesTurn)
+      : undefined;
+  const matchingTurns =
+    filter?.providerTurnLimit === 1 && filter.latestProviderTurnUsageOnly !== true
+      ? firstTurn === undefined
+        ? []
+        : [firstTurn]
+      : projection.providerTurns.filter(matchesTurn);
   const selected = {
     ...projection,
     providerThreads: projection.providerThreads.filter(
@@ -97,7 +106,9 @@ export const selectThreadRecords = <K extends ProjectionRecordField>(
           (filter.includeLatestRun === true && row.id === latestRun?.id)),
     ),
     attempts: projection.attempts.filter(
-      (row) => filter?.ancestryRunIds === undefined || filter.ancestryRunIds.includes(row.runId),
+      (row) =>
+        (filter?.ancestryRunIds === undefined || filter.ancestryRunIds.includes(row.runId)) &&
+        (filter?.attemptIds === undefined || filter.attemptIds.includes(row.id)),
     ),
     contextTransfers: projection.contextTransfers.filter(
       (row) =>
@@ -122,6 +133,11 @@ export const selectThreadRecords = <K extends ProjectionRecordField>(
         (filter?.omitSettledLeafNodes !== true || !isSettledLeafNode(node, projection.runs)),
     ),
     subagents: projection.subagents.filter((task) => {
+      if (
+        filter?.subagentChildThreadId !== undefined &&
+        task.childThreadId !== filter.subagentChildThreadId
+      )
+        return false;
       if (filter?.subagentIds !== undefined && !filter.subagentIds.includes(task.id)) return false;
       if (
         filter?.subagentRunIds !== undefined &&

@@ -60,8 +60,9 @@ it.effect(
       const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
       const guard: CommitGuardSelector = ({ commandType, commandId }) =>
         commandType === "thread.create"
-          ? () =>
+          ? (events) =>
               Effect.gen(function* () {
+                assert.isTrue(events.some(({ event }) => event.type === "run.created"));
                 yield* sql`INSERT INTO guard_marks VALUES (${commandId}, 0)`.pipe(Effect.orDie);
                 return yield* new CommitGuardRefused({ reason: "fenced" });
               })
@@ -97,11 +98,14 @@ it.effect.each(["memory", "file"] as const)(
                 );
               });
       assert.equal(yield* running.pipe(Effect.orDie), 0);
-      const input = launchInput({
-        command: "cmd:counted",
-        thread: "thread:counted",
-        message: "go",
-      });
+      const input = {
+        ...launchInput({
+          command: "cmd:counted",
+          thread: "thread:counted",
+          message: "go",
+        }),
+        confirm: Effect.succeed(true),
+      };
       yield* launches.launch(input).pipe(Effect.provideService(CommitGuard, guard));
       assert.deepEqual(yield* marks, [{ command_id: "cmd:counted:initial-message", running: 1 }]);
       assert.equal(yield* running.pipe(Effect.orDie), 1);
@@ -128,7 +132,10 @@ it.effect(
               })
           : undefined;
       const failed = yield* launches
-        .launch(launchInput({ command: "cmd:late", thread: "thread:late", message: "go" }))
+        .launch({
+          ...launchInput({ command: "cmd:late", thread: "thread:late", message: "go" }),
+          confirm: Effect.succeed(true),
+        })
         .pipe(Effect.provideService(CommitGuard, guard), Effect.flip);
       assert.propertyVal(failed, "operation", "dispatch-message");
       const shell = yield* threads.getThreadShell(ThreadId.make("thread:late"));

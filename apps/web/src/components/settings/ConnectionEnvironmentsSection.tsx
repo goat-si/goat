@@ -1005,7 +1005,7 @@ export function ConnectionEnvironmentsSection({
           alias: destination.alias ?? target.alias,
           hostname: destination.hostname,
           username: destination.user,
-          port: destination.port,
+          port: target.port,
         },
       });
       if (sshPreflightFlow(report) === "review" && canWriteSsh) {

@@ -2,6 +2,7 @@ import {
   WORKTREE_SETUP_ACTIVITY_KIND,
   WorktreeSetupSnapshot,
   type ThreadId,
+  type OrchestrationV2Run,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -24,7 +25,8 @@ export function findRecordedWorktreeSetup(
 export function resolveVisibleWorktreeSetup(input: {
   live: WorktreeSetupSnapshot | null;
   recorded: WorktreeSetupSnapshot | null;
-  turnStarted: boolean;
+  turnStarted?: boolean;
+  runs?: ReadonlyArray<Pick<OrchestrationV2Run, "startedAt">>;
   followUpSent: boolean;
 }): WorktreeSetupSnapshot | null {
   const snapshot =
@@ -35,7 +37,7 @@ export function resolveVisibleWorktreeSetup(input: {
   if (snapshot.phase === "running") return snapshot;
   if (input.followUpSent) return null;
   if (snapshot.phase !== "done") return snapshot;
-  if (!input.turnStarted) return snapshot;
+  if (!input.turnStarted && !input.runs?.some((run) => run.startedAt !== null)) return snapshot;
   return snapshot.stages.some((stage) => stage.status === "failed") ? snapshot : null;
 }
 

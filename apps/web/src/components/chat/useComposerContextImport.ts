@@ -1,3 +1,4 @@
+import { composerFileMatchesReattachMarker } from "./composerAttachmentFiles";
 import { ConnectionBlockedError, ConnectionTransientError } from "@goat/client-runtime/connection";
 import { EnvironmentRpcUnavailableError } from "@goat/client-runtime/rpc";
 import * as Cause from "effect/Cause";
@@ -14,7 +15,6 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftId,
-  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
   useComposerDraftStore,
 } from "../../composerDraftStore";
@@ -238,6 +238,7 @@ export function useComposerContextImport(input: {
             sizeBytes: file.size,
             previewUrl: URL.createObjectURL(file),
             file,
+            ...(record.source ? { source: record.source } : {}),
           },
         ],
         {
@@ -360,7 +361,7 @@ export function useComposerContextImport(input: {
       if (
         existingRecord &&
         isSameComposerContextPayload(existingRecord, record) &&
-        (record.kind !== "thread" || threadDraftTarget === attachmentDraftTarget)
+        record.kind !== "thread"
       ) {
         if (record.kind === "preview-annotation" && record.screenshotContextId) {
           skippedDependentAttachmentIds.add(record.screenshotContextId);
@@ -438,10 +439,25 @@ export function useComposerContextImport(input: {
     }
     const routedThreads = importedThreads.length > 0 ? routeThreadContexts(importedThreads) : [];
     if (routedThreads.length > 0) {
-      addComposerDraftThreadContexts(attachmentDraftTarget, routedThreads, {
-        appendReference: false,
-      });
-      for (const record of routedThreads) rewritten.set(record.contextId, record.contextId);
+      const threads = [...(getComposerDraft(threadDraftTarget)?.threadContexts ?? [])];
+      const additions: ThreadContextRecord[] = [];
+      for (const record of routedThreads) {
+        const attached = threads.find(
+          (thread) =>
+            thread.environmentId === record.environmentId && thread.threadId === record.threadId,
+        );
+        const imported =
+          attached ??
+          (threads.some((thread) => thread.contextId === record.contextId)
+            ? { ...record, contextId: toKindScopedComposerContextId("thread", randomUUID()) }
+            : record);
+        if (!attached) {
+          threads.push(imported);
+          additions.push(imported);
+        }
+        rewritten.set(record.contextId, imported.contextId);
+      }
+      addComposerDraftThreadContexts(threadDraftTarget, additions, { appendReference: false });
     }
     return rewritten;
   };

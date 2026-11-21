@@ -289,7 +289,9 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const previous = rowCache.get(key);
         const reusable = previous?.version === version ? previous.rows : undefined;
         const cached = new Map<number, CachedRow>();
-        const predicates = table === "session_message" ? ["type = 'assistant'"] : [];
+        // OpenCode 2 records a compaction request's spend on its compaction message.
+        const predicates =
+          table === "session_message" ? ["type IN ('assistant', 'compaction')"] : [];
         if (timestamp !== "NULL") predicates.push("time_created >= ?");
         const validAssistant = `CASE WHEN typeof(data) = 'text' AND json_valid(data)
           THEN json_type(data, '$.role') IS NULL OR data ->> '$.role' = 'assistant' END`;

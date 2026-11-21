@@ -1,3 +1,8 @@
+import { guardLostToolEvents } from "./goat/GuardLostToolEvents.ts";
+import { initializeAttemptDelivery, withAttemptDeliveryEvent } from "./AttemptInputDelivery.ts";
+import { makeCommandEventAppender } from "./AtomicLaunchReceipt.ts";
+import { makeEventSinkComparePayloadWrites } from "./EventSinkComparePayload.ts";
+import { makeEventJournalCatchUp, makeEventJournalTail } from "./eventJournalTail.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
@@ -9,7 +14,6 @@ import {
   OrchestrationV2StoredEvent,
   RuntimeRequestId,
   NodeId,
-  ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -80,6 +84,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const journal = yield* makeEventJournalTail;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -88,6 +93,7 @@ const layerBase: Layer.Layer<
     const publishLiveEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(function* (events: ReadonlyArray<OrchestrationV2StoredEvent>) {
+        yield* journal.publish(events);
         yield* PubSub.publishAll(liveEvents, events);
         for (const [type, pubsub] of liveEventsByType) {
           yield* PubSub.publishAll(
@@ -195,7 +201,7 @@ const layerBase: Layer.Layer<
                         : runOrdinals.get(event.payload.runId),
                     )
                     .pipe(Effect.map((payload) => ({ ...event, payload })))
-                : Effect.succeed(event),
+                : Effect.succeed(initializeAttemptDelivery(event)),
             { concurrency: 1 },
           ),
         ),
@@ -203,6 +209,7 @@ const layerBase: Layer.Layer<
     };
 
     const appendStagedEvents = makeTaskAppender(sql, eventStore, projectionStore, scheduledRuns);
+    const appendCommandEvents = makeCommandEventAppender(appendStagedEvents, commandReceipts);
 
     const applyStoredEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -438,10 +445,14 @@ const layerBase: Layer.Layer<
               }
             }
 
-            const normalized = yield* normalizeEvents(
+            const events =
               input.guardPendingUserInputCancellations === true
                 ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                : yield* withAttemptDeliveryEvent(sql, input);
+            const normalized = yield* normalizeEvents(
+              input.expectedTurnItems === undefined
+                ? events
+                : yield* guardLostToolEvents(sql, events, input.expectedTurnItems),
             );
             const storedEvents = yield* appendStagedEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
@@ -549,45 +560,11 @@ const layerBase: Layer.Layer<
             : Effect.void,
       );
 
-    const writeIfProviderThreadUnchangedEffect = Effect.fn(
-      "orchestrationV2.EventSink.writeIfProviderThreadUnchanged",
-    )(function* (input: Parameters<EventSinkV2Shape["writeIfProviderThreadUnchanged"]>[0]) {
-      yield* Effect.annotateCurrentSpan({
-        "orchestration_v2.event_count": input.events.length,
-        "orchestration_v2.provider_thread_id": input.expected.id,
-      });
-      const expectedJson = yield* ProjectionStore.encodeProviderThreadPayload(input.expected);
-      return yield* writeIfStoredPayloadMatches(
-        sql<{ readonly payload_json: string }>`
-          SELECT payload_json
-          FROM orchestration_v2_projection_provider_threads
-          WHERE provider_thread_id = ${input.expected.id}
-          LIMIT 1
-        `,
-        expectedJson,
-        input.events,
-      );
-    });
-
-    const writeIfTurnItemUnchangedEffect = Effect.fn(
-      "orchestrationV2.EventSink.writeIfTurnItemUnchanged",
-    )(function* (input: Parameters<EventSinkV2Shape["writeIfTurnItemUnchanged"]>[0]) {
-      yield* Effect.annotateCurrentSpan({
-        "orchestration_v2.event_count": input.events.length,
-        "orchestration_v2.turn_item_id": input.expected.id,
-      });
-      const expectedJson = yield* ProjectionStore.encodeTurnItemPayload(input.expected);
-      return yield* writeIfStoredPayloadMatches(
-        sql<{ readonly payload_json: string }>`
-          SELECT payload_json
-          FROM orchestration_v2_projection_turn_items
-          WHERE turn_item_id = ${input.expected.id}
-          LIMIT 1
-        `,
-        expectedJson,
-        input.events,
-      );
-    });
+    const comparePayloadWrites = makeEventSinkComparePayloadWrites(sql, (read, expected, events) =>
+      writeIfStoredPayloadMatches(read, expected, events).pipe(
+        Effect.mapError((cause) => new EventSinkWriteError({ eventCount: events.length, cause })),
+      ),
+    );
 
     const existingCommandResult =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -624,16 +601,42 @@ const layerBase: Layer.Layer<
             return { ...existing, committed: false as const, cancelledEffectIds: [] };
           }
 
+          // A deleted source cannot gain a fork after its checkpoint refs become eligible for cleanup.
+          if (input.commandType === "thread.fork") {
+            for (const event of input.events) {
+              if (event.type !== "thread.created" || event.payload.forkedFrom?.type !== "run")
+                continue;
+              const sourceId = event.payload.forkedFrom.threadId;
+              const source =
+                yield* sql`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id = ${sourceId} AND deleted_at IS NULL`;
+              if (source.length === 0) {
+                const receipt: CommandReceiptStore.CommandReceiptV2 = {
+                  commandId: input.commandId,
+                  threadId: input.threadId,
+                  commandType: input.commandType,
+                  acceptedAt: input.acceptedAt,
+                  resultSequence: yield* eventStore.latestSequence({ threadId: input.threadId }),
+                  status: "rejected",
+                  error: "Cannot fork a missing or deleted thread.",
+                };
+                yield* commandReceipts.upsert(receipt);
+                return {
+                  receipt,
+                  storedEvents: [],
+                  committed: false as const,
+                  cancelledEffectIds: [],
+                };
+              }
+            }
+          }
+
           const runId = input.updateDelegatedCompletionOnlyRunId;
           const normalized = yield* normalizeEvents(
             runId === undefined
               ? input.events
               : yield* updateDelegatedCompletionOnly(input.events, (id) => id === runId),
           );
-          const storedEvents = yield* appendStagedEvents({
-            commandId: input.commandId,
-            events: normalized,
-          });
+          const storedEvents = yield* appendCommandEvents(input, normalized);
           let sequence = storedEvents.at(-1)?.sequence;
           if (
             sequence === undefined &&
@@ -775,53 +778,31 @@ const layerBase: Layer.Layer<
       );
     });
 
-    const catchUp = (input: {
-      readonly afterSequence: number;
-      readonly throughSequence: number;
-      readonly threadId?: ThreadId;
-      readonly eventType?: OrchestrationV2DomainEvent["type"];
-    }): Stream.Stream<OrchestrationV2StoredEvent, unknown> => {
-      const pageSize = 256;
-      const loop = (afterSequence: number): Stream.Stream<OrchestrationV2StoredEvent, unknown> =>
-        Stream.unwrap(
-          eventStore
-            .read({
-              afterSequence,
-              throughSequence: input.throughSequence,
-              ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
-              ...(input.eventType === undefined ? {} : { eventType: input.eventType }),
-              limit: pageSize,
-            })
-            .pipe(
-              Stream.runCollect,
-              Effect.map((chunk) => Array.from(chunk)),
-              Effect.map((events) => {
-                if (events.length === 0) {
-                  return Stream.empty;
-                }
-                const current = Stream.fromIterable(events);
-                const last = events.at(-1)?.sequence ?? input.throughSequence;
-                return events.length < pageSize || last >= input.throughSequence
-                  ? current
-                  : Stream.concat(current, loop(last));
-              }),
-            ),
-        );
-      return loop(input.afterSequence);
-    };
-
+    const catchUp = makeEventJournalCatchUp(eventStore);
     const stream = (input?: Parameters<EventSinkV2Shape["stream"]>[0]) => {
       const afterSequence = input?.afterSequence ?? 0;
       const matches = (stored: OrchestrationV2StoredEvent) =>
         (input?.threadId === undefined || stored.event.threadId === input.threadId) &&
-        (input?.eventType === undefined || stored.event.type === input.eventType);
-      const replay = (throughSequence: number) =>
+        (input?.eventType === undefined || stored.event.type === input.eventType) &&
+        (input?.eventTypes === undefined || input.eventTypes.includes(stored.event.type));
+      const replayRange = (afterSequence: number, throughSequence: number) =>
         catchUp({
           afterSequence,
           throughSequence,
           ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
           ...(input?.eventType === undefined ? {} : { eventType: input.eventType }),
+          ...(input?.eventTypes === undefined ? {} : { eventTypes: input.eventTypes }),
         }).pipe(Stream.filter(matches));
+      const replay = (through: number) => replayRange(afterSequence, through);
+      if (input?.throughSequence !== undefined) return replay(input.throughSequence);
+      if (input?.journal === true)
+        return journal.stream({
+          afterSequence,
+          eventTypes: input.eventType === undefined ? input.eventTypes : [input.eventType],
+          latestSequence: eventStore.latestSequence(),
+          onSubscribed: input.onSubscribed,
+          replay: replayRange,
+        });
       return Stream.unwrap(
         Effect.gen(function* () {
           let pubsub = liveEvents;
@@ -907,18 +888,7 @@ const layerBase: Layer.Layer<
               }),
           ),
         ),
-      writeIfProviderThreadUnchanged: (input) =>
-        writeIfProviderThreadUnchangedEffect(input).pipe(
-          Effect.mapError(
-            (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-          ),
-        ),
-      writeIfTurnItemUnchanged: (input) =>
-        writeIfTurnItemUnchangedEffect(input).pipe(
-          Effect.mapError(
-            (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-          ),
-        ),
+      ...comparePayloadWrites,
       commitCommand: (input) =>
         commitCommandEffect(input).pipe(
           Effect.mapError(

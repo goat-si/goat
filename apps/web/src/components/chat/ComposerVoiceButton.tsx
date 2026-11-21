@@ -4,6 +4,7 @@ import {
   ContextMenu,
   ContextMenuTrigger,
   MenuItem,
+  MenuCheckboxItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -13,6 +14,7 @@ import { useId, useState } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import type { EnvironmentVoiceRequestContext } from "@goat/client-runtime/voice-input";
 import { VoiceModelDialog } from "../../speech/VoiceModelDialog";
+import { msg, useMessages } from "gt-react";
 
 export interface ComposerVoiceButtonProps {
   readonly disabled?: boolean;
@@ -28,6 +30,9 @@ export interface ComposerVoiceButtonProps {
     readonly disable: () => void;
     readonly environmentId: EnvironmentId;
     readonly canManage: boolean;
+    readonly streamingAvailable: boolean;
+    readonly transcribeAfterStop: boolean;
+    readonly setTranscribeAfterStop: (value: boolean) => void;
     readonly resolveContext: (id: EnvironmentId) => Promise<EnvironmentVoiceRequestContext | null>;
   };
 }
@@ -39,6 +44,7 @@ export function ComposerVoiceButton({
   onClick,
   environmentSpeech,
 }: ComposerVoiceButtonProps) {
+  const m = useMessages();
   const [modelsOpen, setModelsOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const hintId = useId();
@@ -110,6 +116,15 @@ export function ComposerVoiceButton({
               Use existing voice input
             </MenuRadioItem>
           </MenuRadioGroup>
+          {environmentSpeech.streamingAvailable ? (
+            <MenuCheckboxItem
+              checked={environmentSpeech.transcribeAfterStop}
+              closeOnClick={false}
+              onCheckedChange={(checked) => environmentSpeech.setTranscribeAfterStop(checked)}
+            >
+              {m(msg("Transcribe after I stop recording"))}
+            </MenuCheckboxItem>
+          ) : null}
           <MenuSeparator />
           <MenuItem disabled={!environmentSpeech.canManage} onClick={() => setModelsOpen(true)}>
             Manage voice models

@@ -2,10 +2,12 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { legacyToolNameTargets, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Base64 from "effect/encoding/Base64";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
-import { HttpServerRequest } from "effect/http";
+import { Headers, HttpServerRequest } from "effect/http";
 
 const isInvalidParams = Schema.is(McpSchema.InvalidParams);
 const isInternalError = Schema.is(McpSchema.InternalError);
@@ -124,11 +126,50 @@ export const listedToolCall = (
   return { body: encodeJson({ ...message, params }), legacy: name, listed };
 };
 
+/** The header a 2026-07-28 request repeats its tool name in; Effect refuses a mismatch with -32020. */
+const MCP_NAME_HEADER = "mcp-name";
+const BASE64_PREFIX = "=?base64?";
+const BASE64_SUFFIX = "?=";
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * An Mcp-Name value as Effect's `McpServer.decodeNameHeader` reads it (only McpHttpServer may
+ * import McpServer): printable ASCII, or UTF-8 as `=?base64?…?=`. Undefined when malformed.
+ */
+export const decodeMcpNameHeader = (header: string): string | undefined => {
+  if (!header.startsWith(BASE64_PREFIX) || !header.endsWith(BASE64_SUFFIX))
+    return /^[\t\x20-\x7e]*$/.test(header) ? header : undefined;
+  const bytes = Base64.decode(header.slice(BASE64_PREFIX.length, -BASE64_SUFFIX.length));
+  if (Result.isFailure(bytes)) return undefined;
+  try {
+    return utf8.decode(bytes.success);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * How a legacy tools/call's Mcp-Name header follows its body: absent stays absent (2025-06-18
+ * sends none), a header naming the same legacy tool names the listed one, and a header that
+ * named anything else leaves the whole request as sent, so Effect still refuses the mismatch.
+ */
+export const listedMcpNameHeader = (
+  header: string | undefined,
+  call: { readonly legacy: string; readonly listed: string },
+):
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "Listed"; readonly value: string }
+  | undefined => {
+  if (header === undefined) return { _tag: "Absent" };
+  return decodeMcpNameHeader(header) === call.legacy
+    ? { _tag: "Listed", value: call.listed }
+    : undefined;
+};
+
 /**
  * Resolves a legacy tool name to the listed one before Effect's MCP core sees the request, since
  * one visibility check guards both tools/list and tools/call. The call keeps its argument
- * refusal, access checks and analytics. The Mcp-Name header 2026-07-28 callers send is not
- * rewritten yet, so a legacy name over that protocol is still refused.
+ * refusal, access checks and analytics; a 2026-07-28 Mcp-Name header follows the body.
  */
 export const withServedToolNames =
   /* The auth middleware's span already covers each request. */
@@ -139,9 +180,14 @@ export const withServedToolNames =
     const body = yield* Effect.option(request.text);
     const call = Option.isSome(body) ? listedToolCall(body.value) : undefined;
     if (call === undefined) return yield* httpEffect;
+    const header = listedMcpNameHeader(request.headers[MCP_NAME_HEADER], call);
+    if (header === undefined) return yield* httpEffect;
     // Inherits everything else, including the source that response handlers are keyed by.
     const resolved: HttpServerRequest.HttpServerRequest = Object.create(request, {
       text: { value: Effect.succeed(call.body) },
+      ...(header._tag === "Listed"
+        ? { headers: { value: Headers.set(request.headers, MCP_NAME_HEADER, header.value) } }
+        : {}),
     });
     return yield* httpEffect.pipe(
       Effect.provideService(HttpServerRequest.HttpServerRequest, resolved),

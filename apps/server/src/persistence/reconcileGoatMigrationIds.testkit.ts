@@ -25,6 +25,9 @@ export const UPSTREAM_80S: ReadonlyArray<readonly [number, string]> = [
 
 export const isDatabaseNewerThanBuildError = Schema.is(DatabaseNewerThanBuildError);
 
+/** Fixture ledgers hold GOAT migrations through this id; GOAT migrations added later stay pending. */
+export const FIXTURE_LEDGER_GOAT_END = 166;
+
 export const goatNames = migrationEntries.flatMap(([, name]) =>
   GOAT_MIGRATION_NAMES.has(name) ? [name] : [],
 );

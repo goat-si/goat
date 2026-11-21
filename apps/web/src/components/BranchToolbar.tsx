@@ -353,9 +353,22 @@ const RunContextSelector = memo(function RunContextSelector({
         className={isPanel ? "w-(--anchor-width)" : undefined}
         {...(!isPanel ? composerFloatingLayerProps : {})}
       >
+        {/* Workspace comes first so a long machine list cannot push it out of reach. */}
+        <WorkspaceMenuItems
+          envMode={effectiveEnvMode}
+          locked={envModeLocked}
+          forceNewWorktree={forceNewWorktree}
+          localLabel={resolveCurrentWorkspaceLabel(activeWorktreePath)}
+          sshDestination={sshDestination}
+          sshOptions={sshOptions}
+          sshDisabledReason={sshDisabledReason}
+          onEnvModeChange={onEnvModeChange}
+          onSshDestinationChange={(destination) => onSshDestinationChange?.(destination)}
+        />
         {availableEnvironments &&
         ((showEnvironmentPicker && onEnvironmentChange) || addTargets.length > 0) ? (
           <>
+            <MenuSeparator />
             <MenuGroup>
               <MenuGroupLabel>Run on</MenuGroupLabel>
               <MenuRadioGroup
@@ -443,20 +456,8 @@ const RunContextSelector = memo(function RunContextSelector({
                 </MenuSub>
               ) : null}
             </MenuGroup>
-            <MenuSeparator />
           </>
         ) : null}
-        <WorkspaceMenuItems
-          envMode={effectiveEnvMode}
-          locked={envModeLocked}
-          forceNewWorktree={forceNewWorktree}
-          localLabel={resolveCurrentWorkspaceLabel(activeWorktreePath)}
-          sshDestination={sshDestination}
-          sshOptions={sshOptions}
-          sshDisabledReason={sshDisabledReason}
-          onEnvModeChange={onEnvModeChange}
-          onSshDestinationChange={(destination) => onSshDestinationChange?.(destination)}
-        />
       </MenuPopup>
     </Menu>
   );

@@ -1,3 +1,22 @@
+import {
+  interruptLostToolCalls,
+  makeLostProviderWork,
+  type UnsettledWork,
+} from "./RunLostProviderWork.ts";
+export type { UnsettledWork } from "./RunLostProviderWork.ts";
+import { makeRunInputDelivery, submitProviderInput } from "./RunInputDelivery.ts";
+import { hasNativeGoals } from "./providerTurnStartHelpers.ts";
+import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
+import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
+import {
+  type OpenRunOwnedSubagentProjection,
+  isOpenExecutionNodeStatus,
+  isRunOwnedSubagentTerminalStatus,
+  emptyOpenRunOwnedSubagentProjection,
+  withLinkedChildThreadId,
+  cascadeTerminalizeRunOwnedSubagents,
+} from "./RunOwnedSubagentProjection.ts";
+export { cascadeTerminalizeRunOwnedSubagents } from "./RunOwnedSubagentProjection.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
 export { selectInheritedBackgroundTurnItems } from "./InheritedBackgroundTurnItems.ts";
 import { isTerminalProviderTurnStatus, isSettledTurnItemStatus } from "./providerTurnStatus.ts";
@@ -23,21 +42,24 @@ export { runMemoryPrepareInput };
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
-import { makeAssistantIdleWake, makePendingSnapshotHold } from "./assistantIdleWake.ts";
+import {
+  makeAssistantIdleWake,
+  makePendingSnapshotHold,
+  PENDING_SNAPSHOT_RECHECK_MS,
+} from "./assistantIdleWake.ts";
 import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
+  parseGoalCommand,
   isGoatBotSessionThreadId,
   CommandId,
   RunId,
   TurnItemId,
-  type EventId,
   type ModelSelection,
   type NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2CheckpointScope,
-  type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderThread,
@@ -89,6 +111,7 @@ import {
   makeInterruptResultTurnItem,
   providerProcessExitCause,
   terminalTerminationCause,
+  terminalRunNoticeEvents,
 } from "./runTerminationCause.ts";
 export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
@@ -106,37 +129,14 @@ function isSettledSubagentStatus(status: OrchestrationV2Subagent["status"]): boo
 }
 
 /** A provider-native subagent's turns arrive on its parent's run, but the parent agent started them. */
+const MAX_PENDING_CHILD_SNAPSHOTS = 256;
+
 const NATIVE_SUBAGENT_TURN_ORIGIN: ProviderEventIngestor.ProviderTurnOrigin = {
   createdBy: "agent",
   creationSource: "provider",
   scheduled: false,
   subagent: true,
 };
-
-type SubagentTurnItem = Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
-
-type OpenRunOwnedSubagentProjection = {
-  readonly subagents: ReadonlyMap<NodeId, OrchestrationV2Subagent>;
-  readonly turnItems: ReadonlyMap<NodeId, SubagentTurnItem>;
-  readonly childTurnItems: ReadonlyMap<TurnItemId, OrchestrationV2TurnItem>;
-  readonly nodes: ReadonlyMap<NodeId, OrchestrationV2ExecutionNode>;
-  readonly linkedChildThreadIds: ReadonlySet<ThreadId>;
-};
-
-type RunOwnedSubagentTerminalStatus = Extract<
-  OrchestrationV2Subagent["status"],
-  "interrupted" | "failed" | "cancelled"
->;
-
-function isOpenExecutionNodeStatus(status: OrchestrationV2ExecutionNode["status"]): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
-function isRunOwnedSubagentTerminalStatus(
-  status: ProviderTerminalEvent["status"],
-): status is RunOwnedSubagentTerminalStatus {
-  return status === "interrupted" || status === "failed" || status === "cancelled";
-}
 
 function childTurnsContinue(terminal: ProviderTerminalEvent): boolean {
   return terminal.status === "failed" && terminal.childTurnsContinue === true;
@@ -147,142 +147,11 @@ export function canRouteRelatedSubagent(status: OrchestrationV2Subagent["status"
   return status === "completed";
 }
 
-function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
-  return {
-    subagents: new Map(),
-    turnItems: new Map(),
-    childTurnItems: new Map(),
-    nodes: new Map(),
-    linkedChildThreadIds: new Set(),
-  };
+export function canRouteNativeSubagent(
+  subagent: Pick<OrchestrationV2Subagent, "origin" | "status">,
+): boolean {
+  return subagent.origin === "provider_native" && canRouteRelatedSubagent(subagent.status);
 }
-
-function withLinkedChildThreadId(
-  current: OpenRunOwnedSubagentProjection,
-  childThreadId: ThreadId | null,
-): OpenRunOwnedSubagentProjection {
-  if (childThreadId === null || current.linkedChildThreadIds.has(childThreadId)) {
-    return current;
-  }
-  const linkedChildThreadIds = new Set(current.linkedChildThreadIds);
-  linkedChildThreadIds.add(childThreadId);
-  return { ...current, linkedChildThreadIds };
-}
-
-export const cascadeTerminalizeRunOwnedSubagents = Effect.fn(
-  "RunExecutionService.cascadeTerminalizeRunOwnedSubagents",
-)(function* (input: {
-  readonly run: OrchestrationV2Run;
-  readonly open: OpenRunOwnedSubagentProjection;
-  readonly status: RunOwnedSubagentTerminalStatus;
-  readonly completedAt: DateTime.Utc;
-  readonly allocateEventId: () => Effect.Effect<EventId, IdAllocator.IdAllocatorV2AllocationError>;
-}): Effect.fn.Return<
-  ReadonlyArray<OrchestrationV2DomainEvent>,
-  IdAllocator.IdAllocatorV2AllocationError
-> {
-  const events: Array<OrchestrationV2DomainEvent> = [];
-  // Prefer lifetime linkage over currently-open rows: subagent/turn-item
-  // snapshots may terminalize before the linked child-thread node settles.
-  const childThreadIds = new Set(input.open.linkedChildThreadIds);
-  for (const item of [...input.open.subagents.values(), ...input.open.turnItems.values()]) {
-    if (item.childThreadId !== null) {
-      childThreadIds.add(item.childThreadId);
-    }
-  }
-  const keys = new Set<NodeId>([
-    ...input.open.subagents.keys(),
-    ...input.open.turnItems.keys(),
-    ...input.open.nodes.keys(),
-  ]);
-  for (const key of keys) {
-    const subagent = input.open.subagents.get(key);
-    if (subagent !== undefined && !isSettledSubagentStatus(subagent.status)) {
-      events.push({
-        id: yield* input.allocateEventId(),
-        type: "subagent.updated",
-        threadId: subagent.threadId,
-        runId: input.run.id,
-        nodeId: subagent.id,
-        driver: subagent.driver,
-        providerInstanceId: subagent.providerInstanceId,
-        occurredAt: input.completedAt,
-        payload: {
-          ...subagent,
-          status: input.status,
-          completedAt: input.completedAt,
-          updatedAt: input.completedAt,
-        },
-      });
-    }
-    const node = input.open.nodes.get(key);
-    if (
-      node !== undefined &&
-      ((node.threadId === input.run.threadId && node.runId === input.run.id) ||
-        childThreadIds.has(node.threadId)) &&
-      isOpenExecutionNodeStatus(node.status)
-    ) {
-      events.push({
-        id: yield* input.allocateEventId(),
-        type: "node.updated",
-        threadId: node.threadId,
-        runId: node.runId ?? input.run.id,
-        nodeId: node.id,
-        providerInstanceId: input.run.providerInstanceId,
-        occurredAt: input.completedAt,
-        payload: {
-          ...node,
-          status: input.status,
-          completedAt: input.completedAt,
-        },
-      });
-    }
-    const turnItem = input.open.turnItems.get(key);
-    if (
-      turnItem !== undefined &&
-      turnItem.runId === input.run.id &&
-      !isSettledTurnItemStatus(turnItem.status)
-    ) {
-      events.push({
-        id: yield* input.allocateEventId(),
-        type: "turn-item.updated",
-        threadId: turnItem.threadId,
-        runId: input.run.id,
-        ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
-        providerInstanceId: input.run.providerInstanceId,
-        occurredAt: input.completedAt,
-        payload: {
-          ...turnItem,
-          status: input.status,
-          completedAt: input.completedAt,
-          updatedAt: input.completedAt,
-        },
-      });
-    }
-  }
-  for (const turnItem of input.open.childTurnItems.values()) {
-    if (!childThreadIds.has(turnItem.threadId) || isSettledTurnItemStatus(turnItem.status)) {
-      continue;
-    }
-    events.push({
-      id: yield* input.allocateEventId(),
-      type: "turn-item.updated",
-      threadId: turnItem.threadId,
-      runId: turnItem.runId ?? input.run.id,
-      ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
-      providerInstanceId: input.run.providerInstanceId,
-      occurredAt: input.completedAt,
-      payload: {
-        ...turnItem,
-        ...("streaming" in turnItem ? { streaming: false } : {}),
-        status: input.status,
-        completedAt: input.completedAt,
-        updatedAt: input.completedAt,
-      },
-    });
-  }
-  return events;
-});
 
 function finalProviderThreadStatus(
   disposition: ProviderTerminalEvent["threadDisposition"],
@@ -332,6 +201,7 @@ export const runPrepareInput = (
 export interface RunExecutionServiceV2StartRootRunInput extends ProviderAdapter.TurnMemoryHooks {
   readonly cloudSource?: import("@goat/contracts").OrchestrationV2CloudTask["source"];
   readonly reattach?: boolean;
+  readonly resume?: boolean;
   readonly cloudLaunchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
   readonly commandId: CommandId;
   readonly appThread: OrchestrationV2AppThread;
@@ -340,6 +210,7 @@ export interface RunExecutionServiceV2StartRootRunInput extends ProviderAdapter.
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly checkpointScope: OrchestrationV2CheckpointScope | null;
+  readonly baseline?: Effect.Effect<void>;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly attempt: OrchestrationV2RunAttempt;
   readonly attemptId: RunAttemptId;
@@ -356,12 +227,17 @@ export interface RunExecutionServiceV2StartRootRunInput extends ProviderAdapter.
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly hasWorkspaceMoved?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
+  readonly loadUnsettledWork?: (
+    threadId: ThreadId,
+    nodeIds: ReadonlyArray<NodeId>,
+  ) => Effect.Effect<UnsettledWork, ProjectionStoreV2Error>;
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 }
 
 export interface RunExecutionServiceV2Shape {
+  readonly forkBaseline: (input: RunBaselineInput) => Effect.Effect<Effect.Effect<void>>;
   readonly startRootRun: (
     input: RunExecutionServiceV2StartRootRunInput,
   ) => Effect.Effect<void, RunExecutionServiceV2Error>;
@@ -417,6 +293,7 @@ export const layer: Layer.Layer<
         readonly openRunOwnedSubagentsTerminal?: ProviderTerminalEvent;
         // Root turn snapshot written with the run when GOAT ends the run itself.
         readonly abandonedProviderTurn?: OrchestrationV2ProviderTurn;
+        readonly lostToolCalls?: ReadonlyArray<OrchestrationV2TurnItem>;
         readonly terminal: ProviderTerminalEvent;
         readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
         readonly completedAt?: DateTime.Utc;
@@ -606,6 +483,12 @@ export const layer: Layer.Layer<
           events: [
             ...cloudResultEvents,
             ...cascadedSubagentEvents,
+            ...(yield* interruptLostToolCalls({
+              run: input.run,
+              toolCalls: input.lostToolCalls ?? [],
+              completedAt,
+              allocateEventId,
+            })),
             ...(input.abandonedProviderTurn === undefined
               ? []
               : [
@@ -634,27 +517,7 @@ export const layer: Layer.Layer<
                     payload: finalizedAttempt,
                   },
                 ]),
-            ...(input.terminal.status === "interrupted"
-              ? [
-                  {
-                    id: yield* allocateEventId(),
-                    type: "turn-item.updated" as const,
-                    threadId: input.run.threadId,
-                    runId: input.run.id,
-                    nodeId: input.rootNode.id,
-                    providerInstanceId: input.run.providerInstanceId,
-                    occurredAt: completedAt,
-                    payload: makeInterruptResultTurnItem({
-                      idAllocator,
-                      run: input.run,
-                      rootNode: input.rootNode,
-                      providerThread: input.providerThread,
-                      reason,
-                      completedAt,
-                    }),
-                  },
-                ]
-              : []),
+            ...(yield* terminalRunNoticeEvents({ ...input, idAllocator, completedAt, reason })),
             ...(input.liveProviderTurn !== undefined &&
             !isTerminalProviderTurnStatus(input.liveProviderTurn.status)
               ? [
@@ -749,6 +612,9 @@ export const layer: Layer.Layer<
                 }
               : {}),
             events: finalization.events,
+            ...(input.lostToolCalls === undefined
+              ? {}
+              : { expectedTurnItems: input.lostToolCalls }),
             effects: finalization.effects,
           });
           if (!result.committed) {
@@ -763,6 +629,11 @@ export const layer: Layer.Layer<
     );
 
     return RunExecutionServiceV2.of({
+      forkBaseline: (input) =>
+        captureRunBaseline(checkpointService, input).pipe(
+          Effect.forkChild({ startImmediately: true }),
+          Effect.map(Fiber.join),
+        ),
       startRootRun: Effect.fn("RunExecutionService.startRootRun")(function* (input) {
         const cloud =
           input.cloudSource !== undefined || input.providerThread.cloudTask !== undefined;
@@ -816,23 +687,7 @@ export const layer: Layer.Layer<
                   .responseStreamingMode,
             ),
           );
-          if (input.checkpointScope !== null) {
-            yield* checkpointService
-              .captureBaseline({
-                scope: input.checkpointScope,
-                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-              })
-              .pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
-                    : Effect.logWarning(
-                        "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                        { runId: input.run.id },
-                      ),
-                ),
-              );
-          }
+          yield* input.baseline ?? captureRunBaseline(checkpointService, input);
           if (
             input.shouldStartProviderTurn !== undefined &&
             !(yield* input.shouldStartProviderTurn())
@@ -972,6 +827,14 @@ export const layer: Layer.Layer<
           ReadonlySet<OrchestrationV2TurnItem["id"]>
         >(new Set(inheritedBackgroundTurnItemsById.keys()));
         const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
+        const openRootToolCalls = activeBackgroundTurnItems;
+        const { loadLostRootToolCalls, endWorkLostAfterRootRun } = makeLostProviderWork(
+          input,
+          openRunOwnedSubagents,
+          openRootToolCalls,
+          eventSink,
+          idAllocator,
+        );
         let rootTurnOwnershipChecked = false;
         const workspaceHandedOff = Effect.suspend(() =>
           input.shouldFinalizeRun === undefined || input.hasWorkspaceMoved === undefined
@@ -1205,6 +1068,7 @@ export const layer: Layer.Layer<
         });
         // The last stored root snapshot's pendingBackgroundWork; adapters that omit it leave it false.
         let rootSnapshotPendingWork = false;
+        const childSnapshotDeadlines = new Map<ProviderThreadId, number>();
         const pendingSnapshotHold = makePendingSnapshotHold((at) => idleWake.schedule(at));
         const shouldStopProviderEventIngestion = Effect.gen(function* () {
           if (!(yield* agentTurnsSettled)) {
@@ -1216,15 +1080,35 @@ export const layer: Layer.Layer<
             terminal.status !== "completed" &&
             !childTurnsContinue(terminal)
           ) {
-            return true;
+            if (terminal.status !== "failed" || (yield* Ref.get(providerThreadOwnerLost))) {
+              return true;
+            }
+            if (input.session.hasPendingBackgroundWorkForThread !== undefined) {
+              const pending = yield* input.session
+                .hasPendingBackgroundWorkForThread(yield* Ref.get(latestProviderThread))
+                .pipe(Effect.catchCause(() => Effect.succeed(false)));
+              if (pending) return false;
+            }
+            return !(rootSnapshotPendingWork && (yield* pendingSnapshotHold.holds()));
           }
           // Newly owned items depend on adapters emitting a non-terminal event before the root
           // terminal. Owner loss (a newer run claimed lastRunOrdinal) must not close this stream
           // while these sets are non-empty: turn_item.updated writes are not ownership-gated, so
           // late completions still land.
           const backgroundItems = yield* Ref.get(activeBackgroundTurnItems);
-          if (backgroundItems.size > 0) {
-            return false;
+          if (backgroundItems.size > 0) return false;
+          if (childSnapshotDeadlines.size > 0) {
+            if (pendingSnapshotHold.hasUnprocessedEvents()) return false;
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            let deadline = now;
+            for (const [id, expiresAt] of childSnapshotDeadlines) {
+              if (expiresAt <= now) childSnapshotDeadlines.delete(id);
+              else deadline = Math.max(deadline, expiresAt);
+            }
+            if (deadline > now) {
+              yield* idleWake.schedule(deadline);
+              return false;
+            }
           }
           if (yield* Ref.get(providerThreadOwnerLost)) {
             return true;
@@ -1336,6 +1220,9 @@ export const layer: Layer.Layer<
                 pendingBackgroundProviderTurns.delete(id);
               }
             }
+            for (const id of childSnapshotDeadlines.keys()) {
+              if (!routing.ownedProviderThreadIds.has(id)) childSnapshotDeadlines.delete(id);
+            }
             yield* Ref.update(
               activeBackgroundTurnItems,
               (current) => new Set([...current].filter((id) => !detached.itemIds.has(id))),
@@ -1401,6 +1288,16 @@ export const layer: Layer.Layer<
               runId: input.run.id,
               nodeId: input.rootNode.id,
               event: deliveredEvent,
+              ...("planUpdateRunId" in deliveredEvent &&
+              deliveredEvent.planUpdateRunId !== undefined
+                ? {
+                    writeIfRunCurrent: {
+                      runId: input.run.id,
+                      activeAttemptId: input.attempt.id,
+                      expectedStatus: "running" as const,
+                    },
+                  }
+                : {}),
               ...(isRootProviderThreadUpdate
                 ? rootTerminalAlreadySeen
                   ? {
@@ -1476,17 +1373,30 @@ export const layer: Layer.Layer<
             event.turnItem.streaming &&
             !reservedHeldTurnItemIds.has(event.turnItem.id)
           ) {
-            yield* turnItemPositions.allocate({
-              threadId: event.turnItem.threadId,
-              turnItemId: event.turnItem.id,
-              runId: event.turnItem.runId,
-            });
+            yield* turnItemPositions.allocate(
+              TurnItemPositionStore.positionRequest(event.turnItem),
+            );
             reservedHeldTurnItemIds.add(event.turnItem.id);
           }
           if (event.type === "provider_thread.updated") {
             if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
               yield* Ref.set(latestProviderThread, event.providerThread);
-              rootSnapshotPendingWork = event.pendingBackgroundWork === true;
+              rootSnapshotPendingWork =
+                event.pendingBackgroundWork === true ||
+                (event.providerThread.pendingBackgroundTasks?.length ?? 0) > 0;
+            } else if (event.providerThread.id !== input.providerThread.id) {
+              if (event.pendingBackgroundWork === true) {
+                const id = event.providerThread.id;
+                childSnapshotDeadlines.delete(id);
+                const now = DateTime.toEpochMillis(yield* DateTime.now);
+                childSnapshotDeadlines.set(id, now + PENDING_SNAPSHOT_RECHECK_MS);
+                if (childSnapshotDeadlines.size > MAX_PENDING_CHILD_SNAPSHOTS) {
+                  const oldest = childSnapshotDeadlines.keys().next();
+                  if (!oldest.done) childSnapshotDeadlines.delete(oldest.value);
+                }
+              } else if (event.pendingBackgroundWork === false) {
+                childSnapshotDeadlines.delete(event.providerThread.id);
+              }
             }
           }
           if (
@@ -1573,6 +1483,7 @@ export const layer: Layer.Layer<
                     cause: new ProviderAdapter.ProviderAdapterEventStreamError({
                       driver: input.providerThread.driver,
                       providerSessionId: input.providerSessionId,
+                      raisedByGoat: true,
                       cause: "Provider event stream ended without a root terminal.",
                     }),
                   });
@@ -1630,7 +1541,15 @@ export const layer: Layer.Layer<
                     runId: input.run.id,
                     cause,
                   });
-                  if (yield* Ref.get(rootRunFinalized)) return;
+                  const runtimeLost =
+                    isRunExecutionIngestError(squashed) &&
+                    isProviderEventStreamError(squashed.cause) &&
+                    squashed.cause.raisedByGoat !== true &&
+                    squashed.cause.detachedThreadId === undefined;
+                  if (yield* Ref.get(rootRunFinalized)) {
+                    if (runtimeLost) yield* endWorkLostAfterRootRun(completedAt);
+                    return;
+                  }
                   const providerThread = yield* Ref.get(latestProviderThread);
                   // Stop background work too; the failed consumer cannot persist terminal events.
                   const abandonedProviderTurn =
@@ -1669,6 +1588,18 @@ export const layer: Layer.Layer<
                       : null;
                   const latestItemOrdinal = yield* Ref.get(latestTurnItemOrdinal);
                   const openSubagents = yield* Ref.get(openRunOwnedSubagents);
+                  const lostToolCalls = runtimeLost
+                    ? yield* loadLostRootToolCalls.pipe(
+                        Effect.catchCauseIf(
+                          (loadCause) => !Cause.hasInterruptsOnly(loadCause),
+                          (loadCause) =>
+                            Effect.logWarning(
+                              "orchestration V2 failed to read tool calls lost with the provider runtime",
+                              { runId: input.run.id, cause: loadCause },
+                            ).pipe(Effect.as([])),
+                        ),
+                      )
+                    : [];
                   let nextRetryWarningAt = completedAt;
                   yield* writeFinalRunEvents({
                     run: input.run,
@@ -1682,6 +1613,7 @@ export const layer: Layer.Layer<
                     },
                     openRunOwnedSubagents: openSubagents,
                     ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
+                    lostToolCalls,
                     completedAt,
                     terminationCause: providerProcessExitCause(Cause.squash(cause))
                       ? "provider_process_exit"
@@ -1767,8 +1699,14 @@ export const layer: Layer.Layer<
           key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
           text: entry.text,
         }));
+        const compact =
+          input.message.attachments.length === 0 &&
+          input.message.text.trim().toLowerCase() === "/compact";
         const inbox =
-          input.reattach === true
+          input.reattach === true ||
+          input.resume === true ||
+          compact ||
+          (parseGoalCommand(input.message) !== null && hasNativeGoals(input.session))
             ? { texts: [], reports: [], throughId: null }
             : yield* remoteReportInbox
                 .pending(input.run.threadId)
@@ -1779,10 +1717,24 @@ export const layer: Layer.Layer<
                     ),
                   ),
                 );
-        const compact =
-          input.message.attachments.length === 0 &&
-          input.message.text.trim().toLowerCase() === "/compact";
+        const consumeReports =
+          inbox.throughId === null
+            ? Effect.void
+            : remoteReportInbox
+                .consume(input.run.threadId, inbox.throughId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to consume remote report inbox.", { cause }),
+                  ),
+                );
+        const inputDelivery = yield* makeRunInputDelivery(
+          eventSink,
+          idAllocator,
+          input,
+          consumeReports,
+        );
         const turnInput = {
+          ...(inputDelivery === undefined ? {} : { inputDelivery }),
           ...ProviderAdapter.turnMemoryHooks(input),
           ...(input.cloudSource === undefined ? {} : { cloudSource: input.cloudSource }),
           ...(input.cloudLaunchSource === undefined
@@ -1915,57 +1867,15 @@ export const layer: Layer.Layer<
           return;
         }
 
-        const {
-          message: _savedPrompt,
-          cloudLaunchSource: _launchCheckout,
-          ...attachInput
-        } = turnInput;
-        const startTurn =
-          input.reattach === true
-            ? (input.session.resumeTurn?.({
-                ...attachInput,
-                cloudTask: input.providerThread.cloudTask!,
-              }) ??
-              Effect.fail(
-                new ProviderAdapter.ProviderAdapterTurnStartError({
-                  driver: input.session.driver,
-                  threadId: input.run.threadId,
-                  providerThreadId: input.providerThread.id,
-                  runId: input.run.id,
-                  cause:
-                    "This cloud provider cannot reattach observation. Open the saved task link.",
-                }),
-              ))
-            : compact
-              ? (input.session.compactThread?.(turnInput) ??
-                Effect.fail(
-                  new ProviderAdapter.ProviderAdapterTurnStartError({
-                    driver: input.session.driver,
-                    threadId: input.run.threadId,
-                    providerThreadId: input.providerThread.id,
-                    runId: input.run.id,
-                    cause: new ProviderAdapter.ProviderCompactionUnsupportedError({
-                      driver: input.session.driver,
-                      providerThreadId: input.providerThread.id,
-                    }),
-                  }),
-                ))
-              : input.session.startTurn(turnInput);
+        const startTurn = providerTurnOperation(
+          input,
+          turnInput,
+          compact,
+          input.reattach === true ? { cloudTask: input.providerThread.cloudTask! } : null,
+        );
         yield* Effect.andThen(
           shouldStart,
-          startTurn.pipe(
-            Effect.tap(() =>
-              input.reattach === true || compact || inbox.throughId === null
-                ? Effect.void
-                : remoteReportInbox
-                    .consume(input.run.threadId, inbox.throughId)
-                    .pipe(
-                      Effect.catch((cause) =>
-                        Effect.logWarning("Failed to consume remote report inbox.", { cause }),
-                      ),
-                    ),
-            ),
-          ),
+          submitProviderInput(input.session, inputDelivery, startTurn),
         ).pipe(
           // Wait for acceptance so abandoned startup cannot leave a refresher
           // on the already-detached ingestion fiber.

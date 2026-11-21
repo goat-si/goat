@@ -1,12 +1,15 @@
+import { useAssetUrlState } from "../../assets/assetUrls";
 import { formatFilePathForClipboard } from "@goat/client-runtime/media-actions";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
-import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import { memo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 
+import { contextMenuSourceOf } from "../../contextMenuSource";
+import { useNativeFileDrag } from "../../useNativeFileDrag";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import { shouldOpenMarkdownFileLinkInEditor } from "../../markdown-links";
@@ -22,14 +25,16 @@ import {
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./MarkdownFileLink.logic";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
-import { WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
+import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
 import { copyFilePath } from "../../filePathCopy";
 
 interface MarkdownFileLinkProps {
   environmentId: EnvironmentId | null;
+  fileActions?: boolean;
   href: string;
   targetPath: string;
   iconPath: string;
+  appIconPath?: string | undefined;
   workspaceRelativePath: string | null;
   panelPath: string | null;
   line?: number | undefined;
@@ -51,9 +56,11 @@ const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
 
 export const MarkdownFileLink = memo(function MarkdownFileLink({
   environmentId,
+  fileActions = true,
   href,
   targetPath,
   iconPath,
+  appIconPath,
   workspaceRelativePath,
   panelPath,
   line,
@@ -70,6 +77,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   revealLabel,
   resolveCopyPaths,
 }: MarkdownFileLinkProps) {
+  const nativeFileDrag = useNativeFileDrag(
+    environmentId,
+    async () => (await resolveCopyPaths()).fullPath,
+    fileActions,
+  );
   const handleOpenInEditor = () => {
     if (!onOpen) {
       return;
@@ -254,7 +266,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     );
   };
 
-  const showFileContextMenu = async (position: { x: number; y: number }) => {
+  const showFileContextMenu = async (
+    position: { x: number; y: number },
+    source: ContextMenuSource | undefined,
+  ) => {
     const api = readLocalApi();
     if (!api) return;
 
@@ -271,6 +286,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
           ...copyItems.map(({ id, label }) => ({ id, label })),
         ] as const,
         position,
+        source,
       );
 
       if (clicked === "preview-media") {
@@ -316,7 +332,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             return { x: bounds.left, y: bounds.bottom };
           })()
         : { x: event.clientX, y: event.clientY };
-    void showFileContextMenu(position);
+    void showFileContextMenu(position, contextMenuSourceOf(event));
   };
 
   const canOpenInEditor = onOpen !== undefined;
@@ -343,6 +359,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         render={
           hasPrimaryAction ? (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<a href={href} />}
@@ -365,6 +382,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               onContextMenu={handleContextMenu}
             >
               <FileTagChipContent
+                icon={
+                  appIconPath ? (
+                    <AppBundleIcon environmentId={environmentId} path={appIconPath} theme={theme} />
+                  ) : undefined
+                }
                 path={iconPath}
                 environmentId={environmentId}
                 label={label}
@@ -373,6 +395,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             </ContextChip>
           ) : (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<button type="button" />}
@@ -385,6 +408,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               onContextMenu={handleContextMenu}
             >
               <FileTagChipContent
+                icon={
+                  appIconPath ? (
+                    <AppBundleIcon environmentId={environmentId} path={appIconPath} theme={theme} />
+                  ) : undefined
+                }
                 path={iconPath}
                 environmentId={environmentId}
                 label={label}
@@ -409,7 +437,9 @@ function areMarkdownFileLinkPropsEqual(
     previous.href === next.href &&
     previous.targetPath === next.targetPath &&
     previous.iconPath === next.iconPath &&
+    previous.appIconPath === next.appIconPath &&
     previous.environmentId === next.environmentId &&
+    previous.fileActions === next.fileActions &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.panelPath === next.panelPath &&
     previous.line === next.line &&
@@ -425,5 +455,26 @@ function areMarkdownFileLinkPropsEqual(
     previous.onReveal === next.onReveal &&
     previous.resolveCopyPaths === next.resolveCopyPaths &&
     previous.revealLabel === next.revealLabel
+  );
+}
+
+function AppBundleIcon(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly path: string;
+  readonly theme: "light" | "dark";
+}) {
+  const asset = useAssetUrlState(props.environmentId, {
+    _tag: "native-app-icon",
+    app: { _tag: "app-path", path: props.path },
+  });
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (asset._tag !== "Success" || asset.url === failedUrl) return <WorkspaceEntryIcon {...props} />;
+  return (
+    <img
+      src={asset.url}
+      alt=""
+      className="size-4 shrink-0 object-contain"
+      onError={() => setFailedUrl(asset.url)}
+    />
   );
 }

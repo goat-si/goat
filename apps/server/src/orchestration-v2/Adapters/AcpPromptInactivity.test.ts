@@ -57,6 +57,8 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
     prompt: AcpSessionRuntime.AcpSessionRuntime["Service"]["prompt"],
   ) => AcpSessionRuntime.AcpSessionRuntime["Service"]["prompt"];
   readonly cancelled?: Deferred.Deferred<void>;
+  readonly followAgentWorkState?: boolean;
+  readonly recognizedBackground?: boolean;
 }) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const natives: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
@@ -84,12 +86,22 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
       driver: ACP_TEST_DRIVER,
       capabilities: AcpProviderCapabilitiesV2,
       promptInactivityTimeout: "15 minutes",
+      ...(input.followAgentWorkState === true ? { followAgentWorkState: true } : {}),
+      ...(input.recognizedBackground === true
+        ? {
+            extractBackgroundTaskId: (tool: { readonly toolCallId: string }) =>
+              tool.toolCallId === "tracked-tool-call" ? "background-task" : undefined,
+          }
+        : {}),
       makeRuntime: (runtimeInput) => {
         runtimeInputs.push(runtimeInput);
         return mockRuntime(runtimeInput);
       },
     },
     selfInvocation: yield* resolveSelfInvocation(),
+    ...(input.followAgentWorkState === true
+      ? { continuationRequests: { offer: () => Effect.void } }
+      : {}),
   });
   const threadId = ThreadId.make("thread-acp-prompt-inactivity");
   const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -148,6 +160,183 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
 });
 
 describe("ACP prompt inactivity", () => {
+  it.effect.each([false, true])(
+    "ends a running tool when the ACP process dies (followAgentWorkState: %s)",
+    (followAgentWorkState) =>
+      Effect.gen(function* () {
+        const harness = yield* makePromptInactivityHarness({
+          followAgentWorkState,
+          environment: (ordinal) =>
+            ordinal === 1 ? { GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute" } : {},
+        });
+        yield* harness.startTurn(1);
+        let exited = false;
+        const statuses = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call"
+              ? Stream.make(event.turnItem.status)
+              : Stream.empty,
+          ),
+          Stream.tap(() =>
+            exited
+              ? Effect.void
+              : Effect.sync(() => (exited = true)).pipe(
+                  Effect.andThen(harness.natives[0]!.notify("_test/exit", {})),
+                ),
+          ),
+          Stream.runCollect,
+          Effect.map((collected) => Array.from(collected)),
+        );
+        assert.include(["failed", "interrupted", "cancelled"], statuses.at(-1));
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "fails a pending tool when a live ACP agent rejects its prompt (followAgentWorkState: %s)",
+    (followAgentWorkState) =>
+      Effect.gen(function* () {
+        const harness = yield* makePromptInactivityHarness({
+          followAgentWorkState,
+          environment: (ordinal) =>
+            ordinal === 1
+              ? {
+                  GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute",
+                  GOAT_ACP_FAIL_PROMPT: "1",
+                }
+              : {},
+        });
+        yield* harness.startTurn(1);
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.map((items) => Array.from(items)),
+        );
+        const statuses = events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call"
+            ? [event.turnItem.status]
+            : [],
+        );
+        assert.equal(statuses.at(-1), "failed");
+        assert.notInclude(["pending", "running"], statuses.at(-1));
+        const failed = events.find(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call" &&
+            event.turnItem.status === "failed",
+        );
+        assert.include(
+          JSON.stringify(failed),
+          "The ACP agent rejected the prompt before the tool finished.",
+        );
+        const terminal = events.at(-1);
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
+        if (terminal?.type === "turn.terminal" && terminal.status === "failed")
+          assert.isNotEmpty(terminal.failure.message);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "keeps a started tool running after a live ACP prompt rejection (followAgentWorkState: %s)",
+    (followAgentWorkState) =>
+      Effect.gen(function* () {
+        const rejected = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const harness = yield* makePromptInactivityHarness({
+          followAgentWorkState,
+          environment: (ordinal) =>
+            ordinal === 1
+              ? {
+                  GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute",
+                  GOAT_ACP_FAIL_PROMPT: "1",
+                }
+              : {},
+          wrapPrompt: (prompt) => (payload, options) =>
+            prompt(payload, options).pipe(
+              Effect.catchTags({
+                AcpRequestError: (error) =>
+                  Deferred.succeed(rejected, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+              }),
+            ),
+        });
+        yield* harness.startTurn(1);
+        yield* Deferred.await(rejected);
+        yield* harness.emitUpdate({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tracked-tool-call",
+            status: "in_progress",
+            rawOutput: { text: "kept-result" },
+          },
+        });
+        yield* harness.runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call" &&
+              event.turnItem.status === "running",
+          ),
+          Stream.runHead,
+        );
+        yield* Deferred.succeed(release, undefined);
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.map((items) => Array.from(items)),
+        );
+        const failed = events.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call" &&
+            event.turnItem.status === "failed",
+        );
+        assert.lengthOf(failed, 0);
+        const terminal = events.at(-1);
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
+        if (terminal?.type === "turn.terminal" && terminal.status === "failed")
+          assert.isNotEmpty(terminal.failure.message);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect(
+    "leaves a recognized background tool to its background lifecycle on prompt rejection",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makePromptInactivityHarness({
+          recognizedBackground: true,
+          environment: (ordinal) =>
+            ordinal === 1
+              ? {
+                  GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute",
+                  GOAT_ACP_FAIL_PROMPT: "1",
+                }
+              : {},
+        });
+        yield* harness.startTurn(1);
+        const events = yield* harness.runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.map((items) => Array.from(items)),
+        );
+        const statuses = events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call"
+            ? [event.turnItem.status]
+            : [],
+        );
+        assert.include(statuses, "pending");
+        assert.notInclude(statuses, "failed");
+        const terminal = events.at(-1);
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("fails a prompt its agent leaves silent past the inactivity timeout", () =>
     Effect.gen(function* () {
       const harness = yield* makePromptInactivityHarness({

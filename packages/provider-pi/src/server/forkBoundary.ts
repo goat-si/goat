@@ -6,12 +6,23 @@ import * as Effect from "effect/Effect";
 import { piSessionListing, walkPiBranch, type PiSessionListing } from "./entries.ts";
 
 export type PiForkBoundary =
-  | { readonly type: "entry"; readonly entryId: string }
-  | { readonly type: "nothing" }
+  | {
+      readonly type: "entry";
+      readonly entryId: string;
+      readonly turn: OrchestrationV2ProviderTurn;
+      readonly target: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
+    }
+  | {
+      readonly type: "nothing";
+      readonly target?: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
+    }
   | {
       readonly type: "uncaptured";
       readonly turn: OrchestrationV2ProviderTurn;
       readonly target: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
     };
 
 /**
@@ -24,16 +35,32 @@ export function piForkBoundary(input: {
     | { readonly type: "thread_start" }
     | { readonly type: "provider_turn"; readonly providerTurn: OrchestrationV2ProviderTurn };
   readonly providerThreadTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+  readonly sessionFile?: string | undefined;
 }): PiForkBoundary {
   const target = input.target.type === "thread_start" ? null : input.target.providerTurn;
+  const previous = input.providerThreadTurns
+    .filter((turn) => turn.ordinal < (target?.ordinal ?? 0) && turn.nativeTurnRef !== null)
+    .sort((a, b) => b.ordinal - a.ordinal)[0];
   const boundary = input.providerThreadTurns
-    .filter((turn) => turn.ordinal > (target?.ordinal ?? 0) && turn.nativeTurnRef !== null)
+    .filter(
+      (turn) =>
+        turn.ordinal > (target?.ordinal ?? 0) &&
+        turn.nativeTurnRef !== null &&
+        (input.sessionFile === undefined ||
+          turn.nativeThreadRef === undefined ||
+          turn.nativeThreadRef.nativeId === input.sessionFile),
+    )
     .sort((a, b) => a.ordinal - b.ordinal)[0];
   const ref = boundary?.nativeTurnRef;
-  if (boundary === undefined || ref == null) return { type: "nothing" };
+  if (boundary === undefined || ref == null)
+    return {
+      type: "nothing",
+      target,
+      previous,
+    };
   return ref.strength === "strong" && ref.nativeId !== null
-    ? { type: "entry", entryId: ref.nativeId }
-    : { type: "uncaptured", turn: boundary, target };
+    ? { type: "entry", entryId: ref.nativeId, turn: boundary, target, previous }
+    : { type: "uncaptured", turn: boundary, target, previous };
 }
 
 /** Reads the session tree only for an uncaptured boundary. */

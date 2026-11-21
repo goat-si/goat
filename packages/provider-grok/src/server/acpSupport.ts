@@ -33,18 +33,21 @@ const GROK_AUTH_METHOD_API_KEY = "xai.api_key";
 const GROK_AUTH_METHOD_CACHED_TOKEN = "cached_token";
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 
-/** A fresh home excludes user/project hooks, plugins and MCP; policy tiers cannot be overridden. */
-export const requireGrokMemoryIsolation = Effect.fn("requireGrokMemoryIsolation")(function* (
+const grokMemoryIsolationFailure = (operation: MemoryOperationName) =>
+  new TextGenerationError({
+    operation,
+    detail: "Grok memory generation cannot isolate managed configuration or copy authentication.",
+    cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+  });
+
+/** Policy tiers may add mandatory hooks before any ACP callback exists. */
+export const checkGrokMemoryIsolation = Effect.fn("Grok.checkMemoryIsolation")(function* (
   operation: MemoryOperationName,
   environment: NodeJS.ProcessEnv,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const unavailable = new TextGenerationError({
-    operation,
-    detail: "Grok memory generation cannot isolate managed configuration or copy authentication.",
-    cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-  });
+  const unavailable = grokMemoryIsolationFailure(operation);
   return yield* Effect.gen(function* () {
     for (const file of [
       "/etc/grok/managed_config.toml",
@@ -54,7 +57,6 @@ export const requireGrokMemoryIsolation = Effect.fn("requireGrokMemoryIsolation"
       "/etc/claude-code/managed-settings.json",
     ]) {
       if (yield* fs.exists(file)) {
-        // Policy tiers may add mandatory hooks before any ACP callback exists.
         const info = yield* fs.stat(file);
         if (
           info.type !== "File" ||
@@ -64,15 +66,31 @@ export const requireGrokMemoryIsolation = Effect.fn("requireGrokMemoryIsolation"
           return yield* unavailable;
       }
     }
+    const sourceHome =
+      environment.GROK_HOME ?? path.join(environment.HOME ?? process.env.HOME ?? "", ".grok");
+    const auth = path.join(sourceHome, "auth.json");
+    if (!(yield* fs.exists(auth))) return undefined;
+    if ((yield* fs.stat(auth)).type !== "File") return yield* unavailable;
+    yield* fs.access(auth, { readable: true });
+    return auth;
+  }).pipe(Effect.mapError(() => unavailable));
+});
+
+/** A fresh home excludes user/project hooks, plugins and MCP. */
+export const requireGrokMemoryIsolation = Effect.fn("requireGrokMemoryIsolation")(function* (
+  operation: MemoryOperationName,
+  environment: NodeJS.ProcessEnv,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const auth = yield* checkGrokMemoryIsolation(operation, environment);
+  return yield* Effect.gen(function* () {
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-grok-memory-" });
     const home = path.join(root, "profile");
     const cwd = path.join(root, "workspace");
     yield* fs.makeDirectory(home);
     yield* fs.makeDirectory(cwd);
-    const sourceHome =
-      environment.GROK_HOME ?? path.join(environment.HOME ?? process.env.HOME ?? "", ".grok");
-    const auth = path.join(sourceHome, "auth.json");
-    if (yield* fs.exists(auth)) {
+    if (auth !== undefined) {
       yield* fs.copyFile(auth, path.join(home, "auth.json"));
       yield* fs.chmod(path.join(home, "auth.json"), 0o600);
     }
@@ -89,7 +107,7 @@ export const requireGrokMemoryIsolation = Effect.fn("requireGrokMemoryIsolation"
         CLAUDE_CONFIG_DIR: path.join(root, "claude"),
       },
     };
-  }).pipe(Effect.mapError(() => unavailable));
+  }).pipe(Effect.mapError(() => grokMemoryIsolationFailure(operation)));
 });
 
 type GrokAcpRuntimeGrokSettings = Pick<GrokSettings, "binaryPath">;
@@ -216,6 +234,7 @@ export const makeGrokAcpRuntime = Effect.fn("GrokAcpSupport.makeGrokAcpRuntime")
       authMethodId: resolveGrokAuthMethodId(input.environment),
       cancelMeta: { ...input.cancelMeta, ...GROK_ACP_CANCEL_META },
       initializeMeta: GROK_ACP_INITIALIZE_META,
+      sessionLoadReplayIdleReadiness: true,
       ...grokAcpRuntimeProcessOwnership(processGroupPlatform),
     }),
   );

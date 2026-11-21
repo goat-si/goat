@@ -78,6 +78,16 @@ describe("git action copy", () => {
     ).toBe("No local commits to include in an MR.");
   });
 
+  it("offers creating a PR after the feature branch has been fully pushed", () => {
+    const pushed = status({ aheadCount: 0, behindCount: 0, aheadOfDefaultCount: 1 });
+    expect(resolveQuickAction(pushed, false)).toMatchObject({
+      disabled: false,
+      kind: "run_action",
+      action: "create_pr",
+    });
+    expect(resolveQuickAction({ ...pushed, isDefaultRef: true }, false, true).disabled).toBe(true);
+  });
+
   it("names the host's change request in the default-branch dialog", () => {
     const input = { action: "commit_push_pr", branchName: "main", includesCommit: true } as const;
     expect(
@@ -93,4 +103,56 @@ describe("git action copy", () => {
       }).continueLabel,
     ).toBe("Commit, push & create MR");
   });
+});
+
+it("does not offer PR creation for an unsupported remote provider", () => {
+  const unsupported = status({
+    aheadCount: 0,
+    aheadOfDefaultCount: 1,
+    sourceControlProvider: {
+      kind: SourceControlProviderKind.make("unknown"),
+      name: "Unsupported",
+      baseUrl: "https://example.com",
+    },
+  });
+  expect(resolveQuickAction(unsupported, false)).not.toMatchObject({
+    kind: "run_action",
+    action: "create_pr",
+  });
+});
+
+it("offers PR creation for a recognized provider", () => {
+  const recognized = status({
+    aheadCount: 0,
+    aheadOfDefaultCount: 1,
+    sourceControlProvider: {
+      kind: SourceControlProviderKind.make("github"),
+      name: "GitHub",
+      baseUrl: "https://github.com",
+    },
+  });
+  expect(resolveQuickAction(recognized, false)).toMatchObject({
+    kind: "run_action",
+    action: "create_pr",
+  });
+});
+
+it("keeps commit and push actions available for an unknown provider without creating a PR", () => {
+  const remote = {
+    sourceControlProvider: {
+      kind: SourceControlProviderKind.make("unknown"),
+      name: "Unknown",
+      baseUrl: "https://example.com",
+    },
+  };
+  expect(
+    resolveQuickAction(status({ ...remote, hasWorkingTreeChanges: true }), false),
+  ).toMatchObject({ action: "commit_push" });
+  expect(resolveQuickAction(status({ ...remote, aheadCount: 1 }), false)).toMatchObject({
+    action: "push",
+  });
+  expect(
+    buildMenuItems(status({ ...remote, aheadCount: 1 }), false).find((item) => item.id === "pr")
+      ?.disabled,
+  ).toBe(true);
 });

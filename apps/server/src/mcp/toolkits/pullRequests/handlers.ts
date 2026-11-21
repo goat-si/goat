@@ -2,6 +2,7 @@ import {
   CommandId,
   type OrchestrationProjectShell,
   type OrchestrationV2ThreadShell,
+  type PullRequestState,
   type ThreadId,
   type ThreadPullRequestLink,
 } from "@goat/contracts";
@@ -34,7 +35,7 @@ import {
 } from "../../../sourceControl/threadPullRequests.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { threadNotFound } from "../../OrchestratorMcpService.ts";
+import { threadNotFound } from "../../threadLookupFailure.ts";
 import {
   type ListThreadPullRequestsResult,
   PullRequestLinkFailedError,
@@ -81,18 +82,39 @@ function entryOf(
   };
 }
 
+const PULL_REQUEST_LIST_PAGE_SIZE = 50;
+
+// A total order that survives unlinking: the cursor names a position, not an index, so removing
+// PRs already returned cannot skip later ones. PRs linked in one call share `linkedAt`.
+function pullRequestListPosition(link: ThreadPullRequestLink): string {
+  return [link.linkedAt, link.host, link.repository, String(link.number).padStart(10, "0")].join(
+    " ",
+  );
+}
+
 export function listThreadPullRequests(
   thread: Pick<OrchestrationV2ThreadShell, "pullRequests">,
+  cursor?: string,
+  states?: ReadonlyArray<PullRequestState>,
 ): ListThreadPullRequestsResult {
   const chains = resolveThreadPullRequestChains(thread.pullRequests ?? []);
+  const after = visibleThreadPullRequests(thread.pullRequests ?? [])
+    .filter((link) => states === undefined || states.includes(link.snapshot?.state ?? "open"))
+    .map((link) => ({ link, position: pullRequestListPosition(link) }))
+    .filter(({ position }) => cursor === undefined || position > cursor)
+    .toSorted((left, right) => (left.position < right.position ? -1 : 1));
+  const page = after.slice(0, PULL_REQUEST_LIST_PAGE_SIZE);
+  const pageKeys = new Set(page.map(({ link }) => threadPullRequestKeyOf(link)));
   return {
-    pullRequests: visibleThreadPullRequests(thread.pullRequests ?? []).map((link) =>
-      entryOf(link, chains),
-    ),
-    chains: chains.map((chain) => ({
-      kind: chain.kind,
-      numbers: chain.layers.map((layer) => layer.number),
-    })),
+    pullRequests: page.map(({ link }) => entryOf(link, chains)),
+    // Stacks with a pull request on this page, whole.
+    chains: chains
+      .filter((chain) => chain.layers.some((layer) => pageKeys.has(threadPullRequestKeyOf(layer))))
+      .map((chain) => ({
+        kind: chain.kind,
+        numbers: chain.layers.map((layer) => layer.number),
+      })),
+    nextCursor: after.length > page.length ? (page.at(-1)?.position ?? null) : null,
   };
 }
 
@@ -172,7 +194,7 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) => new Failure({ cause })),
     );
     if (Option.isNone(thread) || thread.value.deletedAt !== null) {
-      return yield* threadNotFound(engine, threadId, `Thread ${threadId} was not found.`);
+      return yield* threadNotFound(engine, scope, threadId, `Thread ${threadId} was not found.`);
     }
     return thread.value;
   });
@@ -206,7 +228,7 @@ const make = Effect.gen(function* () {
     return yield* watches.setWatching({ threadId, target: input, watching }).pipe(
       Effect.catchTags({
         PullRequestWatchThreadNotFoundError: (error) =>
-          threadNotFound(engine, error.threadId, error.message),
+          threadNotFound(engine, scope, error.threadId, error.message),
       }),
     );
   });
@@ -286,6 +308,7 @@ const make = Effect.gen(function* () {
           input,
           target,
           project: projectForPullRequest(known, target, callerProject),
+          callerProject,
           failure: null,
           error: null,
         })),
@@ -294,6 +317,7 @@ const make = Effect.gen(function* () {
             input,
             target: null,
             project: undefined,
+            callerProject,
             failure: error.message,
             error,
           }),
@@ -532,7 +556,7 @@ const make = Effect.gen(function* () {
     ),
     list_thread_pull_requests: McpToolAccess.reads((input) =>
       requireThread(PullRequestListFailedError, input.threadId).pipe(
-        Effect.map(listThreadPullRequests),
+        Effect.map((thread) => listThreadPullRequests(thread, input.cursor, input.states)),
       ),
     ),
     watch_pull_request: writesThread((input) => setWatching(input, true)),
@@ -600,18 +624,23 @@ const make = Effect.gen(function* () {
         if (entry !== undefined && entry.target === null) {
           return yield* new PullRequestGuideFailedError({ detail: entry.failure ?? "" });
         }
-        if (entry === undefined || entry.target === null || entry.project === undefined) {
+        const project = entry?.project ?? entry?.callerProject;
+        if (entry === undefined || entry.target === null || project === undefined) {
           return yield* new PullRequestProjectNotFoundError({
             repository: entry?.target.repository ?? input.repository ?? "",
           });
         }
-        const result = yield* reviewGuides.get(guideReference(entry.project, entry.target)).pipe(
-          Effect.mapError(
-            (error) =>
-              new PullRequestGuideFailedError({
-                detail: guideFailureDetail(error),
-                cause: error,
-              }),
+        const target = entry.target;
+        const result = yield* reviewGuides.get(guideReference(project, target)).pipe(
+          Effect.mapError((error) =>
+            entry.project === undefined &&
+            error._tag === "PullRequestUnavailableError" &&
+            error.reason === "provider-unsupported"
+              ? new PullRequestProjectNotFoundError({ repository: target.repository })
+              : new PullRequestGuideFailedError({
+                  detail: guideFailureDetail(error),
+                  cause: error,
+                }),
           ),
         );
         return {
@@ -650,6 +679,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
+        const hasOverview = activity.overviewThreads !== undefined;
         const author =
           activity.author === undefined || activity.author === null
             ? {}
@@ -662,11 +692,13 @@ const make = Effect.gen(function* () {
             reviewers: [],
             comments: [],
             reviewThreads: [],
+            ...(hasOverview ? { overviewThreads: [] } : {}),
             commits: [],
             reactions: [],
           },
           commentsOmitted: WIDEST_COUNT,
           reviewThreadsOmitted: WIDEST_COUNT,
+          ...(hasOverview ? { overviewThreadsOmitted: WIDEST_COUNT } : {}),
           commitsOmitted: WIDEST_COUNT,
           reviewersOmitted: WIDEST_COUNT,
           reactionsOmitted: WIDEST_COUNT,
@@ -683,6 +715,8 @@ const make = Effect.gen(function* () {
         const reviewers = take(activity.reviewers ?? []);
         const comments = take(activity.comments);
         const reviewThreads = take(activity.reviewThreads);
+        // GitLab's overview threads: absent from other hosts and from older servers.
+        const overviewThreads = take(activity.overviewThreads ?? []);
         const commits = take(activity.commits);
         const reactions = take(activity.reactions ?? []);
         return {
@@ -693,11 +727,13 @@ const make = Effect.gen(function* () {
             ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
             comments: comments.kept,
             reviewThreads: reviewThreads.kept,
+            ...(hasOverview ? { overviewThreads: overviewThreads.kept } : {}),
             commits: commits.kept,
             ...(activity.reactions === undefined ? {} : { reactions: reactions.kept }),
           },
           commentsOmitted: comments.omitted,
           reviewThreadsOmitted: reviewThreads.omitted,
+          ...(hasOverview ? { overviewThreadsOmitted: overviewThreads.omitted } : {}),
           commitsOmitted: commits.omitted,
           reviewersOmitted: reviewers.omitted,
           reactionsOmitted: reactions.omitted,

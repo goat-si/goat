@@ -105,13 +105,18 @@ export function UsageProviderSettings({
                   </span>
                 }
                 status={
-                  source.managementKeyReference != null ? (
-                    <UsageSourceReference
-                      environmentId={environmentId}
-                      source={source}
-                      readOnly={readOnly}
-                      onSave={(next) => updateSettings({ usageLimitSources: { [id]: next } })}
-                    />
+                  source.managementKeyReference != null || source.managementKey === "" ? (
+                    <>
+                      {source.managementKeyReference == null ? (
+                        <span>Management key not set. Re-enter it for this address.</span>
+                      ) : null}
+                      <UsageSourceReference
+                        environmentId={environmentId}
+                        source={source}
+                        readOnly={readOnly}
+                        onSave={(next) => updateSettings({ usageLimitSources: { [id]: next } })}
+                      />
+                    </>
                   ) : null
                 }
                 control={
@@ -151,7 +156,9 @@ function UsageSourceReference({
   readonly readOnly: boolean;
   readonly onSave: (source: UsageLimitSourceConfig) => void;
 }) {
-  const [stored, setStored] = useState(false);
+  const [stored, setStored] = useState(
+    source.managementKeyReference == null && source.managementKey === "",
+  );
   const [key, setKey] = useState("");
   return (
     <div>
@@ -185,16 +192,18 @@ function UsageSourceReference({
           >
             Save key
           </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => {
-              setStored(false);
-              setKey("");
-            }}
-          >
-            Cancel
-          </Button>
+          {source.managementKeyReference != null || source.managementKey !== "" ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                setStored(false);
+                setKey("");
+              }}
+            >
+              Cancel
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>

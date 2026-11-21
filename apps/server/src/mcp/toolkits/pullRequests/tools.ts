@@ -293,6 +293,8 @@ export const ListThreadPullRequestsResult = Schema.Struct({
       numbers: Schema.Array(Schema.Int),
     }),
   ),
+  /** Pass as `cursor` for the next page; null on the last page. */
+  nextCursor: Schema.NullOr(Schema.String),
 });
 export type ListThreadPullRequestsResult = typeof ListThreadPullRequestsResult.Type;
 
@@ -338,6 +340,17 @@ const ListThreadPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.
   description: agentSurfaceRegistry["pull_request.list"].description,
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    states: Schema.optional(
+      Schema.Array(PullRequestState).annotate({
+        description:
+          "Only pull requests whose last known state is listed; one not read yet is open.",
+      }),
+    ),
+    cursor: Schema.optional(
+      Schema.String.annotate({
+        description: "nextCursor from the previous page. Default: the first page.",
+      }),
+    ),
   }),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
@@ -451,6 +464,7 @@ const PullRequestActivityTool = Tool.make(agentSurfaceRegistry["pull_request.act
     activity: PullRequestActivity,
     commentsOmitted: Omitted,
     reviewThreadsOmitted: Omitted,
+    overviewThreadsOmitted: Schema.optional(Omitted),
     commitsOmitted: Omitted,
     reviewersOmitted: Omitted,
     reactionsOmitted: Omitted,

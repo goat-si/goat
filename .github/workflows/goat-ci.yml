@@ -375,7 +375,7 @@ jobs:
             ' || { echo "::error::goat-scope changed_tests_netns is not a list of the changed test files"; exit 1; }
             mapfile -t netns_files < "$split/netns"
             mapfile -t host_files < "$split/host"
-            if [ "${#host_files[@]}" -gt 0 ]; then vp test run "${host_files[@]}" || status=$?; fi
+            if [ "${#host_files[@]}" -gt 0 ]; then node scripts/run-changed-vitest.ts "${host_files[@]}" || status=$?; fi
             if [ "${#netns_files[@]}" -gt 0 ]; then
               bash .github/scripts/loopback-netns.sh vp test run "${netns_files[@]}" || status=$?
             fi

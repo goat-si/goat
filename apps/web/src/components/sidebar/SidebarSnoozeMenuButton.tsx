@@ -3,7 +3,7 @@ import type { TimestampFormat } from "@goat/contracts/settings";
 
 import { ClockIcon } from "~/components/solar";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
-import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
+import { useSidebarSnooze, type SnoozePreset } from "../Sidebar.snooze";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -16,9 +16,11 @@ export function SnoozeMenuButton(props: {
   environmentId: EnvironmentId;
 }) {
   const { open, onOpenChange, onSnooze, timestampFormat, environmentId } = props;
+  const { pickSnoozePreset, resolveSnoozePresets, triggerLabel, snoozeLabels } =
+    useSidebarSnooze(timestampFormat);
   const presets = open
     ? // oxlint-disable-next-line react/purity -- Presets are resolved only while the menu is open, so each opening reads a fresh time.
-      resolveSnoozePresets(new Date(), timestampFormat, environmentId)
+      resolveSnoozePresets(new Date(), environmentId)
     : [];
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -29,7 +31,7 @@ export function SnoozeMenuButton(props: {
               render={
                 <button
                   type="button"
-                  aria-label="Snooze thread"
+                  aria-label={triggerLabel}
                   onClick={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
                   className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
@@ -40,7 +42,7 @@ export function SnoozeMenuButton(props: {
         >
           <ClockIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup>Snooze thread</TooltipPopup>
+        <TooltipPopup>{triggerLabel}</TooltipPopup>
       </Tooltip>
       <MenuPopup side="bottom" align="end">
         {presets.map((preset) => (
@@ -48,7 +50,7 @@ export function SnoozeMenuButton(props: {
             key={preset.id}
             onClick={(event) => {
               event.stopPropagation();
-              const picked = pickSnoozePreset(presets, preset.id, timestampFormat, environmentId);
+              const picked = pickSnoozePreset(presets, preset.id, environmentId);
               if (picked) onSnooze(picked);
             }}
           >
@@ -64,7 +66,7 @@ export function SnoozeMenuButton(props: {
             if (choice) onSnooze(choice);
           }}
         >
-          Custom…
+          {snoozeLabels.custom}
         </MenuItem>
       </MenuPopup>
     </Menu>

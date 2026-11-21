@@ -1,9 +1,11 @@
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
+import { cancelPreparingComposerImages } from "../components/chat/preparingComposerImages";
 import {
   type ComposerThreadTarget,
   composerDraftHasUserContent,
+  composerTargetKey,
   resolveComposerDraftKey,
   useComposerDraftStore,
 } from "../composerDraftStore";
@@ -21,8 +23,13 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
     .filter(([, draftKey]) => draftKey === key)
     .map(([logicalProjectKey]) => logicalProjectKey);
   const discardsSession = typeof target === "string";
+  const environmentId = typeof target === "string" ? session?.environmentId : target.environmentId;
 
   const claim = ThreadUndo.begin("discard", key);
+  // The composer may key attachments by the target or by its resolved draft id; a late
+  // compression under either would recreate the draft.
+  cancelPreparingComposerImages(composerTargetKey(target));
+  cancelPreparingComposerImages(key);
   if (discardsSession) {
     store.clearDraftThread(target);
   } else {
@@ -30,7 +37,7 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
   }
 
   const releaseDiscardedDraft = () => {
-    releaseDraftAttachments([...draft.images, ...draft.files]);
+    releaseDraftAttachments([...draft.images, ...draft.files], environmentId);
     // Draft-session removal already revoked these previews.
     if (!discardsSession) {
       for (const image of draft.images) {

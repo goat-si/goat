@@ -86,6 +86,7 @@ export function harness() {
             entry,
             connection: { phase: "connected", error: null, traceId: null },
             serverConfig: null,
+            refusedRouteIds: [],
           },
     );
   });

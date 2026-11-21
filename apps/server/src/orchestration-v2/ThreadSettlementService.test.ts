@@ -534,6 +534,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
   const settingsReadCount = yield* Ref.make(0);
   const settingsChanges = yield* PubSub.unbounded<ContractServerSettings>();
   const mergedPullRequests = yield* PubSub.unbounded<PullRequestService.PullRequestMergeEvent>();
+  const pullRequestRefreshes = yield* PubSub.unbounded<number>();
   const commands = yield* Ref.make<ReadonlyArray<AutoSettleCommand>>([]);
   const branchCalls = yield* Ref.make<
     ReadonlyArray<{ readonly cwd: string; readonly branch: string }>
@@ -551,7 +552,6 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
   const closedIdle = yield* Queue.unbounded<{ readonly threadId: string }>();
   const scriptRuns =
     yield* Queue.unbounded<ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput>();
-
   const updateSettings = (
     patch: ServerSettingsPatch,
     authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
@@ -622,7 +622,6 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
     ),
   });
-
   const layerDependencies = Layer.mergeAll(
     Layer.mock(ProjectStore.ProjectStoreV2)({
       listShells: () => Ref.get(snapshots).pipe(Effect.map((snapshot) => snapshot.projects)),
@@ -686,6 +685,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
     }),
     Layer.mock(PullRequestService.PullRequestService)({
       summary: pullRequestSummary,
+      subscribeRefreshes: Stream.fromPubSub(pullRequestRefreshes),
       subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(
         Effect.map((subscription) => Stream.fromSubscription(subscription)),
       ),
@@ -708,7 +708,6 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
     }),
     Path.layer,
   );
-
   return {
     activation,
     snapshots,
@@ -726,6 +725,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
     scriptRuns,
     publishEvent: (event: OrchestrationV2DomainEvent) => PubSub.publish(domainEvents, event),
     updateSettings,
+    publishRefresh: PubSub.publish(pullRequestRefreshes, 1),
     publishMerge: PubSub.publish(mergedPullRequests, {
       projectId: PROJECT_ID,
       repository: "owner/repository",

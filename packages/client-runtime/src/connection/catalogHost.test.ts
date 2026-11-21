@@ -270,6 +270,15 @@ describe("connection catalog host", () => {
       expect(inputs).toEqual([{ target, label: "Agent box", keyOnly: true, addedBy }]);
     }),
   );
+  it.effect("keeps a catalog alias on its configured SSH port", () =>
+    Effect.gen(function* () {
+      const { result, inputs } = yield* run({ type: "add_ssh", host: "devbox", addedBy }, [], {
+        resolved: { ...target, port: 2222 },
+      });
+      expect(result).toMatchObject({ type: "add_ssh", created: true });
+      expect(inputs[0]?.target.port).toBeNull();
+    }),
+  );
   it.effect("returns provisioning failures without failing the effect", () =>
     Effect.gen(function* () {
       const { result } = yield* run({ type: "add_ssh", host: "devbox", addedBy }, [], {

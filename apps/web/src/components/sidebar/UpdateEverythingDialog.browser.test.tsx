@@ -83,6 +83,27 @@ async function renderDialog(onConfirm = vi.fn()) {
   return { screen, onConfirm };
 }
 
+it("exposes each update and its state to screen readers on a narrow screen", async () => {
+  await page.viewport(360, 820);
+  const { screen } = await renderDialog();
+  await using _screen = screen;
+  const updates = page.getByRole("list", { name: "App & servers updates" });
+  await expect
+    .element(updates.getByRole("checkbox", { name: /build-box.*SSH runtime.*231/ }))
+    .toBeVisible();
+  await expect
+    .element(updates.getByRole("checkbox", { name: /mac-studio.*2 running.*waits for idle/ }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("tab", { name: /Runtimes/ }));
+  await expect
+    .element(
+      page
+        .getByRole("list", { name: "Runtimes updates" })
+        .getByRole("checkbox", { name: /ci-server.*Codex.*Claude/ }),
+    )
+    .toBeVisible();
+});
+
 it("names machines whose provider check failed instead of reporting no runtime updates", async () => {
   const empty = buildRuntimesTab({ providerMachines: [], opencodex: null });
   await using _screen = await render(
@@ -137,6 +158,27 @@ it("follows the active tab and the checked rows", async () => {
   // Returning to the first tab keeps what was unchecked there.
   await userEvent.click(page.getByRole("tab", { name: /App & servers/ }));
   await expect.element(page.getByRole("button", { name: "Update 3" })).toBeVisible();
+});
+
+it("confirms only checked rows from both tabs in one run", async () => {
+  const { screen, onConfirm } = await renderDialog();
+  await using _screen = screen;
+
+  await userEvent.click(page.getByRole("checkbox", { name: /mac-studio/ }));
+  await userEvent.click(page.getByRole("tab", { name: /Runtimes/ }));
+  await userEvent.click(page.getByRole("checkbox", { name: /ci-server/ }));
+  await userEvent.click(page.getByRole("button", { name: "Update both (5)" }));
+
+  expect(onConfirm).toHaveBeenCalledWith({
+    tab: "both",
+    rows: [
+      expect.objectContaining({ id: "server:windows-mini" }),
+      expect.objectContaining({ id: "ssh-runtime:build" }),
+      expect.objectContaining({ id: "local" }),
+      expect.objectContaining({ id: "providers:this-mac" }),
+      expect.objectContaining({ id: "opencodex" }),
+    ],
+  });
 });
 
 it.each([

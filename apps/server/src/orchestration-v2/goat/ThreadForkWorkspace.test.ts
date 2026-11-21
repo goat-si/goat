@@ -499,19 +499,17 @@ it.effect.each([
   }).pipe(Effect.scoped),
 );
 
-it.effect("removes only what it created when the fork is refused after the worktree exists", () =>
+it.effect("keeps the copied checkout and branch when dispatch refuses the fork", () =>
   Effect.gen(function* () {
     const world = yield* makeWorld;
     git(world.repo, ["branch", "pre-existing"]);
     world.outcome = "reject";
     const error = yield* forkIn(world).pipe(withService(world), Effect.flip);
     assert.equal(error.reason, "fork_failed");
-    assert.isUndefined(error.retainedWorktreePath);
-    assert.deepEqual(worktreePaths(world.repo), [NodeFS.realpathSync(world.repo)]);
-    assert.deepEqual(git(world.repo, ["branch", "--format=%(refname:short)"]).split("\n").sort(), [
-      "main",
-      "pre-existing",
-    ]);
+    const kept = error.retainedWorktreePath ?? "";
+    assert.isNotEmpty(kept);
+    assert.include(worktreePaths(world.repo), NodeFS.realpathSync(kept));
+    assert.include(git(world.repo, ["branch", "--format=%(refname:short)"]), "pre-existing");
   }).pipe(Effect.scoped),
 );
 

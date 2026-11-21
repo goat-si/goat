@@ -39,3 +39,60 @@ it.live("serves another read while a read transaction is held", () =>
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("keeps a masked read waiting when its admission is interrupted", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-reader-admission-" });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL`;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* sql
+        .withTransaction(
+          sql`SELECT 1`.pipe(
+            Effect.andThen(Deferred.succeed(entered, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        )
+        .pipe(SqliteClient.backgroundReads, SqliteClient.readOnly, Effect.forkChild);
+      yield* Deferred.await(entered);
+      // Fill the remaining background admissions while the sole reader is held.
+      const queued = yield* Effect.forEach(Array.from({ length: 47 }), () =>
+        sql`SELECT 1`.pipe(SqliteClient.backgroundReads, SqliteClient.readOnly, (effect) =>
+          Effect.forkChild(effect, { startImmediately: true }),
+        ),
+      );
+      let completed = false;
+      const masked = yield* sql`SELECT 1`.pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            completed = true;
+          }),
+        ),
+        Effect.uninterruptible,
+        SqliteClient.backgroundReads,
+        SqliteClient.readOnly,
+        (effect) => Effect.forkChild(effect, { startImmediately: true }),
+      );
+      const interrupting = yield* Effect.forkChild(Fiber.interrupt(masked), {
+        startImmediately: true,
+      });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      yield* Effect.forEach(queued, Fiber.join);
+      yield* Fiber.join(interrupting);
+      assert.isTrue(completed);
+    }).pipe(
+      Effect.provide(
+        SqliteClient.layer({
+          filename: path.join(directory, "state.sqlite"),
+          readerWorker: true,
+          readerPoolSize: 1,
+        }),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

@@ -34,16 +34,8 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { RpcClientError } from "effect/rpc";
-import {
-  AVAILABLE_CONNECTION_STATE,
-  PrimaryConnectionTarget,
-  HubProxyConnectionTarget,
-  BearerConnectionTarget,
-  type PreparedConnection,
-  type SupervisorConnectionState,
-} from "../connection/model.ts";
+import { HubProxyConnectionTarget, BearerConnectionTarget } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   EnvironmentRpcSubscriptionObserver,
@@ -86,12 +78,7 @@ const memoryPermissionHarness = Effect.fn(function* (allowed = true) {
   return { atoms, runtime };
 });
 
-const TARGET = new PrimaryConnectionTarget({
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Test environment",
-  httpBaseUrl: "https://environment.example.test",
-  wsBaseUrl: "wss://environment.example.test",
-});
+import { makeHarness, session, TARGET } from "./client.testkit.ts";
 
 const INSTALL_CHECKING: RelayClientInstallProgressEvent = {
   type: "progress",
@@ -101,43 +88,6 @@ const INSTALL_DOWNLOADING: RelayClientInstallProgressEvent = {
   type: "progress",
   stage: "downloading",
 };
-
-function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
-  return {
-    client,
-    initialConfig: Effect.never,
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
-    ready: Effect.void,
-    probe: Effect.void,
-    inboundFrames: Effect.succeed(0),
-    closed: Effect.never,
-  };
-}
-
-const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* (
-  target: EnvironmentSupervisor.EnvironmentSupervisor["Service"]["target"] = TARGET,
-) {
-  const state = yield* SubscriptionRef.make<SupervisorConnectionState>(AVAILABLE_CONNECTION_STATE);
-  const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
-    Option.none(),
-  );
-  const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
-  const retryCount = yield* Ref.make(0);
-  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-    target,
-    state,
-    session: activeSession,
-    prepared,
-    connect: Effect.void,
-    disconnect: Effect.void,
-    retryNow: Ref.update(retryCount, (count) => count + 1),
-  } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
-  return {
-    activeSession,
-    retryCount,
-    supervisor,
-  };
-});
 
 describe("environment RPC", () => {
   it.effect("turns unsupported hub RPC defects into quiet expected failures", () =>

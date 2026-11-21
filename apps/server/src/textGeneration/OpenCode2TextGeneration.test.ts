@@ -1,5 +1,9 @@
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { OpenCode2Client } from "@goat/provider-opencode/server/v2/OpenCode2Client";
 import { ChatAttachmentId, ChatImageAttachment, ProviderInstanceId } from "@goat/contracts";
 import * as NodeURL from "node:url";
 import * as M from "@goat/contracts";
@@ -265,18 +269,34 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
     ({ operation, context, code }) =>
       Effect.gen(function* () {
         let acquisitions = 0;
+        const external = context === memoryContext;
+        const acquire = () =>
+          Effect.sync(() => {
+            acquisitions++;
+          }).pipe(Effect.andThen(Effect.die("Uncertified server must not be acquired.")));
         const server = OpenCode2Server.OpenCode2Server.of({
-          withConnection: () =>
-            Effect.sync(() => {
-              acquisitions++;
-            }).pipe(Effect.andThen(Effect.die("Uncertified server must not be acquired."))),
+          supportsMemoryConnection: Effect.succeed(!external),
+          withMemoryConnection: external
+            ? (operation) =>
+                Effect.fail(
+                  new M.TextGenerationError({
+                    operation,
+                    detail: "External server.",
+                    cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+                  }),
+                )
+            : acquire,
+          withConnection: acquire,
           forget: Effect.void,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make(
-          context === undefined
-            ? {}
-            : { memoryRunnerContext: context, external: context === memoryContext },
+          context === undefined ? {} : { memoryRunnerContext: context },
         ).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
+        const supported = code === "identity_mismatch";
+        assert.deepEqual(yield* textGeneration.memoryCapabilities, {
+          summary: supported,
+          conflict: supported,
+        });
         const failure = yield* Effect.flip(
           operation === "resolveMemoryConflict"
             ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
@@ -301,12 +321,12 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
           });
         const server = OpenCode2Server.OpenCode2Server.of({
           withConnection: () => Effect.die("Memory uses its own isolated server."),
+          supportsMemoryConnection: Effect.succeed(true),
           withMemoryConnection: () => Effect.fail(startError),
           forget: Effect.void,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make({
           memoryRunnerContext: memoryContext,
-          external: false,
         }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
         const invoke = () =>
           Effect.flip(
@@ -443,6 +463,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
       external: false,
     };
     const server = OpenCode2Server.OpenCode2Server.of({
+      supportsMemoryConnection: Effect.succeed(true),
       withMemoryConnection: (_operation, _providerId, use) => use(connection),
       withConnection: () => Effect.die("Memory must never borrow the shared server."),
       forget: Effect.void,
@@ -461,9 +482,53 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
           Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
         )
       : generation.generateMemorySummary!(memorySummary);
+  it.effect.each([false, true])(
+    "declares and refuses both operations before connecting with managed policy or external server (external: %s)",
+    (external) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const server = yield* OpenCode2Server.make({
+          binaryPath: "synthetic-opencode",
+          serverUrl: external ? "https://opencode.example" : "",
+          serverPassword: "",
+          directory: process.cwd(),
+          environment: {},
+        }).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            exists: (file) =>
+              file === "/etc/opencode" ? Effect.succeed(!external) : fs.exists(file),
+          }),
+          Effect.provide(
+            Layer.merge(
+              Layer.mock(OpenCodeRuntime.OpenCodeRuntime)({
+                createOpenCodeSdkClient: () => {
+                  throw new Error("Unexpected OpenCode v1 SDK client.");
+                },
+                startOpenCodeServerProcess: () =>
+                  Effect.die("An uncertified memory server must never be started."),
+              }),
+              Layer.succeed(OpenCode2Client, {
+                connect: () => Effect.die("An uncertified memory server must never be connected."),
+              }),
+            ),
+          ),
+        );
+        const generation = yield* OpenCode2TextGeneration.make({
+          memoryRunnerContext: memoryContext,
+        }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
+        assert.deepEqual(yield* generation.memoryCapabilities, { summary: false, conflict: false });
+        for (const operation of operations) {
+          const failure = yield* invoke(generation, operation).pipe(Effect.flip);
+          assert.propertyVal(failure.cause, "code", "unavailable");
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
+  );
   it.effect.each(operations)("%s succeeds with session deny-all and runner metadata", (operation) =>
     Effect.gen(function* () {
       const { generation, state } = yield* fixture("success", operation);
+      assert.deepEqual(yield* generation.memoryCapabilities, { summary: true, conflict: true });
       const result = yield* invoke(generation, operation);
       assert.isNotNull(result.result);
       assert.equal(result.result?.text, output.text);

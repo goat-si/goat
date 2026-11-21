@@ -3,6 +3,9 @@
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
+To free a default shortcut for another command, choose **Unassign** from its row's
+actions menu. **Reset to default** brings it back.
+
 ## Composer controls
 
 In **Settings → General → Send shortcut**, choose whether Enter sends, requires
@@ -172,7 +175,7 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
 `composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
 `fileTreeFocus`, `isWeb`, and `isDesktop`.
-`rightPanelOpen` applies to `rightPanel.new` while the right panel is open. Its default
+In a thread, `rightPanelOpen` is true while its right panel is open. The default
 `mod+t` also requires `!terminalFocus` and opens the new-tab menu.
 `draftThreadRoute` is true in a new thread, including a restored draft, before you
 send its first message.
@@ -192,6 +195,13 @@ Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 ```json
 { "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
 ```
+
+## Find in a browser page
+
+In the desktop app, press `mod+f` with the browser focused. You can also choose
+**Find in page** from the browser menu or **Find in browser page** from the
+command palette. Press Enter or Shift+Enter to move between matches and Escape
+to close search. Pages such as document editors can handle their own shortcut.
 
 ## Find in the current thread
 

@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationV2Run,
   ProviderDriverKind,
@@ -15,6 +16,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { nextTurnSelectionHarness, runSelection } from "./testkit/SteeringHarness.ts";
 
@@ -834,6 +836,88 @@ it.effect(
           const replayedContinue = yield* orchestrator.dispatch(continueCommand);
           assert.isTrue(replayedContinue.replayed);
           assert.deepEqual(replayedContinue.storedEvents, continued.storedEvents);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect(
+  "does not redispatch a steer with a lost acknowledgement after the target completes",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let complete: Effect.Effect<void> = Effect.void;
+        const { started, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          "steering-lost-acknowledgement",
+          false,
+          Effect.void,
+          false,
+          undefined,
+          true,
+          {},
+          undefined,
+          (turn) =>
+            Effect.suspend(() => complete).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ProviderAdapter.ProviderAdapterSteerRunError({
+                    driver,
+                    providerThreadId: turn.providerThread.id,
+                    providerTurnId: turn.providerTurnId,
+                    cause: "The steering acknowledgement was lost.",
+                  }),
+                ),
+              ),
+            ),
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const first = started[0]!;
+          const sink = yield* EventSink.EventSinkV2;
+          complete = Effect.gen(function* () {
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const turn = projection.providerTurns[0]!;
+            const run = projection.runs[0]!;
+            const now = yield* DateTime.now;
+            yield* sink.write({
+              events: [
+                {
+                  id: EventId.make("provider-completed-during-steer"),
+                  threadId,
+                  type: "provider-turn.updated",
+                  occurredAt: now,
+                  payload: { ...turn, status: "completed", completedAt: now },
+                },
+                {
+                  id: EventId.make("run-completed-during-steer"),
+                  threadId,
+                  type: "run.updated",
+                  occurredAt: now,
+                  payload: { ...run, status: "completed", completedAt: now },
+                },
+              ],
+            });
+          }).pipe(Effect.orDie);
+          const messageId = MessageId.make("ambiguous-steer");
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("ambiguous-steer"),
+            threadId,
+            messageId,
+            text: "Check the failing assertion.",
+            attachments: [],
+            dispatchMode: { type: "steer_active", targetRunId: first.runId },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* worker.drain();
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            projection.runs.map((run) => run.id),
+            [first.runId],
+          );
         }).pipe(Effect.provide(layer));
       }),
     ),

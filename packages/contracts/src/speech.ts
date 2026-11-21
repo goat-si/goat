@@ -55,6 +55,8 @@ export const SpeechModelList = Schema.Struct({
       selected: Schema.Boolean,
       linkedFrom: Schema.optionalKey(Schema.String),
       recommended: Schema.optionalKey(Schema.Boolean),
+      languages: Schema.optionalKey(Schema.Unknown),
+      accuracy: Schema.optionalKey(Schema.Unknown),
       benchmark: Schema.optionalKey(SpeechBenchmark),
     }),
   ),

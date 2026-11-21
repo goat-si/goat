@@ -267,6 +267,10 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  supportsStructuredCustomModels: Schema.optionalKey(Schema.Boolean),
+  memoryGeneration: Schema.optionalKey(
+    Schema.Struct({ summary: Schema.Boolean, conflict: Schema.Boolean }),
+  ),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
@@ -296,6 +300,7 @@ export const ServerProvider = Schema.Struct({
   // server. Null means unknown; absence keeps legacy snapshots on `version`.
   installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: ServerProviderState,
+  awaitingFirstCheck: Schema.optionalKey(Schema.Literal(true)),
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
@@ -311,7 +316,12 @@ export const ServerProvider = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Digest of the full machine command and skill lists for an on-demand catalog. */
+  catalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
+  /** The digest whose lists this client has loaded. Stored in the client cache. */
+  loadedCatalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
+  workspaceRescannedAt: Schema.optionalKey(IsoDateTime),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
@@ -469,6 +479,12 @@ const EnvironmentThemeColors = Schema.Record(
   TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
 );
 
+export const THEME_CSS_MAX_LENGTH = 20_000;
+export class ThemeCssValidationError extends Schema.TaggedError<ThemeCssValidationError>()(
+  "ThemeCssValidationError",
+  { message: Schema.String },
+) {}
+
 const environmentThemeFields = {
   version: Schema.optional(Schema.Literal(1)),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
@@ -483,6 +499,7 @@ const environmentThemeFields = {
       dark: Schema.optional(EnvironmentThemeColors),
     }),
   ),
+  css: Schema.optional(Schema.String.check(Schema.isMaxLength(THEME_CSS_MAX_LENGTH))),
 };
 
 export const EnvironmentThemeFile = Schema.Struct(environmentThemeFields);
@@ -491,6 +508,7 @@ export type EnvironmentThemeFile = typeof EnvironmentThemeFile.Type;
 export const EnvironmentTheme = Schema.Struct({
   id: EnvironmentThemeId,
   ...environmentThemeFields,
+  background: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(72))),
 });
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
 
@@ -555,6 +573,12 @@ export const ServerConfig = Schema.Struct({
   /** Send window fields only when advertised. */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
+  speechStreamingV1: Schema.optionalKey(Schema.Boolean),
+  speechStreamingModelIds: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(64),
+    ),
+  ),
   threadFind: Schema.optionalKey(Schema.Boolean),
   ...serverCapabilityFields,
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
@@ -565,6 +589,7 @@ export const ServerConfig = Schema.Struct({
    * answering. Clients do not cache it, since it describes the host at connect.
    */
   lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
+  serverTime: Schema.optionalKey(Schema.Unknown),
   /**
    * Windows only, and only once the server has checked; absent means nothing to report.
    */
@@ -856,6 +881,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact GOAT release version, never a channel, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,
+  stageOnly: Schema.optionalKey(Schema.Boolean),
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),
   /** Omission preserves desktop app updates; boot-service activation requires idle.
       Continuation records recovery intent, not consent to interrupt running work. */

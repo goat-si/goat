@@ -1,5 +1,6 @@
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import type { DesktopBridge } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,22 +14,51 @@ import { describe, expect, vi } from "vite-plus/test";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import { ANNOTATION_VOICE_EVENT_CHANNEL, START_PICK_CHANNEL } from "./GuestProtocol.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 
-const { fromId } = vi.hoisted(() => ({
+const { fromId, rendererIpc } = vi.hoisted(() => ({
   fromId: vi.fn<(_id?: number) => Electron.WebContents | null>((_id?: number) => null),
+  rendererIpc: {
+    bridge: undefined as DesktopBridge | undefined,
+    listeners: new Map<string, (...args: unknown[]) => void>(),
+  },
 }));
+vi.mock("@clerk/electron/preload", () => ({ exposeClerkBridge: () => {} }));
 vi.mock("electron", () => ({
   BrowserWindow: vi.fn(),
   clipboard: { write: vi.fn() },
+  contextBridge: {
+    exposeInMainWorld: (name: string, bridge: DesktopBridge) => {
+      if (name === "desktopBridge") rendererIpc.bridge = bridge;
+    },
+  },
+  ipcRenderer: {
+    sendSync: () => null,
+    invoke: vi.fn(),
+    on: (channel: string, listener: (...args: unknown[]) => void) => {
+      rendererIpc.listeners.set(channel, listener);
+    },
+    off: (channel: string) => rendererIpc.listeners.delete(channel),
+  },
   nativeImage: { createFromPath: vi.fn() },
   shell: { showItemInFolder: vi.fn() },
   session: { fromPartition: vi.fn() },
   webContents: { fromId, getFocusedWebContents: vi.fn(() => null) },
+  webFrame: {},
+  webUtils: {},
 }));
+
+vi.stubGlobal("window", { addEventListener: () => {} });
+vi.stubGlobal("document", { fullscreenElement: null, addEventListener: () => {} });
+try {
+  await import("../preload.ts");
+} finally {
+  vi.unstubAllGlobals();
+}
 
 const managerLayer = () =>
   PreviewManager.layer.pipe(
@@ -150,6 +180,59 @@ const withManager = <A>(
   }).pipe(Effect.provide(managerLayer()), Effect.scoped);
 
 describe("PreviewManager guest events", () => {
+  effectIt.effect(
+    "delivers the tab ID and decoded annotation voice event to the preload listener",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const overlayStarted = Deferred.makeUnsafe<void>();
+          const guestListeners = new Map<string, (...args: unknown[]) => void>();
+          const guest = Object.assign(makeTestPreviewWebContents(unusedCapture), {
+            ipc: {
+              on: (channel: string, listener: (...args: unknown[]) => void) =>
+                guestListeners.set(channel, listener),
+              removeListener: (channel: string) => guestListeners.delete(channel),
+            },
+            isFocused: () => true,
+            once: vi.fn(),
+            send: (channel: string) => {
+              if (channel === START_PICK_CHANNEL) Deferred.doneUnsafe(overlayStarted, Effect.void);
+            },
+          });
+          fromId.mockReturnValue(guest);
+          yield* manager.createTab("tab_1");
+          yield* manager.registerWebview("tab_1", guest.id);
+          yield* manager.setMainWindow({
+            isDestroyed: () => false,
+            once: vi.fn(),
+            webContents: {
+              send: (channel: string, ...args: unknown[]) =>
+                rendererIpc.listeners.get(channel)?.({}, ...args),
+            },
+          } as unknown as Electron.BrowserWindow);
+
+          const received = vi.fn();
+          const unsubscribe = rendererIpc.bridge!.preview!.annotationVoice!.onEvent(received);
+          try {
+            yield* manager.pickElement("tab_1", { sessionId: "current" }).pipe(Effect.forkChild);
+            yield* Deferred.await(overlayStarted);
+            const event = {
+              sessionId: "current",
+              action: "start",
+              text: "draft",
+              cursor: 0,
+              selectionEnd: 0,
+            };
+            guestListeners.get(ANNOTATION_VOICE_EVENT_CHANNEL)?.({}, event);
+            expect(received).toHaveBeenCalledExactlyOnceWith("tab_1", event);
+          } finally {
+            unsubscribe();
+            yield* manager.cancelPickElement("tab_1");
+          }
+        }),
+      ),
+  );
+
   effectIt.effect("keeps mouse back and forward buttons inside the preview tab", () =>
     withManager((manager) =>
       Effect.gen(function* () {

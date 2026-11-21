@@ -22,7 +22,7 @@ const APP_ID = "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
 const config = (overrides: Partial<EasDeviceHostConfig> = {}): EasDeviceHostConfig => ({
   kind: "eas",
   id: "eas",
-  label: "EAS Simulator",
+  label: "Expo Simulators",
   appId: APP_ID,
   accessToken: "expo-token",
   maxSessionMinutes: 25,
@@ -65,6 +65,7 @@ const fakeExpo = (
   const previews: string[] = [];
   let previewFails = options.failPreview ?? false;
   let createFails = options.failCreate ?? false;
+  let orphanListed = !options.omitCreatedFromActive;
   let sessionGated = false;
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -128,74 +129,81 @@ const fakeExpo = (
         yield* Deferred.succeed(sessionGate.requested, undefined);
         yield* Deferred.await(sessionGate.release);
       }
-      const data =
-        operation === "GoatEasSimulatorAvailability"
-          ? {
+      // Expo admits some callers even when this account-level gate is off.
+      if (operation === "GoatEasSimulatorAvailability") {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            data: {
               app: {
                 byId: {
                   ownerAccount: {
                     name: "pingdotgg",
-                    accountFeatureGates: { "device-run-sessions": true },
+                    accountFeatureGates: { "device-run-sessions": false },
                   },
                 },
               },
-            }
-          : operation === "GoatCreateEasSimulatorSession"
-            ? { deviceRunSession: { createDeviceRunSession: { id: `session-${++created}` } } }
-            : operation === "GoatActiveEasSimulatorSessions"
-              ? {
-                  app: {
-                    byId: {
-                      deviceRunSessionsPaginated: {
-                        edges: [
-                          ...(options.omitCreatedFromActive
-                            ? []
-                            : [{ node: { id: "orphan", status: "NEW", name: createdName } }]),
-                          {
-                            node: {
-                              id: "someone-else",
-                              status: "IN_PROGRESS",
-                              name: "GOAT · EAS Simulator · 000000",
-                            },
+            },
+          }),
+        );
+      }
+      const data =
+        operation === "GoatCreateEasSimulatorSession"
+          ? { deviceRunSession: { createDeviceRunSession: { id: `session-${++created}` } } }
+          : operation === "GoatActiveEasSimulatorSessions"
+            ? {
+                app: {
+                  byId: {
+                    deviceRunSessionsPaginated: {
+                      edges: [
+                        ...(orphanListed
+                          ? [{ node: { id: "orphan", status: "NEW", name: createdName } }]
+                          : []),
+                        {
+                          node: {
+                            id: "someone-else",
+                            status: "IN_PROGRESS",
+                            name: "GOAT · Expo Simulators · 000000",
                           },
-                          ...(options.active ?? []).map((node) => ({ node })),
-                          ...(options.activeIncludesCreated && created > 0
-                            ? [
-                                {
-                                  node: {
-                                    id: `session-${created}`,
-                                    status: "STARTING",
-                                    name: createdName,
-                                  },
+                        },
+                        ...(options.active ?? []).map((node) => ({ node })),
+                        ...(options.activeIncludesCreated && created > 0
+                          ? [
+                              {
+                                node: {
+                                  id: `session-${created}`,
+                                  status: "STARTING",
+                                  name: createdName,
                                 },
-                              ]
-                            : []),
-                        ],
+                              },
+                            ]
+                          : []),
+                      ],
+                    },
+                  },
+                },
+              }
+            : operation === "GoatEasSimulatorSession"
+              ? {
+                  deviceRunSessions: {
+                    byId: {
+                      id: body.variables.id,
+                      status: options.status?.() ?? "IN_PROGRESS",
+                      remoteConfig: {
+                        __typename: "AgentDeviceRunSessionRemoteConfig",
+                        agentDeviceRemoteSessionUrl: "https://agent.test",
+                        agentDeviceRemoteSessionToken: "agent-token",
+                        webPreviewToken: "preview-token",
+                        previewApiUrl: "https://preview.test?token=preview-token",
                       },
                     },
                   },
                 }
-              : operation === "GoatEasSimulatorSession"
-                ? {
-                    deviceRunSessions: {
-                      byId: {
-                        id: body.variables.id,
-                        status: options.status?.() ?? "IN_PROGRESS",
-                        remoteConfig: {
-                          __typename: "AgentDeviceRunSessionRemoteConfig",
-                          agentDeviceRemoteSessionUrl: "https://agent.test",
-                          agentDeviceRemoteSessionToken: "agent-token",
-                          webPreviewToken: "preview-token",
-                          previewApiUrl: "https://preview.test?token=preview-token",
-                        },
-                      },
-                    },
-                  }
-                : {
-                    deviceRunSession: {
-                      ensureDeviceRunSessionStopped: { id: body.variables.id, status: "STOPPED" },
-                    },
-                  };
+              : {
+                  deviceRunSession: {
+                    ensureDeviceRunSessionStopped: { id: body.variables.id, status: "STOPPED" },
+                  },
+                };
       return HttpClientResponse.fromWeb(request, Response.json({ data }));
     }),
   );
@@ -207,7 +215,10 @@ const fakeExpo = (
   const allowCreate = () => {
     createFails = false;
   };
-  return { http, named, stopped, allowPreview, allowCreate, previews };
+  const revealOrphan = () => {
+    orphanListed = true;
+  };
+  return { http, named, stopped, allowPreview, allowCreate, revealOrphan, previews };
 };
 
 const layer = Layer.mergeAll(
@@ -226,7 +237,7 @@ const makeHost = (
     Effect.provideService(Scope.Scope, scope),
   );
 
-describe("EAS Simulator host", () => {
+describe("Expo Simulators host", () => {
   it.effect("stops a billed session after its token reference becomes unavailable", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();
@@ -371,7 +382,7 @@ describe("EAS Simulator host", () => {
       yield* ready.devices.boot(catalogDevice!);
       const refused = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(refused.message).toBe(
-        "EAS Simulator is unavailable: EAS Simulator is limited to 1 running session. Close one in the Device panel first.",
+        "Expo Simulators is unavailable: Expo Simulators is limited to 1 running session. Close one in the Device panel first.",
       );
       expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer)),
@@ -473,6 +484,18 @@ describe("EAS Simulator host", () => {
       }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
+  it.effect("leaves admission to Expo's create although the account gate is off", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo();
+      const host = yield* makeHost(expo, config(), yield* Scope.make());
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [catalogDevice] = (yield* ready.devices.list).devices;
+      expect(yield* ready.devices.boot(catalogDevice!)).toBe("session-1");
+      expect(expo.named("GoatEasSimulatorAvailability")).toHaveLength(0);
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
   it.effect("stops the session a refused create made anyway", () =>
     Effect.gen(function* () {
       // Expo refuses the create but lists a session by its name.
@@ -483,6 +506,35 @@ describe("EAS Simulator host", () => {
       const failure = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(failure.message).toContain("Not allowed");
       expect(expo.stopped()).toEqual(["orphan"]);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("holds a 502 create's slot until a later listing can stop the named orphan", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo({ failCreate: true, omitCreatedFromActive: true });
+      const host = yield* makeHost(expo, config({ maxConcurrentSessions: 1 }), yield* Scope.make());
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [device] = (yield* ready.devices.list).devices;
+
+      const failure = yield* ready.devices.boot(device!).pipe(Effect.flip);
+      expect(failure.message).toContain("HTTP 502");
+      expect(expo.named("GoatActiveEasSimulatorSessions")).toHaveLength(1);
+      expect(expo.stopped()).toEqual([]);
+
+      expo.allowCreate();
+      yield* TestClock.adjust("1 second");
+      const pending = yield* ready.devices.boot(device!).pipe(Effect.flip);
+      expect(pending.message).toContain("still being cleaned up");
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
+
+      // The fake lists the timed-out create under its submitted name beside another account session.
+      yield* TestClock.adjust("1 second");
+      expo.revealOrphan();
+      expect((yield* ready.devices.list).devices.every((device) => !device.booted)).toBe(true);
+      expect(expo.stopped()).toEqual(["orphan"]);
+
+      expect(yield* ready.devices.boot(device!)).toBe("session-1");
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
@@ -548,7 +600,7 @@ describe("EAS Simulator host", () => {
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  it.effect("asks for an EAS project before starting anything when none can be found", () =>
+  it.effect("asks for an Expo project before starting anything when none can be found", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();
       const host = yield* makeHost(expo, config({ appId: undefined }), yield* Scope.make());

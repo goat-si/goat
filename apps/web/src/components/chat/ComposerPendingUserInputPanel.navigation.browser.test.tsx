@@ -641,3 +641,62 @@ it("preserves digit selection and ignores shortcuts in editable fields", async (
     input.remove();
   }
 });
+
+it.each([8000, 8001] as const)(
+  "handles a thread annotation of length %i when answering",
+  async (length) => {
+    setup();
+    const { boundaryAnnotation } = await import("./annotationBoundary.testkit");
+    const environmentId = EnvironmentId.make(`answer-boundary-${length}`);
+    const projection = questionProjection(ThreadId.make(`thread-${length}`), ["answer"]);
+    const target = DraftId.make(`answer-boundary-${length}`);
+    const store = useComposerDraftStore.getState();
+    const annotation = boundaryAnnotation(length);
+    store.setPrompt(target, "Keep this prompt");
+    store.addPreviewAnnotation(target, annotation);
+    using _draft = { [Symbol.dispose]: () => store.clearComposerContent(target) };
+    let requests!: ReturnType<typeof usePendingThreadRequests>;
+    function Probe() {
+      const [error, setError] = useState<string | null>(null);
+      const promptRef = useRef("");
+      const composerRef = useRef(null);
+      const current = usePendingThreadRequests({
+        environmentId,
+        activeThreadId: projection.thread.id,
+        serverProjection: projection,
+        supportsQuestionAttachments: false,
+        composerDraftTarget: target,
+        setComposerDraftPrompt: (draft, text) => store.setPrompt(draft, text),
+        promptRef,
+        composerRef,
+        setThreadError: (_threadId, message) => setError(message),
+      });
+      useLayoutEffect(() => {
+        requests = current;
+      });
+      return error ? <p role="alert">{error}</p> : null;
+    }
+    await using screen = await render(<Probe />);
+    await act(() => {
+      requests.onChangeActivePendingUserInputCustomAnswer("question-0", "First");
+      requests.onChangeActivePendingUserInputCustomAnswer("question-1", "Second");
+      requests.onChangeActivePendingUserInputCustomAnswer("question-2", "Third");
+    });
+    await act(() => requests.onAdvanceActivePendingUserInput());
+    await act(() => requests.onAdvanceActivePendingUserInput());
+    await act(() => requests.onAdvanceActivePendingUserInput());
+    if (length === 8000) {
+      expect(boundary.respond).toHaveBeenCalledOnce();
+    } else {
+      await expect
+        .element(screen.getByRole("alert"))
+        .toHaveTextContent("Annotation comments must be 8,000 characters or fewer.");
+      expect(boundary.respond).not.toHaveBeenCalled();
+      expect(store.getComposerDraft(target)?.previewAnnotations[0]?.comment).toBe(
+        annotation.comment,
+      );
+      expect(store.getComposerDraft(target)?.prompt).toContain("Keep this prompt");
+      expect(requests.activePendingDraftAnswers["question-2"]?.customAnswer).toBe("Third");
+    }
+  },
+);

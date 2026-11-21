@@ -23,6 +23,30 @@ const ACCESS =
   "Cursor stopped this run because it refused sign-in or access. Sign in to Cursor again and check repository access, then send the message again.";
 const UNEXPECTED = "Cursor's agent hit an unexpected error before it finished.";
 
+it("matches equivalent escaped repository paths in Cursor results", () => {
+  const output = resultTask(
+    {
+      ...task,
+      source: { ...task.source, repository: "https://github.com/fixture/r%C3%A9sum%C3%A9%20(app)" },
+    },
+    {
+      id: "run-fixture",
+      status: "finished",
+      git: {
+        branches: [
+          {
+            repoUrl: "https://github.com/fixture/r%C3%A9sum%C3%A9%20%28app%29",
+            branch: "cursor/result",
+            prUrl: "https://github.com/fixture/r%C3%A9sum%C3%A9%20%28app%29/pull/1",
+          },
+        ],
+      },
+    },
+  );
+  expect(output.branch).toBe("cursor/result");
+  expect(output.prUrl).toBe("https://github.com/fixture/r%C3%A9sum%C3%A9%20%28app%29/pull/1");
+});
+
 describe("Cursor Cloud failed run", () => {
   it.each([
     ["You have no usage credits left.", BILLING],

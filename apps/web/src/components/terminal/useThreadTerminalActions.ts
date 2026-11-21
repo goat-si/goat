@@ -15,8 +15,11 @@ import { useProject, useQuietThreadShell } from "../../state/entities";
 import { readEnvironmentScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { useKnownTerminalSessions } from "../../state/terminalSessions";
+import { formatEnvironmentQueryError } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
+import { toastManager } from "../ui/toast";
+import { closingTerminalIds, holdTerminalIdWhileClosing } from "./closingTerminals";
 
 /** Where a new terminal starts. Omitted fields fall back to the thread's project and worktree. */
 export interface TerminalLaunchLocation {
@@ -59,6 +62,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     const ids = new Set([
       ...(knownSessions ?? []).map((session) => session.target.terminalId),
       ...drawerTerminalIds,
+      ...(threadRef ? closingTerminalIds(threadRef) : []),
       ...panelSurfaces.flatMap((surface) =>
         surface.kind === "terminal" ? surface.terminalIds : [],
       ),
@@ -88,6 +92,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     readonly location?: TerminalLaunchLocation | null;
     readonly extraEnv?: Record<string, string>;
     readonly stopOnSettle?: boolean;
+    readonly reportOpenFailure?: boolean;
     readonly size?: { readonly cols: number; readonly rows: number };
   }) => {
     if (!threadRef || !canWrite() || !project) return null;
@@ -110,6 +115,19 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
         ...input.size,
         ...(input.stopOnSettle !== undefined ? { stopOnSettle: input.stopOnSettle } : {}),
       },
+    }).then((settled) => {
+      if (
+        input.reportOpenFailure !== false &&
+        settled._tag === "Failure" &&
+        !isAtomCommandInterrupted(settled)
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open terminal",
+          description: formatEnvironmentQueryError(settled.cause),
+        });
+      }
+      return settled;
     });
     return { terminalId, result };
   };
@@ -119,7 +137,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     if (!target || !readEnvironmentScope(target.environmentId, AuthTerminalOperateScope)) return;
     const environmentId = target.environmentId;
     const threadId = target.threadId;
-    void (async () => {
+    void holdTerminalIdWhileClosing(target, terminalId, async () => {
       const closeResult = await closeTerminalCommand({
         environmentId,
         input: { threadId, terminalId, deleteHistory: true },
@@ -131,7 +149,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
       ) {
         await writeTerminal({ environmentId, input: { threadId, terminalId, data: "exit\n" } });
       }
-    })();
+    });
   };
 
   const writeToTerminal = (terminalId: string, data: string) => {

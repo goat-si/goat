@@ -1253,43 +1253,40 @@ export function parsePermissionRequest(
 }
 
 export function sessionUpdateIsReplay(params: EffectAcpSchema.SessionNotification): boolean {
-  const meta = params._meta;
-  return isRecord(meta) && meta.isReplay === true;
+  return isRecord(params._meta) && params._meta.isReplay === true;
 }
 
 export function sessionUpdateCountsAsLoadReplayActivity(
   params: EffectAcpSchema.SessionNotification,
   gatedSessionId?: string,
+  replayStarted = false,
 ): boolean {
-  if (gatedSessionId !== undefined && params.sessionId !== gatedSessionId) {
-    return false;
-  }
-  if (sessionUpdateIsReplay(params)) return true;
+  if (gatedSessionId !== undefined && params.sessionId !== gatedSessionId) return false;
   const update = params.update;
+  const marked = sessionUpdateIsReplay(params);
   switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-    case "agent_thought_chunk":
-      return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
-    case "agent_message":
-    case "agent_thought":
-      return (update.content ?? []).some(
-        (content) => (acpContentBlockDisplayText(content)?.length ?? 0) > 0,
-      );
-    case "tool_call":
-    case "tool_call_update":
-    case "plan":
-    case "plan_update":
-    case "plan_removed":
     case "available_commands_update":
     case "current_mode_update":
     case "config_option_update":
     case "session_info_update":
     case "usage_update":
+      return replayStarted;
+    case "agent_message_chunk":
+    case "agent_thought_chunk":
+      return marked || (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
+    case "agent_message":
+    case "agent_thought":
+      return marked || Boolean(update.content?.some(acpContentBlockDisplayText));
+    case "tool_call":
+    case "tool_call_update":
+    case "plan":
+    case "plan_update":
+    case "plan_removed":
     case "compaction_update":
     case "compaction_summary_chunk":
       return true;
     default:
-      return false;
+      return marked;
   }
 }
 

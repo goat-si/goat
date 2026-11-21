@@ -163,6 +163,8 @@ export interface CommandPaletteItem {
   readonly kind: "action" | "submenu";
   readonly value: string;
   readonly searchTerms: ReadonlyArray<string>;
+  /** How many leading `searchTerms` are names. The rest are keywords. Defaults to 1. */
+  readonly searchNameCount?: number;
   readonly title: ReactNode;
   /** The title as plain text, for searching, when `title` is styled. */
   readonly searchTitle?: string;
@@ -404,7 +406,7 @@ export type BuildThreadActionItemsThread = Pick<
     updatedAt: string;
   };
 
-export function isPaletteListedThread(
+function isPaletteListedThread(
   thread: Pick<SidebarThreadSummary, "lineage" | "sideChatOf">,
 ): boolean {
   return !isSidebarSubagentThread(thread) && thread.sideChatOf == null;
@@ -517,15 +519,27 @@ function scorePaletteItem(
   options: { readonly typos: boolean },
 ) {
   if (item.threadSearch) return scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-  // The title names the item; search terms are keywords. Ranges index the
-  // first term, so they only highlight a title that is that term.
-  const name = typeof item.title === "string" ? item.title : item.searchTitle;
-  const terms =
-    name !== undefined && name !== item.searchTerms[0]
-      ? [name, ...item.searchTerms]
-      : item.searchTerms;
-  const match = scoreSearchTerms(normalizedQuery, terms, options);
-  return match && (item.title === terms[0] ? match : { ...match, ranges: [] });
+  // scoreSearchTerms names only term 0. Extra names are rescored there; ranges stay on the visible title.
+  const visibleName = typeof item.title === "string" ? item.title : item.searchTitle;
+  const prepended = visibleName !== undefined && visibleName !== item.searchTerms[0];
+  const terms = prepended ? [visibleName, ...item.searchTerms] : item.searchTerms;
+  const declared = item.searchNameCount ?? (prepended ? 0 : 1);
+  const nameCount = Math.min(terms.length, (prepended ? 1 : 0) + declared);
+  const visible = scoreSearchTerms(normalizedQuery, terms, options);
+  let best = visible;
+  for (let index = 1; index < nameCount; index += 1) {
+    const alias = terms[index];
+    if (alias === undefined || alias === terms[0]) continue;
+    const scored = scoreSearchTerms(
+      normalizedQuery,
+      [alias, ...terms.slice(0, index), ...terms.slice(index + 1)],
+      options,
+    );
+    if (scored !== null && (best === null || scored.quality > best.quality)) {
+      best = { ...scored, ranges: visible?.ranges ?? [] };
+    }
+  }
+  return best && (item.title === terms[0] ? best : { ...best, ranges: [] });
 }
 
 /**
@@ -544,6 +558,7 @@ export function filterCommandPaletteGroups(input: {
   projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** GOAT Bot's added bots: found by a search, never listed for an empty one. */
   botSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
+  settingsSearchLabel?: string;
   settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
@@ -611,7 +626,7 @@ export function filterCommandPaletteGroups(input: {
     if (input.settingsSearchItems && input.settingsSearchItems.length > 0) {
       searchableGroups.push({
         value: "settings-search",
-        label: "Settings",
+        label: input.settingsSearchLabel ?? "Settings",
         items: input.settingsSearchItems,
       });
     }
@@ -739,9 +754,14 @@ export function filterPinnedBrowseEntries(input: {
     ? ""
     : input.filterQuery;
   const { visibleEntries } = filterFilesystemBrowseEntries(input.browseEntries, visibleFilterQuery);
+  const normalizedFilterQuery = input.filterQuery.normalize("NFC");
+  const normalizedMatches = input.browseEntries.filter((entry) =>
+    namesMatch(entry.name.normalize("NFC"), normalizedFilterQuery),
+  );
   const exactEntry =
     input.filterQuery.length > 0
-      ? (input.browseEntries.find((entry) => namesMatch(entry.name, input.filterQuery)) ?? null)
+      ? (input.browseEntries.find((entry) => namesMatch(entry.name, input.filterQuery)) ??
+        (normalizedMatches.length === 1 ? normalizedMatches[0] : null))
       : null;
   return { visibleEntries, exactEntry };
 }

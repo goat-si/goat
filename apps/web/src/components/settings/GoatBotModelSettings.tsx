@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@goat/contracts";
-import { createModelSelection } from "@goat/shared/model";
+import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 
 import { selectsPlanAgent } from "../../modelSelection";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
@@ -54,7 +54,14 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
                   triggerAriaLabel="GOAT Bot model"
                   disabled={!allowed}
                   onInstanceModelChange={(instanceId, model) =>
-                    save({ goatBotModelSelection: createModelSelection(instanceId, model) })
+                    save({
+                      goatBotModelSelection: pickModelSelection(
+                        settings.goatBotModelSelection,
+                        instanceId,
+                        model,
+                        selection,
+                      ),
+                    })
                   }
                 />
                 {activeEntry ? (

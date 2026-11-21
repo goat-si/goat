@@ -174,6 +174,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_ssh_thread_launch",
   "goat_storage_clean",
   "goat_storage_usage",
+  "goat_theme_set",
   "goat_thread_checkpoint_capture",
   "goat_thread_checkpoint_reconcile",
   "goat_thread_checkpoint_restore",

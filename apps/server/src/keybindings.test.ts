@@ -7,6 +7,7 @@ import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -57,6 +58,63 @@ const readKeybindingsConfig = (configPath: string) =>
   });
 
 it.layer(NodeServices.layer)("keybindings", (it) => {
+  it.effect("does not discard keybindings when unassigning would exceed the limit", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const rules = Array.from({ length: MAX_KEYBINDINGS_COUNT }, (_, index) => ({
+        key: "mod+alt+f1",
+        command: `script.filler-${index}.run` as const,
+      }));
+      yield* writeKeybindingsConfig(keybindingsConfigPath, rules);
+      const service = yield* Keybindings.Keybindings;
+      const target = Keybindings.DEFAULT_KEYBINDINGS.find(
+        (rule) => rule.command === "composer.sendBackground" && rule.key === "mod+alt+enter",
+      )!;
+      const result = yield* toDetailResult(
+        service.upsertKeybindingRule({ ...target, when: "false", replace: target }),
+      );
+      assertFailure(result, "keybindings config has reached the maximum number of entries");
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), rules);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("unassigns one default without disabling its siblings and can restore it", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, []);
+      const service = yield* Keybindings.Keybindings;
+      const target = Keybindings.DEFAULT_KEYBINDINGS.find(
+        (rule) => rule.command === "composer.sendBackground" && rule.key === "mod+alt+enter",
+      )!;
+      const siblings = Keybindings.DEFAULT_KEYBINDINGS.filter(
+        (rule) => rule.command === target.command && rule !== target,
+      );
+      const disabled = yield* service.upsertKeybindingRule({
+        ...target,
+        when: "false",
+        replace: target,
+      });
+      assert.deepEqual(
+        disabled.keybindings.filter((rule) => rule.command === target.command),
+        Keybindings.compileResolvedKeybindingsConfig([...siblings, { ...target, when: "false" }]),
+      );
+      yield* service.syncDefaultKeybindingsOnStartup;
+      const afterRestart = yield* service.getSnapshot;
+      assert.deepEqual(
+        afterRestart.keybindings.filter((rule) => rule.command === target.command),
+        disabled.keybindings.filter((rule) => rule.command === target.command),
+      );
+      const restored = yield* service.upsertKeybindingRule({
+        ...target,
+        replace: { ...target, when: "false" },
+      });
+      assert.deepEqual(
+        restored.keybindings.filter((rule) => rule.command === target.command),
+        Keybindings.compileResolvedKeybindingsConfig([...siblings, target]),
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
   it.effect.each(["error", "end", "error before ready"] as const)(
     "reattaches the keybindings watcher after %s and resyncs detached edits",
     (outcome) =>
@@ -782,5 +840,43 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         assert.isTrue(persistedCommands.has(command), `expected persisted command ${command}`);
       }
     }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect(
+    "suppresses change emission when revalidating unchanged keybindings configuration",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "mod+j", command: "terminal.toggle" },
+        ]);
+
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.start;
+
+        const changes = yield* keybindings.subscribeChanges;
+
+        // Revalidate when config on disk has not changed (e.g. atime bump on Windows).
+        // `revalidate` publishes before it returns, so a wrongly emitted event would be
+        // buffered in the subscription ahead of the real change observed below.
+        yield* keybindings.revalidate;
+
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "mod+j", command: "terminal.toggle" },
+          { key: "mod+k", command: "threadPanel.toggle" },
+        ]);
+        yield* keybindings.revalidate;
+
+        // The first buffered event must be the real change, not the unchanged state.
+        const change = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.isTrue(
+          change.keybindings.some(
+            (rule) =>
+              rule.command === "threadPanel.toggle" &&
+              rule.shortcut.key === "k" &&
+              rule.shortcut.modKey,
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerKeybindings())),
   );
 });

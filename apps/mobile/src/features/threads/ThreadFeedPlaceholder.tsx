@@ -10,6 +10,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 export function ThreadFeedPlaceholder(props: {
   readonly bottomInset: number;
   readonly detail: string;
+  readonly contentSideInsets?: { readonly left: number; readonly right: number };
   readonly horizontalPadding: number;
   readonly keyboardLift?: SharedValue<number>;
   readonly title: string;
@@ -26,6 +27,8 @@ export function ThreadFeedPlaceholder(props: {
           flex: 1,
           flexGrow: 1,
           paddingTop: props.topInset,
+          marginLeft: props.contentSideInsets?.left,
+          marginRight: props.contentSideInsets?.right,
           paddingHorizontal: props.horizontalPadding + 24,
         },
         areaStyle,

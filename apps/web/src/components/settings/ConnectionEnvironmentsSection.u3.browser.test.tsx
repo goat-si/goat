@@ -274,6 +274,7 @@ export function createU3Fixture(registry: AtomRegistry.AtomRegistry, container: 
             entry,
             connection,
             serverConfig: null,
+            refusedRouteIds: [],
           },
         ]);
         await sshRuntime.refresh.run(registry, { environmentId, target });

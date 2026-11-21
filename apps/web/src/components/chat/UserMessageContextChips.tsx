@@ -58,6 +58,7 @@ import {
   formatReviewCommentFence,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+import { useNativeMentionDrag } from "../../useNativeFileDrag";
 import { TimelineRowCtx } from "./timelineRowContext";
 
 function UserMessageMentionChip(props: {
@@ -65,12 +66,18 @@ function UserMessageMentionChip(props: {
   copyMarkdown: string;
 }) {
   const ctx = use(TimelineRowCtx);
+  const nativeFileDrag = useNativeMentionDrag(
+    ctx.activeThreadEnvironmentId,
+    props.record.path,
+    ctx.workspaceRoot,
+  );
   const accent = documentIconColorForFileName(props.record.path);
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <ContextChip
+            {...nativeFileDrag}
             kind="mention"
             style={accent ? ({ "--context-chip-accent": accent } as CSSProperties) : undefined}
             render={<button type="button" />}

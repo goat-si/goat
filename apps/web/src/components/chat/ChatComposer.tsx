@@ -1,11 +1,16 @@
+import { composerSideChatIsLocal } from "./composerSideChatPresentation";
+import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
 import { useMessages } from "gt-react";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
-import { composerPathOrModelReplacement } from "./composerModelMentions";
+import {
+  composerPathOrModelReplacement,
+  selectedModelOrCustomFallback,
+} from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
+import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { getCompatibleRuntimeModeOptions } from "./runtimeModeConfig";
-import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
@@ -36,10 +41,9 @@ import {
 } from "@goat/contracts";
 import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
 import { isPasteAsTextShortcut } from "@goat/client-runtime/text-paste";
-import { serializeComposerFileLink } from "@goat/shared/composerTrigger";
-import { folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
+import { useComposerFolderDrop } from "./useComposerFolderDrop";
 import { splitTransferredFiles } from "./workspaceFileDrop";
-import { createModelSelection, normalizeModelSlug } from "@goat/shared/model";
+import { createModelSelection } from "@goat/shared/model";
 import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   memo,
@@ -127,6 +131,7 @@ import {
 import {
   attachmentsToReleaseOnUploadCapabilityLoss,
   composerOtherFilesForPresentation,
+  composerInlineFileIds,
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
@@ -144,7 +149,10 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../../lib/terminalContext";
-import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
+import {
+  formatComposerContextReference,
+  toKindScopedComposerContextId,
+} from "@goat/shared/composerContextReferences";
 import {
   shouldUseCompactComposerPrimaryActions,
   shouldUseCompactComposerFooter,
@@ -153,6 +161,7 @@ import {
 import {
   type ComposerCitationCommentRequest,
   type ComposerPromptEditorHandle,
+  type ComposerPromptEditorProps,
   ComposerPromptEditor,
 } from "../ComposerPromptEditor";
 import {
@@ -161,7 +170,6 @@ import {
 } from "../composerContextPresentation";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import {
-  collectInlineContextIds,
   type ComposerContextReference,
   ensureInlineContextReferences,
   formatInlineContextReference,
@@ -169,15 +177,9 @@ import {
   inlineContextReferenceReplacement,
 } from "~/lib/composerContextReferences";
 import {
-  attachmentContextRecord,
-  uploadedAttachmentContextRecord,
-  previewAnnotationContextId,
-  previewAnnotationContextRecord,
   reviewCommentContextId,
   reviewCommentContextReference,
-  reviewCommentContextRecord,
   terminalContextReference,
-  terminalContextRecord,
   threadContextRecord,
   threadContextReference,
 } from "~/lib/composerContextRecords";
@@ -188,11 +190,12 @@ import {
   selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
-import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
+import { copySnapshot } from "./copySnapshot";
+import { buildDraftContextClipboardFragment } from "./composerDraftContextClipboard";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
+import { droppedThreadContextRecord } from "./threadContextDrop.logic";
 import { readThreadShell } from "~/state/entities";
-import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
-import type { ComposerContextRecord, ThreadPullRequestLink } from "@goat/contracts";
+import type { ThreadPullRequestLink } from "@goat/contracts";
 import {
   type ComposerCommandItem,
   ComposerCommandMenu,
@@ -214,7 +217,7 @@ import { readDraftSnapshot, useChatComposerVoiceController } from "./useComposer
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
+import { resolveComposerMenuActiveItemId, nudgeComposerMenuItem } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
 import { readPromptUltrathink } from "./TraitsPicker";
@@ -283,7 +286,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
-import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
+import { readEnvironmentScope } from "../../state/session";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
@@ -302,12 +305,6 @@ import { composerCommandKeyHandler } from "./composerCommandKey";
 import { useReplyBannerItems } from "./composerReply";
 import { useComposerReplyTarget } from "./composerReplyTarget";
 import type { ChatComposerHandle } from "./chatComposerHandle";
-
-function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
-  const armed = Date.now() <= deadline.current;
-  deadline.current = 0;
-  return armed;
-}
 
 export type { ChatComposerHandle };
 
@@ -682,15 +679,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const prompt = composerDraft.prompt;
   const composerImages = attachmentDraft.images;
   const composerFiles = attachmentDraft.files;
-  const inlineFileIdSet = (() => {
-    if (questionAttachmentTarget) return new Set<string>();
-    const contextIds = new Set(collectInlineContextIds(prompt));
-    return new Set(
-      composerFiles
-        .filter((file) => contextIds.has(toKindScopedComposerContextId("file", file.id)))
-        .map((file) => file.id),
-    );
-  })();
+  const inlineFileIdSet = composerInlineFileIds(questionAttachmentTarget, prompt, composerFiles);
   const composerVideos = composerFiles.filter((file) =>
     isPreviewableComposerVideo(file, environmentId),
   );
@@ -722,7 +711,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     verifiedHosts: verifiedThreadHosts,
     cwd: gitCwd ?? undefined,
     expandImage: (imageId: string) => {
-      const preview = buildExpandedImagePreview(composerImages, imageId);
+      const preview = buildExpandedImagePreview(composerImages, imageId, copyComposerSnapshot);
       if (preview) onExpandImage(preview);
     },
     openFile: setPreviewFileId,
@@ -751,7 +740,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       openPrLink(event, url);
     },
   };
-  const composerContextRecords = composerContextRecordsFromDraft({
+  const composerContextDraft = {
     terminalContexts: composerTerminalContexts,
     reviewComments: composerReviewComments,
     previewAnnotations: composerPreviewAnnotations,
@@ -760,7 +749,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     images: composerImages,
     files: composerFiles,
     uploadsByImageId,
-  });
+  };
+  const composerContextRecords = composerContextRecordsFromDraft(composerContextDraft);
   const needsReattachFileCount = composerFiles.filter(composerFileNeedsReattach).length;
   const fileStagingLimit = fileAttachmentStagingLimit({
     attachmentUploadsCapabilityKnown,
@@ -833,7 +823,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ...composerImages,
         ...composerFiles,
       ])) {
-        releaseAttachmentUpload(attachment.id);
+        releaseAttachmentUpload(attachment.id, environmentId);
       }
       return;
     }
@@ -843,7 +833,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? composerFiles
         : composerFiles.filter((file) => file.sizeBytes > maxFileAttachmentBytes);
     for (const attachment of attachmentsToReleaseOnUploadCapabilityLoss(invalidFiles)) {
-      releaseAttachmentUpload(attachment.id);
+      releaseAttachmentUpload(attachment.id, environmentId);
     }
     const uploadableFiles =
       maxFileAttachmentBytes === null
@@ -890,8 +880,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
     promptInjectionState: getComposerPromptInjectionState(prompt),
+    thread: activeThread,
     candidateInstanceIds: [
-      composerDraft.activeProvider ?? null,
       activeThread?.runtime?.providerInstanceId,
       activeThreadModelSelection?.instanceId,
       activeProjectDefaultModelSelection?.instanceId,
@@ -987,12 +977,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   }
 
-  const selectedModelForPickerWithCustomFallback = (() => {
-    const currentOptions = modelOptionsByInstance.get(selectedInstanceId) ?? [];
-    return currentOptions.some((option) => option.slug === selectedModelForPicker)
-      ? selectedModelForPicker
-      : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  })();
+  const selectedModelForPickerWithCustomFallback = selectedModelOrCustomFallback(
+    modelOptionsByInstance.get(selectedInstanceId) ?? [],
+    selectedModelForPicker,
+    selectedProvider,
+  );
 
   const activeThreadModelDisplayName = resolveContextWindowModelDisplayName(
     activeThreadModelSelection,
@@ -1030,8 +1019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  // The effort popover's model row hands off to the model picker. Opening on the next frame
-  // lets the effort popover finish closing and return focus before the picker takes it.
+  // Wait a frame for the effort popover to close and return focus before opening the model picker.
   const openComposerModelPicker = () => {
     requestAnimationFrame(() => setIsComposerModelPickerOpen(true));
   };
@@ -1131,7 +1119,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     imageCount: composerImages.length + composerFiles.length,
     existingAttachmentCount: editingQueuedAttachments?.length ?? 0,
     terminalContexts: composerTerminalContexts,
-    elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
+    elementContextCount:
+      composerPreviewAnnotations.length +
+      composerReviewComments.length +
+      composerThreadContexts.length,
   });
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const compactSlashCommandAvailable =
@@ -1148,6 +1139,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     items: composerMenuItems,
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
+    errorText: composerMenuError,
   } = useComposerMenuItems({
     composerTrigger,
     environmentId,
@@ -1299,7 +1291,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const removeComposerImageFromDraft = (imageId: string) => {
     if (questionAttachmentTarget && activePendingIsResponding) return;
-    releaseAttachmentUpload(imageId);
+    releaseAttachmentUpload(imageId, environmentId);
     removeComposerDraftImage(attachmentDraftTarget, imageId);
   };
 
@@ -1308,9 +1300,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Hydrated uploads use persisted attachment ids, not queue keys.
     const file = composerFilesRef.current.find((candidate) => candidate.id === fileId);
     if (file) {
-      releaseDraftAttachment(file);
+      releaseDraftAttachment(file, environmentId);
     } else {
-      releaseAttachmentUpload(fileId);
+      releaseAttachmentUpload(fileId, environmentId);
     }
     removeComposerDraftFile(attachmentDraftTarget, fileId);
   };
@@ -1322,59 +1314,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
   const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
-  const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
-    const wanted = new Set(contextIds);
-    const copiedFiles = new Map<string, File>();
-    for (const annotation of composerPreviewAnnotations) {
-      if (
-        wanted.has(previewAnnotationContextId(annotation.id)) &&
-        composerImages.some((image) => image.id === annotation.id)
-      ) {
-        wanted.add(toKindScopedComposerContextId("image", annotation.id));
-      }
-    }
-    const records: ComposerContextRecord[] = [
-      ...composerTerminalContexts
-        .filter((c) => wanted.has(terminalContextReference(c).contextId))
-        .map(terminalContextRecord),
-      ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
-      ...composerPreviewTabs.filter((record) => wanted.has(record.contextId)),
-      ...composerReviewComments
-        .filter((c) => wanted.has(reviewCommentContextId(c.id)))
-        .map(reviewCommentContextRecord),
-      ...composerPreviewAnnotations
-        .filter((a) => wanted.has(previewAnnotationContextId(a.id)))
-        .map((annotation) =>
-          previewAnnotationContextRecord(annotation, {
-            screenshotContextId: composerImages.some((image) => image.id === annotation.id)
-              ? annotation.id
-              : undefined,
-          }),
-        ),
-      ...[...composerImages, ...composerFiles]
-        .filter((attachment) =>
-          wanted.has(toKindScopedComposerContextId(attachment.type, attachment.id)),
-        )
-        .flatMap((attachment) => {
-          const record =
-            uploadedAttachmentContextRecord(attachment, uploadsByImageId[attachment.id]) ??
-            (attachment.file
-              ? attachmentContextRecord({ attachment, attachmentId: attachment.id })
-              : null);
-          if (!record) return [];
-          if (attachment.file) copiedFiles.set(record.attachmentId, attachment.file);
-          return [record];
-        }),
-    ];
-    if (records.length === 0) return null;
-    const fragment = encodeComposerContextFragment({
-      version: 1,
-      source: { environmentId, ...(activeThread ? { threadId: activeThread.id } : {}) },
-      records,
-    });
-    if (fragment) rememberCopiedComposerAttachments(environmentId, copiedFiles);
-    return fragment;
-  };
+  const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>) =>
+    buildDraftContextClipboardFragment(
+      contextIds,
+      environmentId,
+      activeThread?.id,
+      composerContextDraft,
+    );
+  const copyComposerSnapshot = useStableCallback(async (imageId: string) => {
+    const image = composerImages.find((item) => item.id === imageId);
+    if (!image?.previewUrl || image.source?.kind !== "snap-shot")
+      throw new Error("This snapshot is no longer available.");
+    const contextId = toKindScopedComposerContextId("image", image.id);
+    const fragment = buildContextClipboardFragment([contextId]);
+    if (!fragment) throw new Error("This snapshot could not be copied.");
+    await copySnapshot(
+      image.previewUrl,
+      formatComposerContextReference({ kind: "image", contextId, label: image.name }),
+      fragment,
+    );
+  });
   const buildContextClipboardFragmentStable = useStableCallback(buildContextClipboardFragment);
   const {
     routeThreadContexts,
@@ -2004,15 +1963,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const nudgeComposerMenuHighlight = (key: "ArrowDown" | "ArrowUp") => {
     if (composerMenuItems.length === 0) return;
-    const highlightedIndex = composerMenuItems.findIndex(
-      (item) => item.id === composerHighlightedItemId,
+    setComposerHighlightedItemId(
+      nudgeComposerMenuItem(composerMenuItems, composerHighlightedItemId, key),
     );
-    const normalizedIndex = highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
-    const offset = key === "ArrowDown" ? 1 : -1;
-    const nextIndex =
-      (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
-    const nextItem = composerMenuItems[nextIndex];
-    setComposerHighlightedItemId(nextItem?.id ?? null);
   };
 
   const blurMobileComposerAfterSend = () => {
@@ -2128,8 +2081,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const submitCitationAndSendStable = useStableCallback(submitCitationAndSend);
-  // A question took the editor while a citation comment was
-  // unsaved. Keep the comment in the prompt that comes back afterward.
+  // A question taking the editor must leave an unsaved citation comment in the returning prompt.
   const saveCitationDraftToPrompt = (replacedValue: string, savedValue: string) => {
     if (replacedValue !== prompt) return;
     if (promptRef.current === replacedValue) promptRef.current = savedValue;
@@ -2349,6 +2301,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         images={standaloneComposerImages}
         allImages={composerImages}
         resolvedTheme={resolvedTheme}
+        onCopySnapshot={copyComposerSnapshot}
         onExpandImage={onExpandImage}
         onShowMore={showMoreRestingImages}
       />
@@ -2570,6 +2523,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const insertAttachmentReferences = (
     references: ReadonlyArray<ComposerContextReference>,
     selection?: { start: number; end: number },
+    pendingInsertion?: ComposerAttachmentInsertion,
   ): boolean => {
     if (references.length === 0) return false;
     // Question answers carry attachments beside the answer, never as chips. Falling back to
@@ -2580,6 +2534,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       liveAttachmentTargetKey: attachmentTargetKeyRef.current,
       references,
       insertReferences: () => {
+        if (pendingInsertion?.insert(references)) return true;
         if (selection) {
           const edit = inlineContextReferenceReplacement(promptRef.current, selection, references);
           return applyPromptReplacementStable(edit.start, edit.end, edit.text);
@@ -2717,48 +2672,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
 
-  const addComposerFolders = (folders: File[]) => {
-    const target = folderDropTarget({
-      localEnvironmentDisabled: isLocalEnvironmentDisabled(),
-      environmentId,
-      primaryEnvironmentId,
-      connection: readPreparedConnection(environmentId),
-      isDesktopRenderer: window.desktopBridge !== undefined,
-    });
-    if (target === "remote") {
-      toastManager.add({
-        type: "error",
-        title: "Folders can only be referenced on a server running on this computer",
-      });
-      return;
-    }
-    for (const folder of folders) {
-      const path = resolveDroppedFolderPath(folder, window.desktopBridge?.getPathForFile);
-      if (path === null) {
-        toastManager.add({
-          type: "error",
-          title: `Couldn't get the path of "${folder.name}"`,
-          description: "Type the folder path with @ instead.",
-        });
-        continue;
-      }
-      const inserted = insertComposerTextAtEndStable(`${serializeComposerFileLink(path)} `, {
-        ensureLeadingBoundary: true,
-      });
-      if (!inserted) {
-        toastManager.add({
-          type: "error",
-          title: "Unable to add folder",
-          description: "The composer is busy; try again once it is ready.",
-        });
-        break;
-      }
-    }
-    focusComposer();
-  };
-  const addComposerFoldersStable = useStableCallback(addComposerFolders);
+  const addComposerFoldersStable = useComposerFolderDrop({
+    environmentId,
+    primaryEnvironmentId,
+    draftKey: attachmentTargetKey,
+    insertAtEnd: insertComposerTextAtEndStable,
+    focus: focusComposer,
+  });
 
-  const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
+  const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (event, importSnapshot) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
@@ -2772,7 +2694,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event.stopPropagation();
       if (folders.length > 0) addComposerFoldersStable(folders);
       if (files.length > 0) {
-        void addComposerAttachments(files, { skipImageInlineChip: bypassAutoAttachment });
+        const addFiles = () =>
+          addComposerAttachments(files, { skipImageInlineChip: bypassAutoAttachment });
+        if (importSnapshot && folders.length === 0) {
+          const ownsDestination = () => attachmentTargetKeyRef.current === attachmentTargetKey;
+          pendingDraftWork.begin(attachmentTargetKey);
+          void importSnapshot(ownsDestination)
+            .then((imported) => {
+              if (imported) return;
+              if (ownsDestination()) {
+                void addFiles();
+              } else {
+                toastManager.add({
+                  type: "error",
+                  title: "Paste interrupted",
+                  description: "The attachment draft changed during paste. Paste the image again.",
+                });
+              }
+            })
+            .finally(() => pendingDraftWork.end(attachmentTargetKey));
+        } else {
+          void addFiles();
+        }
       }
       return;
     }
@@ -2828,8 +2771,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
-      const shell = readThreadShell(ref);
-      return shell ? [threadContextRecord(ref, shell.title)] : [];
+      const record = droppedThreadContextRecord(ref, readThreadShell(ref));
+      return record ? [record] : [];
     });
     const routed = records.length > 0 ? routeThreadContexts(records) : [];
     if (routed.length === 0) return;
@@ -3287,6 +3230,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         environmentId={environmentId}
         attachmentDraftTarget={attachmentDraftTarget}
         canOperateThread={canOperateThread}
+        onCopySnapshot={copyComposerSnapshot}
         onExpandImage={onExpandImage}
         onFileOpen={onFileOpen}
         onRemoveImage={removeComposerImage}
@@ -3575,7 +3519,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )}
             >
               {isStashMenuOpen && !composerMenuOpen && (
-                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+                <ComposerCommandMenuLayer anchor={composerMenuAnchor} canOverflowTop>
                   <ComposerStashMenu
                     composerFormRef={composerFormRef}
                     entries={stashQueue}
@@ -3613,6 +3557,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isLoading={isComposerMenuLoading}
                     triggerKind={composerTriggerKind}
                     emptyStateText={composerMenuEmptyState}
+                    errorText={composerMenuError}
                     activeItemId={activeComposerMenuItem?.id ?? null}
                     onHighlightedItemChange={onComposerMenuItemHighlightedStable}
                     onSelect={onSelectComposerItemStable}
@@ -3793,7 +3738,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running"}
+                    isRunning={
+                      phase === "running" &&
+                      !composerSideChatIsLocal(
+                        prompt,
+                        sideChatAvailable,
+                        composerDraft,
+                        attachmentDraft,
+                        { props, selectedProvider },
+                      )
+                    }
                     canInterrupt={canInterrupt}
                     runId={activeThread?.runtime?.activeRunId ?? null}
                     followUpBehavior={followUpBehavior}

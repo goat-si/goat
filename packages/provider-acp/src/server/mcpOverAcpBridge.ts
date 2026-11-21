@@ -1,3 +1,5 @@
+import * as Exit from "effect/Exit";
+import * as Deferred from "effect/Deferred";
 // @effect-diagnostics preferSchemaOverJson:off
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
@@ -21,6 +23,7 @@ interface Connection {
   sessionId: string | null;
   protocolVersion: string | null;
   nextRequestId: number;
+  closing: boolean;
 }
 
 export class AcpMcpOverAcpError extends Error {
@@ -75,6 +78,7 @@ export interface AcpMcpOverAcpBridge {
   readonly disconnect: (
     request: AcpSchema.DisconnectMcpRequest,
   ) => Effect.Effect<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError>;
+  readonly stopCalls: Effect.Effect<void>;
   readonly dispose: Effect.Effect<void>;
 }
 
@@ -83,13 +87,18 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
 ): Effect.fn.Return<AcpMcpOverAcpBridge> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   const connections = yield* Effect.sync(() => new Map<string, Connection>());
+  let callsStopped = yield* Deferred.make<void>();
 
-  const connectionFor = (connectionId: string): Effect.Effect<Connection, AcpMcpOverAcpError> =>
+  const connectionFor = (connectionId: string, markClosing = false) =>
     Effect.suspend(() => {
       const connection = connections.get(connectionId);
-      return connection === undefined
-        ? Effect.fail(new AcpMcpOverAcpError(`Unknown MCP-over-ACP connection "${connectionId}".`))
-        : Effect.succeed(connection);
+      if (connection === undefined || connection.closing) {
+        return Effect.fail(
+          new AcpMcpOverAcpError(`Unknown MCP-over-ACP connection "${connectionId}".`),
+        );
+      }
+      if (markClosing) connection.closing = true;
+      return Effect.succeed(connection);
     });
 
   // Only initialization needs ordering; negotiated calls may wait independently.
@@ -98,7 +107,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       connection.protocolVersion === null ? connection.mutex.withPermits(1)(effect) : effect,
     );
 
-  const send = (
+  const sendNow = (
     connection: Connection,
     message: unknown,
   ): Effect.Effect<ReadonlyArray<unknown>, AcpMcpOverAcpError> =>
@@ -146,11 +155,40 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       }).pipe(Effect.mapError(bridgeError)),
     );
 
+  const send = (connection: Connection, message: unknown) =>
+    Effect.suspend(() =>
+      Effect.raceFirst(
+        sendNow(connection, message),
+        Deferred.await(callsStopped).pipe(
+          Effect.andThen(Effect.fail(new AcpMcpOverAcpError("The MCP call was stopped."))),
+        ),
+      ),
+    );
+
   const disconnect = Effect.fn("mcpOverAcpBridge.disconnect")(function* (
     request: AcpSchema.DisconnectMcpRequest,
   ): Effect.fn.Return<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError> {
-    const connection = yield* connectionFor(request.connectionId);
-    connections.delete(request.connectionId);
+    return yield* Effect.acquireUseRelease(
+      connectionFor(request.connectionId, true),
+      (connection) =>
+        disconnectRemote(connection).pipe(
+          Effect.timeoutOrElse({
+            duration: "5 seconds",
+            orElse: () =>
+              Effect.fail(new AcpMcpOverAcpError("GOAT MCP endpoint did not answer disconnect.")),
+          }),
+        ),
+      (connection, result) =>
+        Effect.sync(() => {
+          if (Exit.isSuccess(result)) connections.delete(request.connectionId);
+          connection.closing = false;
+        }),
+    );
+  });
+
+  const disconnectRemote = Effect.fn("mcpOverAcpBridge.disconnectRemote")(function* (
+    connection: Connection,
+  ) {
     const sessionId = connection.sessionId;
     if (sessionId !== null) {
       const response = yield* Effect.tryPromise({
@@ -168,6 +206,9 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
           }),
         catch: bridgeError,
       });
+      yield* Effect.promise(
+        () => response.body?.cancel().catch(() => undefined) ?? Promise.resolve(),
+      );
       if (!response.ok && response.status !== 404) {
         return yield* Effect.fail(
           new AcpMcpOverAcpError(
@@ -175,9 +216,6 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
           ),
         );
       }
-      yield* Effect.promise(
-        () => response.body?.cancel().catch(() => undefined) ?? Promise.resolve(),
-      );
     }
     return {};
   });
@@ -198,6 +236,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         sessionId: null,
         protocolVersion: null,
         nextRequestId: 0,
+        closing: false,
       });
       return { connectionId };
     }),
@@ -231,12 +270,17 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       });
     }),
     disconnect,
+    stopCalls: Effect.suspend(() => {
+      const stopped = callsStopped;
+      callsStopped = Deferred.makeUnsafe();
+      return Deferred.succeed(stopped, undefined);
+    }).pipe(Effect.asVoid),
     dispose: Effect.suspend(() =>
       Effect.forEach(
         [...connections.keys()],
         (connectionId) => disconnect({ connectionId }).pipe(Effect.ignore),
-        { discard: true },
-      ),
+        { concurrency: "unbounded", discard: true },
+      ).pipe(Effect.ensuring(Effect.sync(() => connections.clear()))),
     ),
   };
 });

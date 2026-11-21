@@ -403,7 +403,14 @@ const make = Effect.gen(function* () {
       projectSettings,
       providers,
       input.projectId,
+      DateTime.toEpochMillis(yield* DateTime.now),
     );
+    if (modelSelection === null) {
+      return yield* new PullRequestOperationError({
+        operation: "generateReviewGuide",
+        detail: "route_unavailable",
+      });
+    }
     const { generated, change } = yield* checkoutHead(
       workspaceRoot,
       locator,

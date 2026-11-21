@@ -56,6 +56,7 @@ export function PreviewAnnotationSpeech({
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
+    liveEnabled: false,
     enabled: available,
     readDraft: () => ({
       ownerKey: sessionId,

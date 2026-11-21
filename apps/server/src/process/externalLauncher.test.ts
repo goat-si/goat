@@ -18,6 +18,7 @@ import { EDITORS } from "@goat/contracts";
 import { resolveEditorCommand } from "@goat/shared/editor";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ExternalLauncher from "./externalLauncher.ts";
+import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
 import {
   layerTest,
   makeMockDetachedHandle,
@@ -207,7 +208,7 @@ it.effect.skipIf(windowsHost)(
         const editors = yield* launcher.resolveAvailableEditors();
         yield* launcher.launchEditor({
           editor: "file-manager",
-          cwd: "/home/t3/workspace [draft]/author's $media/clip|draft.mp4",
+          cwd: "/home/t3/workspace [draft]/author's ‘$media/clip|draft.mp4",
           reveal: true,
         });
         return { kind, editors };
@@ -234,11 +235,79 @@ it.effect.skipIf(windowsHost)(
       assert.equal(spawned.options.detached, true);
       const encodedCommand = String(spawned.args[spawned.args.length - 1] ?? "");
       const decodedCommand = Buffer.from(encodedCommand, "base64").toString("utf16le");
-      assert.equal(
+      assert.include(decodedCommand, "'Directory', 'Folder'");
+      assert.include(
         decodedCommand,
-        "$ProgressPreference = 'SilentlyContinue'; $folderVerb = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\\Directory\\shell' -ErrorAction SilentlyContinue).'(default)'; if ($folderVerb -and $folderVerb -ne 'none') { Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media' } else { Start-Process 'explorer.exe' -ArgumentList ('/select,\"' + '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media\\clip|draft.mp4' + '\"') }",
+        "Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s ‘‘$media'",
+      );
+      assert.include(
+        decodedCommand,
+        "'\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s ‘‘$media\\clip|draft.mp4'",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  ["stock Windows", "", true],
+  ["a Folder replacement", "Folder", false],
+  ["a failed registry lookup", "error", false],
+] as const)("reveals a Windows file with %s", ([, replacement, direct]) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-editors-" });
+    yield* fs.writeFileString(path.join(binDir, "explorer.EXE"), "");
+    const verbatim: string[][] = [];
+    const spawnEnvironments: NodeJS.ProcessEnv[] = [];
+    const exit = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher
+        .launchEditor({ editor: "file-manager", cwd: "C:/my project/a,b.ts", reveal: true })
+        .pipe(Effect.exit);
+    }).pipe(
+      Effect.provideService(
+        WindowsVerbatimSpawn,
+        (command, args, ...environment: NodeJS.ProcessEnv[]) =>
+          Effect.sync(() => {
+            verbatim.push([command, ...args]);
+            spawnEnvironments.push(...environment);
+          }),
+      ),
+      Effect.provide(
+        layerTest({
+          platform: "win32",
+          env: { PATH: binDir, PATHEXT: ".EXE" },
+          spawnResult: (command) => {
+            if (!command.command.endsWith("reg.exe")) return undefined;
+            if (replacement === "error") return { exitCode: 1 };
+            const folderKey = command.args[1] === "HKCR\\Folder\\shell";
+            const verb = replacement === "Folder" && folderKey ? "open" : "none";
+            return { stdout: `    (Default)    REG_SZ    ${verb}\r\n` };
+          },
+        }),
+      ),
+      Effect.provideService(HostProcess.Environment, {
+        PATH: binDir,
+        ELECTRON_RUN_AS_NODE: "1",
+      }),
+    );
+    if (direct) {
+      assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "");
+      assert.deepEqual(verbatim, [
+        ["C:\\Windows\\explorer.exe", '/select,"C:\\my project\\a,b.ts"'],
+      ]);
+      assert.deepEqual(spawnEnvironments, [{ PATH: binDir }]);
+    } else {
+      assert.deepEqual(verbatim, []);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.instanceOf(
+          Cause.squash(exit.cause),
+          ExternalLauncher.ExternalLauncherCommandNotFoundError,
+        );
+      }
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 for (const wsl of [false, true]) {
@@ -294,7 +363,9 @@ for (const wsl of [false, true]) {
           "",
         ]);
         assert.deepEqual(
-          spawnedCommands.filter((command) => command.command !== "xdg-mime"),
+          spawnedCommands.filter(
+            (command) => command.command !== "xdg-mime" && command.command !== "wslpath",
+          ),
           [reveal],
         );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
@@ -496,7 +567,7 @@ it.effect.skipIf(windowsHost)("does not open Zed with the OpenZFS zed daemon on 
       Effect.provide(
         layerTest({
           platform: "linux",
-          env: { HOME: home, PATH: binDir },
+          env: { HOME: home, PATH: binDir, DISPLAY: ":0" },
           path: withSystemBin(path, systemBin),
           onSpawn: (command) => spawned.push(command),
           spawnResult: (command) => (command.args[0] === "--version" ? { exitCode: 1 } : undefined),
@@ -590,6 +661,62 @@ it.effect("keeps the macOS VS Code Insiders bundle out of stable VS Code", () =>
     assert.include(editors, "vscode-insiders");
     assert.equal(spawned?.command, path.join(bin, "code-insiders"));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  {
+    platform: "darwin",
+    scripts: "Library/Application Support/JetBrains/Toolbox/scripts",
+    suffix: "",
+  },
+  { platform: "linux", scripts: ".local/share/JetBrains/Toolbox/scripts", suffix: "" },
+  { platform: "win32", scripts: "JetBrains/Toolbox/scripts", suffix: ".cmd" },
+  {
+    platform: "win32",
+    scripts: "JetBrains/Toolbox/scripts",
+    suffix: ".cmd",
+    install: "Programs/IntelliJ IDEA/bin/idea64.exe",
+  },
+] as const)(
+  "discovers a numbered JetBrains Toolbox script on $platform",
+  ({ platform, scripts, suffix, ...row }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-toolbox-numbered-" });
+      const dir = path.join(home, scripts);
+      yield* fs.makeDirectory(dir, { recursive: true });
+      for (const name of ["idea10", "idea2"]) {
+        yield* fs.writeFileString(path.join(dir, `${name}${suffix}`), "#!/bin/sh\n");
+        yield* fs.chmod(path.join(dir, `${name}${suffix}`), 0o755);
+      }
+      const install = "install" in row ? path.join(home, row.install) : undefined;
+      if (install) {
+        yield* fs.makeDirectory(path.dirname(install), { recursive: true });
+        yield* fs.writeFileString(install, "");
+      }
+
+      const editor = EDITORS.find((editor) => editor.id === "idea")!;
+      const resolved = yield* resolveEditorCommand(editor, {
+        HOME: home,
+        LOCALAPPDATA: home,
+        PATH: path.join(home, "empty"),
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        // Keep IDEs installed on the host out of system locations such as /Applications.
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          stat: (file) =>
+            fs.stat(file.startsWith(`${home}${path.sep}`) ? file : path.join(home, "missing")),
+        }),
+      );
+
+      assert.deepEqual(
+        resolved,
+        Option.some({ command: install ?? path.join(dir, `idea2${suffix}`), baseArgs: [] }),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 for (const { platform, installPath, onPath } of [
@@ -808,4 +935,47 @@ it.effect("starts a Windows command shim for unicode paths with cmd metacharacte
       ),
     );
   }),
+);
+
+it.effect.skipIf(windowsHost)("opens only the canonical named macOS app directory", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const temp = yield* fs.makeTempDirectoryScoped({ prefix: "goat-external-app-" });
+    const root = yield* fs.realPath(temp);
+    const open = path.join(root, "open");
+    yield* fs.writeFileString(open, "#!/bin/sh\n");
+    yield* fs.chmod(open, 0o755);
+    const bundle = path.join(root, "release", "Demo.app");
+    const duplicate = path.join(root, "debug", "Demo.app");
+    const missing = path.join(root, "Missing.app");
+    const regular = path.join(root, "Regular.app");
+    const linked = path.join(root, "Linked.app");
+    yield* fs.makeDirectory(bundle, { recursive: true });
+    yield* fs.makeDirectory(duplicate, { recursive: true });
+    yield* fs.writeFileString(regular, "regular file");
+    yield* fs.symlink(bundle, linked);
+    const launches: ReadonlyArray<string>[] = [];
+    yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      for (const invalid of [missing, regular, "Relative.app"]) {
+        const result = yield* launcher
+          .launchEditor({ cwd: invalid, editor: "file-manager" })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure", invalid);
+      }
+      yield* launcher.launchEditor({ cwd: linked, editor: "file-manager" });
+      yield* launcher.launchEditor({ cwd: duplicate, editor: "file-manager" });
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          platform: "darwin",
+          env: { PATH: root },
+          resolveExecutable: () => open,
+          onSpawn: (command) => launches.push(command.args.map(String)),
+        }),
+      ),
+    );
+    assert.deepEqual(launches, [[bundle], [duplicate]]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

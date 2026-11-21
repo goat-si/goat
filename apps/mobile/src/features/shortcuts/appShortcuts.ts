@@ -88,6 +88,18 @@ export function withRecentThreadShortcut(
   ].slice(0, MAX_RECENT_THREAD_SHORTCUTS);
 }
 
+export function reconcileRecentThreadShortcuts(
+  current: readonly RecentThreadShortcut[],
+  opened: RecentThreadShortcut | null,
+  knownEnvironments: ReadonlySet<string>,
+) {
+  const kept = current.filter((thread) => knownEnvironments.has(thread.environmentId));
+  const retained = kept.length === current.length ? current : kept;
+  return opened && knownEnvironments.has(opened.environmentId)
+    ? withRecentThreadShortcut(retained, opened)
+    : retained;
+}
+
 export function buildShortcutActions(recents: ReadonlyArray<RecentThreadShortcut>): Action[] {
   return [
     {

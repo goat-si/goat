@@ -179,6 +179,7 @@ export class PreviewBrowser extends Context.Service<
       PreviewBrowserInstallError | PreviewBrowserInstallingError | PreviewBrowserUnsupportedError
     >;
     readonly installed: Effect.Effect<Option.Option<string>>;
+    readonly managedReleaseVersion?: string | undefined;
     /** Reads where installation stands without starting or retrying one. */
     readonly installStatus: Effect.Effect<PreviewBrowserInstallStatus>;
   }
@@ -646,7 +647,12 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
     }
   });
 
-  return PreviewBrowser.of({ executable, installed, installStatus });
+  return PreviewBrowser.of({
+    executable,
+    installed,
+    installStatus,
+    managedReleaseVersion: customExecutablePath === undefined ? release?.version : undefined,
+  });
 });
 
 export const layer = Layer.effect(

@@ -1,7 +1,16 @@
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { assert, it } from "@effect/vitest";
-import { RunAttemptId, RunId, ThreadId, type OrchestrationV2Run } from "@goat/contracts";
+import {
+  MessageId,
+  NodeId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -40,16 +49,39 @@ const thread = {
       stack: null,
     },
   ],
-} as never;
+} as unknown as OrchestrationV2AppThread;
 
 const run = (id: RunId, ordinal: number, status: OrchestrationV2Run["status"]) =>
-  ({ id, ordinal, status }) as OrchestrationV2Run;
+  ({ id, ordinal, status, userMessageId: MessageId.make("msg:" + id) }) as OrchestrationV2Run;
 
-const layerWithRuns = (runs: ReadonlyArray<OrchestrationV2Run>) =>
+type Delegate = Pick<
+  OrchestrationV2Subagent,
+  "runId" | "origin" | "status" | "completionDelivery"
+> & {
+  readonly id?: NodeId;
+};
+
+const layerWithRuns = (
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  subagents: ReadonlyArray<Delegate> = [],
+  wake?: { parentRunId: RunId; taskIds: NodeId[] },
+) =>
   ThreadResultService.layer.pipe(
     Layer.provide(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadRecords: () => Effect.succeed({ thread, runs } as never),
+        getThreadRecords: (id, _fields, filter) =>
+          Effect.succeed({
+            thread: { ...thread, id },
+            messages: wake
+              ? [{ id: MessageId.make("msg:" + secondRun), delegatedCompletion: wake }]
+              : [],
+            runs,
+            subagents: subagents.filter(
+              (child) =>
+                filter?.subagentRunIds === undefined ||
+                (child.runId && filter.subagentRunIds.includes(child.runId)),
+            ),
+          } as never),
       }),
     ),
     Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -141,6 +173,112 @@ it.effect("stores a report on the live run and reads it back for that run only",
     Effect.provide(layerWithRuns([run(firstRun, 1, "completed"), run(secondRun, 2, "running")])),
   ),
 );
+
+it.effect("a bot reports the results of both delegates after the last one returns", () => {
+  const bot = ThreadId.make("goat-bot-session:research");
+  const children: Array<Delegate> = [
+    { runId: secondRun, origin: "app_owned", status: "completed" },
+    { runId: secondRun, origin: "app_owned", status: "running" },
+    { runId: firstRun, origin: "app_owned", status: "running" },
+  ];
+  return Effect.gen(function* () {
+    const results = yield* ThreadResultService.ThreadResultService;
+    for (const outcome of ["failed", "succeeded", "blocked", "cancelled"] as const) {
+      const error = yield* Effect.flip(results.report(bot, { outcome, summary: "Still waiting." }));
+      assert.strictEqual(error.reason, "delegates_pending");
+    }
+    assert.isNull((yield* results.forRun(bot))?.reportedAt);
+
+    children[1] = { runId: secondRun, origin: "app_owned", status: "completed" };
+    const summary = "A found the definition on line 129. B could not read the requested file.";
+    yield* results.report(bot, { outcome: "failed", summary });
+    const final = yield* results.forRun(bot);
+    assert.strictEqual(final?.outcome, "failed");
+    assert.strictEqual(final?.summary, summary);
+  }).pipe(Effect.provide(layerWithRuns([run(secondRun, 2, "running")], children)));
+});
+
+it.effect("a wake can report the result it carries once its sibling's result is delivered", () => {
+  const bot = ThreadId.make("goat-bot-session:wake");
+  const id = NodeId.make("worker-a");
+  const sibling = NodeId.make("worker-b");
+  const a: Delegate = {
+    id,
+    runId: firstRun,
+    origin: "app_owned",
+    status: "completed",
+    completionDelivery: { state: "claimed", observedByRunId: null },
+  };
+  const b: Delegate = {
+    ...a,
+    id: sibling,
+    completionDelivery: { state: "pending", observedByRunId: null },
+  };
+  const children = [a, b];
+  return Effect.gen(function* () {
+    const results = yield* ThreadResultService.ThreadResultService;
+    const premature = yield* Effect.flip(results.report(bot, { outcome: "blocked" }));
+    assert.strictEqual(premature.reason, "delegates_pending");
+    children[1] = { ...b, completionDelivery: { state: "delivered", observedByRunId: null } };
+    const final = yield* results.report(bot, {
+      outcome: "failed",
+      summary: "A found line 129; B could not read the file.",
+    });
+    assert.strictEqual(final.runId, secondRun);
+  }).pipe(
+    Effect.provide(
+      layerWithRuns([run(firstRun, 1, "completed"), run(secondRun, 2, "running")], children, {
+        parentRunId: firstRun,
+        taskIds: [id],
+      }),
+    ),
+  );
+});
+
+it.effect("a restarted bot checks delegates across its own task generation", () => {
+  const bot = ThreadId.make("goat-bot-session:restart");
+  const unrelated = RunId.make("other-task");
+  const old = RunId.make("older-generation");
+  const retry = { ...run(secondRun, 4, "running"), restartContinuationOfRunId: firstRun };
+  const children: Delegate[] = [firstRun, unrelated, old].map((runId) => ({
+    runId,
+    origin: "app_owned",
+    status: "running",
+  }));
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const [id, task, generation] of [
+      [firstRun, "task-A", 2],
+      [unrelated, "task-B", 2],
+      [old, "task-A", 1],
+    ] as const) {
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${bot}, ${"msg:" + id}, ${task}, ${generation}, 'task', '2026-11-20')`;
+    }
+    const results = yield* ThreadResultService.ThreadResultService;
+    const error = yield* Effect.flip(results.report(bot, { outcome: "failed" }));
+    assert.strictEqual(error.reason, "delegates_pending");
+    children[0] = { runId: firstRun, origin: "app_owned", status: "completed" };
+    const final = yield* results.report(bot, {
+      outcome: "failed",
+      summary: "B's file is missing.",
+    });
+    assert.strictEqual(final.runId, retry.id);
+  }).pipe(
+    Effect.provide(
+      layerWithRuns(
+        [
+          run(old, 1, "completed"),
+          run(unrelated, 2, "completed"),
+          run(firstRun, 3, "completed"),
+          retry,
+        ],
+        children,
+      ),
+    ),
+  );
+});
 
 it.effect("refuses a report from a thread without runs", () =>
   Effect.gen(function* () {

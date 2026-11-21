@@ -37,9 +37,9 @@ export interface AgentSurfaceEntry {
   /**
    * "core" lists the tool in the core listing and marks it to load up front in every listing.
    * "core_eval" loads it up front only under the opt-in core_eval listing; full lists it like any
-   * tool. Everything else is found with goat_describe and called by name or through goat_call.
+   * tool. "prompt" omits a tool from tools/list when a provider prompt introduces its path.
    */
-  readonly listing?: "core" | "core_eval";
+  readonly listing?: "core" | "core_eval" | "prompt";
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";

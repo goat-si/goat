@@ -3,16 +3,19 @@ import { ProviderDriverKind, ProviderInstanceId, WS_METHODS } from "@goat/contra
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as RpcTest from "effect/rpc/RpcTest";
 import * as Settings from "../serverSettings.ts";
+import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
 import * as Runtime from "./ConnectHubRuntime.testkit.ts";
 import * as Authorization from "./RpcAuthorization.ts";
 import * as Write from "./SettingsRpc.ts";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 
 const method = WS_METHODS.serverUpdateSettings;
 const tags = [...Authorization.AuthorizedWsRpcGroup.requests.values()].map((rpc) => rpc._tag);
@@ -29,6 +32,120 @@ const mutation = {
     config: {},
   },
 };
+
+it.effect(
+  "only a person can grant MiniMax Code quota access for a provider's current launch configuration",
+  () =>
+    Effect.gen(function* () {
+      const runtime = yield* Runtime.open();
+      yield* runtime.settings.start;
+      const config = yield* Config.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const instanceId = ProviderInstanceId.make("local-mcode");
+      const instance = {
+        driver: ProviderDriverKind.make("acpRegistry"),
+        config: {
+          source: "local",
+          commandPath: "mcode",
+          commandArgs: ["acp"],
+          readMiniMaxCodeQuota: true,
+        },
+      };
+      const enable = { operation: "upsert" as const, instanceId, instance };
+      const asSession = (agent: boolean) =>
+        runtime.sessions
+          .issue({
+            subject: agent ? MCP_CLIENT_SUBJECT : "owner",
+            scopes: ["settings:write", "providers:manage"],
+            ...(agent ? { method: "bearer-access-token" as const } : {}),
+          })
+          .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
+      const person = yield* asSession(false);
+      const agent = yield* asSession(true);
+      yield* Effect.gen(function* () {
+        const agentWrite = yield* Write.make(agent);
+        const personWrite = yield* Write.make(person);
+        const optIn = { patch: {}, providerInstanceMutation: enable };
+        expect(yield* agentWrite(optIn).pipe(Effect.isFailure)).toBe(true);
+        expect(yield* runtime.settings.updateProviderInstance(enable).pipe(Effect.isFailure)).toBe(
+          true,
+        );
+        const optedIn = yield* personWrite(optIn);
+        expect(optedIn.providerInstances[instanceId]?.config).toEqual(instance.config);
+        const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath)) as {
+          providerInstances?: Record<string, { config?: unknown }>;
+        };
+        expect(persisted.providerInstances?.[instanceId]?.config).toEqual(instance.config);
+
+        const renamed = { ...enable, instance: { ...instance, displayName: "My MiniMax Code" } };
+        expect(
+          (yield* agentWrite({ patch: {}, providerInstanceMutation: renamed })).providerInstances[
+            instanceId
+          ]?.displayName,
+        ).toBe("My MiniMax Code");
+        const relocated = {
+          ...renamed,
+          instance: {
+            ...renamed.instance,
+            environment: [
+              { name: "MINIMAX_DATA_DIR", value: "/other-mcode-profile", sensitive: false },
+            ],
+          },
+        };
+        expect(
+          yield* agentWrite({ patch: {}, providerInstanceMutation: relocated }).pipe(
+            Effect.isFailure,
+          ),
+        ).toBe(true);
+        const changedCommand = {
+          ...renamed,
+          instance: {
+            ...renamed.instance,
+            config: { ...instance.config, commandPath: "omp" },
+          },
+        };
+        expect(
+          yield* agentWrite({ patch: {}, providerInstanceMutation: changedCommand }).pipe(
+            Effect.isFailure,
+          ),
+        ).toBe(true);
+        const paused = yield* agentWrite({
+          patch: {},
+          providerInstanceMutation: {
+            ...renamed,
+            instance: { ...renamed.instance, enabled: false },
+          },
+        });
+        expect(paused.providerInstances[instanceId]?.enabled).toBe(false);
+        expect(
+          yield* agentWrite({ patch: {}, providerInstanceMutation: renamed }).pipe(
+            Effect.isFailure,
+          ),
+        ).toBe(true);
+        const revoked = yield* personWrite({
+          patch: {},
+          providerInstanceMutation: {
+            ...renamed,
+            instance: {
+              ...renamed.instance,
+              config: { ...instance.config, readMiniMaxCodeQuota: false },
+            },
+          },
+        });
+        expect(revoked.providerInstances[instanceId]?.config).toMatchObject({
+          readMiniMaxCodeQuota: false,
+        });
+      }).pipe(
+        Effect.provide(
+          Routes.layer.pipe(
+            Layer.provide(Routes.layerState),
+            Layer.provide(Environment.layerIdentity),
+          ),
+        ),
+        Effect.provideContext(runtime.context),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
+);
 
 it.effect.each([false, true])(
   "RPC settings queued behind the real settings lock rechecks a revoked caller (mixed=%s)",

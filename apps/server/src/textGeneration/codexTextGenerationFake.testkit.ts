@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import { createModelSelection } from "@goat/shared/model";
 import { CodexSettings, ProviderInstanceId, ProviderSetupError } from "@goat/contracts";
 import * as ServerConfig from "../config.ts";
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
 
@@ -43,6 +43,7 @@ export interface FakeCodexInput {
   refreshAuth?: "in-place" | "replace";
   mcpServers?: ReadonlyArray<{ name: string; enabled: boolean }> | number;
   requireMcpServersOff?: ReadonlyArray<string>;
+  requireOriginator?: string;
   /** Copies the `--output-schema` file here so a test can check what the CLI received. */
   schemaCopyPath?: string;
 }
@@ -61,6 +62,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     refreshAuth: input.refreshAuth ?? null,
     mcpServers: input.mcpServers ?? [],
     requireMcpServersOff: input.requireMcpServersOff ?? [],
+    requireOriginator: input.requireOriginator ?? null,
     schemaCopyPath: input.schemaCopyPath ?? null,
     stderr: input.stderr ?? null,
     output: input.output,
@@ -153,6 +155,9 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "for (const name of check.requireMcpServersOff) {",
         '  if (!offServers.has(name)) fail("MCP server left on: " + name, 13);',
         "}",
+        "if (check.requireOriginator !== null && process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE !== check.requireOriginator) {",
+        '  fail("unexpected originator: " + process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, 14);',
+        "}",
         // Codex CLI 0.163.0 forwards the schema to the API, which rejects a non-object root.
         "if (schemaPath !== null) {",
         '  const schema = JSON.parse(NodeFS.readFileSync(schemaPath, "utf8"));',
@@ -221,7 +226,7 @@ export function withFakeCodexEnv<A, E, R>(
     managedRuntime?: boolean | ProviderSetupError;
     memoryRunnerContext?: import("@goat/provider-core/server/memoryGenerationRunner").MemoryGenerationRunnerContext;
   },
-  effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
+  effectFn: (textGeneration: ProviderTextGeneration) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

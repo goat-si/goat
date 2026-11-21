@@ -572,8 +572,8 @@ if [ -n "$SELECTED_VERSION" ]; then
 fi
 RUNNER_CHANGED=0
 @@GOAT_PROTOCOL_GUARD@@
-check_candidate_protocol
-check_live_protocol
+@@GOAT_HOME_OWNER_WAIT@@check_candidate_protocol
+@@GOAT_HOME_OWNER_WAIT_CALL@@check_live_protocol
 if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
   printf 'Candidate runner changed during validation; reconnect.\n' >&2; exit 1
 fi

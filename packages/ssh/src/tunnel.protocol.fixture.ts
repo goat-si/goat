@@ -88,12 +88,16 @@ const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i+1]; };
 const drainCapable = ${JSON.stringify(signals.drain ?? false)};
 const tokenFile = path.join(home, ".goat/userdata/runtime-control.token");
-function event(type, extra = {}) { fs.appendFileSync(path.join(test, "events"), JSON.stringify({type, version, ...extra}) + "\\n"); }
+// Bounded probes inherit a file-size limit, so each writes its own event log.
+const eventFile = path.join(test, args.includes("--deadline-ms") ? "probe-events-" + process.pid : "events");
+function event(type, extra = {}) { fs.appendFileSync(eventFile, JSON.stringify({type, version, ...extra}) + "\\n"); }
 event("exec", { args });
 if (args[0] === "--version") {
   event("version", { published: fs.existsSync(path.join(state, "run-t3.sh")) ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "" });
   const proof = path.join(test, "pending-proof");
   console.log("goat v" + (fs.existsSync(proof) && fs.readFileSync(proof, "utf8").trim() === "version:" + version ? "0.0.0" : version));
+} else if (args[0] === "__ssh-helper" && args[1] === "home-owned") {
+  process.exit(1);
 } else if (args[0] === "__ssh-helper" && args[1] === "protocol") {
   if (${JSON.stringify(signals.missingCommand ?? false)}) process.exit(2);
   const at = args.indexOf("--runtime-file");
@@ -708,7 +712,8 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       return Effect.die("Unexpected test transport command; real SSH is prohibited");
     }
     remoteCommands.push(command);
-    const args = command.args.slice(at + 1).filter((arg) => arg !== "-l");
+    const shellArgsStart = command.args[at + 1] === "-ec" ? at + 5 : at + 1;
+    const args = command.args.slice(shellArgsStart).filter((arg) => arg !== "-l");
     if (args.includes("-c")) uploads++;
     // Capture actual submitted bytes; inject races only at an observed command boundary.
     return Effect.gen(function* () {

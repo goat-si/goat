@@ -1,6 +1,8 @@
+import { msg, useMessages } from "gt-react";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
+  COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
   type EnvironmentId,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
@@ -108,6 +110,7 @@ export function usePendingThreadRequests(input: {
   readonly composerRef: RefObject<ChatComposerHandle | null>;
   readonly setThreadError: (threadId: ThreadId, error: string | null) => void;
 }) {
+  const m = useMessages();
   const {
     environmentId,
     activeThreadId,
@@ -305,6 +308,18 @@ export function usePendingThreadRequests(input: {
     const providerAnswers = { ...answers };
     const entries = appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries;
     const threadDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+    if (
+      threadDraft?.previewAnnotations.some(
+        (annotation) =>
+          annotation.comment.trim().length > COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
+      )
+    ) {
+      setThreadError(
+        activeThreadId,
+        m(msg("Annotation comments must be 8,000 characters or fewer.")),
+      );
+      return;
+    }
     for (const question of pendingInput.questions) {
       const target = questionAttachmentDraftId(
         environmentId,

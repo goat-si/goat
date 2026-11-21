@@ -3,7 +3,11 @@ import { EnvironmentId, ProviderThreadId, RunId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { presentThreadShell } from "./models.ts";
-import { resolveThreadListStatus, resolveThreadPriorityRank } from "./threadListPriority.ts";
+import {
+  resolveThreadListStatus,
+  resolveThreadListRowStatus,
+  resolveThreadPriorityRank,
+} from "./threadListPriority.ts";
 
 it("shows a held starting run as waiting and resumes working when released", () => {
   const runId = RunId.make("held-run");
@@ -66,4 +70,31 @@ it("preserves absent versus null cursors and the selected run's completion decis
   expect(thread.notificationCompletedAt).toBeNull();
   expect(thread.markedUnreadCompletionAt).toBe("2026-10-15T00:00:00.000Z");
   expect(thread.latestRun?.completionNotification).toBe("silent");
+});
+
+it("acknowledges failed runs after visiting without changing raw status", () => {
+  const thread = {
+    ...presentThreadShell(EnvironmentId.make("env"), v2ThreadShell),
+    runtime: {
+      status: "failed" as const,
+      activeRunId: null,
+      providerInstanceId: v2ThreadShell.modelSelection.instanceId,
+      providerName: null,
+      lastError: "failed",
+      updatedAt: "2026-11-19T01:00:00Z",
+    },
+    latestRun: {
+      status: "failed" as const,
+      completedAt: null,
+      startedAt: "2026-11-19T01:00:00Z",
+      requestedAt: "2026-11-19T00:59:00Z",
+    },
+    lastVisitedAt: "2026-11-19T02:00:00Z",
+  };
+  expect(resolveThreadListStatus(thread)).toBe("failed");
+  expect(resolveThreadListRowStatus(thread)).toBe("ready");
+  expect(resolveThreadListRowStatus({ ...thread, lastVisitedAt: "2026-11-19T00:00:00Z" })).toBe(
+    "failed",
+  );
+  expect(resolveThreadListRowStatus({ ...thread, latestRun: null })).toBe("failed");
 });

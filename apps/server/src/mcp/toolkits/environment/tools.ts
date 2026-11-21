@@ -15,6 +15,7 @@ import {
   ServerSettings,
   ServerSettingsPatch,
   StandingInstructions,
+  EnvironmentThemeFile,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -23,6 +24,7 @@ import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandE
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ThemePublication from "../../../themePublication.ts";
 
 const PreferenceFields = {
   hub: Schema.Struct({
@@ -132,8 +134,25 @@ const UsageTool = Tool.make(agentSurfaceRegistry["environment.usage"].name, {
   dependencies: [McpInvocationContext.McpInvocationContext, Usage.UsageService],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.usage"]));
 
+const ThemeSetTool = Tool.make(agentSurfaceRegistry["theme.set"].name, {
+  description: agentSurfaceRegistry["theme.set"].description,
+  parameters: Schema.Struct({
+    themeId: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(48))),
+    appearance: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(16))),
+    theme: Schema.optionalKey(EnvironmentThemeFile),
+  }),
+  success: Schema.Struct({
+    themeId: Schema.optionalKey(Schema.String),
+    appearance: Schema.optionalKey(Schema.String),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...shared.dependencies, ThemePublication.ThemePublicationService],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["theme.set"]));
+
 export const EnvironmentToolkit = Toolkit.make(
   UsageTool,
+  ThemeSetTool,
   EnvironmentReadTool,
   EnvironmentPreferencesTool,
   EnvironmentSettingsReadTool,

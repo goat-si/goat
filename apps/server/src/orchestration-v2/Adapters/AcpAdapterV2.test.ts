@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - ACP fixtures use Node HTTP servers and native paths
-import { acpMcpAuthorization, makeTurnInput } from "./AcpAdapterV2.testkit.ts";
+import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
 import {
   makeMockRuntime,
   rawProtocolMethod,
@@ -20,18 +20,11 @@ import {
   normalizeDevinToolCall,
   extractDevinSubagentUpdate,
 } from "@goat/provider-acp-registry/testing";
-
-import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { assertNoticeInitialization } from "./AcpNoticeReplay.testkit.ts";
-
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as DocumentText from "../../provider/DocumentText.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
-  CheckpointId,
   EnvironmentId,
   type ModelSelection,
   ProviderDriverKind,
@@ -41,7 +34,6 @@ import {
   type OrchestrationV2ProviderThread,
   type ProviderOptionDescriptor,
 } from "@goat/contracts";
-import { GrokSettings } from "@goat/provider-grok/settings";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
@@ -53,13 +45,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-
 import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
@@ -67,9 +56,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
-
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
-import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import {
@@ -100,27 +87,11 @@ import {
   type AcpAdapterV2RuntimeInput,
   type AcpAdapterV2SubagentUpdate,
 } from "@goat/provider-acp/server/adapter";
-
 import {
   acpRegistryPromptFailure,
   registerMistralVibeAcpExtensions,
 } from "@goat/provider-acp-registry/testing";
-
-const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
-
-const layerHost = TestProviderHost.layer().pipe(
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-);
-
-const layerTest = Layer.mergeAll(
-  DocumentText.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-  NodeServices.layer,
-  NodeCrypto.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  layerHost,
-);
-const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
+import { DEFAULT_GROK_SETTINGS, layerTest, ACP_TEST_DRIVER } from "./AcpAdapterV2.host.testkit.ts";
 
 describe("acpPerTurnPromptUsage", () => {
   it("maps a per-turn sample straight onto TurnTokenUsage", () => {
@@ -1502,6 +1473,131 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("replaces and removes identified ACP plans across turns", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("acp-cross-turn-plans");
+      const threadId = ThreadId.make("acp-cross-turn-plans");
+      let notify:
+        | Parameters<AcpSessionRuntime.AcpSessionRuntime["Service"]["handleSessionUpdate"]>[0]
+        | undefined;
+      let ordinal = 0;
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+            mockAgentPath: yield* bundledMockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (handler) =>
+                Effect.sync(() => {
+                  notify = handler;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+              prompt: () =>
+                Effect.gen(function* () {
+                  ordinal++;
+                  const send = (update: EffectAcpSchema.SessionUpdate) =>
+                    notify!({ sessionId: "mock-session-1", update });
+                  const plan = (id: string, text: string) =>
+                    send({
+                      sessionUpdate: "plan_update",
+                      plan: {
+                        type: "items",
+                        planId: id,
+                        entries: [{ content: text, priority: "medium", status: "pending" }],
+                      },
+                    });
+                  yield* send({ sessionUpdate: "state_update", state: "running" });
+                  if (ordinal === 1) {
+                    yield* plan("control", "First");
+                    yield* plan("control", "Replacement");
+                    yield* send({ sessionUpdate: "plan_removed", planId: "control" });
+                    yield* plan("later-remove", "Remove on next turn");
+                    yield* plan("later-replace", "Old contents");
+                  } else {
+                    yield* send({ sessionUpdate: "plan_removed", planId: "later-remove" });
+                    yield* plan("later-replace", "New contents");
+                  }
+                  yield* send({
+                    sessionUpdate: "plan",
+                    entries: [{ content: "Anonymous plan", priority: "medium", status: "pending" }],
+                  });
+                  yield* send({
+                    sessionUpdate: "state_update",
+                    state: "idle",
+                    stopReason: "end_turn",
+                  });
+                  return { stopReason: "end_turn" as const };
+                }),
+            }),
+          }),
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("acp-cross-turn-plans"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      const run = (ordinal: number) =>
+        Effect.gen(function* () {
+          yield* runtime.startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal }),
+          );
+          return Array.from(
+            yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            ),
+          ).flatMap((event) => (event.type === "plan.updated" ? [event.plan] : []));
+        });
+      const first = yield* run(1);
+      assert.equal(first.length, 6);
+      assert.equal(first[0]!.id, first[1]!.id);
+      assert.equal(first[1]!.id, first[2]!.id);
+      assert.equal(first[1]!.kind, "todo_list");
+      assert.deepEqual(first[1]!.kind === "todo_list" ? first[1]!.steps.map((s) => s.text) : [], [
+        "Replacement",
+      ]);
+      assert.equal(first[2]!.status, "superseded");
+      const second = yield* run(2);
+      assert.equal(second.length, 3);
+      assert.notEqual(first[5]!.id, second[2]!.id);
+      const removed = second.find((p) => p.id === first[3]!.id && p.status === "superseded");
+      const replacement = second.find(
+        (p) => p.kind === "todo_list" && p.steps.some((s) => s.text === "New contents"),
+      );
+      assert.isDefined(
+        removed,
+        "plan_removed on a later turn must supersede the existing session plan",
+      );
+      assert.equal(removed?.runId, first[3]!.runId);
+      assert.equal(replacement?.runId, first[4]!.runId);
+      assert.equal(removed?.nodeId, first[3]!.nodeId);
+      assert.equal(replacement?.nodeId, first[4]!.nodeId);
+      assert.equal(
+        replacement?.id,
+        first[4]!.id,
+        "the same session plan must be replaced, not duplicated",
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -2110,6 +2206,115 @@ describe("AcpAdapterV2", () => {
       );
       assert.equal(parentTools.length, 2);
       assert.equal(parentTools[0]?.title, "Parent tool finished");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("emits coalesced subagent text before a failed turn's terminal", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
+      const instanceId = ProviderInstanceId.make("devin-failed-flush");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          normalizeSessionUpdate: normalizeDevinSessionUpdate,
+          normalizeToolCall: normalizeDevinToolCall,
+          extractSubagentUpdate: extractDevinSubagentUpdate,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (next) =>
+                Effect.sync(() => {
+                  handler = next;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(next))),
+              prompt: () =>
+                Effect.gen(function* () {
+                  const updates = [
+                    {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "child-a",
+                      status: "in_progress",
+                      _meta: {
+                        "cognition.ai/subagent_started": {
+                          agentId: "child-a",
+                          title: "Answer",
+                          task: "Reply ONE.",
+                        },
+                      },
+                    },
+                    ...["O", "N", "E"].map((text) => ({
+                      sessionUpdate: "agent_message_chunk" as const,
+                      content: { type: "text" as const, text },
+                      _meta: {
+                        "cognition.ai/streamingMessageId": "child-result",
+                        "cognition.ai/subagent_context": { parentAgentId: "child-a" },
+                      },
+                    })),
+                  ] satisfies Array<EffectAcpSchema.SessionUpdate>;
+                  for (const update of updates)
+                    yield* handler!({ sessionId: "mock-session-1", update });
+                  return yield* new EffectAcpErrors.AcpRequestError({
+                    code: -32603,
+                    errorMessage: "prompt failed",
+                  });
+                }),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("devin-failed-flush-parent");
+      const modelSelection = { instanceId, model: "default" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("devin-failed-flush-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const events = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const terminal = events.at(-1);
+      assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
+      const childText = events.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.type === "assistant_message" &&
+        event.turnItem.threadId !== threadId
+          ? [event.turnItem.text]
+          : [],
+      );
+      assert.deepEqual(childText, ["O", "ONE"]);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -3512,546 +3717,6 @@ describe("AcpAdapterV2", () => {
         providerTurnId: pending.runtimeRequest.providerTurnId,
       });
       yield* Fiber.join(turnFiber);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect("replaces the ACP session and clears conversation state on rollback", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* bundledMockAgentPath;
-      const instanceId = ProviderInstanceId.make("acp-test-rollback-session");
-      const rollbackThreadId = ThreadId.make("thread-acp-rollback-session-target");
-      yield* (yield* McpProviderSessions.McpProviderSessions).set({
-        environmentId: EnvironmentId.make("environment-acp-rollback-session-target"),
-        threadId: rollbackThreadId,
-        providerSessionId: "mcp-session-acp-rollback-session-target",
-        providerInstanceId: instanceId,
-        endpoint: "http://127.0.0.1:43124/mcp",
-        authorizationHeader: "Bearer rollback-target-token",
-        browserToolsAvailable: false,
-      });
-      const runtimeInputs: Array<AcpAdapterV2RuntimeInput> = [];
-      const nativeRuntimes: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
-      let sessionEventCount = 0;
-      const makeRuntime = makeMockRuntime({
-        childProcessSpawner,
-        mockAgentPath,
-        environment: { GOAT_ACP_PROMPT_DELAY_MS: "100" },
-        wrapRuntime: (nativeRuntime) => {
-          nativeRuntimes.push(nativeRuntime);
-          return nativeRuntime;
-        },
-      });
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          onSessionEvent: () =>
-            Effect.sync(() => {
-              sessionEventCount++;
-            }),
-          makeRuntime: (runtimeInput) =>
-            Effect.sync(() => runtimeInputs.push(runtimeInput)).pipe(
-              Effect.andThen(makeRuntime(runtimeInput)),
-            ),
-        },
-        selfInvocation,
-      });
-      const threadId = ThreadId.make("thread-acp-rollback-session");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-rollback-session"),
-        modelSelection,
-        runtimePolicy,
-      });
-      assert.isTrue(runtime.providerSession.capabilities.threads.canRollbackThread);
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const firstSessionId = providerThread.nativeThreadRef?.nativeId;
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId,
-          providerThread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      const activeRollback = yield* runtime
-        .rollbackThread({
-          providerThread,
-          providerThreadTurns: [],
-          target: {
-            type: "thread_start",
-            checkpointId: CheckpointId.make("checkpoint-acp-active-rollback"),
-            appRunOrdinal: 0,
-          },
-        })
-        .pipe(Effect.result);
-      assert.equal(activeRollback._tag, "Failure");
-      if (activeRollback._tag === "Failure") {
-        assert.include(String(activeRollback.failure.cause), "while turn");
-      }
-      const firstProviderTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(instanceId, `${firstSessionId}:turn:1`),
-      });
-      while (true) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) break;
-      }
-      const snapshotBeforeRollback = yield* runtime.readThreadSnapshot({ providerThread });
-      const rolledBack = yield* runtime.rollbackThread({
-        providerThread: { ...providerThread, appThreadId: rollbackThreadId },
-        providerThreadTurns: snapshotBeforeRollback.providerTurns,
-        target: {
-          type: "thread_start",
-          checkpointId: CheckpointId.make("checkpoint-acp-rollback-session"),
-          appRunOrdinal: 0,
-        },
-      });
-      assert.isString(rolledBack.providerThread.nativeThreadRef?.nativeId);
-      assert.deepEqual(rolledBack.providerTurns, []);
-      assert.equal(
-        runtimeInputs[1]?.processEnvironment?.GOAT_ACP_MCP_AUTHORIZATION,
-        "Bearer rollback-target-token",
-      );
-      assert.equal(acpMcpAuthorization(runtimeInputs[1]), "Bearer rollback-target-token");
-      const snapshotAfterRollback = yield* runtime.readThreadSnapshot({
-        providerThread: rolledBack.providerThread,
-      });
-      assert.deepEqual(snapshotAfterRollback.providerTurns, []);
-      assert.deepEqual(snapshotAfterRollback.messages, []);
-      const sessionEventsBeforeSecondTurn = sessionEventCount;
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId: rollbackThreadId,
-          providerThread: rolledBack.providerThread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-          ordinal: 2,
-        }),
-      );
-      const secondProviderTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(
-          instanceId,
-          `${rolledBack.providerThread.nativeThreadRef?.nativeId}:turn:2`,
-        ),
-      });
-      let secondStatus: string | null = null;
-      while (secondStatus === null) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === secondProviderTurnId) {
-          secondStatus = event.status;
-        }
-      }
-      assert.equal(secondStatus, "completed");
-      yield* nativeRuntimes[1]!.drainEvents;
-      assert.isAbove(sessionEventCount, sessionEventsBeforeSecondTurn);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.live.each([
-    "rollback removal",
-    "rollback rotation",
-    "failed rollback",
-    "fork removal",
-    "snapshot removal",
-  ] as const)("keeps the ACP MCP bridge current through %s", (transition) =>
-    Effect.gen(function* () {
-      const requests: Array<{ path: string; authorization: string }> = [];
-      const server = yield* Effect.acquireRelease(
-        Effect.promise(
-          () =>
-            new Promise<NodeHttp.Server>((resolve) => {
-              const fixture = NodeHttp.createServer(async (request, response) => {
-                const chunks: Buffer[] = [];
-                for await (const chunk of request) chunks.push(Buffer.from(chunk));
-                const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-                requests.push({
-                  path: request.url ?? "",
-                  authorization: request.headers.authorization ?? "",
-                });
-                response.setHeader("content-type", "application/json");
-                response.end(
-                  JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [] } }),
-                );
-              });
-              fixture.listen(0, "127.0.0.1", () => resolve(fixture));
-            }),
-        ),
-        (fixture) =>
-          Effect.promise(
-            () =>
-              new Promise<void>((resolve, reject) =>
-                fixture.close((error) => (error ? reject(error) : resolve())),
-              ),
-          ),
-      );
-      const address = server.address();
-      if (address === null || typeof address === "string")
-        return yield* Effect.die("No fixture port");
-      const fixtureId = transition.replaceAll(" ", "-");
-      const instanceId = ProviderInstanceId.make(`acp-bridge-${fixtureId}`);
-      const threadId = ThreadId.make(`acp-bridge-${fixtureId}`);
-      const sessions = yield* McpProviderSessions.McpProviderSessions;
-      const config = (credential: "A" | "B", targetThreadId = threadId) => ({
-        environmentId: EnvironmentId.make("bridge-fixture"),
-        threadId: targetThreadId,
-        providerSessionId: "bridge-fixture",
-        providerInstanceId: instanceId,
-        endpoint: `http://127.0.0.1:${address.port}/${credential}`,
-        authorizationHeader: `Bearer fixture-${credential}`,
-        browserToolsAvailable: false,
-        grantedScopes: ["memory:read"] as const,
-      });
-      const initiallyEmpty = transition === "rollback removal";
-      if (!initiallyEmpty) yield* sessions.set(config("A"));
-      const mockAgentPath = yield* bundledMockAgentPath;
-      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
-      const handlers = new Map<
-        number,
-        {
-          connect?: Parameters<Runtime["handleMcpConnect"]>[0];
-          message?: Parameters<Runtime["handleMcpMessage"]>[0];
-        }
-      >();
-      let runtimeOrdinal = 1;
-      const prompts: ReadonlyArray<{ type: string; text?: string }>[] = [];
-      const makeRuntime = makeMockRuntime({
-        childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-        mockAgentPath,
-        wrapRuntime: (runtime, ordinal) => {
-          const captured: NonNullable<ReturnType<typeof handlers.get>> = {};
-          handlers.set(ordinal, captured);
-          const observed = Effect.sync(() => {
-            runtimeOrdinal = ordinal;
-          });
-          return {
-            ...runtime,
-            start:
-              transition === "failed rollback" && ordinal > 1
-                ? () =>
-                    Effect.fail(
-                      new EffectAcpErrors.AcpTransportError({
-                        detail: "Fixture replacement failure",
-                        cause: new Error("Fixture candidate rejected"),
-                      }),
-                    )
-                : () => runtime.start().pipe(Effect.tap(() => observed)),
-            loadSession: (...args) => runtime.loadSession(...args).pipe(Effect.tap(() => observed)),
-            resumeSession: (...args) =>
-              runtime.resumeSession(...args).pipe(Effect.tap(() => observed)),
-            forkSession: (...args) => runtime.forkSession(...args).pipe(Effect.tap(() => observed)),
-            prompt: (input) =>
-              Effect.sync(() => prompts.push(input.prompt)).pipe(
-                Effect.andThen(runtime.prompt(input)),
-              ),
-            handleMcpConnect: (handler) =>
-              Effect.sync(() => {
-                captured.connect = handler;
-              }).pipe(Effect.andThen(runtime.handleMcpConnect(handler))),
-            handleMcpMessage: (handler) =>
-              Effect.sync(() => {
-                captured.message = handler;
-              }).pipe(Effect.andThen(runtime.handleMcpMessage(handler))),
-          };
-        },
-      });
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        flavor: { driver: ACP_TEST_DRIVER, capabilities: AcpProviderCapabilitiesV2, makeRuntime },
-      });
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make(`bridge-${fixtureId}`),
-        modelSelection,
-        runtimePolicy,
-      });
-      let thread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
-      let currentThreadId = threadId;
-      const callTools = Effect.fnUntraced(function* () {
-        const active = handlers.get(runtimeOrdinal)!;
-        const connection = yield* active.connect!({ serverId: "goat" }, undefined as never);
-        yield* active.message!(
-          { connectionId: connection.connectionId, method: "tools/list" },
-          undefined as never,
-        );
-        return connection.connectionId;
-      });
-      const originalConnection = initiallyEmpty ? undefined : yield* callTools();
-      if (transition === "fork removal") {
-        currentThreadId = ThreadId.make(`${threadId}-fork`);
-        yield* sessions.set(config("B", currentThreadId));
-        thread = yield* runtime.forkThread({
-          sourceProviderThread: thread,
-          targetThreadId: currentThreadId,
-        });
-      } else {
-        yield* sessions.set(config("B"));
-        if (transition === "snapshot removal") {
-          thread = {
-            ...thread,
-            nativeThreadRef: {
-              driver: ACP_TEST_DRIVER,
-              nativeId: "mock-session-snapshot",
-              strength: "strong",
-            },
-          };
-          yield* runtime.readThreadSnapshot({ providerThread: thread });
-        } else {
-          const rolledBack = yield* runtime
-            .rollbackThread({
-              providerThread: thread,
-              providerThreadTurns: [],
-              target: {
-                type: "thread_start",
-                checkpointId: CheckpointId.make("bridge-checkpoint"),
-                appRunOrdinal: 0,
-              },
-            })
-            .pipe(Effect.exit);
-          if (transition === "failed rollback") {
-            assert.isTrue(Exit.isFailure(rolledBack));
-          } else {
-            if (Exit.isFailure(rolledBack)) return yield* Effect.failCause(rolledBack.cause);
-            thread = rolledBack.value.providerThread;
-          }
-        }
-      }
-      let previousConnection: string;
-      if (transition === "failed rollback") {
-        yield* sessions.set(config("A"));
-        previousConnection = originalConnection!;
-      } else {
-        previousConnection = yield* callTools();
-        assert.deepEqual(requests.at(-1), { path: "/B", authorization: "Bearer fixture-B" });
-        if (transition === "rollback rotation") yield* sessions.set(config("A"));
-        else yield* sessions.clear(currentThreadId);
-      }
-      const beforeAdmission = requests.length;
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId: currentThreadId,
-          providerThread: thread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      yield* runtime.events.pipe(
-        Stream.takeUntil((event) => event.type === "turn.terminal"),
-        Stream.runDrain,
-      );
-      const active = handlers.get(runtimeOrdinal)!;
-      if (transition === "rollback rotation" || transition === "failed rollback") {
-        if (transition === "failed rollback") {
-          // The original live connection survives both failed candidates.
-          yield* active.message!(
-            { connectionId: previousConnection, method: "tools/list" },
-            undefined as never,
-          );
-        } else yield* callTools();
-        assert.deepEqual(requests.at(-1), { path: "/A", authorization: "Bearer fixture-A" });
-        assert.isTrue(
-          requests
-            .slice(beforeAdmission)
-            .every((request) => request.authorization === "Bearer fixture-A"),
-        );
-      } else {
-        for (const denied of [
-          active.connect!({ serverId: "goat" }, undefined as never),
-          active.message!(
-            { connectionId: previousConnection, method: "tools/list" },
-            undefined as never,
-          ),
-        ]) {
-          const result = yield* denied.pipe(Effect.exit);
-          assert.isTrue(Exit.isFailure(result));
-          if (Exit.isFailure(result))
-            assert.include(Cause.pretty(result.cause), "GOAT MCP is unavailable");
-        }
-        assert.equal(requests.length, beforeAdmission, "removed B must receive no HTTP requests");
-        // No prompt advertised tools on this native ID; bridge calls are not claims.
-        assert.isUndefined(
-          prompts.at(-1)?.find((part) => part.text?.startsWith("GOAT memory tools:")),
-        );
-      }
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect("quarantines callbacks from a failed rollback replacement before retrying", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* bundledMockAgentPath;
-      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
-      const sessionUpdateHandlers: Array<
-        Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined
-      > = [];
-      const backgroundMutationHandlers: Array<
-        AcpAdapterV2ExtensionContext["applyBackgroundTaskMutation"] | undefined
-      > = [];
-      const availableCommandUpdates: Array<ReadonlyArray<EffectAcpSchema.AvailableCommand>> = [];
-      let registeredExtensionOrdinal = 0;
-      let runtimeOrdinalSeen = 0;
-      const makeRuntime = makeMockRuntime({
-        childProcessSpawner,
-        mockAgentPath,
-        wrapRuntime: (runtime, runtimeOrdinal) => {
-          runtimeOrdinalSeen = runtimeOrdinal;
-          return {
-            ...runtime,
-            handleSessionUpdate: (handler) =>
-              Effect.sync(() => {
-                sessionUpdateHandlers[runtimeOrdinal - 1] = handler;
-              }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
-            ...(runtimeOrdinal === 2
-              ? {
-                  start: () =>
-                    Effect.fail(
-                      new EffectAcpErrors.AcpTransportError({
-                        detail: "Forced first rollback replacement failure",
-                        cause: "test",
-                      }),
-                    ),
-                }
-              : runtimeOrdinal === 3
-                ? {
-                    start: () =>
-                      Effect.suspend(() => {
-                        const stagedSessionUpdate = sessionUpdateHandlers[2];
-                        if (stagedSessionUpdate === undefined) {
-                          return Effect.die("replacement startup must buffer session updates");
-                        }
-                        return stagedSessionUpdate({
-                          sessionId: "mock-session-3",
-                          update: {
-                            sessionUpdate: "available_commands_update",
-                            availableCommands: [
-                              {
-                                name: "staged-command",
-                                description: "published while the replacement starts",
-                              },
-                            ],
-                          },
-                        }).pipe(Effect.andThen(runtime.start()));
-                      }),
-                  }
-                : {}),
-          };
-        },
-      });
-      const instanceId = ProviderInstanceId.make("acp-test-rollback-retry-generation");
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          enablePostSettleContinuation: true,
-          onAvailableCommandsUpdate: (commands) =>
-            Effect.sync(() => {
-              availableCommandUpdates.push(commands);
-            }),
-          registerExtensions: (context) =>
-            Effect.sync(() => {
-              backgroundMutationHandlers[registeredExtensionOrdinal] =
-                context.applyBackgroundTaskMutation;
-              registeredExtensionOrdinal += 1;
-            }),
-          makeRuntime,
-        },
-        selfInvocation,
-        continuationRequests: { offer: () => Effect.void },
-      });
-      const threadId = ThreadId.make("thread-acp-rollback-retry-generation");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-rollback-retry-generation"),
-        modelSelection,
-        runtimePolicy,
-      });
-      if (runtime.hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die("ACP runtime must expose background work state");
-      }
-      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-
-      yield* runtime.rollbackThread({
-        providerThread,
-        providerThreadTurns: [],
-        target: {
-          type: "thread_start",
-          checkpointId: CheckpointId.make("checkpoint-acp-rollback-retry-generation"),
-          appRunOrdinal: 0,
-        },
-      });
-
-      assert.equal(runtimeOrdinalSeen, 3);
-      assert.deepEqual(
-        availableCommandUpdates.map((commands) => commands.map((command) => command.name)),
-        [["staged-command"]],
-      );
-      const failedReplacementHandler = sessionUpdateHandlers[1];
-      const failedBackgroundMutationHandler = backgroundMutationHandlers[1];
-      assert.isDefined(failedReplacementHandler);
-      assert.isDefined(failedBackgroundMutationHandler);
-      while (Option.isSome(yield* Queue.poll(events))) {}
-      yield* failedReplacementHandler!({
-        sessionId: "failed-replacement-session",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "stale failed replacement callback" },
-        },
-      });
-      assert.isTrue(Option.isNone(yield* Queue.poll(events)));
-      yield* failedBackgroundMutationHandler!({
-        sessionId: "mock-session-3",
-        taskId: "stale-failed-replacement-task",
-        status: "running",
-      });
-      assert.isFalse(yield* hasPendingBackgroundWork);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -6913,12 +6578,19 @@ describe("AcpAdapterV2", () => {
           "mutation-only end-notice must not count as post-settle wake evidence",
         );
         yield* sessionUpdateHandler!(bEndNotice);
-        yield* Effect.yieldNow;
-        yield* Effect.yieldNow;
+        assert.lengthOf(continuationRequests, 0, "a task end notice alone cannot start a wake");
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        yield* sessionUpdateHandler!({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Both background tasks finished." },
+          },
+        });
         assert.lengthOf(
           continuationRequests,
           1,
-          "exactly one continuation when the last running task ends post-finalize with kept midTurn marks",
+          "the native report must start exactly one continuation",
         );
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
@@ -7964,14 +7636,274 @@ describe("AcpAdapterV2", () => {
           assert.equal(event.status, "completed");
           break;
         }
-        yield* Deferred.await(continuationOffered);
         yield* complete("early");
         yield* complete("blocker");
+        assert.lengthOf(
+          continuationRequests,
+          0,
+          "task completion alone must not replace the root answer",
+        );
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        yield* update({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Preparing the background report" },
+        });
+        assert.lengthOf(continuationRequests, 0, "reasoning alone must not offer a wake");
+        yield* update({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "LATE_NATIVE_ANSWER" },
+        });
+        yield* Deferred.await(continuationOffered);
         assert.lengthOf(
           continuationRequests,
           1,
           "duplicate completions must not offer another continuation",
         );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  const openGrokWakeReplay = Effect.fnUntraced(function* (kind: "monitor" | "command") {
+    const selfInvocation = yield* resolveSelfInvocation();
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const mockAgentPath = yield* bundledMockAgentPath;
+    const instanceId = ProviderInstanceId.make("acp-grok-wake-replay");
+    const grokFlavor = makeGrokAcpAdapterFlavor(
+      {
+        instanceId,
+        settings: DEFAULT_GROK_SETTINGS,
+        environment: {},
+        hostPlatform: yield* HostProcess.Platform,
+        selfInvocation,
+      },
+      yield* HostProcess.HomeDirectory,
+    );
+    const promptStarted = yield* Deferred.make<void>();
+    const promptGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+    const promptHeld = yield* Deferred.make<void>();
+    const finalizeScheduled = yield* Deferred.make<Duration.Input>();
+    const finalized = yield* Deferred.make<void>();
+    const offers: Array<ProviderContinuationRequests.ProviderContinuationRequest> = [];
+    type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+    let updateSession: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+    let taskCompleted:
+      | ((payload: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>)
+      | undefined;
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      selfInvocation,
+      testHooks: {
+        afterPromptSettledWithBackgroundWork: () =>
+          Deferred.succeed(promptHeld, undefined).pipe(Effect.asVoid),
+        onDeferredFinalizeScheduled: (debounce) =>
+          Deferred.succeed(finalizeScheduled, debounce).pipe(Effect.asVoid),
+        afterTurnFinalized: () => Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
+      },
+      flavor: {
+        driver: ACP_TEST_DRIVER,
+        capabilities: AcpProviderCapabilitiesV2,
+        enablePostSettleContinuation: true,
+        deferFinalizeForBackgroundWork: kind === "command",
+        ...(kind === "command"
+          ? {
+              normalizeToolCall: grokFlavor.normalizeToolCall!,
+              extractBackgroundTaskId: grokFlavor.extractBackgroundTaskId!,
+              isBackgroundCommandTool: grokFlavor.isBackgroundCommandTool!,
+            }
+          : {
+              extractBackgroundTaskId: (toolCall) =>
+                toolCall.toolCallId.startsWith("tool-call-monitor-")
+                  ? toolCall.toolCallId.replace("tool-call-", "task-")
+                  : undefined,
+            }),
+        registerExtensions: ({ runtime, applyBackgroundTaskMutation }) =>
+          registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation),
+        makeRuntime: makeMockRuntime({
+          childProcessSpawner,
+          mockAgentPath,
+          wrapRuntime: (runtime) => ({
+            ...runtime,
+            handleSessionUpdate: (handler) =>
+              Effect.sync(() => {
+                updateSession = handler;
+              }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            handleExtNotification: (method, schema, handler) => {
+              if (method === "x.ai/task_completed") {
+                const decode = Schema.decodeUnknownSync(schema);
+                taskCompleted = (payload) => handler(decode(payload));
+              }
+              return runtime.handleExtNotification(method, schema, handler);
+            },
+            prompt: () =>
+              Deferred.succeed(promptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(promptGate)),
+              ),
+          }),
+        }),
+      },
+      continuationRequests: {
+        offer: (request) =>
+          Effect.sync(() => {
+            offers.push(request);
+          }),
+      },
+    });
+    const threadId = ThreadId.make("thread-acp-grok-wake-replay");
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const modelSelection = { instanceId, model: "default" };
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("provider-session-acp-grok-wake-replay"),
+      modelSelection,
+      runtimePolicy,
+    });
+    const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    const rootEvents = yield* runtime.events.pipe(
+      Stream.takeUntil((event) => event.type === "turn.terminal"),
+      Stream.runCollect,
+      Effect.forkScoped,
+    );
+    yield* runtime
+      .startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      )
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(promptStarted);
+    const handleUpdate = updateSession;
+    const handleCompletion = taskCompleted;
+    assert.isDefined(handleUpdate);
+    assert.isDefined(handleCompletion);
+    const sessionId = "mock-session-1";
+    return {
+      update: (update: EffectAcpSchema.SessionUpdate) => handleUpdate({ sessionId, update }),
+      complete: (taskId: string, snapshot?: { output: string; exit_code: number }) =>
+        handleCompletion({
+          sessionId,
+          update: { sessionUpdate: "task_completed", task_id: taskId, task_snapshot: snapshot },
+        }),
+      endPrompt: Deferred.succeed(promptGate, { stopReason: "end_turn" }),
+      promptHeld: Deferred.await(promptHeld),
+      finalizeScheduled: Deferred.await(finalizeScheduled),
+      rootEvents: Deferred.await(finalized).pipe(Effect.andThen(Fiber.join(rootEvents))),
+      hasPendingBackgroundWork: runtime.hasPendingBackgroundWork!,
+      offers,
+    };
+  });
+
+  it.effect("Grok wakes once on the native report when task B was polled before finalization", () =>
+    Effect.gen(function* () {
+      const replay = yield* openGrokWakeReplay("monitor");
+      for (const task of ["a", "b"]) {
+        yield* replay.update({
+          sessionUpdate: "tool_call",
+          toolCallId: `tool-call-monitor-${task}`,
+          title: `Monitor task ${task}`,
+          kind: "execute",
+          status: "pending",
+          rawInput: {},
+        });
+        yield* replay.update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: `tool-call-monitor-${task}`,
+          status: "in_progress",
+        });
+      }
+      yield* replay.complete("task-monitor-a");
+      yield* replay.update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-call-monitor-b",
+        status: "completed",
+      });
+      assert.lengthOf(replay.offers, 0);
+      yield* replay.endPrompt;
+      const events = yield* replay.rootEvents;
+      assert.include(events.at(-1), { type: "turn.terminal", status: "completed" });
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tool-call-monitor-b" &&
+            event.turnItem.status === "completed",
+        ),
+      );
+      assert.lengthOf(replay.offers, 0, "the polled completion alone cannot start a wake");
+      assert.isTrue(yield* replay.hasPendingBackgroundWork);
+      yield* replay.update({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Both background tasks finished." },
+      });
+      assert.lengthOf(replay.offers, 1);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect(
+    "Grok waits for the late native answer after early success and a replayed completion",
+    () =>
+      Effect.gen(function* () {
+        const replay = yield* openGrokWakeReplay("command");
+        for (const taskId of ["early", "blocker"]) {
+          yield* replay.update({
+            sessionUpdate: "tool_call",
+            toolCallId: taskId,
+            title: `Run ${taskId}`,
+            kind: "execute",
+            status: "completed",
+            rawInput: { command: `echo ${taskId}` },
+            rawOutput: { type: "BackgroundTaskStarted", task_id: taskId },
+          });
+        }
+        yield* replay.update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "early",
+          status: "in_progress",
+          rawOutput: { type: "Text", text: "Command progress" },
+        });
+        yield* replay.complete("early", { exit_code: 0, output: "EARLY_BG_DONE\n" });
+        yield* replay.complete("early");
+        yield* replay.update({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "EARLY_SUCCESS_DONE" },
+        });
+        assert.lengthOf(replay.offers, 0);
+        yield* replay.endPrompt;
+        yield* replay.promptHeld;
+        yield* replay.complete("blocker", { exit_code: 0, output: "BLOCKER_DONE\n" });
+        yield* TestClock.adjust(yield* replay.finalizeScheduled);
+        const events = yield* replay.rootEvents;
+        assert.include(events.at(-1), { type: "turn.terminal", status: "completed" });
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text.includes("EARLY_SUCCESS_DONE"),
+          ),
+        );
+        yield* replay.complete("early");
+        yield* replay.complete("blocker");
+        assert.lengthOf(replay.offers, 0, "completions alone cannot start a wake");
+        yield* replay.update({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Preparing the background report" },
+        });
+        yield* replay.complete("early");
+        assert.lengthOf(
+          replay.offers,
+          0,
+          "reasoning and a replayed completion cannot start a wake",
+        );
+        yield* replay.update({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "LATE_NATIVE_ANSWER" },
+        });
+        assert.lengthOf(replay.offers, 1);
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

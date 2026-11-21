@@ -11,6 +11,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { MemoryAdministrationToolkit } from "./tools.ts";
 const decode = Schema.decodeUnknownEffect(M.MemoryHubDisableInput);
 const disabled = Schema.decodeUnknownEffect(M.MemoryHubDisableResult);
+const decodeSettingsGet = Schema.decodeUnknownEffect(M.MemorySettingsGetInput);
 const decodeSettingsUpdate = Schema.decodeUnknownEffect(M.MemorySettingsUpdateInput);
 const decodeBindingRead = Schema.decodeUnknownEffect(M.MemoryProjectBindingGetInput);
 const decodeDiagnostics = Schema.decodeUnknownEffect(M.MemorySyncStatusInput);
@@ -94,10 +95,11 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
       return yield* service.resetReportAttempts(value, permit);
     }).pipe(Effect.catch(memoryFailure("goat_memory_report_attempts_reset"))),
   ),
-  memory_settings_get: McpToolAccess.reads(() =>
+  memory_settings_get: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
+      const value = yield* decodeSettingsGet(input);
       const service = yield* MemorySettingsService.MemorySettingsService;
-      return yield* service.get(yield* invocationPermit("read"));
+      return yield* service.get(yield* invocationPermit("read"), value.includeModelAvailability);
     }).pipe(Effect.mapError(memoryError)),
   ),
   memory_settings_update: McpToolAccess.writesWithCapability((input) =>

@@ -7,6 +7,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { SKILL_CHIP_ICON_SVG } from "../composerInlineChip";
 import { ContextChipPopover } from "../contextChipParts";
 import { Button } from "../ui/button";
+import { PopoverClose } from "../ui/popover";
 
 function SkillInlineText(props: {
   text: string;
@@ -87,16 +88,15 @@ function SkillChip(props: {
         <p className="font-medium">{label}</p>
         <p>{description || "No description is available for this skill."}</p>
         {props.threadRef && props.skill.path ? (
-          <Button
-            variant="outline"
-            size="sm"
+          <PopoverClose
+            render={<Button variant="outline" size="sm" />}
             onClick={() => {
               if (props.threadRef)
                 useRightPanelStore.getState().openFile(props.threadRef, props.skill.path);
             }}
           >
             View instructions
-          </Button>
+          </PopoverClose>
         ) : null}
       </div>
     </ContextChipPopover>

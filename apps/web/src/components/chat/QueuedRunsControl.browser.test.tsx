@@ -3,6 +3,8 @@ import {
   toComposerContextId,
 } from "@goat/shared/composerContextReferences";
 import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import { createRef, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -11,6 +13,7 @@ import { page } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   workflow: null as unknown,
+  commandResult: undefined as unknown,
 }));
 
 vi.mock(import("@goat/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -20,12 +23,12 @@ vi.mock(import("@goat/client-runtime/state/thread-workflows"), async (importOrig
 
 vi.mock(import("../../state/entities"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useThreadProjection: (() => state.projection) as never,
+  useQuietThreadProjection: (() => state.projection) as never,
 }));
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => undefined) as never,
+  useAtomCommand: (() => async () => state.commandResult) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -34,12 +37,18 @@ vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
     resources.map((resource) => `https://assets.test/${resource.attachmentId}`)) as never,
 }));
 
+import { ToastProvider } from "../ui/toast";
 import { render as renderUi } from "../../../test/render";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./QueuedRunsControl";
+import { ExpandedImageDialogHost } from "./ExpandedImageDialog";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
+import "../../index.css";
 
 function setup() {
   state.projection = null;
   state.workflow = null;
+  state.commandResult = undefined;
 }
 
 const baseProps = {
@@ -55,6 +64,65 @@ const baseProps = {
 async function renderQueue(props: Partial<ComponentProps<typeof QueuedRunsControl>> = {}) {
   return renderUi(<QueuedRunsControl {...baseProps} {...props} />);
 }
+
+it.each([false, true])(
+  "opens queued image galleries independently of editing, pending=%s",
+  async (pending) => {
+    setup();
+    const attachments = ["first.png", "second.png"].map((name) => ({
+      type: "image" as const,
+      id: name,
+      name,
+      mimeType: "image/png",
+      sizeBytes: 128,
+    }));
+    state.projection = { projection: { messages: [] } };
+    state.workflow = {
+      activeRun: null,
+      queuedRuns: pending
+        ? []
+        : [
+            {
+              run: { id: "run:queued", userMessageId: "message:queued" },
+              text: "Later",
+              attachments,
+            },
+          ],
+    };
+    const optimisticMessages = pending
+      ? [
+          {
+            id: MessageId.make("pending"),
+            inputIntent: "queued_turn" as const,
+            text: "Later",
+            attachments: attachments.map((item) => ({
+              ...item,
+              previewUrl: `https://assets.test/${item.id}`,
+            })),
+          },
+        ]
+      : [];
+    const key = scopedThreadKey(scopeThreadRef(baseProps.environmentId, baseProps.threadId));
+    const onEditQueuedRun = vi.fn();
+    await using _screen = await renderUi(
+      <AppAtomRegistryProvider>
+        <QueuedRunsControl
+          {...baseProps}
+          optimisticMessages={optimisticMessages}
+          onEditQueuedRun={onEditQueuedRun}
+        />
+        <ExpandedImageDialogHost threadKey={key} />
+      </AppAtomRegistryProvider>,
+    );
+    await page.getByRole("button", { name: "Preview second.png", exact: true }).click();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    await expect.element(page.getByText("second.png (2/2)", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Previous media", exact: true }).click();
+    await expect.element(page.getByText("first.png (1/2)", { exact: true })).toBeVisible();
+    expect(onEditQueuedRun).not.toHaveBeenCalled();
+    await page.getByRole("button", { name: "Close image preview", exact: true }).click();
+  },
+);
 
 it("previews assistant quotes as readable text and preserves the citation when editing", async () => {
   setup();
@@ -153,4 +221,58 @@ it("blocks button and keyboard edits while a question owns the composer and unlo
     .toBeEnabled();
   expect(ref.current?.editLatest(false)).toBe(true);
   expect(onEditQueuedRun).toHaveBeenCalledOnce();
+});
+
+it.each(["Send now", "Steer"] as const)("shows the refusal from %s", async (action) => {
+  setup();
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    activeRun: action === "Steer" ? { id: "run:active" } : null,
+    canSendNow: action === "Send now",
+    canPromoteToSteer: action === "Steer",
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Follow up",
+        attachments: [],
+      },
+    ],
+  };
+  const reason = "The target changed while you were editing the queue.";
+  state.commandResult = AsyncResult.failure(Cause.fail(new Error(reason)));
+  await using _screen = await renderUi(
+    <ToastProvider timeout={0}>
+      <QueuedRunsControl {...baseProps} />
+    </ToastProvider>,
+  );
+
+  await page.getByRole("button", { name: action }).click();
+  await expect.element(page.getByText(reason)).toBeVisible();
+});
+
+it("leaves the queued message available when sending is interrupted", async () => {
+  setup();
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    activeRun: null,
+    canSendNow: true,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Follow up",
+        attachments: [],
+      },
+    ],
+  };
+  state.commandResult = AsyncResult.failure(Cause.interrupt());
+  await using _screen = await renderUi(
+    <ToastProvider timeout={0}>
+      <QueuedRunsControl {...baseProps} />
+    </ToastProvider>,
+  );
+
+  const send = page.getByRole("button", { name: "Send now" });
+  await send.click();
+  await expect.element(send).toBeEnabled();
+  await expect.element(page.getByText("Could not send queued message")).not.toBeInTheDocument();
 });

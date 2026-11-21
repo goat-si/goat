@@ -1,9 +1,10 @@
+import { msg } from "gt-react";
 import type { SettingsSearchItem } from "./settingsSearch";
 
 export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
   {
     id: "computer-use",
-    title: "Computer use",
+    title: msg("Computer use"),
     to: "/settings/integrations",
     targetId: "computer",
     searchTerms: [
@@ -12,7 +13,7 @@ export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "computer-use-move-pointer",
-    title: "Let agents move my pointer",
+    title: msg("Let agents move my pointer"),
     to: "/settings/integrations",
     searchTerms: [
       "computer use pointer mouse cursor move foreground background click steal focus advanced",
@@ -20,19 +21,19 @@ export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "computer-use-strict-input-guards",
-    title: "Strict input guards",
+    title: msg("Strict input guards"),
     to: "/settings/integrations",
     searchTerms: ["computer use input guards confirmations advanced"],
   },
   {
     id: "computer-use-keep-typed-text",
-    title: "Keep typed text",
+    title: msg("Keep typed text"),
     to: "/settings/integrations",
     searchTerms: ["computer use browser input history typed text retention privacy advanced"],
   },
   {
     id: "computer-use-skill",
-    title: "Computer Use skill",
+    title: msg("Computer Use skill"),
     to: "/settings/integrations",
     searchTerms: [
       "built in builtin skill computer use instructions agents observe verify advanced readiness",
@@ -40,7 +41,7 @@ export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "screen-code-skill",
-    title: "Screen Code skill",
+    title: msg("Screen Code skill"),
     to: "/settings/integrations",
     searchTerms: [
       "built in builtin skill screen code cells browser tab desktop target instructions agents advanced",

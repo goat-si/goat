@@ -1,3 +1,4 @@
+import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import type { OrchestrationV2ExecutionNode, OrchestrationV2TurnItem } from "@goat/contracts";
 import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
@@ -168,6 +169,19 @@ export function openCodeCommandFailed(toolName: string, completedMetadata: unkno
     exitCode !== undefined &&
     exitCode !== 0
   );
+}
+
+export function openCodeCodeModeHtmlRenders(calls: ReadonlyArray<unknown>, mcpServerName: string) {
+  const expectedTool = `${mcpServerName}.${HTML_RENDER_TOOL_NAME}`;
+  return calls.flatMap((call, index) => {
+    if (recordValue(call, "tool") !== expectedTool || recordValue(call, "status") !== "completed") {
+      return [];
+    }
+    const input = recordValue(call, "input");
+    return typeof input === "object" && input !== null && !Array.isArray(input)
+      ? [{ index, input: input as Record<string, unknown> }]
+      : [];
+  });
 }
 
 export function openCodeToolTurnItem(

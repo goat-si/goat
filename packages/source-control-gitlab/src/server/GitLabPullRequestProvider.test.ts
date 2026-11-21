@@ -1,3 +1,4 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,7 +19,7 @@ it.effect.each(["merge", "disable-auto-merge"] as const)(
       const readHosts: string[] = [];
       const mergedHosts: string[] = [];
       const bridgeHosts: string[] = [];
-      const native = yield* GitLabCli.make.pipe(
+      const native = yield* TestGitLabCli.make.pipe(
         Effect.provide(
           TestSourceControlHost.layer({
             process: {

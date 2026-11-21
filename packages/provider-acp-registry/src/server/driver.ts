@@ -1,14 +1,13 @@
+import { resolveAcpCustomModels } from "../customModels.ts";
 import {
   officialAcpRegistryIconUrlForAgentId,
   ProviderDriverKind,
   resolveOfficialAcpRegistryIconUrl,
   type AcpRegistryOperationError,
   type ServerProvider,
-  type ServerProviderModel,
 } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { createModelCapabilities } from "@goat/shared/model";
 import * as Clock from "effect/Clock";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -32,10 +31,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "@goat/provider-core/server/driver";
-import {
-  providerModelsFromSettings,
-  providerProbeEnvironment,
-} from "@goat/provider-core/server/snapshotProbe";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -57,6 +53,13 @@ import {
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import { probeFingerprint } from "./probeFingerprint.ts";
+import {
+  acpRegistryProbeTtlMs,
+  updateAcpRegistryEnrichmentCache as updateEnrichmentCache,
+} from "./enrichmentCache.ts";
+import { modelsFromDiscovery } from "./discoveredModels.ts";
+import { applyAcpRegistryLiveConfiguration } from "./liveModelConfiguration.ts";
+export { applyAcpRegistryLiveConfiguration } from "./liveModelConfiguration.ts";
 import { makeAcpRegistryLearnedModels, type LearnedModelsCheck } from "./learnedModels.ts";
 import { environmentText, untilEnvironmentHolds } from "./environmentCheck.ts";
 import {
@@ -67,69 +70,17 @@ import { acpRegistrySnapshotReadiness } from "./snapshotReadiness.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
+import { makeMiniMaxCodeUsageEnrichment } from "./minimaxCodeUsageEnrichment.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
-// Cache only successful authenticated probes so sign-in changes remain visible.
-const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
-const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
+export const updateAcpRegistryEnrichmentCache = (
+  input: Parameters<typeof updateEnrichmentCache>[0],
+) => updateEnrichmentCache(input, applyAcpRegistryLiveConfiguration);
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
 });
-
-function modelsFromDiscovery(
-  discovery:
-    | Pick<
-        AcpRegistryLiveConfiguration,
-        "models" | "currentModelId" | "configOptions" | "modelOptionIds"
-      >
-    | undefined,
-  customModels: ReadonlyArray<string>,
-  previousModels: ReadonlyArray<ServerProviderModel> = [],
-): ReadonlyArray<ServerProviderModel> {
-  const discovered = discovery?.models ?? [];
-  const capabilities =
-    discovery === undefined || discovery.configOptions.length === 0
-      ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors: discovery.configOptions });
-  // Model-specific options describe only the session's current model; other
-  // models keep the shared ones plus what an earlier session reported for them.
-  const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
-  const shared = (discovery?.configOptions ?? []).filter(
-    (descriptor) => !modelOptionIds.has(descriptor.id),
-  );
-  const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
-  const capabilitiesFor = (slug: string) => {
-    if (slug === discovery?.currentModelId) return capabilities;
-    const own = (
-      previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? []
-    ).filter((descriptor) => !sharedIds.has(descriptor.id));
-    const optionDescriptors = [...shared, ...own];
-    return optionDescriptors.length === 0
-      ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors });
-  };
-  const builtInModels: ReadonlyArray<ServerProviderModel> =
-    discovered.length === 0
-      ? [
-          {
-            slug: "default",
-            name: "Default",
-            isCustom: false,
-            isDefault: true,
-            capabilities,
-          },
-        ]
-      : discovered.map((model) => ({
-          slug: model.id,
-          name: model.name,
-          isCustom: false,
-          ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities: capabilitiesFor(model.id),
-        }));
-  return providerModelsFromSettings(builtInModels, customModels, capabilities);
-}
 
 interface SnapshotIdentity {
   readonly instanceId: ProviderInstance["instanceId"];
@@ -165,6 +116,7 @@ function baseSnapshot(
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
     supportsTextGeneration: false,
+    supportsStructuredCustomModels: true,
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,
@@ -183,7 +135,7 @@ function baseSnapshot(
             : input.settings.agentId.length > 0),
     },
     ...(input.message ? { message: input.message } : {}),
-    models: modelsFromDiscovery(input.probe?.probe, input.settings.customModels),
+    models: modelsFromDiscovery(input.probe?.probe, resolveAcpCustomModels(input.settings)),
     ...(input.probe === undefined
       ? {}
       : {
@@ -208,42 +160,6 @@ export function applyAcpRegistryAvailableCommands(
     onNone: () => provider,
     onSome: ({ slashCommands, skills }) => ({ ...provider, slashCommands, skills }),
   });
-}
-
-export function applyAcpRegistryLiveConfiguration(
-  provider: ServerProvider,
-  configuration: AcpRegistryLiveConfiguration,
-  customModels: ReadonlyArray<string>,
-  previousModels: ReadonlyArray<ServerProviderModel> = provider.models,
-): ServerProvider {
-  const { message: _staleProbeMessage, ...snapshot } = provider;
-  // session/load may omit models (Kimi returns `{}`); keep the probed list
-  // and apply any live option descriptors to it.
-  const probedModels = provider.models.filter((model) => !model.isCustom);
-  const discovery =
-    configuration.models.length > 0
-      ? configuration
-      : {
-          ...configuration,
-          models: probedModels.map((model) => ({
-            id: model.slug,
-            name: model.name,
-            description: null,
-          })),
-          currentModelId: probedModels.find((model) => model.isDefault)?.slug ?? null,
-        };
-  return {
-    ...snapshot,
-    status: provider.enabled ? "ready" : provider.status,
-    models:
-      configuration.models.length === 0 && configuration.configOptions.length === 0
-        ? provider.models
-        : modelsFromDiscovery(
-            discovery,
-            customModels,
-            previousModels.filter((model) => !model.isCustom),
-          ),
-  };
 }
 
 function applyAcpRegistryUrlAuthAction(
@@ -310,7 +226,12 @@ export function buildCheckedAcpRegistrySnapshot(
       ? { documentationUrl: input.inspection.documentationUrl }
       : {}),
     installed: input.probeError?.reason === "runner_unavailable" ? false : readiness.installed,
-    version: input.probeError?.reason === "runner_unavailable" ? null : readiness.version,
+    version:
+      input.probeError?.reason === "runner_unavailable"
+        ? null
+        : input.settings.source === "local"
+          ? (input.probe?.probe.agentVersion ?? readiness.version)
+          : readiness.version,
     // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
@@ -520,7 +441,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       applyAcpRegistryLiveConfiguration(
         provider,
         configuration,
-        effectiveConfig.customModels,
+        resolveAcpCustomModels(effectiveConfig),
         previous,
       ),
     );
@@ -573,6 +494,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             }),
           );
     });
+    const reportedLocalVersion = yield* Ref.make<{
+      readonly key: string;
+      readonly version: string;
+    } | null>(null);
     // Readiness and the live state share one environment, read after the learned generation.
     const checkProvider = untilEnvironmentHolds(
       currentEnvironment,
@@ -580,7 +505,18 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         const generation = yield* learnedModels.generation;
         const environment = yield* currentEnvironment;
         const provider = yield* checkAcpRegistryProviderReadiness(readinessInput(environment));
-        const result = yield* withLiveRuntimeState(provider, environment, { generation });
+        const reported = yield* Ref.get(reportedLocalVersion);
+        const key = acpRegistryEnvironmentKey(
+          acpRegistrySessionEnvironment(effectiveConfig, environment),
+        );
+        const readyProvider =
+          effectiveConfig.source === "local" &&
+          provider.installed &&
+          provider.version === null &&
+          reported?.key === key
+            ? { ...provider, version: reported.version }
+            : provider;
+        const result = yield* withLiveRuntimeState(readyProvider, environment, { generation });
         return { environment, result };
       }),
     ).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
@@ -602,6 +538,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       readonly entry: {
         readonly provider: ServerProvider;
         readonly key: string;
+        readonly environmentKey: string;
         readonly expiresAt: number;
       } | null;
     }>({ generation: 0, entry: null });
@@ -634,7 +571,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         key !== null &&
         cached.key === key &&
         cached.expiresAt > now &&
-        cached.provider.version === baseSnapshot.version
+        (cached.provider.version === baseSnapshot.version ||
+          (effectiveConfig.source === "local" && baseSnapshot.version === null))
       ) {
         return {
           provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
@@ -645,6 +583,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       }
       const enriched = yield* enrichProvider(environment);
       if (enriched.status === "ready" && key !== null) {
+        const completedAt = yield* Clock.currentTimeMillis;
         yield* Ref.update(enrichmentCache, (current) =>
           current.generation === cacheState.generation
             ? {
@@ -652,7 +591,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 entry: {
                   provider: enriched,
                   key,
-                  expiresAt: now + PROBE_SUCCESS_TTL_MS,
+                  environmentKey: acpRegistryEnvironmentKey(
+                    acpRegistrySessionEnvironment(effectiveConfig, environment),
+                  ),
+                  expiresAt: completedAt + acpRegistryProbeTtlMs(enriched),
                 },
               }
             : current,
@@ -673,8 +615,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-      initialSnapshot: () => checkProvider,
+      // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
+      initialSnapshot: () =>
+        buildInitialAcpRegistrySnapshot({ ...identity, settings: effectiveConfig }),
       checkProvider,
+      ...(yield* makeMiniMaxCodeUsageEnrichment(effectiveConfig, environment, currentEnvironment)),
       enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
         snapshot,
         getSnapshot,
@@ -706,7 +651,21 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                     const enriched = yield* withLiveRuntimeState(provider, environment, {
                       generation: learnedGeneration,
                     });
-                    if (yield* matchesEnvironment) yield* publishSnapshot(enriched);
+                    if (yield* matchesEnvironment) {
+                      if (
+                        effectiveConfig.source === "local" &&
+                        enriched.version !== null &&
+                        enriched.status === "ready"
+                      ) {
+                        yield* Ref.set(reportedLocalVersion, {
+                          key: acpRegistryEnvironmentKey(
+                            acpRegistrySessionEnvironment(effectiveConfig, environment),
+                          ),
+                          version: enriched.version,
+                        });
+                      }
+                      yield* publishSnapshot(enriched);
+                    }
                   }),
                 ),
             }),
@@ -737,7 +696,42 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 Effect.flatMap((current) =>
                   currentEnvironment.pipe(
                     Effect.flatMap((environment) =>
-                      applyLiveConfiguration(current, configuration, environment, undefined),
+                      applyLiveConfiguration(current, configuration, environment, undefined).pipe(
+                        Effect.tap(() => {
+                          const key = acpRegistryEnvironmentKey(
+                            acpRegistrySessionEnvironment(effectiveConfig, environment),
+                          );
+                          if (
+                            configuration.environmentKey !== undefined &&
+                            configuration.environmentKey !== key
+                          ) {
+                            return Effect.void;
+                          }
+                          return Clock.currentTimeMillis.pipe(
+                            Effect.flatMap((now) =>
+                              Ref.update(enrichmentCache, (cache) => {
+                                const updated = updateAcpRegistryEnrichmentCache({
+                                  cache,
+                                  configuration,
+                                  customModels: resolveAcpCustomModels(effectiveConfig),
+                                  environmentKey: key,
+                                  now,
+                                });
+                                return cache.entry === null || updated.entry === null
+                                  ? { generation: updated.generation, entry: null }
+                                  : {
+                                      generation: updated.generation,
+                                      entry: {
+                                        ...updated.entry,
+                                        key: cache.entry.key,
+                                        environmentKey: cache.entry.environmentKey,
+                                      },
+                                    };
+                              }),
+                            ),
+                          );
+                        }),
+                      ),
                     ),
                   ),
                 ),

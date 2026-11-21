@@ -17,6 +17,7 @@ export const isWindowsClaudeLauncherShimPath = (filePath: string): boolean =>
 const NPM_PACKAGE_ENTRY_CANDIDATES = [
   ["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"],
   ["node_modules", "@anthropic-ai", "claude-code", "cli.js"],
+  ["..", "Packages", "Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe", "claude.exe"],
 ] as const;
 
 export type ExecutableFileCheck = (filePath: string) => boolean;

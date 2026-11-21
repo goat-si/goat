@@ -29,6 +29,35 @@ const carrySavedAntigravityAccount = (
   return { auth: previousProvider.auth, status };
 };
 
+export function sameWorkspaceCatalogBasis(
+  previous: ServerProvider | undefined,
+  next: ServerProvider,
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.installed === next.installed &&
+    previous.version === next.version &&
+    previous.installedVersion === next.installedVersion &&
+    Equal.equals(previous.slashCommands, next.slashCommands) &&
+    Equal.equals(previous.skills, next.skills)
+  );
+}
+
+export function invalidateChangedWorkspaceCatalog(
+  previous: ServerProvider | undefined,
+  provider: ServerProvider,
+): ServerProvider {
+  if (
+    !previous ||
+    !provider.workspaceSnapshots?.length ||
+    sameWorkspaceCatalogBasis(previous, provider)
+  ) {
+    return provider;
+  }
+  const { workspaceSnapshots: _stale, ...machine } = provider;
+  return machine;
+}
+
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
@@ -55,6 +84,10 @@ export const mergeProviderSnapshot = (
       : previousWorkspaceSnapshots !== undefined
         ? { workspaceSnapshots: previousWorkspaceSnapshots }
         : {}),
+    ...(nextProvider.workspaceRescannedAt === undefined &&
+    previousProvider.workspaceRescannedAt !== undefined
+      ? { workspaceRescannedAt: previousProvider.workspaceRescannedAt }
+      : {}),
     ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
       ? {
           slashCommands:

@@ -24,6 +24,30 @@ describe("versionSkew", () => {
     expect(manualServerUpdateInstructions("0.0.45")).toBe("goat update 0.0.45");
   });
 
+  it("updates a hand-started server through its own launcher and home, safely quoted", () => {
+    expect(
+      manualServerUpdateInstructions("0.0.45", {
+        kind: "goat-launcher",
+        launcher: "/home/maria's/.local/bin/goat",
+        baseDir: "/home/maria's/.goat",
+      }),
+    ).toBe(
+      "'/home/maria'\\''s/.local/bin/goat' update --base-dir '/home/maria'\\''s/.goat' 0.0.45",
+    );
+  });
+
+  it.each([" ", "\t"])("preserves a GOAT home ending in %j in the copied command", (whitespace) => {
+    expect(
+      manualServerUpdateInstructions("0.0.45", {
+        kind: "goat-launcher",
+        launcher: "/home/maria/bin/goat",
+        baseDir: `/home/maria's/.goat${whitespace}`,
+      }),
+    ).toBe(
+      `'/home/maria/bin/goat' update --base-dir '/home/maria'\\''s/.goat${whitespace}/.' 0.0.45`,
+    );
+  });
+
   it.each([
     { kind: "npm-global", prefix: "/opt/maria's node" },
     { kind: "pnpm-dlx" },

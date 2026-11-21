@@ -1,3 +1,6 @@
+import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
+import { useGT } from "gt-react";
+import { useCommandPaletteSettingsItems } from "./useCommandPaletteSettingsItems";
 import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
 import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
@@ -18,6 +21,7 @@ import {
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
   getNewProjectRepository,
+  getAddProjectInitialQuery,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
   addProjectRemoteSourceLabel,
@@ -52,7 +56,6 @@ import {
   AuthFilesystemReadScope,
   type DesktopWslState,
   type EnvironmentId,
-  type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
@@ -88,6 +91,8 @@ import {
   UserPlusIcon,
 } from "~/components/solar";
 import { requestSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
+import { usePreviewFindAvailable } from "./preview/findAvailability";
+import { appendFindItems } from "./commandPaletteFindItems";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
   useDeferredValue,
@@ -148,13 +153,12 @@ import {
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import { useProjects, useServerConfigs, waitForProject } from "../state/entities";
 import { useCanPromoteThread, usePromoteThread } from "./promoteThread";
 import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
-  ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,
   hasTrailingPathSeparator,
@@ -194,7 +198,6 @@ import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildRootGroups,
-  isPaletteListedThread,
   buildLinkedThreadActionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
@@ -232,9 +235,12 @@ import { CommandPaletteDialog } from "./CommandPaletteDialog";
 import { useCommandPaletteOpenRequests } from "./useCommandPaletteOpenRequests";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
+  EMPTY_BROWSE_ENTRIES,
+  NEW_THREAD_NO_PROJECT_VALUE,
   selectCommandPaletteClientSettings,
   useEnvironmentLookups,
   useProjectLookups,
+  useProjectOpenThreadShells,
   useSortedProjectGroups,
 } from "./CommandPaletteLookups";
 import {
@@ -265,7 +271,6 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog } from "./ui/command";
@@ -280,10 +285,6 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { threadRecentUse } from "@goat/shared/paletteSearch";
-
-const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
-
-const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -439,6 +440,7 @@ function OpenCommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
   readonly clearOpenIntent: () => void;
 }) {
+  const gt = useGT();
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const paletteRouteTarget = useThreadRouteTarget();
@@ -545,7 +547,7 @@ function OpenCommandPaletteDialog(props: {
         : target,
     );
   };
-  const threads = useThreadShells().filter(isPaletteListedThread);
+  const allThreads = useProjectOpenThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, changeStyleItem, themeEditorItem } =
@@ -700,12 +702,7 @@ function OpenCommandPaletteDialog(props: {
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = (environmentId: EnvironmentId | null): string => {
     const environment = environments.find((candidate) => candidate.environmentId === environmentId);
-    const environmentSettings = environment?.serverConfig?.settings ?? null;
-    const baseDirectory = environmentSettings?.addProjectBaseDirectory?.trim() ?? "";
-    if (baseDirectory.length === 0) {
-      return "~/";
-    }
-    return ensureBrowseDirectoryPath(baseDirectory);
+    return getAddProjectInitialQuery(environment?.serverConfig?.settings.addProjectBaseDirectory);
   };
   const { projectByKey } = useProjectLookups();
   const activeThreadKey = activeThread
@@ -803,9 +800,10 @@ function OpenCommandPaletteDialog(props: {
           ),
         )
       : null;
+    const projectThreads = topLevelThreadCandidates(allThreads);
     const latestThread = groupedProjectKeys
       ? (sortThreads(
-          threads.filter(
+          projectThreads.filter(
             (thread) =>
               thread.archivedAt === null &&
               groupedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
@@ -813,7 +811,7 @@ function OpenCommandPaletteDialog(props: {
           clientSettings.sidebarThreadSortOrder,
         )[0] ?? null)
       : getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === project.environmentId),
+          projectThreads.filter((thread) => thread.environmentId === project.environmentId),
           project.id,
           clientSettings.sidebarThreadSortOrder,
         );
@@ -905,6 +903,7 @@ function OpenCommandPaletteDialog(props: {
     threadMessageItems,
     now: searchNow,
     isSearchPending: isThreadSearchPending,
+    isSearchFailed: isThreadSearchFailed,
   } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
   // Recent means used recently: written in or opened, whichever is later. The
   // open thread would always lead that list, so it is left out.
@@ -1277,19 +1276,12 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (activeThreadKey !== null && supportsThreadFind) {
-    actionItems.push({
-      kind: "action",
-      value: "find-current-thread",
-      title: "Find in current thread",
-      searchTerms: ["find", "search", "messages", "plans"],
-      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
-      shortcutCommand: "chat.find",
-      run: async () => {
-        openThreadFind(activeThreadKey);
-      },
-    });
-  }
+  appendFindItems(
+    actionItems,
+    activeThreadKey,
+    supportsThreadFind,
+    usePreviewFindAvailable(routeThreadRef),
+  );
 
   const promptLinkTarget = paletteRouteTarget
     ? paletteRouteTarget.kind === "server"
@@ -1311,7 +1303,7 @@ function OpenCommandPaletteDialog(props: {
             (promptLinkProjectRef
               ? providersByEnvironment.get(promptLinkProjectRef.environmentId)
               : undefined) ?? [],
-          threadModelSelection: activeThread?.modelSelection ?? null,
+          thread: activeThread,
         };
   const plainPromptLink = promptLinkInput
     ? composerPromptLink({ ...promptLinkInput, withContext: false })
@@ -1770,26 +1762,10 @@ function OpenCommandPaletteDialog(props: {
     });
   }
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  // Settings use the same word-start and typo matching as threads.
-  const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
+  const settingsSearchItems = useCommandPaletteSettingsItems(
     availableSettingsSearchItems,
-  ).map((item) => ({
-    kind: "action",
-    value: `setting:${item.id}`,
-    searchTerms: [item.title, SETTINGS_SECTION_LABELS[item.to], ...(item.searchTerms ?? [])],
-    title: item.title,
-    description: `Settings · ${SETTINGS_SECTION_LABELS[item.to]}`,
-    ...(item.secondary ? { secondary: true } : {}),
-    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({
-        to: item.to,
-        hash: item.targetId ?? item.id,
-        replace: pathname === item.to,
-        hashScrollIntoView: false,
-      });
-    },
-  }));
+    pathname,
+  );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -1824,6 +1800,7 @@ function OpenCommandPaletteDialog(props: {
     projectSearchItems: projectSearchItems,
     botSearchItems: goatBotItems.search,
     settingsSearchItems,
+    settingsSearchLabel: gt("Settings"),
     threadSearchItems:
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({
@@ -1901,7 +1878,9 @@ function OpenCommandPaletteDialog(props: {
         }).then((result) => reportProjectFailure("Failed to unarchive project", result));
       }
       const latestThread = getLatestThreadForProject(
-        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        topLevelThreadCandidates(allThreads).filter(
+          (thread) => thread.environmentId === existing.environmentId,
+        ),
         existing.id,
         clientSettings.sidebarThreadSortOrder,
       );
@@ -3017,6 +2996,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
+        searchFailed={isThreadSearchFailed}
         onDragStart={() => props.setOpen(false)}
         rows={resultRows.rows}
         listRef={resultListRef}
@@ -3041,7 +3021,9 @@ function OpenCommandPaletteDialog(props: {
                   }
                 : isThreadSearchPending
                   ? { emptyStateMessage: "Searching thread messages…" }
-                  : {})}
+                  : isThreadSearchFailed
+                    ? { emptyStateMessage: "Couldn't search thread messages." }
+                    : {})}
       />
     </CommandPaletteContent>
   );

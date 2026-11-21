@@ -1,7 +1,8 @@
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, type TerminalAttachStreamEvent } from "@goat/contracts";
+import { ProviderInstanceId, type TerminalAttachStreamEvent, TerminalError } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -49,6 +51,9 @@ const heldFolder = Effect.gen(function* () {
     ).pipe(Effect.forkChild);
   return { cwd, other, held, release, events, hold };
 });
+
+const encodeTerminalError = Schema.encodeSync(TerminalError);
+const decodeTerminalError = Schema.decodeUnknownSync(TerminalError);
 
 const leaseFree = (cwd: string) =>
   tryWithWorkspaceLease(cwd, Effect.void).pipe(Effect.map(Option.isSome));
@@ -401,6 +406,120 @@ it.layer(
   );
 
   it.effect(
+    "a restart that waited while the holder started the same terminal returns that shell",
+    () =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager();
+        const folder = yield* heldFolder;
+        const holder = yield* folder.hold(
+          reuseHeldWorkspaceLease(manager.open(openInput({ cwd: folder.cwd }))),
+        );
+        yield* Deferred.await(folder.held);
+        const restarted = yield* manager
+          .restart({ ...openInput({ cwd: folder.cwd }), cols: 100, rows: 24 })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const snapshot = yield* Fiber.join(restarted);
+        assert.strictEqual(snapshot.pid, ptyAdapter.processes[0]?.pid);
+        assert.isFalse(ptyAdapter.processes[0]?.killed);
+        assert.strictEqual(ptyAdapter.spawnInputs.length, 1);
+      }),
+  );
+
+  it.effect(
+    "an overtaken open that would start anew in a worktree its thread left starts nothing",
+    () =>
+      Effect.gen(function* () {
+        const folder = yield* heldFolder;
+        const fs = yield* FileSystem.FileSystem;
+        const ptyAdapter = new FakePtyAdapter();
+        const manager = yield* TerminalManager.makeWithOptions({
+          logsDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-terminal-logs-" }),
+          ptyAdapter,
+          processKillGraceMs: 1,
+          subprocessInspector: () =>
+            Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
+          threadWorktree: { current: () => Effect.succeedSome("/elsewhere") },
+        });
+        const input = openInput({ cwd: folder.cwd, worktreePath: folder.cwd });
+        // The holder starts the terminal, overtaking the waiting open, then closes it as idle.
+        const holder = yield* folder.hold(
+          reuseHeldWorkspaceLease(manager.open(input)).pipe(
+            Effect.andThen(manager.closeIdle({ threadId: "thread-1" })),
+          ),
+        );
+        yield* Deferred.await(folder.held);
+        const opened = yield* Effect.flip(manager.open(input)).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const error = yield* Fiber.join(opened);
+        assert.strictEqual(error._tag, "TerminalCwdStatError");
+        if (error._tag === "TerminalCwdStatError") assert.strictEqual(error.cwd, folder.cwd);
+        assert.isTrue(ptyAdapter.processes[0]?.killed);
+        assert.strictEqual(ptyAdapter.spawnInputs.length, 1);
+      }),
+  );
+
+  it.effect("a first open in a free folder starts there though the terminal runs elsewhere", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const first = yield* manager.open(openInput({ cwd: folder.other }));
+      const moved = yield* manager.open(openInput({ cwd: folder.cwd }));
+      assert.notStrictEqual(moved.pid, first.pid);
+      assert.strictEqual(moved.cwd, folder.cwd);
+      assert.deepEqual(
+        ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+        [folder.other, folder.cwd],
+      );
+    }),
+  );
+
+  // A close is the last word to a request that was waiting: it is owed only the terminal as it is.
+  it.effect.each([
+    ["the newer terminal", false],
+    ["Unknown terminal once that one was closed as idle", true],
+  ] as const)(
+    "an open that waited through a close and then a newer open gets %s",
+    ([, closedAsIdle]) =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager(5, {
+          subprocessInspector: () =>
+            Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
+        });
+        const folder = yield* heldFolder;
+        const input = openInput({ cwd: folder.other });
+        yield* manager.open(input);
+        const holder = yield* folder.hold(Effect.void);
+        yield* Deferred.await(folder.held);
+        const waiting = yield* Effect.exit(manager.open(openInput({ cwd: folder.cwd }))).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* manager.close({ threadId: input.threadId, terminalId: input.terminalId });
+        const newer = yield* manager.open(input);
+        if (closedAsIdle) yield* manager.closeIdle({ threadId: input.threadId });
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const exit = yield* Fiber.join(waiting);
+        if (closedAsIdle) {
+          assert.isTrue(Exit.isFailure(exit));
+          if (Exit.isFailure(exit))
+            assert.include(String(Cause.squash(exit.cause)), "Unknown terminal");
+        } else {
+          assert.isTrue(Exit.isSuccess(exit));
+          if (Exit.isSuccess(exit)) assert.strictEqual(exit.value.pid, newer.pid);
+        }
+        assert.deepEqual(
+          ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+          [folder.other, folder.other],
+        );
+      }),
+  );
+
+  it.effect(
     "a newer open of the same terminal in another folder outlives an older one that waited",
     () =>
       Effect.gen(function* () {
@@ -535,6 +654,44 @@ it.layer(
         if (error._tag === "TerminalCwdStatError") assert.strictEqual(error.cwd, folder.cwd);
         assert.deepEqual(ptyAdapter.spawnInputs, []);
       }),
+  );
+
+  it.effect.each([
+    ["moved", Effect.succeedSome("/elsewhere"), "This thread moved to another worktree"],
+    [
+      "unreadable",
+      Effect.fail(new TerminalThreadWorktreeError({ cause: "private diagnostic" })),
+      "GOAT could not read the thread's worktree",
+    ],
+  ] as const)("reports why an opted-in open refused to start: %s", ([, current, reason]) =>
+    Effect.gen(function* () {
+      const folder = yield* heldFolder;
+      const fs = yield* FileSystem.FileSystem;
+      const ptyAdapter = new FakePtyAdapter();
+      const manager = yield* TerminalManager.makeWithOptions({
+        logsDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-terminal-logs-" }),
+        ptyAdapter,
+        processKillGraceMs: 1,
+        threadWorktree: { current: () => current },
+      });
+      const request = {
+        ...openInput({ cwd: folder.cwd, worktreePath: folder.cwd }),
+        terminalErrorMessage: true as const,
+      };
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const opened = yield* Effect.flip(manager.open(request)).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const wire = encodeTerminalError(yield* Fiber.join(opened));
+      const error = decodeTerminalError(wire);
+      assert.strictEqual(error._tag, "TerminalRequestError");
+      assert.include(error.message, reason);
+      assert.notInclude(error.message, "private diagnostic");
+      assert.deepEqual(ptyAdapter.spawnInputs, []);
+    }),
   );
 
   it.effect(

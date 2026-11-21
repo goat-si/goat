@@ -14,6 +14,21 @@ class ClaudeMcpRegistrationTimeoutError extends Schema.TaggedError<ClaudeMcpRegi
 
 export const refusalCases = [
   ["background work", new ClaudeBackgroundWorkBlocksQueryReplacementError()],
+  [
+    "a transport failure after the submit fence",
+    new Error("Prompt acknowledgement was lost."),
+    "ambiguous",
+  ],
+  [
+    "background work after native history injection",
+    new ClaudeBackgroundWorkBlocksQueryReplacementError(),
+    "inject",
+  ],
+  [
+    "background work followed by a lost native session",
+    new ClaudeBackgroundWorkBlocksQueryReplacementError(),
+    "lost",
+  ],
   ["an unreadable append file", new ClaudeAppendSystemPromptFileError({ path: "missing.md" })],
   [
     "an MCP registration timeout",

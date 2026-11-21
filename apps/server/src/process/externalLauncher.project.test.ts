@@ -114,3 +114,38 @@ if (!windowsHost)
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+if (!windowsHost)
+  it.effect("opens an existing colon-number folder in a new VS Code window", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-editors-" });
+      const project = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-project-" });
+      const codePath = path.join(binDir, "code");
+      yield* fileSystem.writeFileString(codePath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(codePath, 0o755);
+      const folder = path.join(project, "build:2026");
+      yield* fileSystem.makeDirectory(folder);
+
+      const spawned: ChildProcess.StandardCommand[] = [];
+      yield* Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        yield* launcher.launchEditor({ editor: "vscode", cwd: folder });
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            platform: "linux",
+            env: { PATH: binDir, DISPLAY: ":0" },
+            onSpawn: (command) => spawned.push(command),
+          }),
+        ),
+        Effect.provideService(HostProcess.Environment, { PATH: binDir, DISPLAY: ":0" }),
+      );
+
+      assert.deepEqual(
+        spawned.map((command) => command.args),
+        [["--new-window", folder]],
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );

@@ -54,6 +54,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
+import * as LiveModelSelection from "./goat/LiveModelSelection.ts";
 import * as ProviderSwitchService from "./ProviderSwitchService.ts";
 import * as WorktreeSendCheckLive from "./goat/WorktreeSendCheckLive.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
@@ -296,6 +297,8 @@ const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
       layerEventSinkProvided,
       IdAllocator.layer,
       ProviderSessionRuntime.layer,
+      layerProviderAdapterRegistryProvided,
+      ThreadCommandExecutor.layer,
     ),
   ),
 );
@@ -430,6 +433,7 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
       layerOrchestratorProvided,
       layerThreadManagementProvided,
       layerProviderSessionManagerProvided,
+      layerRuntimePolicyProvided,
     ),
   ),
 );
@@ -491,6 +495,15 @@ export const layerProduction = Layer.mergeAll(
   layerProviderContinuationWorkerProvided,
   layerAgentSessionScannerProvided,
   layerAgentSessionImporterProvided,
+  LiveModelSelection.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerOrchestratorProvided,
+        layerProviderSessionManagerProvided,
+        ProjectionStore.layer,
+      ),
+    ),
+  ),
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(
   Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),

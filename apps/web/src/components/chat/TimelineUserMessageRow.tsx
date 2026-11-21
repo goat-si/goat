@@ -1,3 +1,4 @@
+import { copyMessageSnapshot } from "./copySnapshot";
 import { TurnMemoryDetails } from "./TurnMemoryDetails";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
@@ -444,6 +445,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           },
           records: copyRecords,
         });
+  const copySnapshot = (id: string) =>
+    copyMessageSnapshot(
+      userImages.find((image) => image.id === id),
+      {
+        environmentId: ctx.activeThreadEnvironmentId,
+        ...(ctx.threadRef ? { threadId: ctx.threadRef.threadId } : {}),
+        messageId: row.message.id,
+      },
+    );
   const onBodyCopyCapture = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (resolvedContext.records.length === 0 || !event.clipboardData) return;
     const selection = window.getSelection();
@@ -508,7 +518,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           annotationImage={annotationImage}
           attachment={attachment}
           onExpandImage={(image) => {
-            const preview = buildExpandedImagePreview(userImages, image.id);
+            const preview = buildExpandedImagePreview(userImages, image.id, copySnapshot);
             if (preview) onImageExpand(preview);
           }}
           onOpenFile={onFileOpen}
@@ -617,7 +627,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                         className="block h-full w-full cursor-zoom-in"
                         aria-label={`Preview ${image.name}`}
                         onClick={() => {
-                          const preview = buildExpandedImagePreview(regularImages, image.id);
+                          const preview = buildExpandedImagePreview(
+                            regularImages,
+                            image.id,
+                            copySnapshot,
+                          );
                           if (!preview) return;
                           ctx.onImageExpand(preview);
                         }}
@@ -638,7 +652,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       </div>
                     )}
                     {image.previewUrl && image.source?.kind === "snap-shot" ? (
-                      <SnapShotAttachmentDetails source={image.source} />
+                      <SnapShotAttachmentDetails
+                        source={image.source}
+                        onCopySnapshot={() => copySnapshot(image.id)}
+                      />
                     ) : null}
                   </div>
                 ))}

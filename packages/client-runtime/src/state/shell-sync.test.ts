@@ -57,10 +57,11 @@ const LIVE_SHELL_SNAPSHOT: OrchestrationV2ShellSnapshot = {
   snapshotSequence: 1,
 };
 
-function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
+function session(client: WsRpcProtocolClient, instanceId?: string): RpcSession.RpcSession {
+  const environment = instanceId && { instanceId, serverVersion: "1.0.0" };
   return {
     client,
-    initialConfig: Effect.succeed({ shellResumeCompletionMarker: true } as never),
+    initialConfig: Effect.succeed({ shellResumeCompletionMarker: true, environment } as never),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
@@ -280,14 +281,12 @@ describe("environment shell synchronization", () => {
         ),
       );
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
-        network: "online",
-        phase: "connected",
-        stage: null,
+        network: "online" as const,
+        phase: "connected" as const,
         attempt: 1,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, { kind: "snapshot", snapshot: batchSnapshot });
       yield* Queue.offer(events, { kind: "synchronized" });
@@ -553,14 +552,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",
@@ -573,36 +571,32 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 2,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
-        stage: null,
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 2,
         generation: 2,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Deferred.await(saveStarted);
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 3,
         generation: 3,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((state) => state.status === "synchronizing"),
@@ -697,14 +691,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",
@@ -719,14 +712,12 @@ describe("environment shell synchronization", () => {
       // Disconnect flush starts an immediate persist of the unenriched snapshot
       // (debounced path needs TestClock advancement; flush does not).
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
-        stage: null,
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 1,
         generation: 1,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Deferred.await(unenrichedSaveStarted);
 
@@ -815,14 +806,13 @@ describe("environment shell synchronization", () => {
       );
 
       yield* SubscriptionRef.set(supervisorState, {
+        ...AVAILABLE_CONNECTION_STATE,
         desired: true,
         network: "online",
         phase: "connecting",
         stage: "synchronizing",
         attempt: 1,
         generation: 0,
-        lastFailure: null,
-        retryAt: null,
       });
       yield* Queue.offer(events, {
         kind: "snapshot",
@@ -875,7 +865,7 @@ describe("environment shell synchronization", () => {
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target: TARGET,
         state: supervisorState,
-        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        session: yield* SubscriptionRef.make(Option.some(session(client, "shell-server"))),
         prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
         connect: Effect.void,
         disconnect: Effect.void,
@@ -898,7 +888,7 @@ describe("environment shell synchronization", () => {
         clear: () => Effect.void,
       });
       const snapshotLoader = ShellSnapshotLoader.ShellSnapshotLoader.of({
-        load: () => Effect.succeedSome(httpSnapshot),
+        load: () => Effect.succeedSome({ ...httpSnapshot, instanceId: "shell-server" }),
       });
       const shellState = yield* makeEnvironmentShellState().pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -1038,7 +1028,7 @@ describe("environment shell synchronization", () => {
           Stream.unwrap(Ref.update(subscriptions, (n) => n + 1).pipe(Effect.as(Stream.never))),
       } as unknown as WsRpcProtocolClient;
       const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
-        Option.some(session(client)),
+        Option.some(session(client, "a")),
       );
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target: TARGET,
@@ -1072,6 +1062,7 @@ describe("environment shell synchronization", () => {
               Option.some({
                 ...v2ShellSnapshot,
                 snapshotSequence: n,
+                instanceId: n === 1 ? "a" : "b",
                 loadPullRequests: (n === 1
                   ? Deferred.succeed(firstFillStarted, undefined).pipe(
                       Effect.andThen(Deferred.await(firstLinks)),
@@ -1088,15 +1079,13 @@ describe("environment shell synchronization", () => {
         Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, snapshotLoader),
       );
       yield* Deferred.await(firstFillStarted);
-
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client, "b")));
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter(
           (state) => Option.isSome(state.snapshot) && state.snapshot.value.snapshotSequence === 2,
         ),
         Stream.runHead,
       );
-
       yield* Deferred.succeed(firstLinks, undefined);
       yield* Deferred.succeed(secondLinks, undefined);
       const filled = yield* SubscriptionRef.changes(shellState).pipe(

@@ -97,3 +97,22 @@ describe("ACP Registry contracts", () => {
     expect(() => decodeListResult({ ...listResult, continuation: "has space" })).toThrow();
   });
 });
+
+it("keeps optional ACP agent versions compatible across schema versions", () => {
+  const probe = {
+    instanceId: "acp-fixture",
+    ready: true,
+    icon: null,
+    authMethods: [],
+    models: [],
+    currentModelId: null,
+    configOptions: [],
+  };
+  const current = Schema.decodeUnknownSync(AcpRegistryProbeResult);
+  expect(current(probe).agentVersion).toBeUndefined();
+  expect(current({ ...probe, agentVersion: "1.5.9" }).agentVersion).toBe("1.5.9");
+  expect(() => current({ ...probe, agentVersion: "x".repeat(65) })).toThrow();
+  const { agentVersion: _ignored, ...oldFields } = AcpRegistryProbeResult.fields;
+  const olderClient = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  expect(olderClient({ ...probe, agentVersion: "1.5.9" }).ready).toBe(true);
+});

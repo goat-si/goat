@@ -1,11 +1,50 @@
+import { makePiProtocolError } from "./adapterErrors.ts";
+import * as PiConstants from "./adapterConstants.ts";
+import { recheckPiSelection } from "./selectionDrift.ts";
+import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
+import { adoptLivePiSession, isLivePiSession } from "./sessionIdentity.ts";
+import { piViewedImagePath } from "./viewedImagePath.ts";
+import { tokenUsageFromStats } from "./tokenUsage.ts";
+import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
+import { makeEarlyNativeWork } from "./earlyNativeWork.ts";
+import { makeActivationRecovery } from "./activationRecovery.ts";
+import { sessionFileInCwd, initialPiSessionPath } from "./sessionCwd.ts";
+import { startScopedPiConnection } from "./startConnection.ts";
+import * as Path from "effect/Path";
+import { makeAsyncSubagents } from "./asyncSubagents.ts";
+import type {
+  PiStreamItemState,
+  ActivePiTurn,
+  PendingPiPrompt,
+  PiPromptSend,
+  PiThreadState,
+  PiWake,
+} from "./turnState.ts";
+import { forkPiSession } from "./forkSession.ts";
+import type { PiProviderRetryState } from "./compactionTitle.ts";
+import { piThreadSnapshot } from "./threadSnapshot.ts";
+import { piApprovalRequestKind } from "./approvalRequestKind.ts";
+import { commandOutputDelta } from "./commandOutputDelta.ts";
+import {
+  compactionTitle,
+  type PiCompactionStatus,
+  type PiCompactionState,
+} from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
 import * as NodeUtil from "node:util";
 import { readPiEntries, piSessionListing, walkPiBranch } from "./entries.ts";
 import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
+import { piSubagentOutput } from "./subagentOutput.ts";
+import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
-import { piQuestion, piUiResponse } from "./extensionDialog.ts";
-import * as HostProcess from "@goat/shared/HostProcess";
+import {
+  piQuestion,
+  piUiResponse,
+  piAskUserSingleSelectQuestion,
+  PiCustomAnswers,
+  piToolCallArguments,
+} from "./extensionDialog.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import {
@@ -13,9 +52,7 @@ import {
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ExecutionNode,
-  type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRef,
-  type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -23,7 +60,6 @@ import {
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
   type MessageId,
-  type OrchestrationV2ProviderTurnTokenUsage,
 } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
 import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
@@ -35,8 +71,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -46,170 +82,38 @@ import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentat
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
-import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { parsePiCompactCommand } from "./commands.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-  type ProviderAdapterDriverCreateInput,
-} from "@goat/provider-core/server/adapterDriver";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import {
   findReportedPiModel,
-  makePiRpcConnection,
   resolvePiModelSlug,
   piRecordField as recordField,
   piRecordNumber as recordNumber,
   piRecordString as recordString,
-  type PiRpcConnection,
   type PiRpcRecord,
 } from "./rpc.ts";
-import {
-  buildPiRpcLaunch,
-  materializePiGoatMcpExtension,
-  resolvePiLaunchArgs,
-} from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_GOAT_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { materializePiGoatMcpExtension, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import { PI_GOAT_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./serviceTierCapabilities.ts";
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 // Inherit Pi's configured defaultProvider/defaultModel without calling set_model.
 const PI_INHERIT_MODEL_SLUG = "default";
-const STREAM_FLUSH_MS = 50;
-const PI_REQUEST_TIMEOUT_MS = 15_000;
-const PI_SESSION_TIMEOUT_MS = 60_000;
-const MAX_EXTENSION_STATUSES = 32;
-const MAX_EXTENSION_STATUS_KEY_LENGTH = 256;
-const MAX_EXTENSION_STATUS_TEXT_LENGTH = 4096;
-const PI_UNSOLICITED_ACTIVITY_ERROR =
-  "Pi started agent work outside an active GOAT turn. The session was stopped to prevent invisible tool execution.";
-const SETTLE_PROBE_MAX_ATTEMPTS = 3;
-const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 export interface PiAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly profile?: PiRuntimeProfile;
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
+
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-interface PiStreamItemState {
-  readonly nativeItemId: string;
-  readonly kind: "assistant_message" | "reasoning";
-  text: string;
-  completed: boolean;
-  flushScheduled: boolean;
-  readonly startedAt: DateTime.Utc;
-}
-type PiCompactionStatus = "running" | "completed" | "failed" | "cancelled";
-interface PiCompactionState {
-  readonly nativeItemId: string;
-  readonly startedAt: DateTime.Utc;
-}
-interface PiProviderRetryState {
-  readonly retry: OrchestrationV2ProviderRetry;
-  readonly failure: OrchestrationV2ProviderFailure;
-  readonly startedAt: DateTime.Utc;
-  readonly itemOrdinal: number;
-}
-function compactionTitle(status: PiCompactionStatus): string {
-  switch (status) {
-    case "running":
-      return "Compacting context...";
-    case "completed":
-      return "Context compacted";
-    case "failed":
-      return "Context compaction failed";
-    case "cancelled":
-      return "Context compaction stopped";
-  }
-}
-interface ActivePiTurn {
-  readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
-  readonly providerTurn: OrchestrationV2ProviderTurn;
-  readonly startedAt: DateTime.Utc;
-  readonly itemOrdinals: Map<string, number>;
-  nextItemOrdinal: number;
-  messageOrdinal: number;
-  readonly streamItems: Map<string, PiStreamItemState>;
-  readonly toolArgs: Map<string, unknown>;
-  readonly toolStartedAt: Map<string, DateTime.Utc>;
-  interrupted: boolean;
-  nativeAborted: boolean;
-  sawAgentActivity: boolean;
-  adoptedWake: boolean;
-  promptMayBeCommandOnly: boolean;
-  latestCompactionAfterTokens: number | null;
-  lastLiveUsedTokens: number | null;
-  settleProbeGeneration: number;
-  /** An extension may start compaction immediately after Pi emits agent_settled. */
-  settleWhenIdle: boolean;
-  sawCompaction: boolean;
-  manualCompactInFlight: boolean;
-  activeCompaction: PiCompactionState | null;
-  activeProviderRetry: PiProviderRetryState | null;
-  failure: ReturnType<typeof makeProviderFailure> | null;
-  rejectedPromptFailure: ReturnType<typeof makeProviderFailure> | null;
-  /** Steers Pi queued in send order; it reads them at a step boundary, after running tools return. */
-  readonly unreadSteers: Array<MessageId>;
-  stopTreeRefs?: PiTurnTreeRefs | null;
-  /** The provider/model Pi reported on its latest assistant message. */
-  reportedModel?: string;
-}
-interface PiTurnTreeRefs {
-  /** Omitted keeps the synthetic ref; null means the turn left nothing on the active branch. */
-  readonly nativeTurnRef: OrchestrationV2ProviderRef | null | undefined;
-  readonly leafId: string | null;
-  readonly retainedNativeTurnIds: ReadonlyArray<string> | undefined;
-}
-
-interface PendingPiPrompt {
-  readonly nativeRequestId: string;
-  readonly method: "select" | "confirm" | "input" | "editor";
-  readonly questionId: string;
-  readonly approvalKey: string;
-  readonly expiresAt: number | null;
-  expirationFiber: Fiber.Fiber<void> | null;
-  runtimeRequest: OrchestrationV2RuntimeRequest;
-  readonly node: OrchestrationV2ExecutionNode;
-  readonly turnItem: OrchestrationV2TurnItem;
-}
-
-function piApprovalRequestKind(title: string): "command" | "file-change" {
-  const toolName = /^Allow (\S+)\?$/.exec(title)?.[1];
-  return toolName !== undefined &&
-    (PI_FILE_CHANGE_TOOLS as ReadonlyArray<string>).includes(toolName)
-    ? "file-change"
-    : "command";
-}
-
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
-
-interface PiPromptSend {
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly kind: "turn_start" | "steer";
-  readonly record: PiRpcRecord;
-  readonly messageId?: MessageId;
-}
-
-interface PiThreadState {
-  providerThread: OrchestrationV2ProviderThread;
-  activeTurn: ActivePiTurn | null;
-}
-
-interface PiWake {
-  readonly state: PiThreadState;
-  readonly events: Array<PiRpcRecord>;
-}
 
 export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   options: PiAdapterV2Options,
@@ -223,17 +127,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
 
-  const protocolError = (detail: string, payload?: unknown) =>
-    new ProviderAdapter.ProviderAdapterProtocolError({
-      driver,
-      detail,
-      ...(payload === undefined ? {} : { payload }),
-    });
+  const protocolError = makePiProtocolError(driver);
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
@@ -270,57 +170,40 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      const initialSessionPath = yield* initialPiSessionPath(
+        fileSystem,
+        cwd,
+        input.initialNativeThreadId,
+      );
       const gates = yield* provideCacheFs(
         openPiTurnGates(fileSystem, mcpSession).pipe(Effect.provideService(Scope.Scope, scope)),
       );
-      const launch = buildPiRpcLaunch({
-        profile,
-        launchArgs: resolvedLaunchArgs.args,
-        environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
-        mcpSession,
-        extensionPath,
-        runtimeMode: input.runtimePolicy.runtimeMode,
-        cuaGatePath: gates.cua?.path,
-        screenSkillGatePath: gates.screenSkillPath,
-        subagentGatePath: gates.subagentsPath,
-      });
-      const scopedLaunch = yield* agentScope.wrap({
-        command: options.settings.binaryPath || profile.defaultBinary,
-        args: launch.args,
-        name: profile.driver,
-        threadId: input.threadId,
-        env: launch.env,
-      });
-      // Finalizers run in reverse order: reap detached work after terminating Pi.
-      const scopeUnit = scopedLaunch.unit;
-      const stopScope =
-        scopeUnit === undefined ? Effect.void : yield* Effect.cached(agentScope.stop(scopeUnit));
-      yield* Effect.addFinalizer(() => stopScope);
-      const connection: PiRpcConnection = yield* makePiRpcConnection({
-        threadId: input.threadId,
-        command: scopedLaunch.command,
-        args: scopedLaunch.args,
-        cwd,
-        env: launch.env,
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(AgentScope, agentScope),
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapter.ProviderAdapterOpenSessionError({
-              driver,
-              providerSessionId: input.providerSessionId,
-              cause,
-            }),
-        ),
-      );
-      // Detached children can keep stdout open after Pi exits.
-      if (scopeUnit !== undefined) {
-        yield* connection.exited.pipe(
-          Effect.matchEffect({ onFailure: () => stopScope, onSuccess: () => stopScope }),
-          Effect.forkIn(scope),
-        );
-      }
+      const startConnection = (sessionPath?: string) =>
+        startScopedPiConnection({
+          options,
+          profile,
+          input,
+          cwd,
+          agentScope,
+          spawner,
+          driver,
+          scope,
+          currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
+          launchInput: {
+            profile,
+            launchArgs: resolvedLaunchArgs.args,
+            environment: options.environment,
+            mcpSession,
+            extensionPath,
+            runtimeMode: input.runtimePolicy.runtimeMode,
+            cuaGatePath: gates.cua?.path,
+            screenSkillGatePath: gates.screenSkillPath,
+            subagentGatePath: gates.subagentsPath,
+          },
+          ...(sessionPath === undefined ? {} : { sessionPath }),
+        });
+      const started = yield* startConnection(initialSessionPath);
+      let connection = started.connection;
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
         id: input.providerSessionId,
@@ -340,17 +223,34 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const customAnswers = new PiCustomAnswers();
+      const awaitPromptAck = (
+        drained: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>,
+      ) =>
+        awaitPromptAcknowledgment(
+          drained,
+          () => pendingPrompts.size > 0,
+          (cause) =>
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: cause.message,
+              cause,
+            }),
+        );
       const sessionApprovals = new Set<string>();
       // Pi can settle immediately after dialog response; serialize so terminal cannot overtake request resolution.
       const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: PiThreadState | null = null;
-      let registrationAttempted = false;
-      let lastNativeThreadId: string | null = null;
+      let registrationAttempted = initialSessionPath !== undefined;
+      let registrationInProgress = false;
+      let lastNativeThreadId: string | null = initialSessionPath ?? null;
       let stopRequested = false;
       let unsolicitedActivityDetected = false;
       // Turn failures can leave Pi alive; pump termination retires the runtime.
       let runtimeRetired = false;
+      const deferredWake = yield* FiberMap.make<"wake">();
       let pendingWake: PiWake | null = null;
+      const earlyNativeWork = makeEarlyNativeWork();
       let extensionStatusReset: {
         previous: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
         readonly touched: Set<string>;
@@ -368,6 +268,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           closed = true;
+          customAnswers.clear();
           sessionEntity = { ...sessionEntity, extensionStatuses: [] };
           pendingWake = null;
           if (pendingPromptResponsesDrained !== null)
@@ -435,11 +336,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       // racing it would see Pi idle. Its ack re-arms the probe instead.
       let releasedPromptTurnId: OrchestrationV2ProviderTurn["id"] | null = null;
 
-      const compactRpcRecord = (command: PiCompactCommand): PiRpcRecord =>
-        command.customInstructions === undefined
-          ? { type: "compact" }
-          : { type: "compact", customInstructions: command.customInstructions };
-
       const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
 
@@ -495,18 +391,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (
           key === undefined ||
           key.trim().length === 0 ||
-          key.length > MAX_EXTENSION_STATUS_KEY_LENGTH ||
+          key.length > PiConstants.MAX_EXTENSION_STATUS_KEY_LENGTH ||
           (rawText !== undefined && typeof rawText !== "string")
         )
           return;
         const text =
           typeof rawText === "string"
             ? NodeUtil.stripVTControlCharacters(
-                rawText.slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH * 4),
+                rawText.slice(0, PiConstants.MAX_EXTENSION_STATUS_TEXT_LENGTH * 4),
               )
                 .replaceAll(/\p{Cc}/gu, " ")
                 .trim()
-                .slice(0, MAX_EXTENSION_STATUS_TEXT_LENGTH)
+                .slice(0, PiConstants.MAX_EXTENSION_STATUS_TEXT_LENGTH)
             : "";
         const statuses = sessionEntity.extensionStatuses ?? [];
         if (extensionStatusReset?.previous.some((status) => status.key === key)) {
@@ -515,7 +411,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const index = statuses.findIndex((status) => status.key === key);
         if (
           index < 0
-            ? text.length === 0 || statuses.length >= MAX_EXTENSION_STATUSES
+            ? text.length === 0 || statuses.length >= PiConstants.MAX_EXTENSION_STATUSES
             : statuses[index]?.text === text
         )
           return;
@@ -554,32 +450,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           });
         });
 
-      const itemOrdinal = (turn: ActivePiTurn, nativeItemId: string): number => {
-        const existing = turn.itemOrdinals.get(nativeItemId);
-        if (existing !== undefined) return existing;
-        const ordinal = turn.nextItemOrdinal++;
-        turn.itemOrdinals.set(nativeItemId, ordinal);
-        return ordinal;
-      };
+      const activation = yield* makeActivationRecovery({
+        initial: started,
+        initiallyAttached: initialSessionPath !== undefined,
+        start: () => startConnection(),
+        stopped: () => closed || stopRequested || unsolicitedActivityDetected,
+        cancelPrompts: (at) => sessionEventPermit.withPermits(1)(cancelPendingPrompts(at)),
+        onReplace: (replacement) => {
+          connection = replacement.connection;
+        },
+      });
+      const request = (record: PiRpcRecord, timeoutMs = PiConstants.PI_REQUEST_TIMEOUT_MS) =>
+        activation.request(record, timeoutMs);
 
-      const request = (record: PiRpcRecord, timeoutMs = PI_REQUEST_TIMEOUT_MS) =>
-        connection.request(record, timeoutMs);
-
-      const nonNegativeInteger = (input: unknown, key: string): number | undefined => {
-        const value = recordNumber(input, key);
-        return value === undefined ? undefined : Math.max(0, Math.trunc(value));
-      };
-
-      const rememberModelContextWindow = (model: unknown): number | null => {
-        const provider = recordString(model, "provider");
-        const id = recordString(model, "id");
-        const capacity = nonNegativeInteger(model, "contextWindow");
-        if (provider !== undefined && id !== undefined && capacity !== undefined && capacity > 0) {
-          modelContextWindows.set(`${provider}/${id}`, capacity);
-          return capacity;
-        }
-        return null;
-      };
+      const rememberModelContextWindow = (model: unknown) =>
+        rememberPiModelContextWindow(modelContextWindows, model);
 
       const lifecycleRequest = Effect.fn("PiAdapter.lifecycleRequest")(
         function* (record: PiRpcRecord) {
@@ -601,7 +486,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             )
               return yield* protocolError("Pi transport closed during status reset");
             yield* Deferred.await(reset.ready);
-            const result = yield* request(record, PI_SESSION_TIMEOUT_MS);
+            const result = yield* request(record, PiConstants.PI_SESSION_TIMEOUT_MS);
             if (recordField(result, "cancelled") === true) {
               yield* sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
@@ -618,7 +503,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       (status) => !reset.previous.some((previous) => previous.key === status.key),
                     ),
                   );
-                  const statuses = restored.slice(0, MAX_EXTENSION_STATUSES);
+                  const statuses = restored.slice(0, PiConstants.MAX_EXTENSION_STATUSES);
                   if (
                     statuses.length === current.length &&
                     statuses.every(
@@ -659,32 +544,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.onInterrupt(() => connection.terminate),
           ),
       );
-
-      const tokenUsageFromStats = (
-        stats: unknown,
-        fallbackUsedTokens: number | null,
-        updatedAt: DateTime.Utc,
-      ): OrchestrationV2ProviderTurnTokenUsage | undefined => {
-        const contextUsage = recordField(stats, "contextUsage");
-        const maxTokens = nonNegativeInteger(contextUsage, "contextWindow");
-        const usedTokens =
-          nonNegativeInteger(contextUsage, "tokens") ?? fallbackUsedTokens ?? undefined;
-        if (usedTokens === undefined || maxTokens === undefined || maxTokens === 0)
-          return undefined;
-
-        const totals = recordField(stats, "tokens");
-        const inputTokens = nonNegativeInteger(totals, "input");
-        const cachedInputTokens = nonNegativeInteger(totals, "cacheRead");
-        const outputTokens = nonNegativeInteger(totals, "output");
-        return {
-          usedTokens,
-          maxTokens,
-          ...(inputTokens === undefined ? {} : { inputTokens }),
-          ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-          ...(outputTokens === undefined ? {} : { outputTokens }),
-          updatedAt: DateTime.formatIso(updatedAt),
-        };
-      };
 
       const readTokenUsage = (fallbackUsedTokens: number | null, updatedAt: DateTime.Utc) =>
         request({ type: "get_session_stats" }, 2_000).pipe(
@@ -829,9 +688,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         });
       });
 
-      const compactionNativeItemId = (turn: ActivePiTurn): string =>
-        `compaction:${turn.providerTurn.id}:${turn.nextItemOrdinal}`;
-
       const emitCompaction = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
         compaction: PiCompactionState,
@@ -874,6 +730,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           item: PiStreamItemState,
           streaming: boolean,
         ) {
+          item.published = true;
           const emittedAt = yield* DateTime.now;
           const base = baseItemFields(turn, item.nativeItemId, item.startedAt, emittedAt);
           yield* emitItemNode(
@@ -946,7 +803,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         Effect.fnUntraced(function* (turn: ActivePiTurn, item: PiStreamItemState) {
           if (item.flushScheduled || item.completed) return;
           item.flushScheduled = true;
-          yield* Effect.sleep(Duration.millis(STREAM_FLUSH_MS)).pipe(
+          yield* Effect.sleep(Duration.millis(PiConstants.STREAM_FLUSH_MS)).pipe(
             Effect.andThen(
               Effect.suspend(() => {
                 item.flushScheduled = false;
@@ -957,12 +814,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           );
         });
 
+      const streamItemId = (turn: ActivePiTurn, contentIndex: number) =>
+        `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`;
+
       const streamItemFor = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
         kind: PiStreamItemState["kind"],
         contentIndex: number,
       ) {
-        const nativeItemId = `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`;
+        const nativeItemId = streamItemId(turn, contentIndex);
         const existing = turn.streamItems.get(nativeItemId);
         if (existing !== undefined) return existing;
         const startedAt = yield* DateTime.now;
@@ -972,6 +832,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           text: "",
           completed: false,
           flushScheduled: false,
+          published: false,
           startedAt,
         };
         turn.streamItems.set(nativeItemId, item);
@@ -984,7 +845,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           if (item.completed) return Effect.void;
           item.completed = true;
           if (text !== undefined && text.length > 0) item.text = text;
-          return item.text.length === 0 ? Effect.void : emitStreamItem(turn, item, false);
+          return item.text.length === 0 && !item.published
+            ? Effect.void
+            : emitStreamItem(turn, item, false);
         });
 
       const completeOpenStreamItems = (turn: ActivePiTurn) =>
@@ -1004,10 +867,26 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         // Pi tags every phase of a call made through ctx.executeTool, such as from a codemode script.
         const parentToolCallId = recordString(event, "parentToolCallId");
         if (toolCallId === undefined) return;
-        if (phase === "start") {
-          turn.toolArgs.set(toolCallId, event["args"]);
+        if (phase === "update" && (toolName === "bash" || toolName === "powershell")) {
+          const chunk = commandOutputDelta(
+            turn.commandOutputBytes,
+            toolCallId,
+            event["partialResult"],
+          );
+          if (chunk)
+            yield* emit({
+              type: "command_output.delta",
+              driver,
+              threadId: turn.turnInput.threadId,
+              itemId: idAllocator.derive.turnItemFromProviderItem({
+                driver,
+                nativeItemId: toolCallId,
+              }),
+              chunk,
+            });
+          return;
         }
-        const args = event["args"] ?? turn.toolArgs.get(toolCallId);
+        const args = piToolCallArguments(turn.toolArgs, phase, toolCallId, toolName, event);
         const emittedAt = yield* DateTime.now;
         const startedAt = turn.toolStartedAt.get(toolCallId) ?? emittedAt;
         turn.toolStartedAt.set(toolCallId, startedAt);
@@ -1078,6 +957,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
         }
         const output = piToolOutput(resultRecord, toolName);
+        const viewedImagePath = piViewedImagePath(toolName, args);
         yield* emit({
           type: "turn_item.updated",
           driver,
@@ -1089,6 +969,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             toolName,
             input: args ?? {},
             ...(output === undefined ? {} : { output }),
+            ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
           },
         });
         if (toolName === "subagent") {
@@ -1113,7 +994,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const agent = recordString(result, "agent");
           const task = recordString(result, "task");
           if (agent === undefined || task === undefined) continue;
-          const nativeTaskId = `${toolCallId}:subagent:${recordNumber(result, "step") ?? index}`;
+          const nativeTaskId = `${toolCallId}:subagent:${recordString(result, "asyncMemberId") ?? recordNumber(result, "step") ?? index}`;
           const subagentId = idAllocator.derive.nodeFromProviderItem({
             driver,
             nativeItemId: nativeTaskId,
@@ -1127,13 +1008,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             finished &&
             !interrupted &&
             ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error");
-          const status = interrupted
-            ? "interrupted"
-            : failed
-              ? "failed"
-              : finished
-                ? "completed"
-                : "running";
+          const asyncStatus = recordString(result, "asyncStatus");
+          const status =
+            asyncStatus === "pending" ||
+            asyncStatus === "waiting" ||
+            asyncStatus === "running" ||
+            asyncStatus === "completed" ||
+            asyncStatus === "failed" ||
+            asyncStatus === "interrupted"
+              ? asyncStatus
+              : interrupted
+                ? "interrupted"
+                : failed
+                  ? "failed"
+                  : finished
+                    ? "completed"
+                    : "running";
           const outputText = piSubagentOutput(result);
           const progress =
             !finished && outputText.length > 0 ? { progress: outputText.slice(0, 200) } : {};
@@ -1184,6 +1074,39 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             },
           });
         }
+        const asyncId = recordString(recordField(resultRecord, "details"), "asyncId");
+        if (results.length === 0 && asyncId !== undefined)
+          yield* asyncSubagents.track(asyncId, turn, toolCallId);
+      });
+
+      const asyncSubagents = makeAsyncSubagents({
+        member: (turn, toolCallId, member) =>
+          emitSubagentTasks(
+            turn,
+            toolCallId,
+            {
+              details: {
+                results: [
+                  {
+                    agent: member.agent,
+                    task: "",
+                    model: member.model,
+                    asyncMemberId: member.id,
+                    asyncStatus: member.status,
+                    finished: !["pending", "waiting", "running"].includes(member.status),
+                  },
+                ],
+              },
+            },
+            false,
+          ),
+        pending: (turn, pending) =>
+          emit({
+            type: "background_work.updated",
+            driver,
+            providerTurnId: turn.providerTurn.id,
+            pending,
+          }),
       });
 
       const cancelPrompt = Effect.fn("PiAdapter.cancelPrompt")(function* (
@@ -1231,6 +1154,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       ) {
         const pending = Array.from(pendingPrompts.values());
         pendingPrompts.clear();
+        customAnswers.clear();
         yield* Effect.forEach(pending, (prompt) => cancelPrompt(prompt, resolvedAt), {
           discard: true,
         });
@@ -1240,6 +1164,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         turn: ActivePiTurn,
         nativeItemId: string,
         message: string,
+        severity?: "info" | "warning",
       ) {
         const emittedAt = yield* DateTime.now;
         yield* emitItemNode(turn, nativeItemId, "system", "completed", emittedAt, emittedAt);
@@ -1253,6 +1178,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             title: message,
             type: "system_notice",
             message,
+            ...(severity === undefined ? {} : { severity }),
           },
         });
       });
@@ -1293,6 +1219,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const method = recordString(event, "method");
         const nativeRequestId = recordString(event, "id");
         if (method === undefined) return;
+        if (method === "setWidget" && event["widgetKey"] === "subagent-async") {
+          yield* asyncSubagents.snapshot(event["widgetLines"]);
+          return;
+        }
         if (method === "notify") {
           const state = threadState;
           const turn = state?.activeTurn ?? null;
@@ -1302,6 +1232,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             turn,
             `notify:${turn.providerTurn.id}:${turn.nextItemOrdinal}`,
             message,
+            event["notifyType"] === "info"
+              ? "info"
+              : event["notifyType"] === "warning" || event["notifyType"] === "error"
+                ? "warning"
+                : undefined,
           );
           return;
         }
@@ -1315,6 +1250,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return;
         }
         if (nativeRequestId === undefined) return;
+        const followUp = customAnswers.take(method, event);
+        if (followUp !== undefined) {
+          yield* connection.send({
+            type: "extension_ui_response",
+            id: nativeRequestId,
+            value: followUp,
+          });
+          return;
+        }
         const approvalTitle = recordString(event, "title") ?? "";
         const approvalKey = `${approvalTitle.length}:${approvalTitle}${recordString(event, "message") ?? ""}`;
         if (method === "confirm" && sessionApprovals.has(approvalKey)) {
@@ -1389,6 +1333,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           completedAt: null,
           updatedAt: createdAt,
         };
+        const askUser =
+          method === "select" && turn !== null
+            ? piAskUserSingleSelectQuestion(nativeRequestId, title, event, turn.toolArgs)
+            : undefined;
         const turnItem: OrchestrationV2TurnItem =
           method === "confirm"
             ? {
@@ -1402,10 +1350,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 ...itemBase,
                 type: "user_input_request",
                 requestId,
-                questions: [piQuestion(nativeRequestId, method, title, event)],
+                questions: [askUser?.question ?? piQuestion(nativeRequestId, method, title, event)],
               };
         const pending: PendingPiPrompt = {
           nativeRequestId,
+          customAnswerRoute: askUser?.customAnswerRoute,
           method,
           questionId: nativeRequestId,
           approvalKey,
@@ -1492,7 +1441,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       };
 
       // get_entries includes abandoned branches in append order; follow leaf parentId ancestry instead.
-      const captureTurnTreeRefs = Effect.fnUntraced(function* (timeoutMs = PI_REQUEST_TIMEOUT_MS) {
+      const captureTurnTreeRefs = Effect.fnUntraced(function* (
+        timeoutMs = PiConstants.PI_REQUEST_TIMEOUT_MS,
+      ) {
         const cursorWasStale = leafCursorStale;
         const previousLeaf = lastKnownLeaf;
         const fullListing = cursorWasStale || previousLeaf === null;
@@ -1579,6 +1530,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(treeRefs === null || treeRefs.nativeTurnRef === undefined
               ? {}
               : { nativeTurnRef: treeRefs.nativeTurnRef }),
+            ...(state.providerThread.nativeThreadRef === null
+              ? {}
+              : { nativeThreadRef: state.providerThread.nativeThreadRef }),
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
@@ -1709,10 +1663,31 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
           return;
         }
+        if (
+          event["type"] === "extension_ui_request" &&
+          event["method"] === "setWidget" &&
+          event["widgetKey"] === "subagent-async"
+        ) {
+          yield* asyncSubagents.snapshot(event["widgetLines"]);
+          return;
+        }
         // A native wake may wait for a turn owner; status belongs to the live session immediately.
         if (event["type"] === "extension_ui_request" && event["method"] === "setStatus") {
           yield* updateExtensionStatus(event);
           return;
+        }
+        if (initialSessionPath !== undefined && threadState === null) {
+          const action = earlyNativeWork.capture(event);
+          if (action === "buffered") return;
+          if (action === "overflow") {
+            unsolicitedActivityDetected = true;
+            yield* updateProviderSession(
+              "error",
+              "Pi startup produced too many events before session registration.",
+            );
+            yield* connection.terminate;
+            return;
+          }
         }
         // Model hooks can show dialogs before turn ownership; keep requests session-scoped and buffer output.
         const interactiveUiRequest =
@@ -1748,32 +1723,35 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               yield* updateProviderSession("running", null);
-              yield* continuationRequests
-                .offer({
-                  threadId: state.providerThread.appThreadId,
-                  providerThreadId: state.providerThread.id,
-                  driver,
-                  detail: null,
-                  delivery: "adapter_buffered",
-                  dispatchIfCurrent: (dispatch) =>
-                    sessionEventPermit.withPermits(1)(
-                      Effect.suspend(() =>
-                        pendingWake === wake && threadState === state && !closed
-                          ? dispatch.pipe(
-                              Effect.asSome,
-                              Effect.tapError(() => stopPendingWake(wake)),
-                            )
-                          : Effect.succeedNone,
-                      ),
+              const request = {
+                threadId: state.providerThread.appThreadId,
+                providerThreadId: state.providerThread.id,
+                driver,
+                detail: null,
+                delivery: "adapter_buffered",
+                dispatchIfCurrent: (dispatch) =>
+                  sessionEventPermit.withPermits(1)(
+                    Effect.suspend(() =>
+                      pendingWake === wake && threadState === state && !closed
+                        ? dispatch.pipe(
+                            Effect.asSome,
+                            Effect.tapError(() => stopPendingWake(wake)),
+                          )
+                        : Effect.succeedNone,
                     ),
-                  clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
-                })
-                .pipe(Effect.tapError(() => stopPendingWake(wake)));
+                  ),
+                clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
+              } satisfies ProviderContinuationRequests.ProviderContinuationRequest;
+              if ((yield* continuationRequests.offer(request)) === "overflow")
+                yield* ProviderContinuationRequests.offerWithBackpressure(
+                  continuationRequests,
+                  request,
+                ).pipe(FiberMap.run(deferredWake, "wake"));
               return;
             }
             if (turn === null) {
               unsolicitedActivityDetected = true;
-              yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+              yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
               yield* connection.terminate;
               return;
             }
@@ -1807,6 +1785,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const delta = event["assistantMessageEvent"];
             const deltaType = recordString(delta, "type");
             const contentIndex = recordNumber(delta, "contentIndex") ?? 0;
+            if (deltaType === "text_start" || deltaType === "thinking_start") {
+              const restarted = turn.streamItems.get(streamItemId(turn, contentIndex));
+              if (restarted !== undefined && !restarted.completed) restarted.text = "";
+              return;
+            }
             if (deltaType === "text_delta" || deltaType === "thinking_delta") {
               const item = yield* streamItemFor(
                 turn,
@@ -1865,7 +1848,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           case "compaction_start": {
             if (turn === null) return;
             turn.settleProbeGeneration += 1;
-            turn.sawCompaction = true;
             if (turn.activeCompaction !== null) {
               yield* emitCompaction(turn, turn.activeCompaction, "cancelled");
             }
@@ -1886,6 +1868,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               startedAt: observedAt,
             };
             turn.activeCompaction = null;
+            turn.compactionCancelled = event["aborted"] === true;
             const result = event["result"];
             if (result === null || result === undefined) {
               if (event["aborted"] === true) {
@@ -2013,7 +1996,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
           case "agent_settled": {
             if (turn?.interrupted === true) {
-              if (state !== null) yield* finalizeTurn(state);
+              if (state !== null) {
+                const live = yield* request({ type: "get_state" }, 2_000).pipe(
+                  Effect.orElseSucceed(() => undefined),
+                );
+                lastNativeThreadId = adoptLivePiSession(state, live, driver) ?? lastNativeThreadId;
+                yield* finalizeTurn(state);
+              }
               return;
             }
             if (turn !== null) {
@@ -2065,7 +2054,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 }
                 return;
               }
-              if (!compactTurn.sawCompaction) {
+              if (!compactTurn.compactionCancelled) {
                 compactTurn.failure = makeProviderFailure({
                   message: recordString(event, "error") ?? "Pi compact failed.",
                   class: "provider_error",
@@ -2229,8 +2218,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 if (state !== null) yield* finalizeTurn(state);
                 return;
               }
-              if (attempt < SETTLE_PROBE_MAX_ATTEMPTS) {
-                yield* Effect.sleep(SETTLE_PROBE_RETRY_DELAY).pipe(
+              if (attempt < PiConstants.SETTLE_PROBE_MAX_ATTEMPTS) {
+                yield* Effect.sleep(Duration.millis(PiConstants.SETTLE_PROBE_RETRY_MS)).pipe(
                   Effect.andThen(scheduleSettleProbe(turn, true, attempt + 1)),
                   Effect.forkIn(scope),
                 );
@@ -2246,7 +2235,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               (recordNumber(data, "pendingMessageCount") ?? 0) === 0
             ) {
               turn.settleWhenIdle = false;
-              if (state !== null) yield* finalizeTurn(state);
+              if (state !== null) {
+                lastNativeThreadId = adoptLivePiSession(state, data, driver) ?? lastNativeThreadId;
+                yield* finalizeTurn(state);
+              }
             }
             return;
           }
@@ -2257,7 +2249,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 
       yield* Effect.gen(function* () {
         while (true) {
-          const event = yield* Queue.take(connection.events);
+          const activeConnection = connection;
+          const event = yield* activation.readEvent(activeConnection);
+          if (event === undefined || activeConnection !== connection) continue;
           yield* sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
               // Tracked here rather than in handleSessionEvent, which also
@@ -2291,6 +2285,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
               runtimeRetired = true;
+              yield* asyncSubagents.clear();
               const state = threadState;
               closed = true;
               if (pendingPromptResponsesDrained !== null)
@@ -2323,7 +2318,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 yield* cancelPendingPrompts(yield* DateTime.now);
               }
               if (unsolicitedActivityDetected) {
-                yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+                yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
               } else if (stopRequested) {
                 yield* updateProviderSession("stopped", null);
@@ -2359,131 +2354,210 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         }
       });
 
-      const registerThread = Effect.fnUntraced(function* (
-        threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
-        publish = true,
-      ) {
-        if (rollbackBarrier !== null)
-          return yield* protocolError("Cannot register a Pi thread during rollback");
-        if (threadState !== null && threadState.activeTurn !== null) {
-          return yield* protocolError("Cannot register a Pi thread while a turn is active");
-        }
-        if (pendingWake !== null) {
-          const state = threadState;
-          if (
-            state !== null &&
-            state === pendingWake.state &&
-            state.providerThread.appThreadId === threadInput.threadId &&
-            (threadInput.existingProviderThread === undefined ||
-              threadInput.existingProviderThread.nativeThreadRef?.nativeId ===
-                state.providerThread.nativeThreadRef?.nativeId)
-          )
-            return state.providerThread;
-          return yield* protocolError(
-            "Cannot switch Pi threads while native work is awaiting a turn",
-          );
-        }
-        const existing = threadInput.existingProviderThread;
-        const resumeId = existing?.nativeThreadRef?.nativeId;
-        const needsNewSession = resumeId == null && registrationAttempted;
-        registrationAttempted = true;
-        if (resumeId != null || needsNewSession) {
-          lastNativeThreadId = resumeId ?? lastNativeThreadId;
-          // Failed lifecycle operations can still change native sessions; invalidate bindings and defaults.
-          threadState = null;
-          appliedModel = null;
-          appliedThinking = null;
-          appliedSessionName = null;
-          baselineModel = null;
-          baselineThinking = null;
-          contextWindow = null;
-          const result = yield* lifecycleRequest(
-            resumeId != null
-              ? { type: "switch_session", sessionPath: resumeId }
-              : { type: "new_session" },
-          );
-          if (recordField(result, "cancelled") === true) {
-            return yield* protocolError("A Pi extension cancelled the session switch");
+      const registerThread = Effect.fnUntraced(
+        function* (
+          threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
+          publish = true,
+        ) {
+          if (rollbackBarrier !== null)
+            return yield* protocolError("Cannot register a Pi thread during rollback");
+          if (threadState !== null && threadState.activeTurn !== null) {
+            return yield* protocolError("Cannot register a Pi thread while a turn is active");
           }
-        }
-        if (profile.driver === "omo") {
-          yield* request({ type: "prompt", message: "/computer off" }, PI_SESSION_TIMEOUT_MS);
-        }
-        const stateData = yield* request({ type: "get_state" });
-        if (discoveredModels === null) yield* discoverModels();
-        contextWindow = rememberModelContextWindow(recordField(stateData, "model"));
-        // Capture each baseline before applying selections so our own choices cannot become Pi defaults.
-        if (baselineModel === null && appliedModel === null) {
-          const stateModel = recordField(stateData, "model");
-          const provider = recordString(stateModel, "provider");
-          const modelId = recordString(stateModel, "id");
-          if (provider !== undefined && modelId !== undefined) {
-            baselineModel = { provider, modelId };
+          if (pendingWake !== null) {
+            const state = threadState;
+            if (
+              state !== null &&
+              state === pendingWake.state &&
+              state.providerThread.appThreadId === threadInput.threadId &&
+              (threadInput.existingProviderThread === undefined ||
+                threadInput.existingProviderThread.nativeThreadRef?.nativeId ===
+                  state.providerThread.nativeThreadRef?.nativeId)
+            )
+              return state.providerThread;
+            return yield* protocolError(
+              "Cannot switch Pi threads while native work is awaiting a turn",
+            );
           }
-        }
-        if (baselineThinking === null && appliedThinking === null) {
-          baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
-          appliedThinking = baselineThinking;
-        }
-        // switch_session accepts a file path, not Pi's display session UUID.
-        const nativeId = recordString(stateData, "sessionFile");
-        if (nativeId === undefined) {
-          return yield* protocolError("get_state returned no persisted sessionFile", stateData);
-        }
-        if (needsNewSession && nativeId === lastNativeThreadId) {
-          return yield* protocolError("Pi did not create a distinct session file");
-        }
-        lastNativeThreadId = nativeId;
-        const createdAt = yield* DateTime.now;
-        const providerThread: OrchestrationV2ProviderThread =
-          existing !== undefined
-            ? {
-                ...existing,
-                providerSessionId: input.providerSessionId,
-                nativeThreadRef: providerRef(nativeId),
-                ...(needsNewSession ? { nativeConversationHeadRef: null, contextUsage: null } : {}),
-                status: "idle",
-                updatedAt: createdAt,
-              }
-            : {
-                id: idAllocator.derive.providerThread({
+          const existing = threadInput.existingProviderThread;
+          const resumeId = existing?.nativeThreadRef?.nativeId;
+          const needsNewSession = resumeId == null && registrationAttempted;
+          registrationAttempted = true;
+          let stateData =
+            resumeId != null || activation.isPending()
+              ? yield* request({ type: "get_state" }, PiConstants.PI_SESSION_TIMEOUT_MS)
+              : undefined;
+          const liveFile = recordString(stateData, "sessionFile");
+          const alreadyAttached =
+            resumeId != null &&
+            liveFile !== undefined &&
+            path.resolve(cwd, liveFile) === path.resolve(cwd, resumeId);
+          if (!alreadyAttached && (resumeId != null || needsNewSession)) {
+            if (earlyNativeWork.hasPending())
+              return yield* protocolError(
+                "Cannot switch Pi threads while native work is awaiting a turn",
+              );
+            if (pendingWake !== null)
+              return yield* protocolError(
+                "Cannot switch Pi threads while native work is awaiting a turn",
+              );
+            lastNativeThreadId = resumeId ?? lastNativeThreadId;
+            // Failed lifecycle operations can still change native sessions; invalidate bindings and defaults.
+            threadState = null;
+            appliedModel = null;
+            appliedThinking = null;
+            appliedSessionName = null;
+            baselineModel = null;
+            baselineThinking = null;
+            contextWindow = null;
+            const result = yield* lifecycleRequest(
+              resumeId != null && existing !== undefined
+                ? {
+                    type: "switch_session",
+                    sessionPath: yield* sessionFileInCwd(fileSystem, {
+                      sourceFile: resumeId,
+                      boundary: { type: "nothing" },
+                      createdAt: existing.createdAt,
+                      cwd,
+                      driver,
+                      profile,
+                      options,
+                      launchArgs: resolvedLaunchArgs.args,
+                      spawner,
+                    }),
+                  }
+                : { type: "new_session" },
+            );
+            if (recordField(result, "cancelled") === true) {
+              return yield* protocolError("A Pi extension cancelled the session switch");
+            }
+            stateData = undefined;
+          }
+          if (profile.driver === "omo") {
+            yield* request(
+              { type: "prompt", message: "/computer off" },
+              PiConstants.PI_SESSION_TIMEOUT_MS,
+            );
+          }
+          stateData ??= yield* request({ type: "get_state" });
+          if (discoveredModels === null) yield* discoverModels();
+          contextWindow = rememberModelContextWindow(recordField(stateData, "model"));
+          // Capture each baseline before applying selections so our own choices cannot become Pi defaults.
+          if (baselineModel === null && appliedModel === null) {
+            const stateModel = recordField(stateData, "model");
+            const provider = recordString(stateModel, "provider");
+            const modelId = recordString(stateModel, "id");
+            if (provider !== undefined && modelId !== undefined) {
+              baselineModel = { provider, modelId };
+            }
+          }
+          if (baselineThinking === null && appliedThinking === null) {
+            baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
+            appliedThinking = baselineThinking;
+          }
+          // switch_session accepts a file path, not Pi's display session UUID.
+          const nativeId = recordString(stateData, "sessionFile");
+          if (nativeId === undefined) {
+            return yield* protocolError("get_state returned no persisted sessionFile", stateData);
+          }
+          if (needsNewSession && nativeId === lastNativeThreadId) {
+            return yield* protocolError("Pi did not create a distinct session file");
+          }
+          lastNativeThreadId = nativeId;
+          const createdAt = yield* DateTime.now;
+          const providerThread: OrchestrationV2ProviderThread =
+            existing !== undefined
+              ? {
+                  ...existing,
+                  providerSessionId: input.providerSessionId,
+                  nativeThreadRef: providerRef(nativeId),
+                  ...(needsNewSession
+                    ? { nativeConversationHeadRef: null, contextUsage: null }
+                    : {}),
+                  status: "idle",
+                  updatedAt: createdAt,
+                }
+              : {
+                  id: idAllocator.derive.providerThread({
+                    driver,
+                    nativeThreadId: nativeId,
+                  }),
                   driver,
-                  nativeThreadId: nativeId,
-                }),
-                driver,
-                providerInstanceId: options.instanceId,
-                providerSessionId: input.providerSessionId,
-                appThreadId: threadInput.threadId,
-                ownerNodeId: null,
-                nativeThreadRef: providerRef(nativeId),
-                nativeConversationHeadRef: null,
-                status: "idle",
-                firstRunOrdinal: null,
-                lastRunOrdinal: null,
-                handoffIds: [],
-                forkedFrom: null,
-                pendingBackgroundTasks: [],
-                createdAt,
-                updatedAt: createdAt,
-              };
-        const baselineRead = readPiEntries(profile.pagedEntries, request);
-        const baselineEntries = yield* profile.pagedEntries
-          ? baselineRead
-          : baselineRead.pipe(Effect.orElseSucceed(() => undefined));
-        threadState = { providerThread, activeTurn: null };
-        lastKnownLeaf = recordString(baselineEntries, "leafId") ?? null;
-        leafCursorStale = baselineEntries === undefined;
-        if (publish)
-          yield* emit({
-            type: "provider_thread.updated",
-            driver,
-            providerThread,
-          });
-        return providerThread;
-      });
+                  providerInstanceId: options.instanceId,
+                  providerSessionId: input.providerSessionId,
+                  appThreadId: threadInput.threadId,
+                  ownerNodeId: null,
+                  nativeThreadRef: providerRef(nativeId),
+                  nativeConversationHeadRef: null,
+                  status: "idle",
+                  firstRunOrdinal: null,
+                  lastRunOrdinal: null,
+                  handoffIds: [],
+                  forkedFrom: null,
+                  pendingBackgroundTasks: [],
+                  createdAt,
+                  updatedAt: createdAt,
+                };
+          const baselineRead = readPiEntries(profile.pagedEntries, request);
+          const baselineEntries = yield* profile.pagedEntries
+            ? baselineRead
+            : baselineRead.pipe(Effect.orElseSucceed(() => undefined));
+          yield* sessionEventPermit.withPermits(1)(
+            Effect.gen(function* () {
+              if (
+                threadState !== null &&
+                threadState.providerThread.id === providerThread.id &&
+                threadState.providerThread.appThreadId === threadInput.threadId &&
+                threadState.providerThread.nativeThreadRef?.nativeId === resumeId
+              ) {
+                threadState.providerThread = providerThread;
+              } else {
+                if (pendingWake !== null)
+                  return yield* protocolError(
+                    "Cannot switch Pi threads while native work is awaiting a turn",
+                  );
+                threadState = {
+                  providerThread,
+                  activeTurn: null,
+                  supersededSessionFiles: new Set(),
+                };
+              }
+              lastKnownLeaf = recordString(baselineEntries, "leafId") ?? null;
+              leafCursorStale = baselineEntries === undefined;
+              if (publish) yield* emit({ type: "provider_thread.updated", driver, providerThread });
+              for (const event of earlyNativeWork.drain()) yield* handleSessionEvent(event);
+            }),
+          );
+          return providerThread;
+        },
+        (effect) =>
+          Effect.acquireUseRelease(
+            Effect.suspend(() => {
+              if (registrationInProgress)
+                return Effect.fail(
+                  protocolError("Cannot register a Pi thread during registration"),
+                );
+              registrationInProgress = true;
+              return Effect.void;
+            }),
+            () => effect,
+            () =>
+              Effect.sync(() => {
+                registrationInProgress = false;
+              }),
+          ),
+      );
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        const live = yield* recheckPiSelection(
+          request,
+          modelSelection.model,
+          appliedModel,
+          thinking,
+          appliedThinking,
+        );
+        if (live !== undefined) appliedThinking = live.thinking;
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           if (appliedModel !== null && baselineModel !== null) {
             const restoredModel = yield* request({ type: "set_model", ...baselineModel });
@@ -2491,7 +2565,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             contextWindow = rememberModelContextWindow(restoredModel);
             appliedModel = null;
             const updatedAt = yield* DateTime.now;
-            sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
+            sessionEntity = {
+              ...sessionEntity,
+              model: PI_INHERIT_MODEL_SLUG,
+              updatedAt,
+            };
             yield* emit({
               type: "provider_session.updated",
               driver,
@@ -2506,7 +2584,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* request({ type: "set_thinking_level", level: baselineThinking });
             appliedThinking = baselineThinking;
           }
-        } else if (modelSelection.model !== appliedModel) {
+        } else if (live?.modelDrifted || modelSelection.model !== appliedModel) {
           // Extensions and models.json edits can add providers after the first discovery.
           if (findReportedPiModel(modelSelection.model, discoveredModels) === undefined) {
             yield* discoverModels();
@@ -2645,6 +2723,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }),
         startTurn: Effect.fn("PiAdapter.startTurn")(
           function* (turnInput) {
+            if (registrationInProgress)
+              return yield* protocolError("Cannot start a Pi turn during registration");
             if (rollbackBarrier !== null)
               return yield* protocolError("Cannot start a Pi turn during rollback");
             const state = threadState;
@@ -2662,12 +2742,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (closed || stopRequested)
                 return yield* protocolError("Cannot start a Pi turn after session closure");
               if (pendingPromptResponsesDrained === null) break;
-              yield* Deferred.await(pendingPromptResponsesDrained);
+              yield* awaitPromptAck(pendingPromptResponsesDrained);
             }
-            if (
-              state.providerThread.nativeThreadRef?.nativeId !==
-              turnInput.providerThread.nativeThreadRef?.nativeId
-            ) {
+            if (!isLivePiSession(state, turnInput.providerThread.nativeThreadRef?.nativeId)) {
               return yield* protocolError("Pi turn requested for a different native session");
             }
             // Fork adoption uses the orchestrator-allocated row; preserve that identity in later updates.
@@ -2711,6 +2788,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               nodeId: turnInput.rootNodeId,
               runAttemptId: turnInput.attemptId,
               nativeTurnRef: providerRef(syntheticNativeTurnId, "weak"),
+              ...(state.providerThread.nativeThreadRef === null
+                ? {}
+                : { nativeThreadRef: state.providerThread.nativeThreadRef }),
               ordinal: turnInput.providerTurnOrdinal,
               status: "running",
               startedAt,
@@ -2726,6 +2806,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               streamItems: new Map(),
               toolArgs: new Map(),
               toolStartedAt: new Map(),
+              commandOutputBytes: new Map(),
               interrupted: false,
               nativeAborted: false,
               sawAgentActivity: false,
@@ -2736,7 +2817,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               lastLiveUsedTokens: null,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
-              sawCompaction: false,
+              compactionCancelled: false,
               manualCompactInFlight: compactCommand !== null,
               activeCompaction: null,
               activeProviderRetry: null,
@@ -2744,17 +2825,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               rejectedPromptFailure: null,
               unreadSteers: [],
             };
-            // Lock only install/send/start events; correlated setup must leave the pump free for dialogs.
             while (true) {
               const pendingAck = yield* Effect.gen(function* () {
                 if (
                   threadState !== state ||
                   state.activeTurn !== null ||
+                  registrationInProgress ||
                   closed ||
                   stopRequested ||
                   rollbackBarrier !== null ||
-                  state.providerThread.nativeThreadRef?.nativeId !==
-                    turnInput.providerThread.nativeThreadRef?.nativeId
+                  !isLivePiSession(state, turnInput.providerThread.nativeThreadRef?.nativeId)
                 ) {
                   return yield* protocolError("Pi turn ownership changed before it could start");
                 }
@@ -2764,7 +2844,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   return yield* protocolError("Pi native wake belongs to a different app thread");
                 }
                 pendingWake = null;
-                state.providerThread = turnInput.providerThread;
+                state.providerThread = {
+                  ...turnInput.providerThread,
+                  nativeThreadRef: state.providerThread.nativeThreadRef,
+                };
                 state.activeTurn = activeTurn;
                 activeTurn.adoptedWake = wake !== null && !continuation;
                 if (compactCommand !== null) {
@@ -2784,6 +2867,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       ...(payload.images.length === 0 ? {} : { images: payload.images }),
                     },
                   });
+                  yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
                 }
                 yield* emit({
                   type: "provider_turn.updated",
@@ -2823,7 +2907,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               );
               if (pendingAck === null) break;
               // The native event pump needs the permit to consume the actual ACK.
-              yield* Deferred.await(pendingAck);
+              yield* awaitPromptAck(pendingAck);
             }
             // Pi acks `prompt` only after slash-command expansion completes,
             // and extension commands may block on user dialogs indefinitely.
@@ -2913,6 +2997,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
+            yield* sessionEventPermit.withPermits(1)(asyncSubagents.clear(turn));
             if (
               interruptInput.requestRuntimeRestart === true ||
               turn.settleWhenIdle ||
@@ -2929,8 +3014,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               // Read rollback tree refs before termination breaks requests; the permit lets in-flight capture finish.
               yield* sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
-                  if (threadState?.activeTurn === turn && turn.stopTreeRefs === undefined) {
-                    turn.stopTreeRefs = yield* captureTurnTreeRefs(2_000).pipe(
+                  if (threadState?.activeTurn === turn) {
+                    turn.settleProbeGeneration += 1;
+                    const live = yield* request({ type: "get_state" }, 2_000).pipe(
+                      Effect.orElseSucceed(() => undefined),
+                    );
+                    lastNativeThreadId =
+                      adoptLivePiSession(threadState, live, driver) ?? lastNativeThreadId;
+                    turn.stopTreeRefs ??= yield* captureTurnTreeRefs(2_000).pipe(
                       Effect.catch((cause) =>
                         Effect.logWarning("Pi turn history could not be read before stop", {
                           cause,
@@ -2979,7 +3070,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 `Pi extension request ${requestInput.requestId} has expired`,
               );
             }
-            const response = piUiResponse(pending, requestInput.decision, requestInput.answers);
+            const response = customAnswers.route(
+              pending.customAnswerRoute,
+              piUiResponse(pending, requestInput.decision, requestInput.answers),
+            );
+            if (response === null) return yield* protocolError("Too many Pi custom answers");
             yield* connection.send({
               type: "extension_ui_response",
               id: pending.nativeRequestId,
@@ -3098,6 +3193,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ),
         rollbackThread: Effect.fn("PiAdapter.rollbackThread")(
           function* (rollbackInput) {
+            if (registrationInProgress)
+              return yield* protocolError("Cannot roll back a Pi thread during registration");
             // A fresh runtime (restart or idle release) must load the persisted session before forking.
             // Unpublished: the rollback service persists the returned snapshot.
             if (
@@ -3170,7 +3267,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     // The fork already moved the native session; never keep the old binding on failure.
                     yield* request(
                       { type: "prompt", message: "/computer off" },
-                      PI_SESSION_TIMEOUT_MS,
+                      PiConstants.PI_SESSION_TIMEOUT_MS,
                     ).pipe(
                       Effect.onError(() =>
                         Effect.sync(() => {
@@ -3276,65 +3373,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (forkInput.providerTurnId !== undefined && target === undefined) {
               return yield* protocolError("Pi fork target turn is missing");
             }
+            const targetFile = target?.nativeThreadRef?.nativeId ?? undefined;
             const boundary: PiForkBoundary =
               target === undefined
                 ? { type: "nothing" }
                 : piForkBoundary({
                     target: { type: "provider_turn", providerTurn: target },
                     providerThreadTurns: sourceTurns,
+                    sessionFile: targetFile,
                   });
-            // CLI --fork sets the destination cwd; RPC switch_session/clone would retain the source cwd.
-            const forkLaunch = buildPiRpcLaunch({
-              launchArgs: resolvedLaunchArgs.args,
-              environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
-              mcpSession: undefined,
-              extensionPath: undefined,
-              shortLived: true,
-              disableExtensions: true,
-              disableTools: true,
-              profile,
-            });
-            const nativeId = yield* Effect.scoped(
-              Effect.gen(function* () {
-                const forkConnection = yield* makePiRpcConnection({
-                  command: options.settings.binaryPath || profile.defaultBinary,
-                  args: [...forkLaunch.args, "--fork", sourceFile],
-                  cwd,
-                  env: forkLaunch.env,
-                });
-                yield* Stream.fromQueue(forkConnection.events).pipe(
-                  Stream.runDrain,
-                  Effect.ignore,
-                  Effect.forkScoped,
-                );
-                const beforeEntry =
-                  boundary.type === "nothing"
-                    ? null
-                    : yield* piForkEntry(
-                        driver,
-                        boundary,
-                        source.createdAt,
-                        readPiEntries(profile.pagedEntries, (input) =>
-                          forkConnection.request(input),
-                        ),
-                      );
-                if (beforeEntry !== null) {
-                  const result = yield* forkConnection.request({
-                    type: "fork",
-                    entryId: beforeEntry,
-                  });
-                  if (recordField(result, "cancelled") === true) {
-                    return yield* protocolError("A Pi extension cancelled the session fork");
-                  }
-                }
-                const state = yield* forkConnection.request({ type: "get_state" });
-                const file = recordString(state, "sessionFile");
-                if (file === undefined || file === sourceFile) {
-                  return yield* protocolError("Pi fork did not create a distinct session file");
-                }
-                return file;
-              }),
-            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+            const nativeId = yield* forkPiSession(
+              {
+                sourceFile: targetFile ?? sourceFile,
+                boundary,
+                createdAt: source.createdAt,
+                cwd,
+                driver,
+                profile,
+                options,
+                launchArgs: resolvedLaunchArgs.args,
+                spawner,
+              },
+              fileSystem,
+              path,
+            );
             const now = yield* DateTime.now;
             return yield* registerThread(
               {
@@ -3388,77 +3450,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   });
 });
 
-function piSubagentOutput(result: unknown): string {
-  const stopReason = recordString(result, "stopReason");
-  const failed =
-    (recordNumber(result, "exitCode") ?? 0) !== 0 ||
-    stopReason === "error" ||
-    stopReason === "aborted";
-  if (failed) {
-    const failure = recordString(result, "errorMessage") || recordString(result, "stderr");
-    if (failure !== undefined && failure.length > 0) return failure;
-  }
-  const messages = recordField(result, "messages");
-  if (!Array.isArray(messages)) return "";
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (recordString(message, "role") !== "assistant") continue;
-    const text = contentText(recordField(message, "content"));
-    if (text.length > 0) return text;
-  }
-  return "";
-}
-
-function piThreadSnapshot(
-  providerThread: OrchestrationV2ProviderThread,
-): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
-  return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
-}
-
-export type PiAdapterV2DriverEnv =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
-  | IdAllocator.IdAllocatorV2
-  | McpProviderSessions.McpProviderSessions
-  | ProviderHost.ProviderHost;
-
-export const makePiAdapterV2Driver = (
-  profile: PiRuntimeProfile,
-  settingsSchema: Schema.Codec<PiSettings, unknown>,
-): ProviderAdapterDriver<PiSettings, PiAdapterV2DriverEnv> => ({
-  driverKind: ProviderDriverKind.make(profile.driver),
-  configSchema: settingsSchema,
-  defaultConfig: (): PiSettings => Schema.decodeSync(settingsSchema)({}),
-  create: Effect.fn("PiAdapterV2Driver.create")(
-    function* (input: ProviderAdapterDriverCreateInput<PiSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const home = yield* HostProcess.HomeDirectory;
-      const currentEnvironment = Effect.suspend(() =>
-        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
-      return yield* makePiAdapterV2({
-        instanceId: input.instanceId,
-        profile,
-        settings: { ...input.config, enabled: input.enabled },
-        environment: yield* currentEnvironment,
-        currentEnvironment,
-        continuationRequests,
-      });
-    },
-    (effect, input) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterDriverCreateError({
-              driver: ProviderDriverKind.make(profile.driver),
-              instanceId: input.instanceId,
-              detail: `Failed to create ${profile.displayName} adapter.`,
-              cause,
-            }),
-        ),
-      ),
-  ),
-});
-
-export const PiAdapterV2Driver = makePiAdapterV2Driver(PI_PROFILE, PiSettings);
+export {
+  makePiAdapterV2Driver,
+  PiAdapterV2Driver,
+  type PiAdapterV2DriverEnv,
+} from "./adapterDriver.ts";

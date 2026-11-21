@@ -15,7 +15,11 @@ import type {
 } from "@goat/contracts";
 import { create } from "zustand";
 import { usePendingUserInputAnswers } from "./pendingUserInputAnswers";
-import { DraftId, useComposerDraftStore } from "./composerDraftStore";
+import {
+  type ComposerThreadDraftState,
+  DraftId,
+  useComposerDraftStore,
+} from "./composerDraftStore";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
 import {
   countQuestionAttachments,
@@ -80,13 +84,38 @@ export function changeQuestionAttachmentPreparation(key: DraftId, delta: number)
   );
 }
 
-export function clearQuestionAttachmentDraft(key: DraftId): void {
+export function clearQuestionAttachmentDraft(
+  key: DraftId,
+  retained?: Pick<ComposerThreadDraftState, "images" | "files"> | null,
+  environmentId?: EnvironmentId,
+): void {
   const store = useComposerDraftStore.getState();
   const draft = store.getComposerDraft(key);
   if (draft) {
-    releaseDraftAttachments([...draft.images, ...draft.files]);
+    const retainedAttachments = [...(retained?.images ?? []), ...(retained?.files ?? [])];
+    const abandoned = [...draft.images, ...draft.files].filter(
+      (attachment) =>
+        !retainedAttachments.some(
+          (existing) =>
+            existing.id === attachment.id ||
+            (existing.type === "file" &&
+              attachment.type === "file" &&
+              existing.uploadedAttachmentId !== undefined &&
+              existing.uploadedAttachmentId === attachment.uploadedAttachmentId &&
+              existing.uploadEnvironmentId === attachment.uploadEnvironmentId),
+        ),
+    );
+    if (abandoned.length > 0) {
+      if (environmentId === undefined) releaseDraftAttachments(abandoned);
+      else releaseDraftAttachments(abandoned, environmentId);
+    }
     for (const image of draft.images) {
-      if (image.previewUrl.startsWith("blob:")) URL.revokeObjectURL(image.previewUrl);
+      if (
+        image.previewUrl.startsWith("blob:") &&
+        !retained?.images.some((existing) => existing.previewUrl === image.previewUrl)
+      ) {
+        URL.revokeObjectURL(image.previewUrl);
+      }
     }
   }
   store.clearComposerContent(key);
@@ -103,13 +132,15 @@ function pruneResolvedQuestionAttachmentDrafts(
   threadId: ThreadId,
   pendingRequestIds: ReadonlyArray<string>,
 ): void {
+  const store = useComposerDraftStore.getState();
+  const retained = store.getComposerDraft(scopeThreadRef(environmentId, threadId));
   const keys = new Set([
-    ...Object.keys(useComposerDraftStore.getState().draftsByThreadKey),
+    ...Object.keys(store.draftsByThreadKey),
     ...Object.keys(useQuestionAttachmentPreparation.getState().counts),
   ]);
   const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
   for (const key of resolvedQuestionDraftKeys(keys, prefix, pendingRequestIds)) {
-    clearQuestionAttachmentDraft(DraftId.make(key));
+    clearQuestionAttachmentDraft(DraftId.make(key), retained, environmentId);
   }
 }
 

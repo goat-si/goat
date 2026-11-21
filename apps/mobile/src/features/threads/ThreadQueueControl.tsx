@@ -13,6 +13,7 @@ import { resolveUserMessagePresentation } from "@goat/client-runtime/user-messag
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { Image } from "expo-image";
+import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import * as Haptics from "expo-haptics";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Animated, Platform, Pressable, ScrollView, View } from "react-native";
@@ -129,9 +130,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     openQuestionCount: pendingRequests?.userInputs.length ?? 0,
   });
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun, "reorder queued message");
-  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
+  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, { reportFailure: false });
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
-  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, { reportFailure: false });
   const resumeQueueCommand = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     label: "resume queue",
     reportFailure: false,
@@ -151,6 +152,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     ?.instanceId;
   const [resuming, setResuming] = useState(false);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
+  const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
   const busyRef = useRef(false);
   const [draggedRunId, setDraggedRunId] = useState<RunId | null>(null);
   const [previewBeforeRunId, setPreviewBeforeRunId] = useState<RunId | null | undefined>();
@@ -236,22 +238,30 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     busyRef.current = true;
     setBusyRunId(runId);
     void Haptics.selectionAsync();
-    if (action === "remove") {
-      await cancel(buildCancelQueuedRunCommand({ ...target, runId }));
-    } else if (workflow?.canSendNow) {
-      await resume({ ...target, input: { threadId: target.threadId, runId } });
-    } else if (workflow?.activeRun && workflow.canPromoteToSteer) {
-      await promote({
-        ...target,
-        input: {
-          threadId: target.threadId,
-          queuedRunId: runId,
-          targetRunId: workflow.activeRun.id,
-        },
-      });
-    }
+    const result =
+      action === "remove"
+        ? await cancel(buildCancelQueuedRunCommand({ ...target, runId }))
+        : workflow?.canSendNow
+          ? await resume({ ...target, input: { threadId: target.threadId, runId } })
+          : workflow?.activeRun && workflow.canPromoteToSteer
+            ? await promote({
+                ...target,
+                input: {
+                  threadId: target.threadId,
+                  queuedRunId: runId,
+                  targetRunId: workflow.activeRun.id,
+                },
+              })
+            : null;
     busyRef.current = false;
     setBusyRunId(null);
+    if (action === "steer" && result?._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert(
+        "Could not send queued message",
+        error instanceof Error ? error.message : "Try again.",
+      );
+    }
   };
 
   const canReorder = workflow?.canReorder === true && queuedRuns.length > 1;
@@ -433,6 +443,11 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                 onRemove={() => void act(run.id, "remove")}
               >
                 <View className="flex-row items-center">
+                  <QueueAttachmentThumbnails
+                    environmentId={target.environmentId}
+                    attachments={attachments}
+                    onPressPreview={setPreviewFile}
+                  />
                   <Menu
                     accessibilityLabel={`Actions for queued message ${index + 1}`}
                     shouldOpenOnLongPress
@@ -482,10 +497,6 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       onPress={() => void act(run.id, "edit")}
                       className="min-h-14 flex-row items-center gap-2.5 py-2.5 active:opacity-70"
                     >
-                      <QueueAttachmentThumbnails
-                        environmentId={target.environmentId}
-                        attachments={attachments}
-                      />
                       <Text
                         className={
                           controls.isEditing
@@ -583,6 +594,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             </Screen>
           </ScreenStack>
         </View>
+        <FilePreviewModal source={previewFile} onRequestClose={() => setPreviewFile(null)} />
       </GestureHandlerRootView>
     );
   }
@@ -594,6 +606,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
         <AndroidSheetHeader title="Queued" onBack={() => navigation.goBack()} />
         <ScreenContent insetHorizontal={layout.usesSplitView}>{content}</ScreenContent>
       </View>
+      <FilePreviewModal source={previewFile} onRequestClose={() => setPreviewFile(null)} />
     </GestureHandlerRootView>
   );
 }
@@ -670,8 +683,10 @@ function QueueRowSwipeable(props: {
 function QueueAttachmentThumbnails(props: {
   readonly environmentId: EnvironmentId;
   readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const images = props.attachments.filter((attachment) => attachment.mimeType.startsWith("image/"));
+  const gallery = images.map((attachment) => queueImagePreview(props.environmentId, attachment));
   const shown = images.slice(0, THUMBNAIL_LIMIT);
   const overflow = props.attachments.length - shown.length;
   if (props.attachments.length === 0) return null;
@@ -682,6 +697,9 @@ function QueueAttachmentThumbnails(props: {
           key={attachment.id}
           environmentId={props.environmentId}
           attachment={attachment}
+          onPress={() =>
+            props.onPressPreview({ ...queueImagePreview(props.environmentId, attachment), gallery })
+          }
         />
       ))}
       {overflow > 0 ? (
@@ -695,29 +713,59 @@ function QueueAttachmentThumbnails(props: {
   );
 }
 
+function queueAttachmentResource(attachment: ChatAttachment) {
+  return {
+    _tag: "attachment",
+    attachmentId: attachment.id,
+    fileName: attachment.name,
+    mimeType: attachment.mimeType,
+    disposition: "inline",
+  } as const;
+}
+
+function queueImagePreview(environmentId: EnvironmentId, attachment: ChatAttachment) {
+  const resource = queueAttachmentResource(attachment);
+  return {
+    kind: "image",
+    environmentId,
+    resource,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    actionsSource: {
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      environmentId,
+      resource,
+    },
+  } as const;
+}
+
 function QueueAttachmentThumbnail(props: {
   readonly environmentId: EnvironmentId;
   readonly attachment: ChatAttachment;
+  readonly onPress: () => void;
 }) {
-  const resource = {
-    _tag: "attachment",
-    attachmentId: props.attachment.id,
-    fileName: props.attachment.name,
-    mimeType: props.attachment.mimeType,
-    disposition: "inline",
-  } as const;
+  const resource = queueAttachmentResource(props.attachment);
   const url = useAssetUrl(props.environmentId, resource);
-  if (url === null) {
-    return <View className="h-6 w-6 rounded bg-subtle" />;
-  }
   return (
-    <Image
-      source={assetImageSource(props.environmentId, resource, url)}
-      cachePolicy="memory-disk"
-      contentFit="cover"
-      style={{ width: 24, height: 24, borderRadius: 4 }}
-      accessibilityIgnoresInvertColors
-    />
+    <Pressable
+      accessibilityRole="imagebutton"
+      accessibilityLabel={`Open ${props.attachment.name}`}
+      hitSlop={6}
+      onPress={props.onPress}
+    >
+      {url === null ? (
+        <View className="h-6 w-6 rounded bg-subtle" />
+      ) : (
+        <Image
+          source={assetImageSource(props.environmentId, resource, url)}
+          cachePolicy="memory-disk"
+          contentFit="cover"
+          style={{ width: 24, height: 24, borderRadius: 4 }}
+          accessibilityIgnoresInvertColors
+        />
+      )}
+    </Pressable>
   );
 }
 

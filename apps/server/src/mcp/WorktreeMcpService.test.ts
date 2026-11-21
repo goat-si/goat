@@ -1,9 +1,11 @@
+import { verifyManagedCheckout } from "../orchestration-v2/goat/restoreSnapshot.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  GitCommandError,
   type OrchestrationV2ThreadProjection,
   type Project,
   ProjectId,
@@ -305,6 +307,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
           listRefs,
           listLocalBranchNames,
           localStatus,
+          verifyManagedCheckout: () => Effect.void,
+          resolveCommit: ({ revision }) => Effect.succeed({ commitSha: revision }),
           fetchWorktreeBaseCommit,
           createWorktree,
           removeWorktree,
@@ -459,6 +463,19 @@ describe("goat_worktree_handoff", () => {
       yield* command(cwd, ["commit", "--allow-empty", "-m", "local only"]);
       const harness = makeHarness({
         git: {
+          verifyManagedCheckout: (input) =>
+            verifyManagedCheckout({ ...input, projectCwd: cwd }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    operation: "verifyManagedCheckout",
+                    command: "git worktree",
+                    cwd: input.projectCwd,
+                    detail: cause.detail,
+                    cause,
+                  }),
+              ),
+            ),
           fetchWorktreeBaseCommit: (input) => git.fetchWorktreeBaseCommit({ ...input, cwd }),
           createWorktree: (input) => git.createWorktree({ ...input, cwd, path: worktreePath }),
         },
@@ -570,64 +587,125 @@ describe("goat_worktree_handoff", () => {
     });
   });
 
-  it.effect("removes the created worktree when the thread update dies with a defect", () => {
+  it.effect("creates a handoff from the accepted SHA and keeps the named base", () => {
+    const harness = makeHarness({
+      git: { resolveCommit: () => Effect.succeed({ commitSha: "pinned-local-head" }) },
+    });
+    return Effect.gen(function* () {
+      yield* runHandoff(harness, {
+        branch: "feature/pinned-handoff",
+        baseRef: "dev",
+        startFromOrigin: false,
+      });
+      expect(harness.createWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({ refName: "pinned-local-head", baseRefName: "dev" }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it.effect("refuses local HEAD drift before binding or setup", () => {
+    const harness = makeHarness({
+      git: {
+        resolveCommit: () => Effect.succeed({ commitSha: "initial-local-head" }),
+        verifyManagedCheckout: ({ expectedHead }) =>
+          expectedHead === "initial-local-head"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git",
+                  cwd: workspaceRoot,
+                  detail: "checkout HEAD changed",
+                }),
+              )
+            : Effect.void,
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runHandoff(harness, {
+          branch: "feature/local-hook",
+          startFromOrigin: false,
+          continuationPrompt: "Continue",
+        }),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.runForThread).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("refuses a checkout at the wrong commit before binding or running setup", () => {
+    const harness = makeHarness({
+      git: {
+        verifyManagedCheckout: ({ expectedHead }) =>
+          expectedHead === "abc123"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git",
+                  cwd: workspaceRoot,
+                  detail: "wrong commit",
+                }),
+              )
+            : Effect.void,
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runHandoff(harness, {
+          branch: "feature/replaced",
+          startFromOrigin: true,
+          continuationPrompt: "Continue",
+        }),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.runForThread).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("preserves the created worktree when the thread update dies with a defect", () => {
     const harness = makeHarness({ dispatchDies: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/dispatch-defect" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/dispatch-defect",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
     });
   });
 
-  it.effect("re-checks attachment after creating the worktree and backs out on a race", () => {
-    const harness = makeHarness({ threadAttachedOnRecheck: true });
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/raced" }));
-      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
-      expect(harness.createWorktree).toHaveBeenCalledTimes(1);
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/raced",
-        force: true,
+  it.effect(
+    "re-checks attachment after creating the worktree and keeps the unbound checkout on a race",
+    () => {
+      const harness = makeHarness({ threadAttachedOnRecheck: true });
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/raced" }));
+        expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
+        expect(harness.createWorktree).toHaveBeenCalledTimes(1);
+        expect(harness.removeWorktree).not.toHaveBeenCalled();
+        expect(harness.deleteLocalBranch).not.toHaveBeenCalled();
+        expect(harness.dispatch).not.toHaveBeenCalled();
       });
-      expect(harness.deleteLocalBranch).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        refName: "feature/raced",
-        force: true,
-      });
-      expect(harness.dispatch).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
-  it.effect("removes the created worktree when the recheck read fails", () => {
+  it.effect("preserves the created worktree when the recheck read fails", () => {
     const harness = makeHarness({ threadReadFailsOnRecheck: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/recheck-fails" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/recheck-fails",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
       expect(harness.dispatch).not.toHaveBeenCalled();
     });
   });
 
-  it.effect("backs out when the thread is archived during worktree creation", () => {
+  it.effect("preserves the checkout when the thread is archived during worktree creation", () => {
     const harness = makeHarness({ threadArchivedOnRecheck: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/archived-race" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
       expect(harness.dispatch).not.toHaveBeenCalled();
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/archived-race",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
     });
   });
 

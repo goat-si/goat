@@ -115,3 +115,94 @@ it.effect("fails a stalled 429 provider retry as a usage limit and stops the Cod
     ),
   ),
 );
+
+it.effect("bounds repeated Codex retries from the first notice", () =>
+  Effect.gen(function* () {
+    const nativeThreadId = "native-retry-budget-thread";
+    const nativeTurnId = "native-retry-budget-turn";
+    const retry = (attempt: number) => ({
+      type: "emit_inbound" as const,
+      label: `retry-${attempt}`,
+      frame: {
+        method: "error",
+        params: {
+          threadId: nativeThreadId,
+          turnId: nativeTurnId,
+          willRetry: true,
+          error: {
+            message: `Reconnecting... ${attempt}/5`,
+            additionalDetails: `Transport failure ${attempt}`,
+            codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
+          },
+        },
+      },
+    });
+    const transcript = makeCodexReplayTranscript({
+      scenario: "codex-repeated-retry-budget",
+      entries: [
+        ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
+        retry(1),
+        retry(2),
+        {
+          type: "expect_outbound",
+          label: "turn/interrupt",
+          frame: {
+            id: 4,
+            method: "turn/interrupt",
+            params: { threadId: nativeThreadId, turnId: nativeTurnId },
+          },
+        },
+        { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
+      ],
+    });
+    const first = yield* Deferred.make<void>();
+    const second = yield* Deferred.make<void>();
+    const sendSecond = yield* Deferred.make<void>();
+    const harness = yield* makeCodexReplayHarness(
+      transcript,
+      (event) => {
+        if (
+          event.type !== "turn_item.updated" ||
+          event.turnItem.type !== "error" ||
+          event.turnItem.retry === undefined
+        )
+          return Effect.void;
+        return Deferred.succeed(event.turnItem.retry.attempt === 1 ? first : second, undefined);
+      },
+      undefined,
+      undefined,
+      (entry) => (entry.label === "retry-2" ? Deferred.await(sendSecond) : Effect.void),
+    );
+    yield* harness.runtime.startTurn(
+      makeCodexTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        text: "Continue.",
+        attemptId: RunAttemptId.make("attempt-codex-retry-budget"),
+      }),
+    );
+    yield* Deferred.await(first);
+    yield* TestClock.adjust("9 minutes");
+    yield* Deferred.succeed(sendSecond, undefined);
+    yield* Deferred.await(second);
+    assert.isEmpty(harness.terminalEvents());
+    yield* TestClock.adjust("1 minute");
+    const terminal = harness.terminalEvents().at(-1);
+    assert.equal(terminal?.status, "failed");
+    if (terminal?.status !== "failed") return;
+    assert.equal(terminal.failure.message, "Transport failure 2");
+    assert.equal(terminal.retry?.attempt, 2);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        IdAllocator.layer,
+        MemoryDerivedCache.layer,
+        McpProviderSessions.layer,
+        NodeServices.layer,
+        NodeCrypto.layer,
+      ),
+    ),
+  ),
+);

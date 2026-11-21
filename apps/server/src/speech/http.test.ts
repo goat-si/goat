@@ -48,7 +48,7 @@ const serve = Effect.fn("test.speech.serve")(function* (
   const remove = vi.fn(() => Effect.void);
   const configure = vi.fn(() => Effect.void);
   const transcribe = vi.fn(() => transcription);
-  const service = Layer.succeed(SpeechManagement.SpeechManagement, {
+  const service = Layer.mock(SpeechManagement.SpeechManagement)({
     list: Effect.suspend(list),
     configuration: Effect.succeed(DEFAULT_SPEECH_CONFIGURATION),
     download,

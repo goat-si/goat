@@ -10,10 +10,14 @@ import * as SourceControlProvider from "@goat/source-control-core/server/SourceC
 import type { SourceControlApiDiscoverySpec } from "@goat/source-control-core/server/discovery";
 
 const isRepositoryLocatorError = Schema.is(BitbucketApi.BitbucketRepositoryLocatorError);
+const isRequestError = Schema.is(BitbucketApi.BitbucketRequestError);
 
 /** A repository named some other way than `workspace/repository` is the user's to fix. */
 const repositoryDetail = (error: BitbucketApi.BitbucketApiError, fallback: string) =>
-  isRepositoryLocatorError(error) ? error.detail : fallback;
+  isRepositoryLocatorError(error) ||
+  (isRequestError(error) && error.detail.startsWith("Could not resolve source control credential:"))
+    ? error.detail
+    : fallback;
 
 function toChangeRequest(summary: NormalizedBitbucketPullRequestRecord): ChangeRequest {
   return {
@@ -67,7 +71,7 @@ export const make = Effect.gen(function* () {
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.headSelector,
                   ),
-                  detail: "Failed to list change requests.",
+                  detail: repositoryDetail(error, "Failed to list change requests."),
                   cause: error,
                 }),
             ),
@@ -87,7 +91,7 @@ export const make = Effect.gen(function* () {
                 reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                   input.reference,
                 ),
-                detail: "Failed to get change request.",
+                detail: repositoryDetail(error, "Failed to get change request."),
                 cause: error,
               }),
           ),
@@ -118,7 +122,7 @@ export const make = Effect.gen(function* () {
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.headSelector,
                   ),
-                  detail: "Failed to create change request.",
+                  detail: repositoryDetail(error, "Failed to create change request."),
                   cause: error,
                 }),
             ),
@@ -177,7 +181,7 @@ export const make = Effect.gen(function* () {
                   provider: SourceControlProviderKind.make("bitbucket"),
                   operation: "getDefaultBranch",
                   cwd: input.cwd,
-                  detail: "Failed to get default branch.",
+                  detail: repositoryDetail(error, "Failed to get default branch."),
                   cause: error,
                 }),
             ),
@@ -203,7 +207,7 @@ export const make = Effect.gen(function* () {
                   reference: SourceControlProvider.transportSafeSourceControlErrorValue(
                     input.reference,
                   ),
-                  detail: "Failed to check out change request.",
+                  detail: repositoryDetail(error, "Failed to check out change request."),
                   cause: error,
                 }),
             ),

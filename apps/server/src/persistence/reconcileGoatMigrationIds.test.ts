@@ -16,6 +16,7 @@ import {
   runMigrations,
 } from "./Migrations.ts";
 import {
+  FIXTURE_LEDGER_GOAT_END,
   failingAfterWork,
   fresh,
   schema,
@@ -54,8 +55,8 @@ const history = Effect.gen(function* () {
   return rows.map((row) => [row.migration_id, row.name] as const);
 });
 
-const goatNames = migrationEntries.flatMap(([, name]) =>
-  GOAT_MIGRATION_NAMES.has(name) ? [name] : [],
+const goatNames = migrationEntries.flatMap(([id, name]) =>
+  GOAT_MIGRATION_NAMES.has(name) && id <= FIXTURE_LEDGER_GOAT_END ? [name] : [],
 );
 
 const hasReviewGuides = Effect.gen(function* () {
@@ -156,7 +157,8 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
             .slice(count)
             .map((name, index) => [159 + count + index, name] as const),
           [165, "MemorySuggestionQuota"],
-          [166, "TurnMemoryReceipts"],
+          [166, "ScheduledTaskFirstBindIntent"],
+          ...migrationManifest.filter(([id]) => id > FIXTURE_LEDGER_GOAT_END),
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -199,6 +201,7 @@ describe("GOAT migration ids", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [79, "DelegatedRecoveryIndexes"],
         ...upstream80s,
+        ...migrationManifest.filter(([id]) => id >= 167),
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -229,6 +232,7 @@ describe("GOAT migration ids", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [79, "DelegatedRecoveryIndexes"],
         ...upstream80s,
+        ...migrationManifest.filter(([id]) => id >= 167),
       ]);
       const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_master
         WHERE type = 'index' AND name IN ('orchestration_v2_projection_threads_subagent_result_idx',
@@ -260,6 +264,7 @@ describe("GOAT migration ids", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [79, "DelegatedRecoveryIndexes"],
         ...upstream80s,
+        ...migrationManifest.filter(([id]) => id >= 167),
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -274,7 +279,7 @@ describe("GOAT migration ids", () => {
       const moved = yield* runMigrations();
       assert.deepStrictEqual(
         moved.map(([id]) => id),
-        migrationManifest.flatMap(([id]) => (id >= 70 && id <= 89 ? [id] : [])),
+        migrationManifest.flatMap(([id]) => ((id >= 70 && id <= 89) || id >= 167 ? [id] : [])),
       );
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -322,7 +327,7 @@ describe("GOAT migration ids", () => {
         );
         assert.deepStrictEqual(
           yield* runMigrations(),
-          migrationManifest.filter(([id]) => id >= 76 && id <= 89),
+          migrationManifest.filter(([id]) => (id >= 76 && id <= 89) || id >= 167),
         );
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -661,7 +666,8 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
           [163, "MemoryCompactMoveReceipts"],
           [164, "MemoryOriginCatchup"],
           [165, "MemorySuggestionQuota"],
-          [166, "TurnMemoryReceipts"],
+          [166, "ScheduledTaskFirstBindIntent"],
+          ...migrationManifest.filter(([id]) => id > FIXTURE_LEDGER_GOAT_END),
         ],
       );
       const sql = yield* SqlClient.SqlClient;
@@ -761,6 +767,7 @@ describe("upgrading a 0.1.1 ledger past upstream 069", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [69, "ThreadMessageSearch"],
         ...migrationManifest.filter(([id]) => id >= 70 && id <= 89),
+        ...migrationManifest.filter(([id]) => id >= 167),
       ]);
       assert.lengthOf(yield* searchTable, 1);
       assert.deepStrictEqual(yield* history, migrationManifest);

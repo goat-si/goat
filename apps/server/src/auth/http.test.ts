@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- inject native SQL failures at the HTTP boundary.
+import * as NodeSqlite from "node:sqlite";
 import {
   LEGACY_SESSION_COOKIE_NAME,
   LEGACY_DEV_SESSION_COOKIE_PREFIX,
@@ -13,6 +15,7 @@ import {
 } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,11 +26,13 @@ import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpRouter from "effect/http/HttpRouter";
+import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
 
@@ -53,6 +58,7 @@ const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provide(layerConfig),
 );
+
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -120,6 +126,31 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           expect(await retiredScopeResponse.json()).toMatchObject({ reason: "invalid_scope" });
 
           const devCookies = devResponse.headers.getSetCookie();
+          expect(devCookies.every((cookie) => !/;\s*Secure/i.test(cookie))).toBe(true);
+          const tailnetResponse = await environmentA.handler(
+            postJson(
+              "/api/auth/browser-session",
+              { credential: DEV_TOKEN },
+              { host: "100.64.0.1:3773" },
+            ),
+            requestContext,
+          );
+          expect(tailnetResponse.headers.getSetCookie()).toHaveLength(devCookies.length);
+          expect(
+            tailnetResponse.headers.getSetCookie().every((cookie) => !/;\s*Secure/i.test(cookie)),
+          ).toBe(true);
+          const secureResponse = await environmentA.handler(
+            postJson(
+              "/api/auth/browser-session",
+              { credential: DEV_TOKEN },
+              { "x-forwarded-proto": "https" },
+            ),
+            requestContext,
+          );
+          expect(secureResponse.headers.getSetCookie()).toHaveLength(devCookies.length);
+          expect(
+            secureResponse.headers.getSetCookie().every((cookie) => /;\s*Secure/i.test(cookie)),
+          ).toBe(true);
           const devCookie = devCookies.find((cookie) => cookie.startsWith("goat_dev_session_"));
           expect(devCookie).toContain("HttpOnly");
           expect(devCookie).toContain(`=${DEV_TOKEN};`);
@@ -185,6 +216,13 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           );
           expect(await upgradedSession.json()).toMatchObject({ authenticated: true });
           expect(upgradedSession.headers.getSetCookie()[0]).toMatch(/^goat_session_/);
+          const secureUpgrade = await environmentA.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: { cookie: legacyCookieHeader, "x-forwarded-proto": "https" },
+            }),
+            requestContext,
+          );
+          expect(secureUpgrade.headers.getSetCookie()[0]).toMatch(/;\s*Secure/i);
         }),
       ([environmentA, environmentB]) =>
         Effect.promise(() => Promise.all([environmentA.dispose(), environmentB.dispose()])),
@@ -221,6 +259,183 @@ it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (s
           );
           expect(refused.status).toBe(401);
           expect(refused.headers.get("www-authenticate")).toBe("DPoP");
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("returns the revocation error reason and trace when SQL and rollback both fail", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const secretStorage = yield* Layer.build(
+      ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
+    );
+    const requestContext = Context.add(secretStorage, SecureRandom.SecureRandom, random);
+    const environment = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      ),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+    const session = yield* Effect.promise(() =>
+      environment.handler(
+        postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
+        requestContext,
+      ),
+    );
+    expect(session.status).toBe(200);
+    const cookie =
+      session.headers
+        .getSetCookie()
+        .find((value) => value.startsWith("goat_dev_session_"))
+        ?.split(";", 1)[0] ?? "";
+    const revoke = () =>
+      environment.handler(
+        new Request("http://127.0.0.1/api/auth/clients/revoke-others", {
+          method: "POST",
+          headers: { cookie },
+        }),
+        requestContext,
+      );
+    const prepare = NodeSqlite.DatabaseSync.prototype.prepare;
+    let blockRollback = true;
+    let rollbacks = 0;
+    using _prepare = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, statement) {
+        if (blockRollback && statement === "ROLLBACK") {
+          rollbacks++;
+          throw new Error("rollback unavailable");
+        }
+        if (
+          blockRollback &&
+          /UPDATE auth_sessions\s+SET revoked_at[\s\S]*RETURNING session_id/.test(statement)
+        ) {
+          throw new Error("revoke update unavailable");
+        }
+        return prepare.call(this, statement);
+      });
+    const response = yield* Effect.promise(revoke);
+    expect(rollbacks).toBe(1);
+    expect(response.status).toBe(500);
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({
+      code: "internal_error",
+      reason: "client_session_revoke_failed",
+      traceId: expect.stringMatching(/^[0-9a-f]+$/),
+    });
+    blockRollback = false;
+    expect((yield* Effect.promise(revoke)).status).toBe(200);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+// The web handler runs on its own runtime, so proofs need wall-clock time.
+it.live("checks token-endpoint DPoP proofs without writing replay state", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const written: Array<string> = [];
+    const recordingSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: (name) => Effect.sync(() => void written.push(name)),
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, recordingSecretStore),
+    );
+    const url = "http://127.0.0.1/oauth/token";
+    const key = makeDpopKey();
+    const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+    const tokenRequest = (subjectToken: string, proof: string) =>
+      new Request(url, {
+        method: "POST",
+        headers: { host: "127.0.0.1", dpop: proof },
+        body: new URLSearchParams({
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: subjectToken,
+          subject_token_type: AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+        }),
+      });
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() =>
+        onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      ),
+      (environment) =>
+        Effect.promise(async () => {
+          const unknownToken = await environment.handler(
+            tokenRequest("not-a-pairing-token", key.sign({ method: "POST", url, token: "", iat })),
+            requestContext,
+          );
+          expect(unknownToken.status).toBe(401);
+          expect(await unknownToken.json()).not.toHaveProperty("dpopFailureReason");
+
+          const accepted = await environment.handler(
+            tokenRequest(DEV_TOKEN, key.sign({ method: "POST", url, token: "", iat })),
+            requestContext,
+          );
+          expect(accepted.status).toBe(200);
+          expect(await accepted.json()).toMatchObject({ token_type: "DPoP" });
+
+          const proxied = await environment.handler(
+            new Request(url, {
+              method: "POST",
+              headers: {
+                host: "127.0.0.1",
+                "x-forwarded-proto": "https",
+                dpop: key.sign({
+                  method: "POST",
+                  url: "https://127.0.0.1/oauth/token",
+                  token: "",
+                  iat,
+                }),
+              },
+              body: new URLSearchParams({
+                grant_type: AuthTokenExchangeGrantType,
+                subject_token: DEV_TOKEN,
+                subject_token_type: AuthEnvironmentBootstrapTokenType,
+                requested_token_type: AuthAccessTokenType,
+              }),
+            }),
+            requestContext,
+          );
+          expect(proxied.status).toBe(200);
+
+          const badProof = await environment.handler(
+            tokenRequest(DEV_TOKEN, "not-a-proof"),
+            requestContext,
+          );
+          expect(badProof.status).toBe(401);
+          expect(badProof.headers.get("www-authenticate")).toBe("DPoP");
+          const expired = await environment.handler(
+            tokenRequest(DEV_TOKEN, key.sign({ method: "POST", url, token: "", iat: iat - 600 })),
+            requestContext,
+          );
+          expect(expired.status).toBe(401);
+          const expiredProxy = await environment.handler(
+            new Request(url, {
+              method: "POST",
+              headers: {
+                host: "127.0.0.1",
+                "x-forwarded-proto": "https",
+                dpop: key.sign({
+                  method: "POST",
+                  url: "https://127.0.0.1/oauth/token",
+                  token: "",
+                  iat: iat - 600,
+                }),
+              },
+              body: new URLSearchParams({
+                grant_type: AuthTokenExchangeGrantType,
+                subject_token: DEV_TOKEN,
+                subject_token_type: AuthEnvironmentBootstrapTokenType,
+                requested_token_type: AuthAccessTokenType,
+              }),
+            }),
+            requestContext,
+          );
+          expect(expiredProxy.status).toBe(401);
+          expect(written).toEqual([]);
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );

@@ -48,10 +48,16 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
 const managedWorktreesDir = "/tmp/provider-turn-start-worktrees";
-export const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+export const layerWorktreeLocation = (
+  worktreesDir = managedWorktreesDir,
+  stateDir = worktreesDir,
+) =>
   Layer.mergeAll(
     Path.layer,
-    Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
+    Layer.mock(ServerConfig.ServerConfig)({
+      worktreesDir,
+      stateDir,
+    } as ServerConfig.ServerConfig["Service"]),
     ServerSettings.layerTest(),
   );
 
@@ -63,11 +69,21 @@ export function makeLocalCommandHarness(input: {
   /** Where the thread points by the time the start takes its workspace lease. */
   readonly reboundWorktreePath?: string;
   readonly worktreesDir?: string;
+  readonly stateDir?: string;
+  readonly headSha?: string;
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
   readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
+  readonly manualResume?: {
+    readonly accepted: boolean;
+    readonly supported: boolean;
+    readonly replacement?: boolean;
+    readonly delivery?: "unsent" | "ambiguous";
+    readonly legacy?: boolean;
+    readonly syntheticContinuation?: "restart" | "usage-limit";
+  };
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
   readonly scheduledTaskId?: ScheduledTaskId;
@@ -75,6 +91,7 @@ export function makeLocalCommandHarness(input: {
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
   readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
+  readonly omitResumeProviderSession?: boolean;
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -86,7 +103,9 @@ export function makeLocalCommandHarness(input: {
     readonly currentRun?: () => RunId | undefined;
   };
   readonly previousTurn?: {
-    readonly runStatus: "failed" | "completed" | "interrupted";
+    readonly runStatus: "failed" | "completed" | "interrupted" | "rolled_back";
+    readonly supersededTurn?: boolean;
+    readonly unownedTurn?: boolean;
     readonly terminationCause?: "person_stop" | "agent_stop";
     readonly turnStatus: "running" | "completed" | "interrupted";
     readonly differentThread?: boolean;
@@ -119,6 +138,9 @@ export function makeLocalCommandHarness(input: {
     modelSelection: { instanceId: newInstanceId, model: "gpt-5.4" },
     providerThreadId,
     userMessageId: messageId,
+    ...(input.manualResume === undefined
+      ? {}
+      : { manualContinuationOfRunId: RunId.make("previous-failed-run") }),
     rootNodeId,
     activeAttemptId: attemptId,
     status: "starting",
@@ -287,23 +309,85 @@ export function makeLocalCommandHarness(input: {
   const previousTurnId = ProviderTurnId.make("previous-provider-turn");
   const previousRunId = RunId.make("previous-failed-run");
   if (input.previousTurn !== undefined) {
+    const { manualContinuationOfRunId: _resumeSource, ...earlierRun } = run;
     const previousAttemptId = RunAttemptId.make("previous-failed-attempt");
+    const restartedAttemptId = RunAttemptId.make("previous-restarted-attempt");
+    const previousRootId = NodeId.make("previous-root");
     const previousProviderThreadId = input.previousTurn.differentThread
       ? oldProviderThreadId
       : providerThreadId;
     projection = {
       ...projection,
+      attempts:
+        input.previousTurn.supersededTurn || input.manualResume !== undefined
+          ? [
+              {
+                id: previousAttemptId,
+                runId: previousRunId,
+                attemptOrdinal: 1,
+                rootNodeId: previousRootId,
+                providerInstanceId: run.providerInstanceId,
+                providerThreadId: previousProviderThreadId,
+                providerTurnId: previousTurnId,
+                reason: "initial",
+                status: input.previousTurn.supersededTurn ? "superseded" : "interrupted",
+                ...(input.manualResume === undefined || input.manualResume.legacy
+                  ? {}
+                  : {
+                      inputDelivery:
+                        input.manualResume.delivery ??
+                        (input.manualResume.accepted ? "accepted" : "unsent"),
+                    }),
+                startedAt: now,
+                completedAt: now,
+              },
+              ...(input.previousTurn.supersededTurn
+                ? [
+                    {
+                      id: restartedAttemptId,
+                      runId: previousRunId,
+                      attemptOrdinal: 2,
+                      rootNodeId: NodeId.make("previous-steered-root"),
+                      providerInstanceId: run.providerInstanceId,
+                      providerThreadId: previousProviderThreadId,
+                      providerTurnId: null,
+                      reason: "steering_restart" as const,
+                      status: "interrupted" as const,
+                      inputDelivery: "unsent" as const,
+                      startedAt: null,
+                      completedAt: now,
+                    },
+                  ]
+                : []),
+              ...projection.attempts,
+            ]
+          : projection.attempts,
       runs: [
         {
-          ...run,
+          ...earlierRun,
+          ...(input.manualResume?.syntheticContinuation === "restart"
+            ? { restartContinuationOfRunId: RunId.make("restart-ancestor") }
+            : {}),
+          ...(input.manualResume?.syntheticContinuation === "usage-limit"
+            ? { usageLimitContinuationOfRunId: RunId.make("usage-limit-ancestor") }
+            : {}),
           id: previousRunId,
           ordinal: 1,
           status: input.previousTurn.runStatus,
+          ...(input.manualResume === undefined
+            ? {}
+            : { userMessageId: MessageId.make("resume-source-message") }),
           ...(input.previousTurn.terminationCause === undefined
             ? {}
             : { terminationCause: { kind: input.previousTurn.terminationCause } }),
-          rootNodeId: NodeId.make("previous-root"),
-          activeAttemptId: previousAttemptId,
+          rootNodeId: input.previousTurn.supersededTurn
+            ? NodeId.make("previous-steered-root")
+            : previousRootId,
+          activeAttemptId: input.previousTurn.unownedTurn
+            ? null
+            : input.previousTurn.supersededTurn
+              ? restartedAttemptId
+              : previousAttemptId,
           providerThreadId: previousProviderThreadId,
           completedAt: now,
         },
@@ -319,19 +403,45 @@ export function makeLocalCommandHarness(input: {
           },
         },
       ],
-      providerTurns: [
-        {
-          id: previousTurnId,
-          providerThreadId: previousProviderThreadId,
-          nodeId: NodeId.make("previous-root"),
-          runAttemptId: previousAttemptId,
-          ordinal: 1,
-          nativeTurnRef: null,
-          status: input.previousTurn.turnStatus,
-          startedAt: now,
-          completedAt: input.previousTurn.turnStatus === "running" ? null : now,
-        },
-      ],
+      messages:
+        input.manualResume === undefined
+          ? projection.messages
+          : [
+              {
+                ...message,
+                id: MessageId.make("resume-source-message"),
+                runId: previousRunId,
+                text: input.manualResume.replacement ? "Replacement prompt" : "Original prompt",
+                attachments: input.manualResume.replacement
+                  ? [
+                      {
+                        type: "image",
+                        id: "replacement-image",
+                        name: "replacement.png",
+                        mimeType: "image/png",
+                        sizeBytes: 100,
+                      },
+                    ]
+                  : [],
+              },
+              ...projection.messages,
+            ],
+      providerTurns:
+        input.manualResume?.accepted === false
+          ? []
+          : [
+              {
+                id: previousTurnId,
+                providerThreadId: previousProviderThreadId,
+                nodeId: NodeId.make("previous-root"),
+                runAttemptId: input.previousTurn.unownedTurn ? null : previousAttemptId,
+                ordinal: 1,
+                nativeTurnRef: null,
+                status: input.previousTurn.turnStatus,
+                startedAt: now,
+                completedAt: input.previousTurn.turnStatus === "running" ? null : now,
+              },
+            ],
     };
   }
   const continuation = input.restartContinuation;
@@ -399,6 +509,9 @@ export function makeLocalCommandHarness(input: {
   const fallbackEnsureThread = vi.fn(() => Effect.succeed(providerThread));
   const resumeFallbackSession = {
     driver: providerThread.driver,
+    ...(input.omitResumeProviderSession === true
+      ? {}
+      : { providerSession: { capabilities: CodexProviderCapabilitiesV2 } }),
     resumeThread: () =>
       Effect.fail(
         input.resumeFailure ??
@@ -409,6 +522,7 @@ export function makeLocalCommandHarness(input: {
           }),
       ),
     ensureThread: fallbackEnsureThread,
+    ...(input.manualResume?.supported === true ? { resumeInterruptedTurn: () => Effect.void } : {}),
   };
   const settleTurnStart = vi.fn(
     (_turn: { readonly threadId: ThreadId; readonly runId: RunId }) => Effect.void,
@@ -419,7 +533,11 @@ export function makeLocalCommandHarness(input: {
       : "historyReadFailureAfterFallback" in input || "resumeFailure" in input
         ? Effect.succeed(resumeFallbackSession as never)
         : "ensureThreadFailure" in input
-          ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
+          ? Effect.succeed({
+              driver: providerThread.driver,
+              providerSession: { capabilities: CodexProviderCapabilitiesV2 },
+              ensureThread,
+            } as never)
           : "openFailure" in input
             ? Effect.sync(() => {
                 if (input.interruptRunBeforeOpenFailure === true) interruptRun();
@@ -451,6 +569,9 @@ export function makeLocalCommandHarness(input: {
                   },
                   ensureThread: () => Effect.succeed(providerThread),
                   resumeThread: () => Effect.succeed(projection.providerThreads[0]),
+                  ...(input.manualResume?.supported === true
+                    ? { resumeInterruptedTurn: () => Effect.void }
+                    : {}),
                 } as never)
               : Effect.die("A local command must not open a native session."),
   );
@@ -577,14 +698,17 @@ export function makeLocalCommandHarness(input: {
         input.providerCliGate ?? Layer.empty,
         IdAllocator.layer,
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(input.worktreesDir, input.stateDir),
         input.fileSystem === undefined
-          ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
+          ? FileSystem.layerNoop({
+              exists: (path) => Effect.succeed(!path.includes("worktree-restore-pending")),
+            })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
         input.gitWorkflow === undefined
           ? Layer.mock(GitWorkflow.GitWorkflowService)({
               pruneWorktrees: () => Effect.void,
               listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
+              resolveCommit: () => Effect.succeed({ commitSha: input.headSha ?? "fixture-head" }),
               createWorktree,
             })
           : Layer.succeed(GitWorkflow.GitWorkflowService, input.gitWorkflow),
@@ -622,12 +746,14 @@ export function makeLocalCommandHarness(input: {
               projection.runs.find((candidate) => candidate.id === id),
             ),
           getTurnStartHistory: () =>
-            Effect.fail(
-              new ProjectionStore.ProjectionStoreReadError({
-                threadId,
-                cause: input.historyReadFailureAfterFallback,
-              }),
-            ),
+            input.previousTurn?.supersededTurn || input.manualResume !== undefined
+              ? Effect.succeed([])
+              : Effect.fail(
+                  new ProjectionStore.ProjectionStoreReadError({
+                    threadId,
+                    cause: input.historyReadFailureAfterFallback,
+                  }),
+                ),
         }),
         ...(input.memory === undefined
           ? []
@@ -648,7 +774,10 @@ export function makeLocalCommandHarness(input: {
             ),
         }),
         Layer.mock(ProviderAuthService.ProviderAuthService)({ tryHandlePromptCommand }),
-        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
+        Layer.mock(RunExecutionService.RunExecutionServiceV2)({
+          startRootRun,
+          forkBaseline: () => Effect.succeed(Effect.void),
+        }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: resolveRuntimePolicy,
         }),

@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import {
   ClaudeCloudSettings,
   ProviderDriverKind,
@@ -295,6 +296,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         orchestrationAdapter,
         folderTrust: folderTrust.capability,
         textGeneration: {
+          ...noMemoryGeneration,
           generateCommitMessage: () => unsupportedText("commitMessage"),
           generatePrContent: () => unsupportedText("prContent"),
           generateBranchName: () => unsupportedText("branchName"),

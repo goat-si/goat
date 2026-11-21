@@ -1,12 +1,16 @@
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsError } from "@goat/contracts";
 import { cachedResolveSecret } from "../secrets/secretResolver.ts";
-import { resolveHostSecrets } from "./sourceControlHostSecrets.ts";
+import {
+  resolveHostSecrets,
+  SourceControlCredentialDestinationError,
+} from "./sourceControlHostSecrets.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -15,6 +19,7 @@ export const layer = Layer.effect(
   SourceControlHost.SourceControlHost,
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const environment = yield* HostProcess.Environment;
     const { settingsPath } = yield* ServerConfig.ServerConfig;
     const process = yield* VcsProcess.VcsProcess;
     const git = yield* GitVcsDriver.GitVcsDriver;
@@ -27,10 +32,23 @@ export const layer = Layer.effect(
             Effect.flatMap((settings) =>
               Effect.tryPromise({
                 try: () =>
-                  resolveHostSecrets(settings, kind, host, (reference) =>
-                    cachedResolveSecret(settings.secretProviders, reference),
+                  resolveHostSecrets(
+                    settings,
+                    kind,
+                    host,
+                    (reference) => cachedResolveSecret(settings.secretProviders, reference),
+                    kind === "bitbucket" && environment.GOAT_BITBUCKET_API_BASE_URL
+                      ? [URL.parse(environment.GOAT_BITBUCKET_API_BASE_URL)?.host ?? ""]
+                      : [],
                   ),
-                catch: () => new ServerSettingsError({ settingsPath, operation: "read-secret" }),
+                catch: (cause) =>
+                  cause instanceof SourceControlCredentialDestinationError
+                    ? new ServerSettingsError({
+                        settingsPath,
+                        operation: "normalize",
+                        reason: cause.message,
+                      })
+                    : new ServerSettingsError({ settingsPath, operation: "read-secret" }),
               }),
             ),
           ),

@@ -84,6 +84,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     driver: ProviderDriverKind,
     appThread: OrchestrationV2AppThread,
     createOnly: Schema.optional(Schema.Boolean),
+    onlyIfDefaultTitle: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("provider_session.updated"),
@@ -105,16 +106,20 @@ export const ProviderAdapterV2Event = Schema.Union([
     driver: ProviderDriverKind,
     threadId: Schema.optional(ThreadId),
     providerTurn: OrchestrationV2ProviderTurn,
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
   Schema.Struct({
     type: Schema.Literal("node.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("subagent.updated"),
     driver: ProviderDriverKind,
     subagent: OrchestrationV2Subagent,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("message.updated"),
@@ -123,6 +128,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("turn_item.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     turnItem: OrchestrationV2TurnItem,
     /** Persist recovered activity independently of a run subscription. */
@@ -161,6 +167,7 @@ export const ProviderAdapterV2Event = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("plan.updated"),
+    planUpdateRunId: Schema.optionalKey(RunId),
     driver: ProviderDriverKind,
     plan: OrchestrationV2PlanArtifact,
   }),
@@ -176,6 +183,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     threadDisposition: Schema.Literals(["reusable", "broken"]),
     /** The full result a cloud task reported, when its saved summary is shortened. */
     resultText: Schema.optional(Schema.String),
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
   Schema.Struct({
     type: Schema.Literal("turn.terminal"),
@@ -191,6 +199,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     threadDisposition: Schema.Literals(["reusable", "broken"]),
     /** Child turns outlive root failure and report their own terminals; otherwise open children settle. */
     childTurnsContinue: Schema.optional(Schema.Literal(true)),
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
 ]);
 export type ProviderAdapterV2Event = typeof ProviderAdapterV2Event.Type;
@@ -269,6 +278,15 @@ export class ProviderAdapterThreadInUseError extends Schema.TaggedError<Provider
 /**
  * The user sent `/compact` to a driver whose session has no native compaction.
  */
+export class ProviderResumeUnsupportedError extends Schema.TaggedError<ProviderResumeUnsupportedError>()(
+  "ProviderResumeUnsupportedError",
+  { driver: ProviderDriverKind, providerThreadId: ProviderThreadId },
+) {
+  override get message(): string {
+    return "This provider cannot resume without a new message. Send a message to continue.";
+  }
+}
+
 export class ProviderCompactionUnsupportedError extends Schema.TaggedError<ProviderCompactionUnsupportedError>()(
   "ProviderCompactionUnsupportedError",
   {
@@ -299,6 +317,7 @@ export class ProviderAdapterReadThreadSnapshotError extends Schema.TaggedError<P
   {
     driver: ProviderDriverKind,
     providerThreadId: ProviderThreadId,
+    historyLimitExceeded: Schema.optionalKey(Schema.Literal(true)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -434,6 +453,8 @@ export class ProviderAdapterEventStreamError extends Schema.TaggedError<Provider
     source: Schema.optional(Schema.Literal("provider_process_exit")),
     /** Set when GOAT closed the session because this thread detached from it, not the provider. */
     detachedThreadId: Schema.optional(ThreadId),
+    /** Set when GOAT raised this itself; unset when the adapter reported its runtime failing. */
+    raisedByGoat: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -475,6 +496,7 @@ export const ProviderAdapterV2Error = Schema.Union([
   ProviderAdapterRollbackThreadError,
   ProviderAdapterForkThreadError,
   ProviderAdapterTurnStartError,
+  ProviderResumeUnsupportedError,
   ProviderAdapterSteerRunUnsupportedError,
   ProviderAdapterSteerRunError,
   ProviderAdapterSteerDeclinedError,
@@ -493,11 +515,13 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
+  readonly historyImport?: true;
   readonly initialProviderItemIdentityVersion?: 2;
 }
 
 export interface ProviderAdapterV2EnsureThreadInput {
   readonly threadId: ThreadId;
+  readonly isAppOwnedDelegated?: boolean;
   readonly title?: string;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
@@ -516,6 +540,15 @@ export type ProviderAdapterV2CloudTaskMetadata = Pick<
   OrchestrationV2CloudTask,
   "url" | "title" | "progress"
 >;
+
+export interface ProviderInputDelivery {
+  readonly begin: () => Effect.Effect<boolean, ProviderAdapterTurnStartError>;
+  readonly submitted: () => Effect.Effect<void>;
+  readonly skipped: () => Effect.Effect<void>;
+  readonly accepted: () => Effect.Effect<void>;
+  /** A continuation attached to work the provider was already running. */
+  readonly inherited: () => Effect.Effect<void>;
+}
 
 export interface TurnMemoryHooks {
   /** Called only after a provider transport accepts a prompt carrying this snapshot. */
@@ -543,6 +576,7 @@ export const turnMemoryHooks = (
       };
 
 export interface ProviderAdapterV2TurnInput extends TurnMemoryHooks {
+  readonly inputDelivery?: ProviderInputDelivery;
   readonly memoryContext?: MemoryContextSnapshot;
   /** Initial launch only. Follow-up and attach must not require this checkout. */
   readonly cloudLaunchSource?: ProviderAdapterV2CloudLaunchSource;
@@ -564,6 +598,7 @@ export interface ProviderAdapterV2TurnInput extends TurnMemoryHooks {
   readonly nativeThreadHasTurns?: boolean;
   readonly providerTurnOrdinal: number;
   readonly restartContinuationOfRunId?: RunId;
+  readonly resume?: true;
   readonly attemptId: RunAttemptId;
   readonly rootNodeId: NodeId;
   readonly providerThread: OrchestrationV2ProviderThread;
@@ -575,18 +610,40 @@ export interface ProviderAdapterV2TurnInput extends TurnMemoryHooks {
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 
+export type ProviderAdapterV2ResumeTurnInput = Omit<
+  ProviderAdapterV2TurnInput,
+  "message" | "resume"
+> & {
+  readonly messageId: MessageId;
+};
+
+export function resumeTurnInput(
+  input: ProviderAdapterV2ResumeTurnInput,
+): ProviderAdapterV2TurnInput {
+  const { messageId, ...turn } = input;
+  return {
+    ...turn,
+    resume: true,
+    message: { messageId, text: "", attachments: [], createdBy: "user", creationSource: "server" },
+  };
+}
+
 export interface ProviderAdapterV2SteerInput {
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
   readonly message: ProviderAdapterV2TurnMessage;
+  /** The selection sent with the message when it differs from the running turn's. */
+  readonly modelSelection?: ModelSelection;
 }
 
 export interface ProviderAdapterV2InterruptInput {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
   readonly requestRuntimeRestart?: boolean;
+  /** The root outcome is known and only bounded follow-up cleanup remains. */
+  readonly onRootStopResolved?: Effect.Effect<void>;
 }
 
 export interface ProviderAdapterV2RuntimeRequestResponseInput {
@@ -601,6 +658,7 @@ export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
+  readonly reasoningMessageIds?: ReadonlyArray<OrchestrationV2ConversationMessage["id"]>;
   readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;
   readonly providerPayload?: unknown;
 }
@@ -662,21 +720,33 @@ export interface ProviderAdapterV2McpCallToolResult {
   readonly _meta?: unknown;
 }
 
+export type ProviderAdapterV2McpRuntime = Effect.Effect<
+  | {
+      readonly modelSelection: ModelSelection;
+      readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+    }
+  | undefined,
+  ProviderAdapterV2Error
+>;
+
 export interface ProviderAdapterV2McpApps {
   readonly listTools: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<ReadonlyArray<ProviderAdapterV2McpTool>, ProviderAdapterV2Error>;
   readonly callTool: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
     readonly tool: string;
     readonly arguments: Record<string, unknown>;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<ProviderAdapterV2McpCallToolResult, ProviderAdapterV2Error>;
   readonly readResource: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
     readonly uri: string;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<{ readonly contents: ReadonlyArray<unknown> }, ProviderAdapterV2Error>;
 }
 
@@ -689,6 +759,7 @@ export type ProviderAdapterV2SubagentOutcome = {
 export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed" | "outdated";
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly tracksInputDelivery?: true;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;
@@ -754,6 +825,10 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly startTurn: (
     input: ProviderAdapterV2TurnInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /** Resume local provider work with no new prompt. */
+  readonly resumeInterruptedTurn?: (
+    input: ProviderAdapterV2ResumeTurnInput,
+  ) => Effect.Effect<void, ProviderAdapterV2Error>;
   /** Attach observation to saved work. Never submit a prompt or create a task. */
   readonly resumeTurn?: (
     input: Omit<ProviderAdapterV2TurnInput, "message" | "cloudLaunchSource"> & {
@@ -766,6 +841,11 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly steerTurn: (
     input: ProviderAdapterV2SteerInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /** Applies a thread's new selection to its running process where the provider can; otherwise it waits for the next turn. */
+  readonly applyModelSelection?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly stopTask?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly taskId: string;

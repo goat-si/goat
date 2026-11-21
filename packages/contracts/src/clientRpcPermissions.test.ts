@@ -3,6 +3,18 @@ import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcP
 import { WS_METHODS } from "./rpc.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 
+it("requires operate permission for every speech stream operation", () => {
+  for (const method of [
+    "speech.stream.start",
+    "speech.stream.feed",
+    "speech.stream.finish",
+    "speech.stream.cancel",
+    "speech.stream.events",
+  ]) {
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+  }
+});
+
 it("guards bot task lookup and search with read while preserving existing task permissions", () => {
   for (const method of ["channel.getBotTask", "channel.searchBotTasks"] as const)
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:read"]);
@@ -328,4 +340,10 @@ it("forking a thread needs the operate grant the server checks", () => {
   expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.forkThread, {})).toEqual([
     "orchestration:operate",
   ]);
+});
+
+it("requires environment maintenance authority to stage a server update", () => {
+  for (const method of [WS_METHODS.serverUpdateServer, WS_METHODS.serverUpdateServerWithProgress]) {
+    expect(clientRpcRequiredScopes(method, { stageOnly: true })).toEqual(["environment:maintain"]);
+  }
 });

@@ -107,6 +107,7 @@ export function AssistantCitationCommentEditor({
         <Button
           variant="outline"
           size="xs"
+          tabIndex={-1}
           onPointerDown={(event) => event.preventDefault()}
           onClick={onCancel}
         >

@@ -28,7 +28,6 @@ import {
   LEGACY_SCAN_CACHE_FILE_NAMES,
   SCAN_CACHE_FILE_NAME,
   type CachedFile,
-  type ScanCache,
 } from "./usageScanCache.ts";
 
 const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
@@ -44,6 +43,15 @@ export const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
 export const transcriptFormats = new Map(
   transcriptReaders.map(({ reader }) => [reader.provider, reader.format] as const),
 );
+
+const rateModelResolvers = new Map(
+  [...transcriptReaders, ...scanReaders].flatMap(({ reader }) =>
+    reader.rateModel === undefined ? [] : [[reader.provider, reader.rateModel] as const],
+  ),
+);
+
+export const providerRateModel = (provider: UsageProviderKind, model: string) =>
+  rateModelResolvers.get(provider)?.(model);
 
 export interface TranscriptSource {
   readonly provider: UsageProviderKind;
@@ -67,7 +75,6 @@ export const encodeRatesCache = Schema.encodeEffect(
 export const ScanCacheJson = Schema.fromJsonString(
   Schema.Unknown as unknown as Schema.Codec<unknown>,
 );
-export const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 export const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
 export const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
 
@@ -83,11 +90,13 @@ export const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
 
 // Only shared sessions need cross-file dedupe; per-file occurrence counts make other keys unique.
 export function sharedSessions(
-  files: readonly { readonly records: readonly UsageRecord[] }[],
+  files: Iterable<{ readonly records: readonly UsageRecord[] }>,
 ): ReadonlySet<string> {
   const firstFile = new Map<string, number>();
   const shared = new Set<string>();
-  for (const [index, file] of files.entries()) {
+  let index = 0;
+  for (const file of files) {
+    index++;
     let previous = "";
     for (const { provider, sessionId } of file.records) {
       if (!sharedSessionProviders.has(provider) || sessionId === previous || sessionId.length === 0)
@@ -111,6 +120,7 @@ export interface ScannedDir {
   readonly provider: UsageProviderKind;
   readonly dir: string;
   readonly volumeId: string;
+  readonly physicalSourceId?: string;
   readonly hostId?: string;
   readonly status?: UsageSource["status"];
   readonly message?: string;
@@ -120,11 +130,56 @@ export interface ScannedDir {
         readonly path: string;
         readonly records: readonly UsageRecord[];
         readonly malformedRecords: number;
+        readonly historyPage?: { readonly entry: CachedFile; readonly version: number };
       }[]
     | null;
   /** Every transcript path the walk listed, in walk order, whatever its mtime. */
   readonly walked?: readonly string[];
   readonly refreshing?: true;
+}
+
+const sourceRank = { ok: 0, partial: 1, failed: 2, missing: 3 } satisfies Record<
+  UsageSource["status"],
+  number
+>;
+
+export function resolveSourceOwners(
+  sources: readonly ScannedDir[],
+  filesByDir: readonly Iterable<NonNullable<ScannedDir["files"]>[number]>[],
+) {
+  const owners = new Map<string, { index: number; status: UsageSource["status"] }>();
+  const scans = sources.map((source, index) => {
+    const files = filesByDir[index] ?? [];
+    let scannedFiles = 0;
+    let skippedFiles = 0;
+    let malformedRecords = 0;
+    for (const file of files) {
+      if (file.records.length > 0) scannedFiles++;
+      else skippedFiles++;
+      malformedRecords += file.malformedRecords;
+    }
+    const status =
+      source.files === null && scannedFiles === 0
+        ? "missing"
+        : malformedRecords > 0 && (source.status === undefined || source.status === "ok")
+          ? "partial"
+          : (source.status ?? "ok");
+    const key =
+      source.physicalSourceId === undefined
+        ? undefined
+        : `${source.provider}\0${source.physicalSourceId}`;
+    if (key !== undefined) {
+      const owner = owners.get(key);
+      if (owner === undefined || sourceRank[status] < sourceRank[owner.status]) {
+        owners.set(key, { index, status });
+      }
+    }
+    return { source, files, status, scannedFiles, skippedFiles, malformedRecords, key };
+  });
+  return scans.map(({ key, ...scan }, index) => ({
+    ...scan,
+    ownerIndex: (key === undefined ? undefined : owners.get(key)?.index) ?? index,
+  }));
 }
 
 export const resolveUsageHostId = Effect.gen(function* () {
@@ -177,7 +232,10 @@ export function makeUsageInstances(hostEnvironment: NodeJS.ProcessEnv) {
     > = Object.entries(settings.providerInstances)
       .filter(([, instance]) => instance.driver === driver.driverKind)
       .map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const);
-    if (!Object.hasOwn(settings.providerInstances, driver.driverKind)) {
+    if (
+      driver.usage?.provider !== "cursor" ||
+      !Object.hasOwn(settings.providerInstances, driver.driverKind)
+    ) {
       entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
     }
     const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
@@ -233,7 +291,7 @@ export function makeSupersededCacheRemover(
 }
 
 export function makeFileRecordReader(
-  fileCache: ScanCache,
+  fileCache: { get(path: string): CachedFile | undefined },
   resolvedRecords: WeakMap<UsageRecord, UsageRecord>,
   correctedRecord: (record: UsageRecord) => UsageRecord,
 ) {

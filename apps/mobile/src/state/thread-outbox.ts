@@ -32,6 +32,13 @@ export function updateThreadOutboxMessage(
   return threadOutboxManager.update(message, expectedRevision);
 }
 
+export function modifyThreadOutboxMessage(
+  messageId: QueuedThreadMessage["messageId"],
+  change: (message: QueuedThreadMessage) => QueuedThreadMessage | null,
+): Promise<boolean> {
+  return threadOutboxManager.modify(messageId, change);
+}
+
 export function threadOutboxRevision(messageId: QueuedThreadMessage["messageId"]): number {
   return threadOutboxManager.revisionOf(messageId);
 }

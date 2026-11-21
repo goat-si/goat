@@ -48,21 +48,36 @@ export function workspaceLeaseBusy(cause: Cause.Cause<unknown>) {
 // so a stop that hangs must give up and fall through to the normal retry/fail path.
 const DELEGATED_TASKS_STOP_TIMEOUT = Duration.seconds(30);
 
+export function exhaustedEffectAttempts(
+  effect: EffectOutbox.OrchestrationEffectV2,
+  maxAttempts: number,
+) {
+  return effect.request.type === "provider-turn.steer" || effect.attemptCount >= maxAttempts;
+}
+
 export const boundExecution =
   (effect: EffectOutbox.OrchestrationEffectV2) =>
   (execution: Effect.Effect<void, OrchestrationEffectExecutionError>) =>
-    effect.request.type === "delegated-tasks.stop"
-      ? execution.pipe(
-          Effect.timeoutOrElse({
-            duration: DELEGATED_TASKS_STOP_TIMEOUT,
-            orElse: () =>
-              Effect.fail(
-                new OrchestrationEffectExecutionError({
-                  effectId: effect.id,
-                  effectType: effect.request.type,
-                  cause: `Timed out after ${Duration.format(DELEGATED_TASKS_STOP_TIMEOUT)}.`,
-                }),
-              ),
+    effect.request.type === "provider-turn.steer" && effect.attemptCount > 1
+      ? Effect.fail(
+          new OrchestrationEffectExecutionError({
+            effectId: effect.id,
+            effectType: effect.request.type,
+            cause: "Steering delivery from the previous claim is unknown.",
           }),
         )
-      : execution;
+      : effect.request.type === "delegated-tasks.stop"
+        ? execution.pipe(
+            Effect.timeoutOrElse({
+              duration: DELEGATED_TASKS_STOP_TIMEOUT,
+              orElse: () =>
+                Effect.fail(
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause: `Timed out after ${Duration.format(DELEGATED_TASKS_STOP_TIMEOUT)}.`,
+                  }),
+                ),
+            }),
+          )
+        : execution;

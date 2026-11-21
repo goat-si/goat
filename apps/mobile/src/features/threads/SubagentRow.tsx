@@ -5,7 +5,10 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@goat/client-runtime/state/provider-instance-display";
-import { resolveSubagentMetadata } from "@goat/client-runtime/state/subagent-display";
+import {
+  resolveSubagentMetadata,
+  subagentCardDetail,
+} from "@goat/client-runtime/state/subagent-display";
 import { formatSubagentEffort } from "@goat/client-runtime/state/thread-execution";
 import type { EnvironmentId, OrchestrationV2Subagent } from "@goat/contracts";
 import type { ReactNode } from "react";
@@ -16,12 +19,12 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { useEnvironmentServerConfig, useProject, useThreadShell } from "../../state/entities";
-import { subagentCardDetail } from "./subagent-card-presentation";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
 import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
 
 type SubagentRowSubagent = Pick<
   OrchestrationV2Subagent,
+  | "remote"
   | "currentMemoryAccess"
   | "memoryGrantCeiling"
   | "threadId"
@@ -117,10 +120,11 @@ function SubagentMetadata(props: {
       acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
     };
   });
-  const provider = providers.find(
-    (candidate) => candidate.instanceId === subagent.providerInstanceId,
-  );
+  const provider = subagent.remote
+    ? undefined
+    : providers.find((candidate) => candidate.instanceId === subagent.providerInstanceId);
   const showBadge = provider !== undefined && shouldShowInstanceBadge(provider, providers);
+  const driver = provider?.driver ?? (subagent.remote === undefined ? subagent.driver : undefined);
   const parent = useThreadShell(scopeThreadRef(environmentId, subagent.threadId))?.source;
   const child = useThreadShell(
     subagent.childThreadId === null ? null : scopeThreadRef(environmentId, subagent.childThreadId),
@@ -151,12 +155,10 @@ function SubagentMetadata(props: {
           accentColor={provider.accentColor}
           showBadge
         />
+      ) : driver === undefined ? (
+        <SymbolView name="person.2" size={11} tintColorClassName="accent-icon-muted" />
       ) : (
-        <ProviderIcon
-          provider={provider?.driver ?? subagent.driver}
-          iconUrl={provider?.iconUrl}
-          size={12}
-        />
+        <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={12} />
       )}
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}

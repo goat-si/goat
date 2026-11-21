@@ -1,0 +1,266 @@
+import ImageIO
+import UIKit
+
+/// Full-screen image gallery modelled on Messages. It opens at once from the tapped thumbnail's
+/// own pixels and sharpens when the original arrives, so a slow or failed load never holds it back.
+final class GoatNativeImageViewer: NSObject {
+  let identifier: String
+  private let completion: (Error?) -> Void
+  private let onFinish: () -> Void
+  private weak var sources: GoatPresentationSources?
+  private let sourceIdentifiers: [String]
+  private var titles: [String] = []
+  private var urls: [URL?] = []
+  /// The original bytes on disk, kept for sharing.
+  private var files: [URL?] = []
+  private var placeholders: [UIImage?] = []
+  private var loads: [Int: Task<Void, Never>] = [:]
+  private var decodes: [Int: Task<Void, Never>] = [:]
+  /// The last queued decode; each one waits for it, so one original decodes at a time.
+  private var decodeQueue: Task<Void, Never>?
+  /// Pages showing their decoded original; only the current page and its neighbours keep one.
+  private var decoded: Set<Int> = []
+  private var currentIndex = 0
+  private var controller: GoatImageViewerController?
+  private var finished = false
+
+  init(identifier: String, sources: GoatPresentationSources, sourceIdentifiers: [String],
+       onFinish: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
+    self.identifier = identifier
+    self.sources = sources
+    self.sourceIdentifiers = sourceIdentifiers
+    self.onFinish = onFinish
+    self.completion = completion
+    super.init()
+  }
+
+  func present(urls: [URL?], titles: [String], selectedIndex: Int, from presenter: UIViewController) {
+    self.urls = urls
+    self.titles = titles
+    files = Array(repeating: nil, count: urls.count)
+    currentIndex = selectedIndex
+    let viewer = GoatImageViewerController(titles: titles, selectedIndex: selectedIndex)
+    viewer.sourceView = { [weak self] index in self?.sourceView(index) }
+    viewer.fileForPage = { [weak self] index in self?.file(at: index) }
+    viewer.onRetry = { [weak self] index in self?.load(index, retry: true) }
+    viewer.onDismissed = { [weak self] in self?.finish() }
+    viewer.onPageChange = { [weak self] index in self?.show(page: index) }
+    controller = viewer
+    viewer.loadViewIfNeeded()
+    placeholders = urls.indices.map { sourceView($0).flatMap(Self.thumbnail(of:)) }
+    for (index, placeholder) in placeholders.enumerated() {
+      if let placeholder { viewer.setImage(placeholder, at: index, full: false) }
+    }
+    presenter.present(GoatImageViewerNavigation(viewer: viewer), animated: false) { viewer.animateIn() }
+    for index in urls.indices { load(index, retry: false) }
+  }
+
+  /// Delivers a URL that was still resolving when the gallery opened, or nil when it never will.
+  func update(index: Int, url: URL?) {
+    guard !finished, urls.indices.contains(index), urls[index] == nil else { return }
+    guard let url else {
+      controller?.setFailed(at: index, retryable: false)
+      return
+    }
+    urls[index] = url
+    load(index, retry: false)
+  }
+
+  func dismiss() {
+    guard !finished else { return }
+    guard let controller else { finish(); return }
+    controller.close()
+  }
+
+  /// Ends at once, for a new viewer that must open while this one is still animating away.
+  func finishImmediately() {
+    guard !finished else { return }
+    controller?.navigationController?.dismiss(animated: false)
+    finish()
+  }
+
+  private func file(at index: Int) -> URL? {
+    files.indices.contains(index) ? files[index] : nil
+  }
+
+  private func sourceView(_ index: Int) -> UIView? {
+    guard sourceIdentifiers.indices.contains(index), !sourceIdentifiers[index].isEmpty else { return nil }
+    return sources?.view(for: sourceIdentifiers[index])
+  }
+
+  private func load(_ index: Int, retry: Bool) {
+    guard !finished, urls.indices.contains(index), let url = urls[index], loads[index] == nil else { return }
+    if retry { controller?.setLoading(at: index) }
+    let title = titles[index]
+    loads[index] = Task { @MainActor [self] in
+      defer { loads[index] = nil }
+      do {
+        let file = try await GoatNativeFilePresentation.prepareFile(url: url, title: title)
+        guard !finished, !Task.isCancelled else { Self.remove(file); return }
+        if let previous = files[index] { Self.remove(previous) }
+        files[index] = file
+        decoded.remove(index)
+        if isNearCurrent(index) { decode(index) }
+      } catch {
+        guard !finished, !Task.isCancelled else { return }
+        controller?.setFailed(at: index, retryable: true)
+      }
+    }
+  }
+
+  /// Every original downloads up front, but a decoded one costs far more memory than its file,
+  /// so only pages next to the current one decode, and pages further away fall back to their thumbnail.
+  private func show(page index: Int) {
+    currentIndex = index
+    for other in decoded where !isNearCurrent(other) {
+      decoded.remove(other)
+      controller?.release(at: other, placeholder: placeholders[other])
+    }
+    // Queued decodes for pages paged past are skipped before they start.
+    for (other, task) in decodes where !isNearCurrent(other) { task.cancel() }
+    for near in files.indices where isNearCurrent(near) { decode(near) }
+  }
+
+  private func isNearCurrent(_ index: Int) -> Bool { abs(index - currentIndex) <= 1 }
+
+  private func decode(_ index: Int) {
+    guard !finished, let file = file(at: index), !decoded.contains(index), decodes[index] == nil else { return }
+    let source = sourceView(index)
+    let previous = decodeQueue
+    let task = Task { @MainActor [self] in
+      await previous?.value
+      var settled = false
+      defer {
+        decodes[index] = nil
+        // Paged away and back while this run waited: it was cancelled, so the page asks again.
+        if !settled, !finished, isNearCurrent(index), !decoded.contains(index) { decode(index) }
+      }
+      guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      // ImageIO reads SVG poorly or not at all; the thumbnail is vector, so redraw it at full-screen size.
+      let isSVG = file.pathExtension.lowercased() == "svg"
+      let image = isSVG ? nil : await Task.detached(priority: .userInitiated) { Self.decode(file) }.value
+      guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      if isSVG {
+        // The open transition hides the thumbnail, which draws blank until it is back.
+        await controller?.untilRevealed()
+        guard !finished, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      }
+      settled = true
+      if let image = image ?? (isSVG ? source.flatMap(Self.render(_:)) : nil) {
+        decoded.insert(index)
+        controller?.setImage(image, at: index, full: true)
+      } else {
+        // A corrupt download or an SVG whose thumbnail is scrolled away; retrying downloads it again.
+        // A file that is not an image must not reach Share.
+        if !isSVG {
+          Self.remove(file)
+          files[index] = nil
+        }
+        controller?.setFailed(at: index, retryable: true)
+      }
+    }
+    decodes[index] = task
+    decodeQueue = task
+  }
+
+  private func finish() {
+    guard !finished else { return }
+    finished = true
+    for task in loads.values { task.cancel() }
+    loads.removeAll()
+    for task in decodes.values { task.cancel() }
+    decodes.removeAll()
+    decodeQueue = nil
+    for file in files.compactMap({ $0 }) { Self.remove(file) }
+    files.removeAll()
+    controller = nil
+    DispatchQueue.main.async { [completion] in completion(nil) }
+    // After queueing the completion, so a new presentation JS starts on seeing this lands behind it.
+    onFinish()
+  }
+
+  private static func remove(_ file: URL) {
+    try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+  }
+
+  /// The decoded image a thumbnail already shows, uncropped, or a snapshot of a view that draws one.
+  /// The largest image view wins, so an overlaid icon is never mistaken for the picture.
+  private static func thumbnail(of view: UIView) -> UIImage? {
+    var queue = [view]
+    var best: (image: UIImage, area: CGFloat)?
+    while let candidate = queue.popLast() {
+      queue.append(contentsOf: candidate.subviews)
+      guard let image = (candidate as? UIImageView)?.image, image.size.width > 0, image.size.height > 0 else { continue }
+      let area = candidate.bounds.width * candidate.bounds.height
+      if area > best?.area ?? 0 { best = (image, area) }
+    }
+    if let best, best.area >= view.bounds.width * view.bounds.height / 2 { return best.image }
+    return snapshot(view, scale: view.window?.screen.scale ?? 2)
+  }
+
+  private static func render(_ view: UIView) -> UIImage? {
+    let screen = view.window?.screen.bounds.size ?? CGSize(width: 1024, height: 1024)
+    let fit = min(screen.width / max(view.bounds.width, 1), screen.height / max(view.bounds.height, 1))
+    // The thumbnail was shown again after the open transition, in a frame not yet on screen.
+    return snapshot(view, scale: max(1, fit) * (view.window?.screen.scale ?? 2), afterScreenUpdates: true)
+  }
+
+  private static func snapshot(_ view: UIView, scale: CGFloat, afterScreenUpdates: Bool = false) -> UIImage? {
+    guard view.bounds.width > 1, view.bounds.height > 1, view.window != nil else { return nil }
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = scale
+    format.opaque = false
+    return UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+      view.drawHierarchy(in: view.bounds, afterScreenUpdates: afterScreenUpdates)
+    }
+  }
+
+  /// Decodes off the main thread at no more than zooming needs, and keeps GIFs animated.
+  nonisolated private static func decode(_ file: URL) -> UIImage? {
+    guard let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
+    let count = CGImageSourceGetCount(source)
+    guard count > 0 else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
+      kCGImageSourceThumbnailMaxPixelSize: 4096,
+    ]
+    var animationOptions = options
+    animationOptions[kCGImageSourceThumbnailMaxPixelSize] = 1024
+    animationOptions[kCGImageSourceShouldCacheImmediately] = nil
+    // Every frame stays decoded while it plays, so an animation over this budget shows its first frame.
+    if count > 1, let first = CGImageSourceCreateThumbnailAtIndex(source, 0, animationOptions as CFDictionary),
+      first.bytesPerRow * first.height * count <= animationByteBudget {
+      var frames: [(image: UIImage, delay: Double)] = [(UIImage(cgImage: first), frameDuration(source, 0))]
+      for index in 1..<count {
+        guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, animationOptions as CFDictionary) else { continue }
+        frames.append((UIImage(cgImage: frame), frameDuration(source, index)))
+      }
+      // UIKit plays frames evenly, so each frame repeats once per tick of its delay; the repeats share
+      // one bitmap. The tick grows with the animation's length to keep the timeline near 1,000 entries.
+      let total = frames.reduce(0) { $0 + $1.delay }
+      let tick = max(0.02, total / 1_000)
+      let timeline = frames.flatMap { frame in
+        Array(repeating: frame.image, count: max(1, Int((frame.delay / tick).rounded())))
+      }
+      if frames.count > 1 { return UIImage.animatedImage(with: timeline, duration: Double(timeline.count) * tick) }
+    }
+    return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
+  }
+
+  nonisolated private static func frameDuration(_ source: CGImageSource, _ index: Int) -> Double {
+    let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+    let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+    let png = properties?[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+    let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
+      ?? gif?[kCGImagePropertyGIFDelayTime] as? Double
+      ?? png?[kCGImagePropertyAPNGUnclampedDelayTime] as? Double
+      ?? png?[kCGImagePropertyAPNGDelayTime] as? Double
+      ?? 0.1
+    // Browsers treat near-zero delays as 0.1s.
+    return delay < 0.011 ? 0.1 : delay
+  }
+}
+
+private let animationByteBudget = 64 * 1024 * 1024

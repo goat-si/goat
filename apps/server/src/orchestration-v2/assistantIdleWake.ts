@@ -33,7 +33,7 @@ export const makeAssistantIdleWake = Effect.fn("assistantIdleWake.make")(functio
   return { events: Stream.fromQueue(ticks), schedule, fired, close };
 });
 
-const PENDING_SNAPSHOT_RECHECK_MS = 5_000;
+export const PENDING_SNAPSHOT_RECHECK_MS = 5_000;
 
 /**
  * A stored pending-work snapshot keeps ingestion open while provider events keep arriving, and
@@ -51,6 +51,7 @@ export function makePendingSnapshotHold(schedule: (at: number) => Effect.Effect<
     providerEvent: () => {
       processed++;
     },
+    hasUnprocessedEvents: () => processed < pulled,
     // Called from each stop check, which already has a span.
     holds: Effect.fnUntraced(function* () {
       // The waiting event's own stop check comes after it is processed.

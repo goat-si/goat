@@ -1,5 +1,8 @@
 import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
-import { makeBrowserAccessProject } from "./test/ProviderSessionManagerBrowserAccess.testkit.ts";
+import {
+  makeBrowserAccessProject,
+  runBrowserAccessScenario,
+} from "./test/ProviderSessionManagerBrowserAccess.testkit.ts";
 import {
   makeThreadCreatedEvent,
   makeMemoryReadHold,
@@ -232,71 +235,6 @@ const makeNativeChildFixture = Effect.fnUntraced(function* () {
   });
   return { manager, parent, resumeChild };
 });
-function runBrowserAccessScenario(input: {
-  readonly enableAgentBrowserAccess: boolean;
-  readonly projectOverride: boolean;
-  readonly deviceOverride?: boolean;
-  readonly createThread?: boolean;
-  readonly projectExists?: boolean;
-  readonly turnCapabilities?: ReadonlyArray<MemoryContracts.TurnCapability>;
-}) {
-  return Effect.gen(function* () {
-    const state = yield* Ref.make(emptyState);
-    const mcpConfigs = yield* Ref.make<
-      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
-    >([]);
-    const projectId = ProjectId.make("project-provider-session-manager-browser-access");
-    const threadId = ThreadId.make("thread-provider-session-manager-browser-access");
-    const layerProjectService = Layer.mock(ProjectService.ProjectService)({
-      getById: (requestedProjectId) =>
-        Effect.succeed(
-          input.projectExists === false
-            ? Option.none()
-            : Option.some(makeBrowserAccessProject(requestedProjectId)),
-        ),
-    });
-    yield* Effect.gen(function* () {
-      const eventSink = yield* EventSink.EventSinkV2;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-      const now = yield* DateTime.now;
-      const providerSessionId = yield* idAllocator.allocate.providerSession({
-        providerInstanceId: modelSelection.instanceId,
-        threadId,
-      });
-      if (input.createThread !== false) {
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now, projectId })],
-        });
-      }
-      const { turnCapabilities = [] } = input;
-      yield* manager
-        .open({ threadId, providerSessionId, modelSelection, runtimePolicy, turnCapabilities })
-        .pipe(Effect.ignore);
-    }).pipe(
-      Effect.provide(
-        layerTest({
-          state,
-          idleTimeoutMs: 1_000,
-          mcpConfigs,
-          projectServiceLayer: layerProjectService,
-          serverSettingsLayer: ServerSettings.layerTest({
-            enableAgentBrowserAccess: input.enableAgentBrowserAccess,
-            projectSettingsOverrides: {
-              [projectId]: {
-                enableAgentBrowserAccess: input.projectOverride,
-                ...(input.deviceOverride === undefined
-                  ? {}
-                  : { enableAgentDeviceAccess: input.deviceOverride }),
-              },
-            },
-          }),
-        }),
-      ),
-    );
-    return (yield* Ref.get(mcpConfigs))[0];
-  });
-}
 export function makePendingRuntimeRequestEvents(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;

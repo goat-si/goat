@@ -10,6 +10,7 @@ import {
   type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@goat/contracts";
+import type { ToolCallVisibility } from "@goat/contracts/settings";
 import {
   resolveGoatMcpToolDefinition,
   resolveGoatMcpItemCall,
@@ -439,6 +440,23 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogPresentationEntry): 
     entry.toolLifecycleStatus !== "inProgress" &&
     entry.toolLifecycleStatus !== "stopped"
   );
+}
+
+const HIDEABLE_TOOL_CALL_ITEM_TYPES: ReadonlySet<WorkLogPresentationEntry["itemType"]> = new Set([
+  "command_execution",
+  "file_change",
+  "file_search",
+  "web_search",
+  "dynamic_tool",
+]);
+
+export function workEntryHiddenByToolCallVisibility(
+  entry: WorkLogPresentationEntry,
+  visibility: ToolCallVisibility,
+): boolean {
+  if (visibility === "showAll" || !HIDEABLE_TOOL_CALL_ITEM_TYPES.has(entry.itemType)) return false;
+  if (visibility !== "hideSuccessful") return true;
+  return entry.toolLifecycleStatus === "completed" && !workEntryDisplayIndicatesToolFailure(entry);
 }
 
 function workLogEntryIsLocalCodeSearch(entry: WorkLogPresentationEntry): boolean {

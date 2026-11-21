@@ -921,7 +921,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     row.projectedItem.item.type === "file_change" &&
     row.projectedItem.item.status !== "failed";
   const fullDetail =
-    expanded && !reasoning && !call && !inlineDiff
+    expanded && !reasoning && !call && !inlineDiff && !row.workEntry.questionAnswer
       ? fetchedItem && !isRead
         ? formatItemFullDetail(row.projectedItem, fetchedItem)
         : row.getFullDetail()

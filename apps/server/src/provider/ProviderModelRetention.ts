@@ -33,7 +33,8 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
 
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
-  if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
+  const isOpenCode = provider.driver === ProviderDriverKind.make("opencode");
+  if (!isAntigravity && !isCodex && !isOpenCode) {
     return true;
   }
 
@@ -51,7 +52,7 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     provider.enabled && !provider.installed && provider.status === "warning";
   const isIncompleteInstalledProbe =
     provider.installed &&
-    (provider.status === "error" || (isCodex && provider.status === "warning"));
+    (provider.status === "error" || ((isCodex || isOpenCode) && provider.status === "warning"));
   return isPendingAntigravityAuthentication || isPendingInitialProbe || isIncompleteInstalledProbe;
 };
 

@@ -1,3 +1,4 @@
+import * as TestGitLabCli from "./gitLabCli.testkit.ts";
 import { afterEach, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,13 +7,12 @@ import { VcsProcessExitError } from "@goat/contracts";
 
 import type * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
-import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 
 const run = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>();
 const layer = it.layer(
   GitLabPullRequestCli.layer.pipe(
-    Layer.provide(GitLabCli.layer),
+    Layer.provide(TestGitLabCli.layer),
     Layer.provide(TestSourceControlHost.layer({ process: { run } })),
   ),
 );

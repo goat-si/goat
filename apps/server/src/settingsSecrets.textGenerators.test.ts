@@ -11,6 +11,7 @@ import {
 import { expect, it } from "vite-plus/test";
 import { redactServerSettingsForClient } from "./serverSettings.ts";
 import { it as effectIt, assert } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -25,8 +26,16 @@ import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerConfig from "./config.ts";
 
 effectIt.effect.each([
-  ["an OmO-only setup normalizes memory generation to OmO's default", resolveMemoryModelSelection],
-  ["the review guide inherits the normalized OmO default", resolveReviewGuideModelSelection],
+  [
+    "an OmO-only setup normalizes memory generation to OmO's default",
+    (settings: ServerSettings, now: number) =>
+      resolveMemoryModelSelection(settings, undefined, now),
+  ],
+  [
+    "the review guide inherits the normalized OmO default",
+    (settings: ServerSettings, now: number) =>
+      resolveReviewGuideModelSelection(settings, undefined, null, now),
+  ],
 ] as const)("%s", ([, resolve]) =>
   Effect.gen(function* () {
     const service = yield* ServerSettingsModule.ServerSettingsService;
@@ -46,7 +55,7 @@ effectIt.effect.each([
         [omo]: { driver: ProviderDriverKind.make("omo"), enabled: true, config: {} },
       },
     });
-    assert.deepStrictEqual(resolve(settings, undefined, null), {
+    assert.deepStrictEqual(resolve(settings, yield* Clock.currentTimeMillis), {
       instanceId: omo,
       model: "default",
     });

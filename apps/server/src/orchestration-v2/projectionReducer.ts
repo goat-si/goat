@@ -1,3 +1,6 @@
+import { preserveAttemptDelivery } from "./AttemptInputDelivery.ts";
+import { attributePendingBackgroundTasks } from "./projectionProviderThread.ts";
+import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -197,6 +200,11 @@ function applyToProjectionEvent(
         thread: event.payload,
         updatedAt: event.payload.updatedAt,
       };
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
+      };
     case "thread.visited":
     case "thread.marked-unread":
       return {
@@ -231,7 +239,7 @@ function applyToProjectionEvent(
     case "run-attempt.updated":
       return withLocalVisibleTurnItems({
         ...base,
-        attempts: upsertById(base.attempts, event.payload),
+        attempts: upsertById(base.attempts, preserveAttemptDelivery(base.attempts, event.payload)),
       });
     case "node.updated":
       return {
@@ -273,7 +281,14 @@ function applyToProjectionEvent(
                 activeProviderThreadId: event.payload.id,
               }
             : base.thread,
-        providerThreads: upsertById(base.providerThreads, event.payload),
+        providerThreads: upsertById(
+          base.providerThreads,
+          attributePendingBackgroundTasks(
+            event.payload,
+            base.providerThreads.find((thread) => thread.id === event.payload.id),
+            event.runId,
+          ),
+        ),
       };
     case "provider-turn.updated":
       return {

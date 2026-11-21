@@ -94,7 +94,7 @@ function newQueue(environmentId: EnvironmentId) {
     const attachments = owned.get(key);
     if (attachments === undefined) return;
     owned.delete(key);
-    releaseGoatBotAttachments(attachments);
+    releaseGoatBotAttachments(attachments, environmentId);
   };
   const queue = createGoatBotSendQueue<GoatBotDraftAttachment>({
     onChange: changed,

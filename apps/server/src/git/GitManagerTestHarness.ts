@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 // @effect-diagnostics effectFnOpportunity:off - test fixture factories and mock services.
 import { makeTempDir } from "./testkit/fileFixtures.ts";
 import { GitFixtureTemplates, layerGitFixtureTemplates, runGit } from "./testkit/gitRepository.ts";
@@ -156,6 +157,7 @@ function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
+    ...noMemoryGeneration,
     generateCommitMessage: (input) =>
       Effect.succeed({
         subject: "Implement stacked git actions",
@@ -180,6 +182,7 @@ function createTextGeneration(
   };
 
   return {
+    ...noMemoryGeneration,
     generateCommitMessage: (input) =>
       implementation.generateCommitMessage(input).pipe(
         Effect.mapError(
@@ -584,8 +587,10 @@ export function makeManager(input?: {
     if (input?.seed !== undefined) {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
+    // The manager keeps using these services, so they live as long as the test's scope.
+    const services = yield* Layer.build(layerManager);
     const manager = yield* GitManager.make.pipe(
-      Effect.provide(layerManager),
+      Effect.provideContext(services),
       Effect.provideContext(stores),
     );
     return { manager, providerCalls };

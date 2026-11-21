@@ -1,33 +1,24 @@
+import { extractPng } from "@goat/shared/png";
 import { withHostStatus } from "./DeviceDiscoveryState.ts";
 import {
-  type DeviceActionInput,
   type DeviceCloseInput,
-  type DeviceConfigureInput,
-  type DeviceDetail,
-  type DeviceDetailInput,
   type DeviceError,
   type DeviceHostId,
   type DeviceId,
   DeviceHostUnavailableError,
   DeviceNotFoundError,
   DeviceOperationError,
-  type DeviceOpenInput,
   type DevicePlatform,
   DevicePlatformUnavailableError,
   type DeviceServiceState,
   type DeviceSession,
-  type DeviceShutdownInput,
   type DeviceSummary,
-  type DeviceEasAccount,
   DeviceEasAccountError,
-  type DeviceEasAccountInput,
   type DeviceHostConfig,
   type EasDeviceHostConfig,
   type SshDeviceHostConfig,
-  type DeviceHostSummary,
   LOCAL_DEVICE_HOST_ID,
   LOCAL_DEVICE_HOST_LABEL,
-  type ThreadId,
 } from "@goat/contracts";
 import { actionableHostFailure, sshProbeFailureMessage } from "./DeviceHostDiagnostics.ts";
 import * as FileSystem from "effect/FileSystem";
@@ -47,7 +38,6 @@ import {
   agentDeviceSession,
   writeAgentDeviceConfig,
 } from "./AgentDeviceTarget.ts";
-import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -72,77 +62,13 @@ import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 
 export const DEVICE_HUB_ROUTE_PREFIX = "/api/device-hub";
 
-export interface DeviceScreenshot {
-  readonly device: DeviceSummary;
-  readonly png: Uint8Array;
-}
-
-export interface DeviceReadiness extends DeviceHost.DeviceHostReady {
-  readonly hostId: DeviceHostId;
-}
-
-export interface DeviceAgentReadiness extends DeviceReadiness {
-  /** Null when each device has its own daemon; see `DeviceOperations.agentEndpoint`. */
-  readonly agentDevice: DeviceHost.AgentDeviceEndpoint | null;
-}
-
-export class DeviceService extends Context.Service<
-  DeviceService,
-  {
-    readonly agentCli: Effect.Effect<string, DeviceError>;
-    readonly testHost: (
-      config: SshDeviceHostConfig,
-    ) => Effect.Effect<DeviceHostSummary, DeviceError>;
-    /** Who an Expo credential signs in as and which EAS projects it can run sessions under. */
-    readonly easAccount: (
-      input: DeviceEasAccountInput,
-    ) => Effect.Effect<DeviceEasAccount, DeviceEasAccountError>;
-    /**
-     * The agent-device flags that reach the device: its config and session,
-     * and the id agent-device selects it by, which can differ from its id here.
-     */
-    readonly agentTarget: (input: {
-      threadId: ThreadId;
-      hostId: DeviceHostId;
-      deviceId: DeviceId;
-    }) => Effect.Effect<
-      { readonly agentDeviceId: string; readonly args: ReadonlyArray<string> },
-      DeviceError
-    >;
-    readonly state: Effect.Effect<DeviceServiceState>;
-    readonly subscribe: Effect.Effect<PubSub.Subscription<DeviceServiceState>, never, Scope.Scope>;
-    readonly configure: (
-      input: DeviceConfigureInput,
-    ) => Effect.Effect<DeviceServiceState, DeviceError>;
-    readonly list: Effect.Effect<DeviceServiceState, DeviceError>;
-    readonly updateTool: (tool: "hub" | "agent") => Effect.Effect<DeviceServiceState, DeviceError>;
-    readonly inspect: Effect.Effect<DeviceServiceState>;
-    readonly retryHost: (hostId: DeviceHostId) => Effect.Effect<DeviceServiceState, DeviceError>;
-    readonly open: (
-      input: DeviceOpenInput,
-      context?: DeviceHost.DeviceOpenContext,
-    ) => Effect.Effect<DeviceSession, DeviceError>;
-    readonly close: (input: DeviceCloseInput) => Effect.Effect<void, DeviceError>;
-    readonly shutdown: (input: DeviceShutdownInput) => Effect.Effect<void, DeviceError>;
-    readonly detail: (input: DeviceDetailInput) => Effect.Effect<DeviceDetail, DeviceError>;
-    readonly action: (input: DeviceActionInput) => Effect.Effect<DeviceDetail, DeviceError>;
-    readonly screenshot: (input: {
-      readonly hostId?: DeviceHostId | undefined;
-      readonly deviceId: DeviceId;
-    }) => Effect.Effect<DeviceScreenshot, DeviceError>;
-    readonly readiness: (hostId?: DeviceHostId) => Effect.Effect<DeviceReadiness, DeviceError>;
-    readonly readinessIfSupported: (
-      hostId?: DeviceHostId,
-    ) => Effect.Effect<DeviceReadiness | null, DeviceError>;
-    readonly agentReadinessIfSupported: (
-      hostId?: DeviceHostId,
-    ) => Effect.Effect<DeviceAgentReadiness | null, DeviceError>;
-    readonly currentReadiness: (hostId?: DeviceHostId) => Effect.Effect<DeviceReadiness | null>;
-    readonly sessionsForThread: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<DeviceSession>>;
-    /** Ends the thread's device sessions and their agent-device sessions; devices keep running. */
-    readonly releaseThread: (threadId: ThreadId) => Effect.Effect<void, DeviceError>;
-  }
->()("goat/device/DeviceService") {}
+export { DeviceService } from "./DeviceServiceContract.ts";
+export type {
+  DeviceScreenshot,
+  DeviceReadiness,
+  DeviceAgentReadiness,
+} from "./DeviceServiceContract.ts";
+import { DeviceService, type DeviceReadiness } from "./DeviceServiceContract.ts";
 
 interface ServiceState {
   readonly state: DeviceServiceState;
@@ -721,7 +647,16 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const screenshot: DeviceService["Service"]["screenshot"] = Effect.fn("DeviceService.screenshot")(
     function* (input) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
-      return { device, png: yield* ready.devices.screenshot(device) };
+      const bytes = yield* ready.devices.screenshot(device);
+      const png = extractPng(bytes);
+      if (png === undefined) {
+        return yield* new DeviceOperationError({
+          operation: "screenshot",
+          reason: "hub_rejected",
+          cause: `The hub returned ${bytes.length} bytes without a complete PNG.`,
+        });
+      }
+      return { device, png };
     },
   );
 
@@ -790,7 +725,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       easAccount: Effect.fn("DeviceService.easAccount")(function () {
         return Effect.fail(
           new DeviceEasAccountError({
-            reason: "EAS accounts are unavailable in this device service.",
+            reason: "Expo accounts are unavailable in this device service.",
           }),
         );
       }),
@@ -936,7 +871,7 @@ export const make = Effect.gen(function* () {
         return yield* SshDeviceHost.probe(host).pipe(Effect.provide(probeContext));
       }).pipe(
         Effect.mapError((error) =>
-          error._tag === "DeviceHostError" && SshDeviceHost.isSshWindowsHostError(error.cause)
+          error._tag === "DeviceHostError" && SshDeviceHost.isSshProbeFailure(error.cause)
             ? new DeviceHostUnavailableError({
                 hostId: host.id,
                 hostLabel: host.label,
@@ -961,9 +896,9 @@ export const make = Effect.gen(function* () {
             new DeviceOperationError({
               operation: "update device tool",
               reason: "command_failed",
-              // Only the exit code goes into the shown message; npm's stderr can carry registry credentials.
+              ...(cause.reason === "npm_not_found" ? { recovery: "npm_not_found" as const } : {}),
               ...(cause.exitCode !== undefined ? { exitCode: cause.exitCode } : {}),
-              cause,
+              cause: cause.message,
             }),
         ),
       ),
@@ -1063,7 +998,7 @@ export const make = Effect.gen(function* () {
     );
   });
   const changes = yield* settings.subscribeChanges;
-  // Settings keep EAS hosts apart from SSH hosts; an id both lists use stays the SSH host's.
+  // Settings keep Expo hosts apart from SSH hosts; an id both lists use stays the SSH host's.
   const configuredHosts = (value: {
     readonly deviceHosts: ReadonlyArray<SshDeviceHostConfig>;
     readonly easDeviceHosts: ReadonlyArray<EasDeviceHostConfig>;

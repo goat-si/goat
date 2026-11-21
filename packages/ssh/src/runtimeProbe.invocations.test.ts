@@ -294,3 +294,40 @@ it.effect("keyable modern Windows probes warm the existing facts cache", () =>
     assert.deepEqual(yield* f.asks(), [...cold, "--version", "__ssh-helper protocol --shell"]);
   }).pipe(Effect.scoped),
 );
+
+it.effect.each([
+  ["active", "4102444810 1", true],
+  ["expired", "4102444799 1", false],
+  ["malformed", "invalid", false],
+  ["far future", "4102490000 1", false],
+] as const)(
+  "waits for a shared-home update marker only while active (%s)",
+  ([, contents, waited]) =>
+    Effect.gen(function* () {
+      const f = yield* fixture(false, false);
+      const runtime = NodePath.join(f.home, ".goat/runtime");
+      const marker = NodePath.join(runtime, "desktop-update-in-progress");
+      const trace = NodePath.join(f.home, "update-wait");
+      yield* Effect.promise(() => NodeFSP.writeFile(marker, contents + "\n"));
+      const script = buildRemoteRuntimeProbeScript(
+        version,
+        "runtime",
+        false,
+        false,
+        undefined,
+        false,
+        true,
+      );
+      const prefix = `date() { printf '4102444800\\n'; }
+sleep() {
+  printf 'waited' > "$HOME/update-wait"
+  rm "$HOME/.goat/runtime/desktop-update-in-progress"
+}
+`;
+      yield* Effect.promise(() =>
+        exec("sh", ["-c", prefix + script], { env: { ...process.env, HOME: f.home } }),
+      );
+      const actual = yield* Effect.promise(() => NodeFSP.readFile(trace, "utf8").catch(() => ""));
+      assert.equal(actual, waited ? "waited" : "");
+    }).pipe(Effect.scoped),
+);

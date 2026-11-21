@@ -21,9 +21,27 @@ import {
   buildDefaultCodexRouteMutation,
   confirmCodexRouteChange,
   includesProviderAccount,
+  providerReferenceCleared,
 } from "./CodexHomeRouteStatus";
 
 const codex = ProviderDriverKind.make("codex");
+it("reports a server-cleared provider secret after a route save", () => {
+  const before = {
+    driver: codex,
+    environment: [
+      {
+        name: "KEY",
+        value: "",
+        sensitive: true,
+        secret: { provider: "vault", reference: "op://v/i/f" },
+      },
+    ],
+  } as unknown as ProviderInstanceConfig;
+  const after = { ...before, environment: [{ name: "KEY", value: "", sensitive: true }] };
+  expect(providerReferenceCleared(before, after)).toBe(true);
+  expect(providerReferenceCleared(before, before)).toBe(false);
+});
+
 describe("OpenCodex Home routing", () => {
   it("keeps Home routing reachable for the four adapters without in-app sign-in", () => {
     const noSignIn = { installed: false, setup: { canAuthenticate: false, canInstall: false } };

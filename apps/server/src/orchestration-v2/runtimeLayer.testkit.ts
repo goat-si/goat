@@ -1,13 +1,29 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
+import { assert } from "@effect/vitest";
+import * as Queue from "effect/Queue";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as DateTime from "effect/DateTime";
+import * as EventSink from "./EventSink.ts";
+import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
+  CommandId,
+  ThreadId,
+  NodeId,
+  RuntimeRequestId,
+  MessageId,
   type ModelSelection,
-  type ProjectId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type PullRequestDetail,
   SourceControlProviderKind,
+  TurnItemId,
+  type OrchestrationV2Run,
 } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -31,7 +47,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 export const layerPlatformTest = Layer.merge(
-  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+  DocumentText.layer.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
@@ -83,7 +99,7 @@ const providerInstance = {
   enabled: true,
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 const alternateProviderInstance = {
   ...providerInstance,
@@ -249,5 +265,286 @@ export const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+export const writeProviderFailureForQueue = Effect.fn("writeProviderFailureForQueue")(function* (
+  eventSink: EventSink.EventSinkV2["Service"],
+  activeRun: OrchestrationV2Run & {
+    readonly rootNodeId: NonNullable<OrchestrationV2Run["rootNodeId"]>;
+  },
+  failureClass: "provider_error" | "usage_limit",
+) {
+  const { threadId } = activeRun;
+  const now = yield* DateTime.now;
+  yield* eventSink.write({
+    events: [
+      {
+        id: EventId.make(`${threadId}:error`),
+        type: "turn-item.updated",
+        threadId,
+        runId: activeRun.id,
+        nodeId: activeRun.rootNodeId,
+        providerInstanceId: activeRun.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`${threadId}:error`),
+          type: "error",
+          threadId,
+          runId: activeRun.id,
+          nodeId: activeRun.rootNodeId,
+          providerThreadId: activeRun.providerThreadId,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed",
+          title: "Provider failure",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          failure: {
+            class: failureClass,
+            message: "Provider failed.",
+            code: "provider_failed",
+            retryable: null,
+            ...(failureClass === "usage_limit"
+              ? { resetAt: DateTime.formatIso(DateTime.add(now, { hours: 1 })) }
+              : {}),
+          },
+        },
+      },
+      {
+        id: EventId.make(`${threadId}:failed`),
+        type: "run.updated",
+        threadId,
+        runId: activeRun.id,
+        nodeId: activeRun.rootNodeId,
+        providerInstanceId: activeRun.providerInstanceId,
+        occurredAt: now,
+        payload: { ...activeRun, status: "failed", completedAt: now },
+      },
+    ],
+  });
+});
+
+export const dispatchBufferedQueueWake = (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  threadId: ThreadId,
+  wakeMessageId: MessageId,
+) =>
+  orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`command:${wakeMessageId}`),
+    threadId,
+    messageId: wakeMessageId,
+    text: "Background work completed.",
+    attachments: [],
+    createdBy: "agent",
+    creationSource: "provider",
+    dispatchMode: { type: "queue_after_active" },
+    notification: {
+      source: { kind: "background_task" },
+      outcome: "completed",
+      summary: "Work finished",
+    },
+  });
+
+export const dispatchHeldAgentPrompt = (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  threadId: ThreadId,
+) =>
+  orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`${threadId}:agent`),
+    threadId,
+    messageId: MessageId.make(`${threadId}:agent`),
+    text: "A queued agent prompt",
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+    createdBy: "agent",
+    creationSource: "server",
+  });
+
+export const finishBufferedReplay = Effect.fn("finishBufferedReplay")(function* (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  sink: EventSink.EventSinkV2["Service"],
+  wake: OrchestrationV2Run,
+  promotedRunIds: Queue.Queue<OrchestrationV2Run["id"]>,
+) {
+  assert.equal(yield* Queue.take(promotedRunIds), wake.id);
+  const { threadId } = wake;
+  const markerMessageId = MessageId.make(`${threadId}:second-replay`);
+  yield* dispatchBufferedQueueWake(orchestrator, threadId, markerMessageId);
+  const projection = yield* orchestrator.getThreadProjection(threadId);
+  const agent = projection.runs.find((run) => run.userMessageId === `${threadId}:agent`);
+  const marker = projection.runs.find((run) => run.userMessageId === markerMessageId);
+  if (marker === undefined || agent?.queueHeld !== true)
+    return yield* Effect.die("Missing held agent or replay marker");
+  const now = yield* DateTime.now;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`${threadId}:replayed`),
+        type: "run.updated",
+        threadId,
+        runId: wake.id,
+        occurredAt: now,
+        payload: {
+          ...wake,
+          status: "completed",
+          startedAt: wake.startedAt ?? now,
+          completedAt: now,
+        },
+      },
+    ],
+  });
+  assert.equal(yield* Queue.take(promotedRunIds), marker.id);
+  const after = yield* orchestrator.getThreadProjection(threadId);
+  assert.isTrue(after.runs.find((run) => run.id === agent.id)?.queueHeld);
+});
+
+export const seedFoundationQuestion = Effect.fn("runtimeTest.seedFoundationQuestion")(function* (
+  name: string,
+  requestOverrides: Partial<import("@goat/contracts").OrchestrationV2RuntimeRequest> = {},
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make(`${name}`);
+  const requestId = RuntimeRequestId.make(`${name}-request`);
+  const nodeId = NodeId.make(`${name}-node`);
+  const itemId = TurnItemId.make(`${name}-item`);
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`${name}-create`),
+    createdBy: "user",
+    creationSource: "web",
+    threadId,
+    projectId: ProjectId.make(`${name}-project`),
+    title: "Async question",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: process.cwd(),
+  });
+  yield* eventSink.write({
+    commandId: CommandId.make(`${name}-seed`),
+    events: [
+      {
+        id: EventId.make(`${name}-node-event`),
+        type: "node.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: nodeId,
+          threadId,
+          runId: null,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        id: EventId.make(`${name}-request-event`),
+        type: "runtime-request.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+          ...requestOverrides,
+        },
+      },
+      {
+        id: EventId.make(`${name}-item-event`),
+        type: "turn-item.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          type: "user_input_request",
+          threadId,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          requestId,
+          responseMode: "message",
+          questions: [{ id: "color", header: "Color", question: "Which color?", options: [] }],
+        },
+      },
+    ],
+  });
+  return { threadId, requestId, nodeId, itemId, now };
+});
+
+export const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
+  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  RuntimeLayer.layerProjectService,
+  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerEventInfrastructure,
+).pipe(
+  Layer.provide(
+    Layer.mock(WorkspacePaths.WorkspacePaths)({
+      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+      peek: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      request: () => Effect.void,
+      getAvailable: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
+      invalidate: () => Effect.void,
+      subscribeChanges: Effect.never,
+    }),
+  ),
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerPlatformTest),
 );

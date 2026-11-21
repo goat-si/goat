@@ -141,9 +141,9 @@ ${REMOTE_ARCHIVE_FETCH}
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/$GOAT_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE" @@GOAT_ARCHIVE_DOWNLOAD_SECONDS@@
   GOAT_EXPECTED="$(grep " \\*\\{0,1\\}$GOAT_ARCHIVE$" "$GOAT_STAGING/SHA256SUMS" | cut -d' ' -f1)"
   if command -v sha256sum >/dev/null 2>&1; then
-    GOAT_ACTUAL="$(sha256sum "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
+    GOAT_ACTUAL="$(sha256sum < "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
   else
-    GOAT_ACTUAL="$(shasum -a 256 "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
+    GOAT_ACTUAL="$(shasum -a 256 < "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
   fi
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
@@ -160,10 +160,12 @@ ${REMOTE_ARCHIVE_EXTRACT}
     exit 1
   fi
   if command -v shasum >/dev/null 2>&1; then
-    GOAT_EXECUTABLE_SHA256="$(shasum -a 256 "$GOAT_STAGING/goat" | cut -d' ' -f1)"
+    GOAT_EXECUTABLE_SHA256="$(shasum -a 256 < "$GOAT_STAGING/goat" | cut -d' ' -f1)"
   else
-    GOAT_EXECUTABLE_SHA256="$(sha256sum "$GOAT_STAGING/goat" | cut -d' ' -f1)"
+    GOAT_EXECUTABLE_SHA256="$(sha256sum < "$GOAT_STAGING/goat" | cut -d' ' -f1)"
   fi
+  case "$GOAT_EXECUTABLE_SHA256" in *[!0123456789abcdef]*|'') printf 'Could not verify the GOAT executable checksum.\\n' >&2; exit 1 ;; esac
+  [ "\${#GOAT_EXECUTABLE_SHA256}" = 64 ] || { printf 'Could not verify the GOAT executable checksum.\\n' >&2; exit 1; }
   # Publish provenance with the verified executable, never backfill legacy directories.
   # The uploader names its source in the environment so run-t3.sh bytes stay source-free:
   # retained-runner identity compares those bytes across launches.

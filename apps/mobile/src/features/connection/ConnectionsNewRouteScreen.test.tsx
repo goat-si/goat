@@ -460,3 +460,17 @@ it("keeps the form open with a completion error when the old hub cannot be remov
   expect(screen.container.textContent).toContain("couldn't remove Old hub");
   expect(harness.leave).not.toHaveBeenCalled();
 });
+
+it("fills both fields from a pasted pairing link and preserves code on address edits", () => {
+  using screen = setup();
+  screen.edit("Code", "manual-code");
+  screen.edit("Address", "  http://100.82.53.91:3773/pair#token=test-pairing-code\n");
+  const address = screen.container.querySelector<HTMLInputElement>('input[aria-label="Address"]');
+  const code = screen.container.querySelector<HTMLInputElement>('input[aria-label="Code"]');
+  expect(address?.value).toBe("http://100.82.53.91:3773");
+  expect(code?.value).toBe("test-pairing-code");
+  screen.edit("Code", "replacement-code");
+  screen.edit("Address", "100.82.53.92:3773");
+  expect(address?.value).toBe("100.82.53.92:3773");
+  expect(code?.value).toBe("replacement-code");
+});

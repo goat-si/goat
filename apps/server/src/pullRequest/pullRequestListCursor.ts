@@ -1,4 +1,5 @@
 import type {
+  ProviderAcrossListCursor,
   ProviderChangeRequest,
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
@@ -6,6 +7,8 @@ import type {
 export interface ListCursor extends ProviderListCursor {
   readonly seenAt: ReadonlyArray<number>;
 }
+
+export const MAX_CURSOR_BOUNDARY_IDENTITIES = 128;
 
 export function listCursorKey(host: string, repository: string): string {
   return `${host} ${repository.toLowerCase()}`;
@@ -32,11 +35,29 @@ export function listCursorAt(
   fetched: ReadonlyArray<ProviderChangeRequest>,
   deliveredCount: number,
   resumeAfter?: string,
-): string {
+): string | null {
   const seenAt = new Set([
     ...(previous?.updatedBefore === boundary ? previous.seenAt : []),
     ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
   ]);
+  if (seenAt.size > MAX_CURSOR_BOUNDARY_IDENTITIES) return null;
   const cursor = `${boundary}|${(previous?.delivered ?? 0) + deliveredCount}|${[...seenAt].join(",")}`;
   return resumeAfter === undefined ? cursor : `${cursor}|${resumeAfter}`;
+}
+
+export function acrossListCursor<T extends { readonly repository: string }>(
+  cursor: ListCursor,
+  projects: ReadonlyArray<T>,
+  cursorOf: (project: T) => ListCursor | undefined,
+): ProviderAcrossListCursor {
+  return {
+    updatedBefore: cursor.updatedBefore,
+    delivered: cursor.delivered,
+    seenAt: projects.flatMap((project) => {
+      const previous = cursorOf(project);
+      return previous?.updatedBefore === cursor.updatedBefore
+        ? previous.seenAt.map((number) => ({ repository: project.repository, number }))
+        : [];
+    }),
+  };
 }

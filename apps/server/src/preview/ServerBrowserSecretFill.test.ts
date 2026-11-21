@@ -30,6 +30,8 @@ const makeTab = (
     readonly stillFilled?: boolean;
     readonly notPassword?: boolean;
     readonly origin?: string;
+    readonly url?: string;
+    readonly beforeFenceRead?: () => Promise<void>;
   } = {},
   /** Tabs of one profile share their browser context, and so their sign-ins. */
   context: object = {},
@@ -39,7 +41,7 @@ const makeTab = (
   let sessionClosed = false;
   const page = {
     on: () => page,
-    url: () => "https://login.test/",
+    url: () => faults.url ?? "https://login.test/",
     frames: () => [page],
     mainFrame: () => page,
     context: () => context,
@@ -74,6 +76,7 @@ const makeTab = (
     if (fn.includes('return "empty"')) {
       if (sessionClosed) throw new Error("Target page, context or browser has been closed");
       if (faults.stillFilled) throw new Error("Session closed");
+      await faults.beforeFenceRead?.();
       // Runs the page-side check against the scripted field.
       const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
       return { result: { value: check.call({ ...field }, args[0]?.value) } };
@@ -279,6 +282,49 @@ it.live(
     );
   },
 );
+
+it.live("returns a text snapshot permit without probing an unresolved sibling fence", () => {
+  const shared = {};
+  const probeStarted = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<void>();
+  const sibling = makeTab(
+    {
+      beforeFenceRead: () => {
+        probeStarted.resolve();
+        return reply.promise;
+      },
+    },
+    shared,
+  );
+  const { tab } = makeTab({ url: "https://docs.test/" }, shared);
+  return withFill(async (fill) => {
+    await fill.fill(sibling.tab, fillRequest, later(), record, checkBlocked);
+    const snapshot = () =>
+      tab.control.agent("agent-a", () =>
+        fill.guard(
+          tab,
+          {
+            ...request("snapshot", { captureImage: false }),
+            measureSnapshotFrame: true,
+          },
+          true,
+        ),
+      );
+    const guarded = snapshot();
+    try {
+      const first = await Promise.race([
+        guarded.then((measure) => ({ completed: true, measure })),
+        probeStarted.promise.then(() => ({ completed: false })),
+      ]);
+      expect(first).toEqual({ completed: true, measure: undefined });
+    } finally {
+      reply.resolve();
+      await guarded;
+    }
+    sibling.closeSession();
+    expect((await snapshot())?.()).toBe(true);
+  });
+});
 
 it.live("lifts the fence of a field whose frame session closed with its document", () => {
   const { tab, closeSession } = makeTab();

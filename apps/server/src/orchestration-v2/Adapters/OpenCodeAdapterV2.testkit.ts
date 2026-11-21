@@ -90,6 +90,7 @@ export type OpenCodeOrchestratorReplayHarnessError =
 
 function replayValueMatches(expected: unknown, actual: unknown): boolean {
   if (expected === "<any>" || expected === "<workspace>") return true;
+  if (expected === "<string>") return typeof actual === "string" && actual.length > 0;
   if (Array.isArray(expected)) {
     return (
       Array.isArray(actual) &&
@@ -435,7 +436,9 @@ function layerOpenCodeReplayRuntime(transcript: OpenCodeSdkReplayTranscript) {
   );
 }
 
-function layerOpenCodeProviderAdapterRegistryReplay(transcript: OpenCodeSdkReplayTranscript) {
+export function layerOpenCodeTestAdapterRegistry<E>(
+  runtime: Layer.Layer<OpenCodeRuntime.OpenCodeRuntime, E>,
+) {
   return ProviderAdapterRegistry.layerFromDrivers({
     drivers: [OpenCodeAdapterV2Driver],
     configMap: {
@@ -447,7 +450,7 @@ function layerOpenCodeProviderAdapterRegistryReplay(transcript: OpenCodeSdkRepla
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
-        layerOpenCodeReplayRuntime(transcript),
+        runtime,
         TestProviderHost.layer().pipe(
           Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
@@ -486,5 +489,6 @@ export const OpenCodeOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarn
           }),
       ),
     ),
-  makeProviderAdapterRegistryLayer: layerOpenCodeProviderAdapterRegistryReplay,
+  makeProviderAdapterRegistryLayer: (transcript) =>
+    layerOpenCodeTestAdapterRegistry(layerOpenCodeReplayRuntime(transcript)),
 };

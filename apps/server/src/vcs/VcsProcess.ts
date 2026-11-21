@@ -33,6 +33,7 @@ export interface VcsProcessInput {
   readonly spawnCwd?: string;
   readonly stdin?: string;
   readonly onStdoutChunk?: (chunk: Uint8Array) => void;
+  readonly onSpawn?: () => void;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number;
@@ -140,6 +141,7 @@ const REPOSITORY_SELECTORS = new Set([
   "GIT_COMMON_DIR",
   "GIT_INDEX_FILE",
   "GIT_OBJECT_DIRECTORY",
+  "GIT_QUARANTINE_PATH",
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 ]);
 
@@ -232,6 +234,7 @@ export const make = Effect.gen(function* () {
         ...(input.spawnCwd !== undefined ? { spawnCwd: input.spawnCwd } : {}),
         ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
         ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
+        ...(input.onSpawn !== undefined ? { onSpawn: input.onSpawn } : {}),
         env: {
           ...(input.command === "git"
             ? unsetInheritedRepositoryEnv(process.env, hostPlatform)

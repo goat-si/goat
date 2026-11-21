@@ -67,8 +67,11 @@ Patch rebuild guidance lives in the
 ## Native media presentations
 
 iOS delegates full-screen video to [AVKit](../../apps/mobile/modules/goat-native-controls/ios/GoatNativeVideoPresentation.swift)
-and images and documents to [Quick Look](../../apps/mobile/modules/goat-native-controls/ios/GoatNativeFilePresentation.swift).
-Each framework owns its controls and transition. A separate UIKit zoom transition
+and documents to [Quick Look](../../apps/mobile/modules/goat-native-controls/ios/GoatNativeFilePresentation.swift).
+Images use an [iOS gallery](../../apps/mobile/modules/goat-native-controls/ios/GoatNativeImageViewer.swift)
+that can page from the registered thumbnails while originals resolve. Quick Look needs
+prepared files before presentation and its image gestures can compete with paging
+and dismissal. A separate UIKit zoom transition
 prevents AVKit's native Close action from exiting full screen and interferes with
 Quick Look's interactive return to its thumbnail. The AVKit entry selector is
 guarded, with standard modal presentation as the fallback.
@@ -76,7 +79,8 @@ guarded, with standard modal presentation as the fallback.
 [Thumbnail registration](../../apps/mobile/modules/goat-native-controls/ios/GoatNativePresentation.swift)
 holds weak view references for transition and share-sheet anchors. It does not own
 the preview; a source row can disappear while a native presentation is open.
-Identifiers must distinguish attachments that are visible at the same time.
+Gallery identifiers follow media identity across thumbnail mounts. When the same
+image is rendered more than once, the registry prefers a visible copy.
 Native promises complete after dismissal so callers keep local file leases until
 the preview or share flow has finished.
 

@@ -3,6 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { isSshRemoteUrl } from "./sourceControl.ts";
 
 describe("isSshRemoteUrl", () => {
+  it("recognizes a single-component SCP path without confusing a drive or remote helper", () => {
+    expect(isSshRemoteUrl("gitserver:repo.git")).toBe(true);
+    expect(isSshRemoteUrl("C:repo.git")).toBe(false);
+    expect(isSshRemoteUrl("hg::repo.git")).toBe(false);
+  });
   it.each([
     "git@github.com:owner/repo.git",
     "ssh://git@github.com/owner/repo.git",

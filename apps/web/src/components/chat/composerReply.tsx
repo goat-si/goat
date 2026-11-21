@@ -121,11 +121,14 @@ export function refuseReplyThatGoesUnread(
   );
 }
 
-/** Whether a thread shows `threadId`'s history: it is that thread or descends from it by run forks. */
+/**
+ * Whether a thread shows `threadId`'s history: it is that thread or descends from it by run forks.
+ * Null when a thread on the way is not held (its family read is out, or it is gone): unknown.
+ */
 function showsHistoryOf(
   target: { environmentId: EnvironmentId; threadId: ThreadId },
   threadId: ThreadId,
-) {
+): boolean | null {
   const seen = new Set<ThreadId>();
   let current: ThreadId | null = target.threadId;
   while (current !== null && !seen.has(current)) {
@@ -134,14 +137,15 @@ function showsHistoryOf(
     const shell: EnvironmentThreadShell | null = readThreadShell(
       scopeThreadRef(target.environmentId, current),
     );
-    current = shell?.forkedFrom?.type === "run" ? shell.forkedFrom.threadId : null;
+    if (shell === null) return null;
+    current = shell.forkedFrom?.type === "run" ? shell.forkedFrom.threadId : null;
   }
   return false;
 }
 
 /**
- * A stashed reply returns only in a thread that shows its response (the thread that holds it, or
- * a side chat or fork of it), and a pending one wins. The send gate judges whether it may go.
+ * A stashed reply returns unless the held fork chain shows the thread does not show its response,
+ * and a pending one wins. Where the chain is not all held it returns: the send gate judges it.
  */
 export function restoreStashedReply(
   records: ReadonlyArray<ComposerContextRecord>,
@@ -152,7 +156,7 @@ export function restoreStashedReply(
   const { citation } = reply;
   if (
     citation.environmentId !== target.environmentId ||
-    !showsHistoryOf(target, citation.threadId)
+    showsHistoryOf(target, citation.threadId) === false
   ) {
     return;
   }

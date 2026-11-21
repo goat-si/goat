@@ -1,3 +1,6 @@
+import { msg, useMessages } from "gt-react";
+import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
+import { composerFileDedupKey, composerFileMatchesReattachMarker } from "./composerAttachmentFiles";
 import type { ChatComposerProps } from "./ChatComposer";
 import {
   type ComposerContextRecord,
@@ -10,8 +13,6 @@ import {
   type ComposerFileAttachment,
   type ComposerThreadDraftState,
   type PersistedComposerFileAttachment,
-  composerFileDedupKey,
-  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
   composerTargetKey,
   hydrateImagesFromPersisted,
@@ -30,6 +31,7 @@ import { collectComposerPromptInlineTokens } from "../../composer-editor-mention
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { pendingDraftWork } from "./pendingDraftWork";
+import { countPreparingComposerImages } from "./preparingComposerImages";
 import {
   previewAnnotationContextRecord,
   reviewCommentContextRecord,
@@ -96,6 +98,7 @@ export function useComposerStash(input: {
   ) => ReadonlyMap<string, string>;
   readonly expandMobileComposer: () => void;
 }) {
+  const m = useMessages();
   const {
     environmentId,
     composerDraftTarget,
@@ -445,6 +448,18 @@ export function useComposerStash(input: {
   const deleteStashEntryStable = useStableCallback(deleteStashEntry);
 
   const stashCurrentPrompt = async () => {
+    if (
+      composerPreviewAnnotations.some(
+        (annotation) =>
+          annotation.comment.trim().length > COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
+      )
+    ) {
+      toastManager.add({
+        type: "error",
+        title: m(msg("Annotation comments must be 8,000 characters or fewer.")),
+      });
+      return;
+    }
     // Stashing clears the draft. A pasted attachment still downloading would then land in the
     // emptied composer instead of travelling with the entry it belongs to.
     if (pendingDraftWork.has(attachmentTargetKey)) {
@@ -452,6 +467,16 @@ export function useComposerStash(input: {
         type: "info",
         title: "Still bringing attached context into this message.",
         description: "Stash again once its chip resolves.",
+      });
+      return;
+    }
+    // The snapshot only holds compressed images; a still-compressing one would land in the
+    // emptied composer instead of travelling with this entry.
+    if (countPreparingComposerImages(attachmentTargetKey) > 0) {
+      toastManager.add({
+        type: "info",
+        title: "Still compressing a pasted image.",
+        description: "Stash again once it finishes compressing.",
       });
       return;
     }
@@ -575,12 +600,12 @@ export function useComposerStash(input: {
         removeComposerDraftReviewComment(stashTarget, comment.id);
       }
       for (const annotation of composerPreviewAnnotations) {
-        releaseAttachmentUpload(annotation.id);
+        releaseAttachmentUpload(annotation.id, environmentId);
         removeComposerDraftPreviewAnnotation(stashTarget, annotation.id);
       }
       setComposerDraftPrompt(stashTarget, "");
       for (const image of images) {
-        releaseAttachmentUpload(image.id);
+        releaseAttachmentUpload(image.id, environmentId);
       }
       setComposerCursor(0);
       setComposerTrigger(null);

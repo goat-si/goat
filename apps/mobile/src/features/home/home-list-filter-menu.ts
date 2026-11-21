@@ -1,8 +1,20 @@
 import type { EnvironmentId } from "@goat/contracts";
+import type { WorkspaceEnvironment } from "../../state/workspaceModel";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+}
+
+export function homeListFilterEnvironments(environments: ReadonlyArray<WorkspaceEnvironment>) {
+  return environments
+    .filter((environment) => environment.isEnabled)
+    .map((environment) => ({
+      environmentId: environment.environmentId,
+      label: environment.environmentLabel,
+      connectionState: environment.connectionState,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
 }
 
 export interface HomeListFilterMenuProject {

@@ -270,6 +270,10 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
       case "OrchestrationDispatchCommandError":
       case "EnvironmentAuthorizationError":
         return false;
+      case "ComposerAttachmentUploadError":
+        return (
+          "cause" in error && error.cause !== error && shouldRetryThreadOutboxDelivery(error.cause)
+        );
       case "ConnectionTransientError":
       case "RpcClientError":
       case "EnvironmentRpcUnavailableError":

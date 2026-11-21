@@ -10,7 +10,7 @@
 #                            far; preview is a maintainers' test train)
 #   GOAT_VERSION           exact version to install (overrides GOAT_CHANNEL)
 #   GOAT_HOME              GOAT home directory (default: ~/.goat)
-#   GOAT_INSTALL_BIN_DIR   where the `goat` symlink goes (default: ~/.local/bin)
+#   GOAT_INSTALL_BIN_DIR   where the `goat` command goes (default: ~/.local/bin)
 #   GOAT_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $GOAT_HOME/runtime/goat/versions/<version>, the
@@ -289,7 +289,86 @@ fi
 
 step "Setting up the goat command..."
 mkdir -p "$bin_dir"
-ln -sfn "${target_dir}/goat" "${bin_dir}/goat"
+launcher_path="${bin_dir}/goat"
+launcher_tmp="$(mktemp "${bin_dir}/.goat-launcher.XXXXXX")"
+probe_out="$(mktemp "${bin_dir}/.goat-probe.XXXXXX")"
+probe_err="$(mktemp "${bin_dir}/.goat-probe.XXXXXX")"
+trap 'rm -f "$launcher_tmp" "$probe_out" "$probe_err"' EXIT
+nl='
+'
+launcher_head="#!/bin/sh${nl}exec '"
+launcher_tail="' \"\$@\"${nl}"
+launcher_script() {
+  quoted="$(printf '%sx' "$1" | sed "s/'/'\\\\''/g")"
+  printf '%s%s%s' "$launcher_head" "${quoted%x}" "$launcher_tail"
+}
+script_target() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le 4096 ] || return 0
+  contents="$(cat "$1"; printf x)"; contents="${contents%x}"
+  case "$contents" in "$launcher_head"*"$launcher_tail") ;; *) return 0 ;; esac
+  quoted="${contents#"$launcher_head"}"
+  unquoted="$(printf '%sx' "${quoted%"$launcher_tail"}" | sed "s/'\\\\''/'/g")"; unquoted="${unquoted%x}"
+  [ -n "$unquoted" ] && [ "$(launcher_script "$unquoted"; printf x)" = "${contents}x" ] && printf '%s' "$unquoted"
+  return 0
+}
+slot_empty=true
+if [ -e "$launcher_path" ] || [ -L "$launcher_path" ]; then
+  slot_empty=false
+  if [ -L "$launcher_path" ]; then
+    existing_kind=link
+    existing_link="$(readlink "$launcher_path" 2>/dev/null || true)"
+    existing="$existing_link"
+    case "$existing" in /*) ;; *) existing="${bin_dir}/${existing}" ;; esac
+  else
+    existing_kind=script
+    existing="$(script_target "$launcher_path")"
+  fi
+  owned=false
+  case "$existing" in
+    "$versions_dir"/*/goat)
+      suffix="${existing#"$versions_dir"/}"; version_part="${suffix%/goat}"
+      case "$version_part" in '' | . | .. | */*) ;; *) owned=true ;; esac ;;
+  esac
+  if ! "$owned" && [ -n "$existing" ]; then
+    real_versions="$(CDPATH='' cd -P -- "$versions_dir" && pwd)"
+    real_parent="$(CDPATH='' cd -P -- "$(dirname -- "$existing")" 2>/dev/null && pwd || true)"
+    [ "$(basename -- "$existing")" = goat ] && [ "$(dirname -- "$real_parent")" = "$real_versions" ] && owned=true
+  fi
+  "$owned" || fail "another goat is already at ${launcher_path}; it was left unchanged."
+fi
+LAUNCHER_PROBE_TIMEOUT_SECONDS=2
+LAUNCHER_PROBE_MAX_BLOCKS=8
+( ulimit -f "$LAUNCHER_PROBE_MAX_BLOCKS"; exec "${target_dir}/goat" __ssh-helper launcher-capabilities ) >"$probe_out" 2>"$probe_err" < /dev/null &
+probe_pid=$!
+(
+  sleeper=
+  trap '[ -z "$sleeper" ] || { kill "$sleeper" 2>/dev/null || :; wait "$sleeper" 2>/dev/null || :; }; exit 0' TERM
+  sleep "$LAUNCHER_PROBE_TIMEOUT_SECONDS" & sleeper=$!
+  wait "$sleeper" || exit 0
+  kill -KILL "$probe_pid" 2>/dev/null || :
+) </dev/null >/dev/null 2>&1 &
+probe_watchdog=$!
+probe_status=0; wait "$probe_pid" || probe_status=$?
+kill "$probe_watchdog" 2>/dev/null || :; wait "$probe_watchdog" 2>/dev/null || :
+if ! "$slot_empty"; then
+  if [ "$existing_kind" = link ]; then
+    [ -L "$launcher_path" ] && [ "$(readlink "$launcher_path" 2>/dev/null || true)" = "$existing_link" ] || fail "${launcher_path} changed during installation; it was left unchanged."
+  else
+    [ ! -L "$launcher_path" ] && [ "$(script_target "$launcher_path")" = "$existing" ] || fail "${launcher_path} changed during installation; it was left unchanged."
+  fi
+fi
+if [ "$probe_status" -eq 0 ] && [ "$(wc -c < "$probe_out")" -eq 16 ] && [ ! -s "$probe_err" ] && [ "$(cat "$probe_out")" = script-launcher ]; then
+  launcher_script "${target_dir}/goat" >"$launcher_tmp"
+  chmod 755 "$launcher_tmp"
+  if "$slot_empty"; then ln "$launcher_tmp" "$launcher_path" || fail "could not create ${launcher_path}; it was left unchanged."
+  else mv -f "$launcher_tmp" "$launcher_path"; fi
+else
+  rm -f "$launcher_tmp"
+  if "$slot_empty"; then ln -s "${target_dir}/goat" "$launcher_path" || fail "could not create ${launcher_path}; it was left unchanged."
+  else ln -s "${target_dir}/goat" "$launcher_tmp" && mv -f "$launcher_tmp" "$launcher_path"; fi
+fi
+rm -f "$launcher_tmp" "$probe_out" "$probe_err"
+trap - EXIT
 # Pruning keeps what this launcher points at; a background service cannot see bin_dir otherwise.
 launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/goat"
 launchers="${goat_home}/runtime/launchers"

@@ -21,6 +21,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("provider-runtime.continue"),
     sourceRunId: RunId,
+    processLossCount: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
@@ -51,6 +52,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     messageId: MessageId,
     // A declined steer's follow-up runs with the selection the user steered with.
     modelSelection: Schema.optional(ModelSelection),
+    pinnedScheduleSelection: Schema.optional(ModelSelection),
     steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({

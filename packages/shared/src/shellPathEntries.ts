@@ -10,7 +10,7 @@ export function mergePathEntries(
   for (const pathValue of [preferredPath, inheritedPath]) {
     if (!pathValue) continue;
     for (const entry of pathValue.split(delimiter)) {
-      const trimmedEntry = entry.trim();
+      const trimmedEntry = platform === "win32" ? entry.trim() : entry;
       if (!trimmedEntry || seen.has(trimmedEntry)) {
         continue;
       }

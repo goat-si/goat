@@ -48,6 +48,7 @@ export function mergeClaudeBackgroundTasks(
 export function claudeBackgroundDetails(
   launch:
     | {
+        readonly toolName: string;
         readonly classification: { readonly itemType: string };
         readonly input: { readonly type: string; readonly value: unknown };
         readonly startedAt: DateTime.Utc;
@@ -55,7 +56,7 @@ export function claudeBackgroundDetails(
     | undefined,
 ) {
   if (
-    launch?.classification.itemType !== "command_execution" ||
+    (launch?.classification.itemType !== "command_execution" && launch?.toolName !== "Monitor") ||
     launch.input.type !== "record" ||
     launch.input.value === null ||
     typeof launch.input.value !== "object"

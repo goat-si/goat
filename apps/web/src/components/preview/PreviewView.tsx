@@ -41,8 +41,6 @@ import { capturePreviewAnnotationScreenshot } from "~/lib/previewAnnotation";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
   rememberPreviewUrl,
-  readThreadPreviewState,
-  setActivePreviewTab,
   updatePreviewServerSnapshot,
   useThreadPreviewState,
 } from "~/previewStateStore";
@@ -66,7 +64,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
-import { subscribePreviewAction } from "./previewActionBus";
+import { desktopPreviewAction, subscribePreviewAction } from "./previewActionBus";
 import { closePreviewSession } from "./closePreviewSession";
 import { openPreviewSession } from "./openPreviewSession";
 import { showPreviewPopup } from "./showPreviewPopup";
@@ -82,8 +80,8 @@ import { useBrowserLayoutZoomFactor } from "~/browser/useBrowserLayoutZoomFactor
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
 import { PreviewUnreachable } from "./PreviewUnreachable";
+import { previewNavigationStatus } from "./previewEmptyStateLogic";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
-import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { Badge } from "~/components/ui/badge";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { alternatePreviewRuntime, useRendersServerTabNatively } from "~/browser/previewRuntime";
@@ -104,6 +102,8 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 import { focusPreviewWebview } from "./focusPreviewWebview";
+import { usePreviewFind } from "./PreviewFindBar";
+import { activatePreviewAddressTab } from "./activatePreviewAddressTab";
 import type { PreviewViewProps } from "./previewViewProps";
 
 export function PreviewView({
@@ -143,7 +143,7 @@ export function PreviewView({
   const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const serverBrowser = useEnvironmentSupportsServerBrowser(threadRef.environmentId);
-  const serverBrowserStop = useEnvironmentSupportsServerBrowserStop(threadRef.environmentId);
+  const stopSupport = useEnvironmentSupportsServerBrowserStop(threadRef.environmentId);
   const adjust = useAtomCommand(previewEnvironment.adjust, "preview appearance or zoom");
 
   usePreviewSession(threadRef);
@@ -168,6 +168,7 @@ export function PreviewView({
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
+  const find = usePreviewFind(visible ? runtimeTabId : null, snapshot, nativeServerTab);
   const serverOwnsRendering = snapshot?.runtime === "server";
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
   const [serverAspectRatioLocked, setServerAspectRatioLocked] = useState(false);
@@ -190,14 +191,14 @@ export function PreviewView({
   const desktopOverlay =
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const layoutZoomFactor = useBrowserLayoutZoomFactor(desktopOverlay?.zoomFactor ?? 1);
-  const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
+  const navStatus = previewNavigationStatus(snapshot, desktopOverlay?.navStatus);
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
-  const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
+  const loading = navStatus._tag === "Loading" || (desktopOverlay?.loading ?? false);
   const canGoBack = desktopOverlay?.canGoBack ?? snapshot?.canGoBack ?? false;
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
-  const showEmptyState = shouldShowPreviewEmptyState(snapshot);
+  const showEmptyState = navStatus._tag === "Idle";
   const serverStreamPending =
     isServerTab && !showEmptyState && !isUnreachable && serverFrameTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
@@ -267,16 +268,18 @@ export function PreviewView({
       reportPreviewAddressError(error);
     }
   };
-
   const handleRefresh = () => {
     if (isServerTab) serverSurfaceRef.current?.reload();
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
   const handleStopLoading = () => {
     if (isServerTab) serverSurfaceRef.current?.stopLoading();
+    else if (nativeServerTab && stopSupport.native) void adjustServerTab({ stopLoading: true });
     else if (runtimeTabId) void previewBridge?.stopLoading?.(runtimeTabId);
   };
-  const canStopLoading = isServerTab ? serverBrowserStop : Boolean(previewBridge?.stopLoading);
+  const canStopLoading = isServerTab
+    ? stopSupport.stream
+    : Boolean((nativeServerTab && stopSupport.native) || previewBridge?.stopLoading);
 
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
     if (!tabId) return;
@@ -293,7 +296,7 @@ export function PreviewView({
       });
       return;
     }
-    updatePreviewServerSnapshot(threadRef, result.value);
+    if (!change.stopLoading) updatePreviewServerSnapshot(threadRef, result.value);
   };
 
   const serverZoomFactor = snapshot?.zoomFactor ?? DEFAULT_PREVIEW_ZOOM_FACTOR;
@@ -420,6 +423,7 @@ export function PreviewView({
         zoomIn: handleZoomIn,
         zoomOut: handleZoomOut,
         resetZoom: handleResetZoom,
+        ...(find.open ? { find: find.open } : {}),
         clearCookies: () => void adjustServerTab({ clear: "cookies" }),
         clearCache: () => void adjustServerTab({ clear: "cache" }),
         ...(nativeServerTab && previewBridge
@@ -439,6 +443,7 @@ export function PreviewView({
           zoomIn: handleZoomIn,
           zoomOut: handleZoomOut,
           resetZoom: handleResetZoom,
+          ...(find.open ? { find: find.open } : {}),
           clearCookies: () =>
             void previewBridge
               ?.clearCookies(threadRef.environmentId, activeProfileId)
@@ -839,6 +844,9 @@ export function PreviewView({
         case "forward":
           (action === "back" ? handleBack : handleForward)();
           return;
+        case "find":
+          find.open?.();
+          return;
         case "focus-url":
           setFocusUrlNonce((value) => (value ?? 0) + 1);
           return;
@@ -860,7 +868,8 @@ export function PreviewView({
     if (!visible) return;
     const unsubscribeAction = subscribePreviewAction((action) => onPreviewAction(action));
     const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
-      if (action === "preview.focusUrl") onPreviewAction("focus-url");
+      const previewAction = desktopPreviewAction(action);
+      if (previewAction) onPreviewAction(previewAction);
     });
     return () => {
       unsubscribeAction();
@@ -895,19 +904,9 @@ export function PreviewView({
           ];
         })}
         history={recentHistoryEntries}
-        onActivateTab={(targetTabId) => {
-          const current = readThreadPreviewState(threadRef);
-          if (current.serverEpoch !== previewState.serverEpoch || !current.sessions[targetTabId])
-            return false;
-          const panel = useRightPanelStore.getState();
-          const surface = panel.byThreadKey[threadKey]?.surfaces.find(
-            (entry) => entry.kind === "preview" && entry.resourceId === targetTabId,
-          );
-          if (!surface) return false;
-          setActivePreviewTab(threadRef, targetTabId);
-          panel.activateSurface(threadRef, surface.id);
-          return true;
-        }}
+        onActivateTab={(targetTabId) =>
+          activatePreviewAddressTab(threadRef, previewState.serverEpoch, targetTabId)
+        }
         url={url}
         loading={loading || serverStreamPending}
         canGoBack={canGoBack && !serverInputDisabled}
@@ -977,6 +976,7 @@ export function PreviewView({
       />
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
+        {find.bar}
         {runtimeTabId && snapshot && isServerTab ? (
           <>
             {viewport._tag !== "fill" && !showEmptyState && !isUnreachable ? (

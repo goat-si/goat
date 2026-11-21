@@ -237,6 +237,83 @@ it.each(LAYOUTS)("shows workspace modes and retires the old option in %s", async
   }
 });
 
+it.each(["composer", "panel"] as const)(
+  "puts the workspace choices above a long machine list in %s",
+  async (layout) => {
+    await using screen = await setup();
+    state.serverThread = false;
+    const draftId = DraftId.make("many-machines");
+    const projectId = ProjectId.make("project");
+    const machines = Array.from({ length: 16 }, (_, index) => ({
+      environmentId: EnvironmentId.make(`machine-${index}`),
+      projectId,
+      label: `Machine ${index}`,
+      isPrimary: index === 0,
+      machine: "server" as const,
+    }));
+    useComposerDraftStore
+      .getState()
+      .setLogicalProjectDraftThreadId(
+        "project",
+        scopeProjectRef(machines[0]!.environmentId, projectId),
+        draftId,
+        { threadId: ThreadId.make("thread"), envMode: "local" },
+      );
+    const renderMachines = () =>
+      act(async () => {
+        const draft = session(draftId)!;
+        await screen.rerender(
+          <BranchToolbar
+            projectId={ProjectId.make("source")}
+            worktreePath={null}
+            isServerThread={false}
+            layout={layout}
+            panelSection="workspace"
+            draftId={draftId}
+            environmentId={draft.environmentId}
+            threadId={ThreadId.make("thread")}
+            showGitControls
+            envMode={draft.envMode}
+            envLocked={false}
+            startFromOrigin={false}
+            onStartFromOriginChange={vi.fn()}
+            onEnvModeChange={(envMode) =>
+              useComposerDraftStore.getState().setDraftThreadContext(draftId, { envMode })
+            }
+            availableEnvironments={machines}
+            onEnvironmentChange={(environmentId) =>
+              useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+                projectRef: scopeProjectRef(environmentId, projectId),
+              })
+            }
+          />,
+        );
+      });
+    await renderMachines();
+    await userEvent.click(screen.workspaceTrigger(layout));
+    await userEvent.click(page.getByRole("menuitemradio", { name: "Machine 12", exact: true }));
+    expect(session(draftId)?.environmentId).toBe(EnvironmentId.make("machine-12"));
+    await renderMachines();
+
+    await userEvent.click(screen.workspaceTrigger(layout));
+    const menu = page.getByRole("menu");
+    await expect.element(menu).toBeVisible();
+    const text = menu.element().textContent ?? "";
+    expect(text.indexOf("Workspace")).toBeLessThan(text.indexOf("Run on"));
+    const rows = [...menu.element().querySelectorAll('[role="menuitemradio"]')].map(
+      (row) => row.textContent,
+    );
+    expect(rows.slice(0, 2)).toEqual(["Local", "New worktree"]);
+    const newWorktree = page.getByRole("menuitemradio", { name: "New worktree", exact: true });
+    await expect.element(newWorktree).toBeInViewport();
+    await userEvent.click(newWorktree);
+    expect(session(draftId)).toMatchObject({
+      envMode: "worktree",
+      environmentId: EnvironmentId.make("machine-12"),
+    });
+  },
+);
+
 it.each([
   [false, "local", null, "Local · Build host"],
   [false, "worktree", "/existing", "Worktree · Build host"],

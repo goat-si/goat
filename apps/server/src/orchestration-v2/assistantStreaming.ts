@@ -3,7 +3,7 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import { hasAssistantTextBoundary } from "./Adapters/AssistantTextBoundary.ts";
 
 // List fences can open at any indentation; closers may be at most three spaces deeper.
-const MARKDOWN_FENCE_PATTERN = /^( *)(`{3,}|~{3,})/;
+const MARKDOWN_FENCE_PATTERN = /^( *)(`{3,}(?![^`\r\n]*`)|~{3,})/;
 // CommonMark blank lines contain only spaces and tabs.
 const BLANK_LINE_PATTERN = /^[ \t]*$/;
 // Require trailing space so partial list markers cannot match during streaming.

@@ -11,10 +11,12 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { openCodePermissionRules } from "./adapter.ts";
+import { openCodeChildPermissionRules, openCodePermissionRules } from "./adapter.ts";
+import { mergeOpenCodeResumePermission } from "./permissionRules.ts";
 import {
   asyncEventStream,
   makeOpenCodeRuntimeHarness,
+  permissionAction,
   runtimePolicy,
 } from "./adapter.harness.testkit.ts";
 
@@ -177,6 +179,51 @@ const resumeFixture = Effect.fn("resumeFixture")(function* (
 });
 
 describe("OpenCode native subagent limit", () => {
+  it("allows external directories at child launch only for the unrestricted no-approval policy", () => {
+    const inherited = (policy: ReturnType<typeof runtimePolicy>) =>
+      openCodePermissionRules(policy).filter(
+        (rule) => rule.permission === "external_directory" || rule.action === "deny",
+      );
+    const fullAccess = runtimePolicy("full-access");
+    assert.equal(permissionAction(inherited(fullAccess), "external_directory"), "allow");
+    const approval = runtimePolicy("full-access", { approvalPolicy: "on-request" });
+    assert.equal(permissionAction(inherited(approval), "external_directory"), "ask");
+    const workspaceWrite = runtimePolicy("auto-accept-edits", {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+    });
+    assert.equal(permissionAction(inherited(workspaceWrite), "external_directory"), "deny");
+    const nativeDenial = {
+      permission: "external_directory",
+      pattern: "*",
+      action: "deny",
+    } as const;
+    const child = openCodeChildPermissionRules(fullAccess, [nativeDenial], true);
+    assert.equal(permissionAction(child, "external_directory"), "deny");
+    assert.equal(permissionAction(child, "task"), "deny");
+  });
+
+  it("upgrades an older full-access base and removes the inherited allow under approval", () => {
+    const oldBase = [{ permission: "*", pattern: "*", action: "allow" }] as const;
+    const fullAccess = mergeOpenCodeResumePermission(
+      { permission: [...oldBase], metadata: { goatPermissionBase: oldBase } },
+      runtimePolicy("full-access"),
+      true,
+    );
+    assert.deepInclude(fullAccess.permission, {
+      permission: "external_directory",
+      pattern: "*",
+      action: "allow",
+    });
+    const approval = mergeOpenCodeResumePermission(
+      fullAccess,
+      runtimePolicy("approval-required"),
+      undefined,
+    );
+    assert.equal(permissionAction(approval.permission, "external_directory"), "ask");
+    assert.equal(permissionAction(approval.permission, "task"), "deny");
+  });
+
   it.effect("installs GOAT rules on a fork before its first prompt (#2239)", () =>
     Effect.gen(function* () {
       const { calls, harness, root, sessions, config } = yield* limitHarness(

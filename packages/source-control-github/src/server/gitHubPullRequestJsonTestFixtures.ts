@@ -69,6 +69,7 @@ const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
   body: "",
   lastEditedAt: null,
   isMinimized: false,
+  pullRequestReview: null,
   url: "https://github.com/acme/web/pull/1#discussion",
   ...raw,
   author: actor(author),

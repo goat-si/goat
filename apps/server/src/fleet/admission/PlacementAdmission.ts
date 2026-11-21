@@ -142,37 +142,33 @@ const make = Effect.gen(function* () {
   const guardFor =
     (commandId: CommandId): CommitGuardSelector =>
     (command) => {
-      const refuse = (reason: string) => Effect.fail(new CommitGuardRefused({ reason }));
-      if (command.commandId === commandId && command.commandType === "thread.create")
-        return () =>
-          store.bindThread({ commandId, epoch, threadId: command.threadId }).pipe(
-            Effect.orElseSucceed(() => false),
-            Effect.flatMap((bound) => (bound ? Effect.void : refuse("placement is not pending"))),
-          );
-      if (
+      const createsThread =
+        command.commandId === commandId && command.commandType === "thread.create";
+      const sendsFirst =
         command.commandId === initialMessageCommandId(commandId) &&
-        command.commandType === "message.dispatch"
-      )
-        return (storedEvents) => {
-          const created = storedEvents.find((stored) => stored.event.type === "run.created");
-          if (created?.event.type !== "run.created")
-            return refuse("the first message created no run");
-          return store
-            .markCounted({
-              commandId,
-              epoch,
-              threadId: command.threadId,
-              runId: created.event.payload.id,
-            })
-            .pipe(
-              Effect.orElseSucceed(() => false),
-              Effect.flatMap((counted) =>
-                counted ? Effect.void : refuse("placement is not pending"),
-              ),
-            );
-        };
+        command.commandType === "message.dispatch";
       // Fibers the launch forks inherit this reference; their own commands pass unguarded.
-      return undefined;
+      if (!createsThread && !sendsFirst) return undefined;
+      return (storedEvents) => {
+        const created = storedEvents.find((stored) => stored.event.type === "run.created");
+        const binding = { commandId, epoch, threadId: command.threadId };
+        if (created?.event.type !== "run.created" && sendsFirst)
+          return Effect.fail(
+            new CommitGuardRefused({ reason: "the first message created no run" }),
+          );
+        const write =
+          created?.event.type === "run.created"
+            ? store.markCounted({ ...binding, runId: created.event.payload.id })
+            : store.bindThread(binding);
+        return write.pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.flatMap((accepted) =>
+            accepted
+              ? Effect.void
+              : Effect.fail(new CommitGuardRefused({ reason: "placement is not pending" })),
+          ),
+        );
+      };
     };
 
   /** Runs one admitted launch to its end; the reservation row, not this fiber's exit, is the outcome. */

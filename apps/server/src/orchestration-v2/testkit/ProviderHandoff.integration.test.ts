@@ -35,17 +35,18 @@ it.live.each(
       ["failed", true, true, true],
       ["interrupted", false, true, false],
       ["interrupted", true, false, true],
+      ["interrupted", false, false, false, true],
       ["cancelled", false, false, false],
       ["cancelled", true, true, false],
     ] as const
   ).map(
-    ([status, queued, returning, native]) =>
+    ([status, queued, returning, native, stopBeforeSubmit]) =>
       [
-        `${status} context ${queued ? "through the queue" : "immediately"} to ${returning ? "a returning" : "a new"} provider via ${native ? "native history" : "text"}`,
-        { status, queued, returning, native },
+        `${status} context ${queued ? "through the queue" : "immediately"} to ${returning ? "a returning" : "a new"} provider via ${native ? "native history" : "text"}${stopBeforeSubmit ? " with a post-fence Stop" : ""}`,
+        { status, queued, returning, native, stopBeforeSubmit },
       ] as const,
   ),
-)("hands off %s", ([, { status, queued, returning, native }]) =>
+)("hands off %s", ([, { status, queued, returning, native, stopBeforeSubmit }]) =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace(`handoff-${status}-${queued}-${returning}`);
@@ -72,6 +73,9 @@ it.live.each(
             modelSelection,
             responseByRunOrdinal: { [sourceOrdinal]: partialResponse },
             capturedTurns,
+            ...(stopBeforeSubmit && modelSelection.instanceId === targetSelection.instanceId
+              ? { skipAfterFenceOnOrdinal: sourceOrdinal + 1 }
+              : {}),
             ...(native && modelSelection.instanceId === targetSelection.instanceId
               ? { injectedHistory }
               : {}),
@@ -156,13 +160,19 @@ it.live.each(
         if (!queued) {
           yield* dispatch("target", "Continue", targetSelection);
         }
-        yield* waitForRun(sourceOrdinal + 1, "completed");
+        if (stopBeforeSubmit) yield* worker.drain();
+        else yield* waitForRun(sourceOrdinal + 1, "completed");
         const projection = yield* orchestrator.getThreadProjection(threadId);
         const targetRun = projection.runs.at(-1)!;
         const handoff = projection.contextHandoffs.find(
           (candidate) => candidate.id === targetRun.contextHandoffId,
         );
         assert.isDefined(handoff);
+        if (stopBeforeSubmit) {
+          assert.isUndefined(handoff?.delivery);
+          assert.lengthOf(yield* Ref.get(capturedTurns), 1);
+          return;
+        }
         assert.equal(
           handoff?.strategy,
           returning ? "delta_since_target_last_seen" : "full_thread_summary",

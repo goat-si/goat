@@ -1,3 +1,7 @@
+import {
+  verifyManagedCheckout,
+  type ManagedCheckoutIdentity,
+} from "../orchestration-v2/goat/restoreSnapshot.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -42,6 +46,7 @@ import {
   type WorkspaceLeaseUnavailableError,
 } from "../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { WorktreeHolderGuard } from "./WorktreeHolderGuard.ts";
 
 const leaseUnavailable =
   (operation: string, command: string, cwd: string) => (error: WorkspaceLeaseUnavailableError) =>
@@ -51,6 +56,10 @@ export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
     readonly repositoryRoot: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
+    readonly verifyManagedCheckout: (
+      input: ManagedCheckoutIdentity,
+    ) => Effect.Effect<void, GitCommandError>;
+    readonly resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"];
     readonly hasCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -64,6 +73,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly localStatus: (
       input: VcsStatusInput,
+      options?: GitManager.GitLocalStatusOptions,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly upstreamDivergence: (cwd: string) => Effect.Effect<
@@ -81,6 +91,8 @@ export class GitWorkflowService extends Context.Service<
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
+    /** The checkout's own HEAD file, inside a linked worktree's admin directory when there is one. */
+    readonly headPath: (cwd: string) => Effect.Effect<string | null, never>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
@@ -122,6 +134,10 @@ export class GitWorkflowService extends Context.Service<
       { readonly commitSha: string; readonly remoteRefName: string },
       GitCommandError
     >;
+    readonly resolveWorktreeFallbackRemote: (
+      cwd: string,
+      preferredRemote?: string,
+    ) => Effect.Effect<GitVcsDriver.GitWorktreeBaseRemote | null, GitCommandError>;
     readonly resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"];
     readonly fetchWorktreeBaseCommit: (input: {
       readonly cwd: string;
@@ -134,6 +150,7 @@ export class GitWorkflowService extends Context.Service<
     >;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
+      guard?: (path: string) => Effect.Effect<void, GitCommandError>,
     ) => Effect.Effect<void, GitCommandError>;
     readonly inspectExistingBranch: GitVcsDriver.GitVcsDriver["Service"]["inspectExistingBranch"];
     /** The worktree that has `branch` checked out, or null when none has it. */
@@ -352,6 +369,24 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+    verifyManagedCheckout: (input) =>
+      verifyManagedCheckout(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitWorkflowService.verifyManagedCheckout",
+              command: "git worktree",
+              cwd: input.projectCwd,
+              detail: `Could not verify the checkout at ${input.worktreePath}: ${cause.detail}.`,
+              cause,
+            }),
+        ),
+      ),
+    resolveCommit: Effect.fn("GitWorkflowService.resolveCommit")(function (input) {
+      return ensureGitCommand("GitWorkflowService.resolveCommit", input.cwd).pipe(
+        Effect.andThen(git.resolveCommit(input)),
+      );
+    }),
     hasCommit: Effect.fn("GitWorkflowService.hasCommit")(function (input) {
       return ensureGitCommand("GitWorkflowService.hasCommit", input.cwd).pipe(
         Effect.andThen(
@@ -392,11 +427,11 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    localStatus: Effect.fn("GitWorkflowService.localStatus")(function (input) {
+    localStatus: Effect.fn("GitWorkflowService.localStatus")(function (input, options) {
       return detectGitRepositoryForStatus("GitWorkflowService.localStatus", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository
-            ? gitManager.localStatus(input)
+            ? gitManager.localStatus(input, options)
             : Effect.succeed(nonRepositoryLocalStatus()),
         ),
       );
@@ -447,6 +482,19 @@ export const make = Effect.gen(function* () {
     invalidateLocalStatus: gitManager.invalidateLocalStatus,
     invalidateRemoteStatus: gitManager.invalidateRemoteStatus,
     invalidateStatus: gitManager.invalidateStatus,
+    headPath: Effect.fn("GitWorkflowService.headPath")(function (cwd) {
+      return git
+        .execute({
+          operation: "GitWorkflowService.headPath",
+          cwd,
+          args: ["rev-parse", "--path-format=absolute", "--git-path", "HEAD"],
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() || null : null)),
+          Effect.orElseSucceed(() => null),
+        );
+    }),
     pullCurrentBranch: Effect.fn("GitWorkflowService.pullCurrentBranch")(function (cwd) {
       return ensureGitCommand("GitWorkflowService.pullCurrentBranch", cwd).pipe(
         Effect.andThen(git.pullCurrentBranch(cwd)),
@@ -519,6 +567,14 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
+    resolveWorktreeFallbackRemote: Effect.fn("GitWorkflowService.resolveWorktreeFallbackRemote")(
+      function* (cwd, preferredRemote) {
+        yield* ensureGitCommand("GitWorkflowService.resolveWorktreeFallbackRemote", cwd);
+        const remoteName = preferredRemote ?? (yield* git.resolvePrimaryRemoteName(cwd));
+        const branchName = yield* git.resolveDefaultBranchName(cwd, remoteName);
+        return branchName === null ? null : { remoteName, branchName };
+      },
+    ),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(
       function (input) {
         return ensureGitCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd).pipe(
@@ -533,13 +589,21 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
-    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
+    removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input, guard) {
       // Hold the folder git will delete, which it resolves against cwd, so no turn starts in it.
       const target = path.resolve(input.cwd, input.path);
       const operation = "GitWorkflowService.removeWorktree";
       return ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(
-          tryWithWorkspaceSubtree(target, git.removeWorktree({ ...input, path: target })).pipe(
+          tryWithWorkspaceSubtree(
+            target,
+            withWorkspaceLease(
+              target,
+              (guard?.(target) ?? Effect.void).pipe(
+                Effect.andThen(git.removeWorktree({ ...input, path: target })),
+              ),
+            ),
+          ).pipe(
             Effect.catchTags({
               WorkspaceLeaseUnavailableError: (error) =>
                 Effect.fail(leaseUnavailable(operation, "git worktree remove", input.cwd)(error)),
@@ -614,19 +678,24 @@ export const layer = Layer.effect(GitWorkflowService, make);
  */
 export const makeClientWorktrees = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
+  const guard = yield* WorktreeHolderGuard;
   const path = yield* Path.Path;
   const isManaged = yield* makeIsManagedWorktreePath;
 
   const remove = Effect.fn("ClientWorktrees.remove")(function* (input: VcsRemoveWorktreeInput) {
     const target = path.resolve(input.cwd, input.path);
-    if (!(yield* isManaged(target)))
-      return yield* new GitCommandError({
-        operation: "ClientWorktrees.remove",
-        command: "git worktree remove",
-        cwd: input.cwd,
-        detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
-      });
-    return yield* gitWorkflow.removeWorktree(input);
+    const notManaged = new GitCommandError({
+      operation: "ClientWorktrees.remove",
+      command: "git worktree remove",
+      cwd: input.cwd,
+      detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
+    });
+    if (!(yield* isManaged(target))) return yield* notManaged;
+    return yield* gitWorkflow.removeWorktree(input, (lockedPath) =>
+      isManaged(lockedPath).pipe(
+        Effect.flatMap((managed) => (managed ? guard(lockedPath) : Effect.fail(notManaged))),
+      ),
+    );
   });
 
   /** Threads using a worktree, and whether GOAT made it, which decides whether a client offers its removal. */

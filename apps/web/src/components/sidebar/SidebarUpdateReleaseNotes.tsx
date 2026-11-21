@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { ExternalLinkIcon } from "~/components/solar";
 
@@ -28,13 +29,14 @@ function ReleaseLink({
   readonly releaseUrl: string;
   readonly shell: DesktopUpdateShell | undefined;
 }) {
+  const gt = useGT();
   return (
     <a
       className="mt-2 inline-flex items-center gap-1 rounded-sm text-xs leading-5 text-muted-foreground underline decoration-dotted underline-offset-4 outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       href={releaseUrl}
       onClick={(event) => {
         event.preventDefault();
-        void openDesktopUpdateReleaseNotes(shell, releaseUrl);
+        void openDesktopUpdateReleaseNotes(shell, releaseUrl, gt);
       }}
     >
       {children}
@@ -52,6 +54,7 @@ export function SidebarUpdateReleaseNotes({
   readonly state: DesktopUpdateState;
   readonly tooltip: string;
 }) {
+  const gt = useGT();
   if (state.releaseNotes.length === 0) {
     return <>{tooltip}</>;
   }
@@ -69,15 +72,17 @@ export function SidebarUpdateReleaseNotes({
           const linkLabel =
             releaseNote.stats ??
             (omittedItemCount === 0
-              ? "View release on GitHub"
-              : `${omittedItemCount} more ${omittedItemCount === 1 ? "change" : "changes"} on GitHub`);
+              ? gt("View release on GitHub")
+              : gt("More on GitHub ({count})", { count: omittedItemCount }));
 
           return (
             <div key={releaseNote.version}>
               {index > 0 && <Separator className="my-3" />}
               <section>
                 <h3 className="text-foreground text-xs leading-4 font-semibold">
-                  {index === 0 ? "What's changed" : `Changes in ${releaseNote.version}`}
+                  {index === 0
+                    ? gt("What's changed")
+                    : gt("Changes in {version}", { version: releaseNote.version })}
                 </h3>
                 {releaseNote.intro ? (
                   <p className="mt-2 break-words text-xs leading-5 text-popover-foreground/90">
@@ -104,7 +109,7 @@ export function SidebarUpdateReleaseNotes({
           <div>
             <Separator className="my-3" />
             <ReleaseLink releaseUrl={getDesktopUpdateReleaseHistoryUrl()} shell={shell}>
-              {`${state.omittedReleaseCount} older ${state.omittedReleaseCount === 1 ? "release" : "releases"} on GitHub`}
+              {gt("Earlier releases on GitHub ({count})", { count: state.omittedReleaseCount })}
             </ReleaseLink>
           </div>
         ) : null}

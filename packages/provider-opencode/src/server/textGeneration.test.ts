@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import { settingsSecretLiteral } from "@goat/contracts";
 import { ProviderInstanceId, TextGenerationError } from "@goat/contracts";
 import * as M from "@goat/contracts";
@@ -652,6 +653,11 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
                 ],
               },
             };
+            const supported = code === "identity_mismatch";
+            expect(yield* textGeneration.memoryCapabilities).toEqual({
+              summary: supported,
+              conflict: supported,
+            });
             const failure = yield* Effect.flip(
               operation === "resolveMemoryConflict"
                 ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
@@ -710,6 +716,35 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
         )
       : generation.generateMemorySummary!(memorySummary);
   it.effect.each(operations)(
+    "%s is not advertised with managed OpenCode configuration",
+    (operation) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* withOpenCodeTextGeneration(
+          DEFAULT_OPENCODE_SETTINGS,
+          (generation) =>
+            Effect.gen(function* () {
+              const error = yield* invoke(generation, operation).pipe(Effect.flip);
+              expect(error.cause).toMatchObject({ code: "unavailable" });
+              expect(yield* generation.memoryCapabilities).toEqual({
+                summary: false,
+                conflict: false,
+              });
+              expect(runtimeMock.state.startCalls).toHaveLength(0);
+            }),
+          undefined,
+          memoryContext,
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            exists: (file) => (file === "/etc/opencode" ? Effect.succeed(true) : fs.exists(file)),
+          }),
+        );
+      }),
+  );
+
+  it.effect.each(operations)(
     "%s succeeds with disabled tools and trusted metadata, then cleans up",
     (operation) =>
       withOpenCodeTextGeneration(
@@ -717,6 +752,7 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
         (generation) =>
           Effect.gen(function* () {
             setOutput(operation);
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated = yield* invoke(generation, operation);
             expect(generated.result).not.toBeNull();
             expect(generated.result?.text).toBe(output.text);

@@ -211,7 +211,7 @@ export const maskSnapshotRecords = (
 
 // How long a frame in another process gets to answer; one that crashed never does.
 
-const FRAME_ANSWER_MS = 1_000;
+export const FRAME_ANSWER_MS = 1_000;
 
 // Include password, phone, email and one-time-code fields and CSS-masked text in open shadow
 // roots, normalized like accessible text. A field counts by its type or an autocomplete token.

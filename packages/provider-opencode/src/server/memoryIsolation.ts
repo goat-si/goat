@@ -10,29 +10,37 @@ import {
   type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 
+/** External servers are not controlled by the instance owner. */
+export const requireOpenCodeMemoryIsolation = (operation: MemoryOperationName) =>
+  Effect.fail(
+    new TextGenerationError({
+      operation,
+      detail:
+        "OpenCode memory generation cannot isolate configuration on a user-specified external server.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    }),
+  );
+
 const Auth = Schema.Record(Schema.String, Schema.Unknown);
 const decodeAuth = Schema.decodeUnknownEffect(Schema.fromJsonString(Auth));
 const encodeAuth = Schema.encodeSync(Schema.fromJsonString(Auth));
 
-/** Config discovery also walks ancestors and reads system/MDM policy outside HOME/XDG.
- * Sources: OpenCode v1.17.5 config/{paths,managed}.ts and v2 core/config/discovery.ts.
- * Refuse those sources before starting a server; copy only the selected API/OAuth credential.
- */
-export const prepareMemoryServer = Effect.fn("OpenCode.prepareMemoryServer")(function* (
-  operation: MemoryOperationName,
-  providerId: string,
-  baseEnvironment: NodeJS.ProcessEnv,
-  version: 1 | 2,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const platform = yield* HostProcess.Platform;
-  const home = yield* HostProcess.HomeDirectory;
-  const failure = new TextGenerationError({
+const memoryIsolationFailure = (operation: MemoryOperationName) =>
+  new TextGenerationError({
     operation,
     detail: "OpenCode memory configuration, plugins or credentials could not be isolated.",
     cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
   });
+
+/** Discovery also walks ancestors and reads system and MDM policy outside HOME/XDG. */
+const prepareMemoryDirectory = Effect.fn("OpenCode.prepareMemoryDirectory")(function* (
+  operation: MemoryOperationName,
+  baseEnvironment: NodeJS.ProcessEnv,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const failure = memoryIsolationFailure(operation);
   return yield* Effect.gen(function* () {
     // Windows keeps TEMP under the user's home, so the ancestor walk below would find the
     // user's own .claude or .agents there and refuse every time. %SystemRoot%\Temp lets each
@@ -59,7 +67,6 @@ export const prepareMemoryServer = Effect.fn("OpenCode.prepareMemoryServer")(fun
         ? outsideHome.value
         : yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-memory-" }),
     );
-    const directory = path.join(root, "work");
     const system =
       platform === "darwin"
         ? "/Library/Application Support/opencode"
@@ -85,6 +92,30 @@ export const prepareMemoryServer = Effect.fn("OpenCode.prepareMemoryServer")(fun
       if (parent === ancestor) break;
       ancestor = parent;
     }
+    return root;
+  }).pipe(Effect.mapError(() => failure));
+});
+
+export const canIsolateOpenCodeMemory = (environment: NodeJS.ProcessEnv) =>
+  prepareMemoryDirectory("generateMemorySummary", environment).pipe(
+    Effect.scoped,
+    Effect.isSuccess,
+  );
+
+/** Copy only the selected API or OAuth credential into the isolated location. */
+export const prepareMemoryServer = Effect.fn("OpenCode.prepareMemoryServer")(function* (
+  operation: MemoryOperationName,
+  providerId: string,
+  baseEnvironment: NodeJS.ProcessEnv,
+  version: 1 | 2,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
+  const failure = memoryIsolationFailure(operation);
+  const root = yield* prepareMemoryDirectory(operation, baseEnvironment);
+  const directory = path.join(root, "work");
+  return yield* Effect.gen(function* () {
     for (const name of ["work", "home", "config", "data/opencode", "cache", "state", "tmp"])
       yield* fs.makeDirectory(path.join(root, name), { recursive: true });
     const environment: NodeJS.ProcessEnv = {};

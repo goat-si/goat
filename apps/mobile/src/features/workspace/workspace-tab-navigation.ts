@@ -185,6 +185,36 @@ function detailRoute(
   );
 }
 
+export function workspaceTabPage(
+  state: { readonly routes: readonly RouteLike[] },
+  tab: WorkspaceTab | "settings",
+  selections: WorkspaceSelections,
+  options: {
+    readonly columns: boolean;
+    readonly check: WorkspaceSelectionCheck;
+    readonly seedPullRequest?: (identity: Omit<PullRequestSelection, "key">) => object;
+  },
+) {
+  if (!options.columns || tab === "usage") return undefined;
+  if (tab === "settings") {
+    const page = rememberedSettingsPage(selections);
+    const route = settingsNavigationState(
+      state,
+      page,
+      undefined,
+      page === selections.settings ? selections.settingsKey : undefined,
+    ).routes[2];
+    return route && { ...route, key: route.key ?? `${route.name}-workspace-page` };
+  }
+  const route = detailRoute(state, tab, selections, options.check, options.seedPullRequest);
+  if (!route) return undefined;
+  const identity =
+    tab === "threads"
+      ? [selections.threads?.environmentId, selections.threads?.threadId]
+      : selections.pullRequests && identityOf(selections.pullRequests);
+  return { ...route, key: route.key ?? `${route.name}-workspace-page-${JSON.stringify(identity)}` };
+}
+
 /**
  * The root stack for opening a workspace tab. With columns the detail column must show
  * something, so the tab reopens the page it last showed (Settings falls back to its default);
@@ -205,22 +235,11 @@ export function workspaceTabNavigationState<
   },
 ) {
   const overlays = options.overlays ?? [];
-  if (tab === "settings") {
-    const page = options.columns ? rememberedSettingsPage(selections) : undefined;
-    const settings = settingsNavigationState(
-      state,
-      page,
-      undefined,
-      page === selections.settings ? selections.settingsKey : undefined,
-    );
-    const routes = [...settings.routes.map(keyed), ...overlays];
-    return { ...settings, index: routes.length - 1, routes };
-  }
-  const home = state.routes.find((route) => route.name === "Home") ?? { name: "Home" };
-  const detail =
-    options.columns && tab !== "usage"
-      ? detailRoute(state, tab, selections, options.check, options.seedPullRequest)
-      : undefined;
-  const routes = [...[home, ...(detail ? [detail] : [])].map(keyed), ...overlays];
+  const page = workspaceTabPage(state, tab, selections, options);
+  const base =
+    tab === "settings"
+      ? settingsNavigationState(state, undefined).routes
+      : [state.routes.find((route) => route.name === "Home") ?? { name: "Home" }];
+  const routes = [...base.map(keyed), ...(page ? [page] : []), ...overlays];
   return { ...state, index: routes.length - 1, routes };
 }

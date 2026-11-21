@@ -40,6 +40,8 @@ export class SshWindowsHostError extends Schema.TaggedError<SshWindowsHostError>
   }
 }
 export const isSshWindowsHostError = Schema.is(SshWindowsHostError);
+export const isSshProbeFailure = (cause: unknown): boolean =>
+  isSshWindowsHostError(cause) || (cause instanceof SshCommandError && cause.exitCode === 255);
 
 const Probe = Schema.Struct({
   nodePath: Schema.String,

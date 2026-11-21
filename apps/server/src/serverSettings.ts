@@ -1,3 +1,6 @@
+import { normalizeChangedAcpCustomModels } from "./provider/goat/AcpCustomModelSettings.ts";
+import * as SpeechSettingsChanges from "./speech/SpeechSettingsChanges.ts";
+import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as NodeUtil from "node:util";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
@@ -30,7 +33,6 @@ import {
   ProjectScript,
   ProjectSettingsOverrides,
   ProviderDriverKind,
-  type ProviderInstanceConfig,
   ProviderInstanceId,
   type ProviderInstanceMutation,
   resolveProviderInstanceEnabled,
@@ -43,6 +45,7 @@ import {
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { makeDefaultThemeSetter, type DefaultThemeSetter } from "./serverSettingsTheme.ts";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
   applyServerSettingsPatch,
@@ -83,7 +86,7 @@ import {
   type HubConsentGenerations,
   makeHubConsentGenerations,
 } from "./hub/hubConsentGenerations.ts";
-import { withDisposableStamp } from "./hub/disposable/disposableSwitch.ts";
+import { withSettingsWriteConsent } from "./settingsWriteConsent.ts";
 import {
   agentWorkspaceTerminalSettingsMethods,
   rejectAgentWorkspaceTerminalPolicyChange,
@@ -97,6 +100,7 @@ import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
 import {
   decodeLegacyProviderSettingsJsonExit,
+  foldProviderInstanceEnabledFlags,
   migrateLegacyProviderSettings,
   migrateLegacySourceControlSettings,
 } from "./serverSettingsLegacyMigration.ts";
@@ -145,45 +149,6 @@ const decodeMemoryHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
 const textEncoder = new TextEncoder();
-
-// Conflicting flags resolve to false to preserve user disables.
-const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSettings => {
-  let changed = false;
-  const providerInstances: Record<string, ProviderInstanceConfig> = {};
-  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-    const config = instance.config;
-    // Leave malformed flags for driver schema validation rather than silently repairing them.
-    if (
-      config === null ||
-      typeof config !== "object" ||
-      Array.isArray(config) ||
-      typeof (config as { readonly enabled?: unknown }).enabled !== "boolean"
-    ) {
-      providerInstances[instanceId] = instance;
-      continue;
-    }
-    const { enabled: configEnabled, ...restConfig } = config as Record<string, unknown> & {
-      readonly enabled: boolean;
-    };
-    const resolved =
-      instance.enabled === false || configEnabled === false
-        ? false
-        : (instance.enabled ?? configEnabled);
-    changed = true;
-    providerInstances[instanceId] = {
-      ...instance,
-      enabled: resolved,
-      config: restConfig,
-    } satisfies ProviderInstanceConfig;
-  }
-  if (!changed) {
-    return settings;
-  }
-  return {
-    ...settings,
-    providerInstances: providerInstances as ServerSettings["providerInstances"],
-  };
-};
 
 const normalizeServerSettings = (
   settings: ServerSettings,
@@ -757,6 +722,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly setDefaultTheme?: DefaultThemeSetter;
     readonly committedPolicy?: CuaCommittedPolicyRead;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
@@ -802,6 +768,7 @@ export class ServerSettingsService extends Context.Service<
 
     readonly withSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
+      options?: { readonly refreshFromDisk: true },
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
 
     readonly withStoredSettingsSnapshot?: <A, E, R>(
@@ -822,6 +789,10 @@ export class ServerSettingsService extends Context.Service<
 
     /** Subscribe before reading a snapshot to retain changes before lazy stream startup. */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
+    readonly speechChangesRevision?: Effect.Success<typeof SpeechSettingsChanges.make>["revision"];
+    readonly subscribeSpeechChanges?: Effect.Success<
+      typeof SpeechSettingsChanges.make
+    >["subscribe"];
     readonly subscribeProviderChanges?: Effect.Effect<
       Stream.Stream<
         { readonly settings: ServerSettings; readonly revision: CodexRoute.SettingsRevision },
@@ -851,6 +822,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       : {}),
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const speechChanges = yield* SpeechSettingsChanges.make;
+  yield* speechChanges.publish(initialSettings.speech);
   const cuaPolicy = yield* makeCuaCommittedPolicy;
   yield* cuaPolicy.publish(initialSettings, Option.none());
   const providerPolicy = yield* makeMemoryProviderPolicy;
@@ -869,7 +842,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Ref.get(currentSettingsRef).pipe(
-      Effect.flatMap(withDisposableStamp(update)),
+      Effect.flatMap((current) =>
+        withSettingsWriteConsent(update)(current).pipe(
+          Effect.flatMap((next) => normalizeChangedAcpCustomModels(current, next, "test settings")),
+        ),
+      ),
       Effect.flatMap(normalizeServerSettings),
       Effect.tap(() => beforeCommit ?? Effect.void),
       Effect.tap((nextSettings) =>
@@ -877,6 +854,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           Ref.set(currentSettingsRef, nextSettings).pipe(
             Effect.andThen(cuaPolicy.publish(nextSettings, Option.none())),
             Effect.andThen(hubConsent.committed(nextSettings.hub)),
+            Effect.andThen(speechChanges.publish(nextSettings.speech)),
             Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
           ),
@@ -949,6 +927,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    setDefaultTheme: makeDefaultThemeSetter(updateTestSettings),
     committedPolicy: cuaPolicy.read,
     blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
       Effect.map((settings) => settings.blockedBrowserHosts),
@@ -998,6 +977,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     },
     streamChanges: Stream.empty,
     subscribeChanges: Effect.succeed(Stream.empty),
+    speechChangesRevision: speechChanges.revision,
+    subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &
     MemoryHubSettingsTransitions["Service"] & {
       adminSettings: MemoryHubAdminSettings["Service"];
@@ -1288,6 +1269,7 @@ const make = Effect.gen(function* () {
   const cacheKey = "settings" as const;
   const hubConsent = yield* makeHubConsentGenerations;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+  const speechChanges = yield* SpeechSettingsChanges.make;
   const providerChangesPubSub = yield* PubSub.unbounded<{
     readonly settings: ServerSettings;
     readonly revision: CodexRoute.SettingsRevision;
@@ -1302,6 +1284,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
+      yield* speechChanges.publish(settings.speech);
       yield* PubSub.publish(changesPubSub, settings);
       if (Option.isSome(routeState))
         yield* PubSub.publish(providerChangesPubSub, {
@@ -1510,8 +1493,12 @@ const make = Effect.gen(function* () {
       if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
         settingsFileTrusted = false;
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
-        // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+        // Unreadable settings cannot authorize resuming threads or pruning history.
+        settings = {
+          ...DEFAULT_SERVER_SETTINGS,
+          continueThreadsAfterServerUpdate: false,
+          usageHistoryRetentionDays: "unlimited",
+        };
         if (failure._tag === "Failure") {
           parseFailure = Option.some(Cause.squash(failure.cause));
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {
@@ -1924,7 +1911,11 @@ const make = Effect.gen(function* () {
           cause: parseFailure.value,
         });
       }
-      const updated = yield* withDisposableStamp(update)(current);
+      const updated = yield* normalizeChangedAcpCustomModels(
+        current,
+        clearRetargetedSettingsSecrets(current, yield* withSettingsWriteConsent(update)(current)),
+        settingsPath,
+      );
       for (const [id, provider] of Object.entries(updated.secretProviders)) {
         if (
           !NodeUtil.isDeepStrictEqual(
@@ -2067,9 +2058,15 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
+  const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (
+    use,
+    options,
+  ) =>
     writeSemaphore.withPermits(1)(
-      cachedLocked.pipe(
+      (options?.refreshFromDisk
+        ? reloadLocked.pipe(Effect.map((loaded) => loaded.settings))
+        : cachedLocked
+      ).pipe(
         Effect.flatMap(materializeSettingsSecrets),
         Effect.map(resolveTextGenerationProvider),
         Effect.flatMap(use),
@@ -2132,6 +2129,7 @@ const make = Effect.gen(function* () {
     committedOwnerPolicy: ownerServices.committed,
     ownerPolicyAdministration: ownerServices.administration,
     start,
+    setDefaultTheme: makeDefaultThemeSetter(updateAndPersistSettings),
     ready: Deferred.await(startedDeferred),
     committedPolicy: cuaPolicy.read,
     getSettings: getSettingsFromCache.pipe(
@@ -2232,6 +2230,8 @@ const make = Effect.gen(function* () {
         Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
       );
     },
+    speechChangesRevision: speechChanges.revision,
+    subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &
     MemoryHubSettingsTransitions["Service"] & {
       adminSettings: MemoryHubAdminSettings["Service"];

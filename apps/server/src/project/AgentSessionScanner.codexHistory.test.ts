@@ -1,3 +1,4 @@
+import { parseAgentSessionTranscript } from "./AgentSessionTranscriptParser.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
@@ -186,7 +187,7 @@ it("titles a Codex event after the request that follows injected setup blocks", 
     '<in-app-browser-context source="ambient-ui-state">\nTab\n</in-app-browser-context>',
     "Fix the import titles",
   ].join("\n");
-  const thread = AgentSessionScanner.parseAgentSessionTranscript({
+  const thread = parseAgentSessionTranscript({
     contents: [
       encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
       encodeTranscriptRecord({
@@ -200,6 +201,26 @@ it("titles a Codex event after the request that follows injected setup blocks", 
     lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
   });
 
+  expect(thread?.title).toBe("Fix the import titles");
+  expect(thread?.messages.map((message) => message.text)).toEqual([prompt]);
+});
+
+it("omits a leading Codex page context from the title but preserves the message", () => {
+  const prompt =
+    '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>\nFix the import titles';
+  const thread = parseAgentSessionTranscript({
+    contents: [
+      encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
+      encodeTranscriptRecord({
+        type: "event_msg",
+        payload: { type: "user_message", message: prompt },
+      }),
+    ].join("\n"),
+    source: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    fallbackSessionId: "fallback",
+    lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+  });
   expect(thread?.title).toBe("Fix the import titles");
   expect(thread?.messages.map((message) => message.text)).toEqual([prompt]);
 });

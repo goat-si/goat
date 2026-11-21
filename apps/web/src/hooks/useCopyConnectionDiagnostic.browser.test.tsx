@@ -33,6 +33,7 @@ const environment: EnvironmentPresentation = {
   displayUrl: null,
   relayManaged: false,
   serverConfig: null,
+  refusedRouteIds: [],
   entry: {
     enabled: true,
     target: new SshConnectionTarget({ environmentId, label: "Test host", connectionId: "ssh" }),

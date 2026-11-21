@@ -22,6 +22,7 @@ import {
 import { Atom } from "effect/reactivity";
 
 import { deadlineStore } from "./clock.ts";
+import { providerWorkspaceRefreshKey } from "./providerWorkspaceRefreshKey.ts";
 import { type AtomCommand, runAtomCommand } from "./state/runtime.ts";
 
 export type ProviderSkillSourceKind =
@@ -286,6 +287,7 @@ const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 const WORKSPACE_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 export interface ProviderWorkspaceSnapshotRefreshState {
+  readonly refreshKey: string | undefined;
   /**
    * When the last scan was requested. A request inside the TTL is not
    * repeated, so a client clock ahead of the server's cannot loop rescans.
@@ -301,6 +303,7 @@ export interface ProviderWorkspaceSnapshotRefreshState {
 }
 
 const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRefreshState = {
+  refreshKey: undefined,
   requestedAt: null,
   retryNotBefore: null,
   failedAttempts: 0,
@@ -315,6 +318,7 @@ const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRef
  */
 function planProviderWorkspaceSnapshotRefresh(
   previous: ProviderWorkspaceSnapshotRefreshState,
+  refreshKey: string | undefined,
   provider: ServerProvider | null | undefined,
   cwd: string,
   now: number,
@@ -326,43 +330,56 @@ function planProviderWorkspaceSnapshotRefresh(
   const hasSnapshot = hasCompleteProviderWorkspaceSnapshot(provider, cwd);
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   const pending = Boolean(snapshot && isProviderWorkspaceSnapshotPending(snapshot));
-  // Losing a snapshot (the server dropped it) lifts both the TTL and the retry
-  // cooldown so the scan happens at once.
+  const keyChanged = previous.refreshKey !== refreshKey;
   const lost = previous.hadSnapshot && !hasSnapshot;
-  const requestedAt = lost ? null : previous.requestedAt;
+  const resetBudget = lost || keyChanged;
+  // A catalog or installation change can release an exhausted scan without duplicating an in-flight request.
+  const requestedAt =
+    lost || (keyChanged && previous.failedAttempts >= WORKSPACE_SNAPSHOT_MAX_ATTEMPTS)
+      ? null
+      : previous.requestedAt;
   const retryNotBefore =
-    lost || (previous.retryNotBefore !== null && now >= previous.retryNotBefore)
+    resetBudget || (previous.retryNotBefore !== null && now >= previous.retryNotBefore)
       ? null
       : previous.retryNotBefore;
   const state = {
+    refreshKey,
     requestedAt,
     retryNotBefore,
     failedAttempts:
-      lost || (requestedAt !== null && now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS)
+      resetBudget ||
+      (requestedAt !== null && now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS)
         ? 0
         : previous.failedAttempts,
     hadSnapshot: hasSnapshot,
     snapshotPending: pending,
   };
+  const current = hasCurrentProviderWorkspaceSnapshot(provider, cwd, now);
   const refresh =
     (requestedAt === null || now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS) &&
-    !hasCurrentProviderWorkspaceSnapshot(provider, cwd, now) &&
+    !current &&
     retryNotBefore === null;
   if (refresh) {
     return { state: { ...state, requestedAt: now }, refresh: true, recheckAt: null };
   }
-  return { state, refresh: false, recheckAt: pending ? retryNotBefore : null };
+  return {
+    state,
+    refresh: false,
+    recheckAt:
+      !current && (pending || provider?.catalogDigest !== undefined) ? retryNotBefore : null,
+  };
 }
 
 /**
  * A scan that failed, or finished without a complete snapshot, cools down
  * before retrying. After the last attempt the request marker stays, so only
- * the TTL (or a snapshot loss) lets the next scan through.
+ * the TTL, a snapshot loss, or a refresh key change lets the next scan through.
  */
 function failProviderWorkspaceSnapshotRefresh(
   state: ProviderWorkspaceSnapshotRefreshState,
   requestedAt: number,
   now: number,
+  cooldownMs = WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS,
 ): ProviderWorkspaceSnapshotRefreshState {
   // A newer request, or a snapshot loss, already superseded this one.
   if (state.requestedAt !== requestedAt) return state;
@@ -371,7 +388,7 @@ function failProviderWorkspaceSnapshotRefresh(
   return {
     ...state,
     requestedAt: null,
-    retryNotBefore: now + WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS,
+    retryNotBefore: cooldownMs === 0 ? null : now + cooldownMs,
     failedAttempts,
   };
 }
@@ -438,12 +455,16 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
     const statusAtom = Atom.make((get) =>
       resolveWorkspaceSnapshotStatus(findProvider(get(input.providers(environmentId))), cwd),
     ).pipe(Atom.withLabel(`provider-workspace-snapshot-status:${key}`));
+    const refreshKeyAtom = Atom.make((get) =>
+      providerWorkspaceRefreshKey(findProvider(get(input.providers(environmentId)))),
+    ).pipe(Atom.withLabel(`provider-workspace-snapshot-key:${key}`));
     type Update = (
       state: ProviderWorkspaceSnapshotRefreshState,
     ) => ProviderWorkspaceSnapshotRefreshState;
     const refreshAtom: Atom.Writable<ProviderWorkspaceSnapshotRefreshState, Update> = Atom.writable(
       (get): ProviderWorkspaceSnapshotRefreshState => {
         get(statusAtom);
+        const refreshKey = get(refreshKeyAtom);
         // `once`: unrelated provider updates must not trigger a check.
         const provider = findProvider(get.once(input.providers(environmentId)));
         // @effect-diagnostics-next-line globalDate:off
@@ -451,6 +472,7 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
         const previous = get.self<ProviderWorkspaceSnapshotRefreshState>();
         const plan = planProviderWorkspaceSnapshotRefresh(
           previous._tag === "Some" ? previous.value : initialProviderWorkspaceSnapshotRefreshState,
+          refreshKey,
           provider,
           cwd,
           now,
@@ -463,22 +485,31 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
         // Outlives this build on purpose: a rebuild must not drop the retry.
         // Once nothing subscribes, the retry state dies with the node; writing
         // would recreate and rebuild it, which scans again with no subscriber.
-        const retryLater = () => {
+        const retry = (cooldownMs?: number) => {
           const node = registry.getNodes().get(refreshAtom);
           if (node === undefined || node.canBeRemoved) return;
           registry.set(refreshAtom, (state) =>
             // @effect-diagnostics-next-line globalDate:off
-            failProviderWorkspaceSnapshotRefresh(state, now, Date.now()),
+            failProviderWorkspaceSnapshotRefresh(state, now, Date.now(), cooldownMs),
           );
         };
+        const retryLater = () => retry();
         void runAtomCommand(
           registry,
           input.refreshProviders,
           { environmentId, input: { instanceId, cwd } },
           { reportFailure: false },
         ).then((result) => {
+          const node = registry.getNodes().get(refreshAtom);
+          if (node === undefined || node.canBeRemoved) return;
+          const currentProvider = findProvider(registry.get(input.providers(environmentId)));
           const refreshedProvider =
-            result._tag === "Success" ? findProvider(result.value.providers) : undefined;
+            result._tag !== "Success"
+              ? undefined
+              : provider?.catalogDigest !== undefined ||
+                  currentProvider?.catalogDigest !== undefined
+                ? currentProvider
+                : findProvider(result.value.providers);
           const snapshot =
             refreshedProvider && resolveProviderWorkspaceSnapshot(refreshedProvider, cwd);
           // A new server timestamp proves progress even when the client clock is ahead.
@@ -489,7 +520,12 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
             (hasCurrentProviderWorkspaceSnapshot(refreshedProvider, cwd, completedAt) ||
               snapshot?.checkedAt !==
                 (provider && resolveProviderWorkspaceSnapshot(provider, cwd))?.checkedAt);
-          if (!refreshed) retryLater();
+          if (!refreshed) return retryLater();
+          if (
+            currentProvider?.workspaceRescannedAt !== provider?.workspaceRescannedAt &&
+            !hasCompleteProviderWorkspaceSnapshot(currentProvider, cwd)
+          )
+            retry(0);
         }, retryLater);
         return plan.state;
       },

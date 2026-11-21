@@ -477,6 +477,18 @@ describe("DesktopShellEnvironment", () => {
     }),
   );
 
+  it.effect("keeps literal whitespace and quotes in a POSIX login PATH", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () => envOutput({ PATH: ' /fixture path :"/literal"' }),
+      });
+      assert.isTrue(env.PATH?.startsWith(' /fixture path :"/literal":/usr/bin:') ?? false);
+    }),
+  );
+
   it.effect("hydrates PATH and missing SSH_AUTH_SOCK from the login shell on macOS", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = {
@@ -507,6 +519,50 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
       assert.isTrue(prepared);
+    }),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "loads a release mirror from the login shell on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        yield* runShellEnvironment({
+          env,
+          platform,
+          handler: () =>
+            envOutput({
+              PATH: "/usr/bin",
+              GOAT_RELEASE_BASE_URL: "https://mirror.example/releases",
+            }),
+        });
+        assert.equal(env.GOAT_RELEASE_BASE_URL, "https://mirror.example/releases");
+      }),
+  );
+
+  it.effect("rejects shell mirror credentials before publishing the shell patch", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () =>
+          envOutput({
+            PATH: "/usr/bin",
+            GOAT_RELEASE_BASE_URL: "https://name:secret@mirror.example/releases",
+          }),
+        use: (service) =>
+          Effect.gen(function* () {
+            yield* service.installIntoProcess;
+            yield* service.awaitDiscovery;
+            const snapshot = yield* Stream.runHead(service.updates);
+            assert.isTrue(Option.isSome(snapshot));
+            if (Option.isSome(snapshot))
+              assert.notInclude(JSON.stringify(snapshot.value), "secret");
+            return true;
+          }),
+      });
+      assert.isUndefined(env.GOAT_RELEASE_BASE_URL);
     }),
   );
 
@@ -575,6 +631,39 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.SSL_CERT_FILE, "/opt/zerobrew/etc/ca-certificates/cacert.pem");
       assert.equal(env.SSL_CERT_DIR, "/etc/ssl/certs");
       assert.equal(env.NODE_EXTRA_CA_CERTS, "/Users/me/corp-root.pem");
+    }),
+  );
+
+  it.effect.each([
+    {
+      name: "hydrates both Android SDK names when neither is inherited",
+      inherited: {},
+      expected: { ANDROID_HOME: "/shell/android-home", ANDROID_SDK_ROOT: "/shell/android-root" },
+    },
+    {
+      // The device host reads ANDROID_HOME before ANDROID_SDK_ROOT, so a shell
+      // ANDROID_HOME next to an inherited ANDROID_SDK_ROOT would change the SDK.
+      name: "keeps an inherited ANDROID_SDK_ROOT selected over a login-shell ANDROID_HOME",
+      inherited: { ANDROID_SDK_ROOT: "/inherited/android-sdk" },
+      expected: { ANDROID_HOME: undefined, ANDROID_SDK_ROOT: "/inherited/android-sdk" },
+    },
+  ])("$name", ({ inherited, expected }) =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin", ...inherited };
+
+      yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () =>
+          envOutput({
+            PATH: "/usr/bin",
+            ANDROID_HOME: "/shell/android-home",
+            ANDROID_SDK_ROOT: "/shell/android-root",
+          }),
+      });
+
+      assert.equal(env.ANDROID_HOME, expected.ANDROID_HOME);
+      assert.equal(env.ANDROID_SDK_ROOT, expected.ANDROID_SDK_ROOT);
     }),
   );
 

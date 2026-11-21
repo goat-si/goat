@@ -94,7 +94,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         .report(scope.thread.threadId, input)
         .pipe(
           Effect.mapError((error) =>
-            error.reason === "run_not_found" || error.reason === "run_mismatch"
+            error.reason !== "storage"
               ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
               : unavailable(),
           ),

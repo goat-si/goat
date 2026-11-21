@@ -1,3 +1,4 @@
+import { rebaseRequiredFromStatus } from "./gitLabMergeRequestMergeability.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -167,7 +168,7 @@ export function decodeListStatesJson(
 /** The fields a listed merge request needs, so one GraphQL read stands in for REST and states. */
 export const LIST_ITEM_GRAPHQL_FIELDS = `${LIST_STATE_GRAPHQL_FIELDS}
   title webUrl state draft createdAt updatedAt mergedAt sourceBranch targetBranch
-  conflicts mergeStatusEnum author { username name avatarUrl } labels(first: 100) { nodes { title } }`;
+  conflicts mergeStatusEnum detailedMergeStatus author { username name avatarUrl } labels(first: 100) { nodes { title } }`;
 
 const RawGraphqlListNodeSchema = Schema.Struct({
   ...RawListStateFields,
@@ -182,6 +183,7 @@ const RawGraphqlListNodeSchema = Schema.Struct({
   targetBranch: Schema.String,
   conflicts: Schema.optional(Schema.NullOr(Schema.Boolean)),
   mergeStatusEnum: Schema.optional(Schema.NullOr(Schema.String)),
+  detailedMergeStatus: Schema.optional(Schema.NullOr(Schema.String)),
   author: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -268,6 +270,9 @@ export function decodeMergeRequestGraphqlListJson(
         has_conflicts: node.conflicts,
         merge_status: node.mergeStatusEnum,
       }),
+      ...(rebaseRequiredFromStatus(node.detailedMergeStatus) === undefined
+        ? {}
+        : { rebaseRequired: rebaseRequiredFromStatus(node.detailedMergeStatus) }),
       additions: 0,
       deletions: 0,
       createdAt: node.createdAt,

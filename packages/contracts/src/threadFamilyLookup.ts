@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ThreadId } from "./baseSchemas.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 
 const THREAD_FAMILY_LOOKUP_LIMIT = 100;
 export const OrchestrationV2GetThreadFamilyInput = Schema.Struct({
@@ -10,3 +10,12 @@ export const OrchestrationV2GetThreadFamilyInput = Schema.Struct({
   ),
 });
 export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThreadFamilyInput.Type;
+
+/**
+ * What a lookupOnly read answers for the ids it was asked: live and archived threads, deleted and
+ * unknown ids absent. A thread whose project is gone names no project.
+ */
+export const ThreadLookupAnswer = {
+  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
+  lookupProjectIds: Schema.optionalKey(Schema.Record(ThreadId, Schema.NullOr(ProjectId))),
+};

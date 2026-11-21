@@ -4,7 +4,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const { state, checkSecretSource, checkSecretSourceCommand } = vi.hoisted(() => ({
-  state: { capabilities: {} as { secretSourceCheck?: boolean | undefined } },
+  state: { capabilities: {} as { secretSourceCheck?: boolean | undefined }, canManage: true },
   checkSecretSource: vi.fn(async (_request: unknown) => ({
     _tag: "Success" as const,
     value: { _tag: "Resolved" } as { _tag: "Resolved" } | { _tag: "Failed"; detail: string },
@@ -47,6 +47,10 @@ vi.mock(import("../../state/server"), async (original) => {
   };
 });
 
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentScope: () => state.canManage,
+}));
 import { SecretReferencePicker } from "./SecretReferencePicker";
 
 const saved = { provider: "vault" as never, reference: "op://work/item/token" };
@@ -57,6 +61,23 @@ function setup(secretSourceCheck: boolean | undefined) {
 }
 
 describe("secret source", () => {
+  it("disables references when provider management is unavailable", async () => {
+    setup(true);
+    state.canManage = false;
+    try {
+      await using screen = await render(
+        <SecretReferencePicker
+          environmentId={EnvironmentId.make("fixture")}
+          value={saved}
+          onChange={vi.fn()}
+        />,
+      );
+      await expect.element(screen.getByRole("combobox", { name: "Secret source" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Check" }).query()).toBeNull();
+    } finally {
+      state.canManage = true;
+    }
+  });
   it("checks a saved reference and says it was read without showing the value", async () => {
     setup(true);
     await using screen = await render(

@@ -1,4 +1,5 @@
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
+import * as SpeechManagement from "./speech/SpeechManagement.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
@@ -130,6 +131,7 @@ export const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnviron
   }),
 });
 export const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(SpeechManagement.SpeechManagement)({}),
   Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],

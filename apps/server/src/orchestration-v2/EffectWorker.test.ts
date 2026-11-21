@@ -134,6 +134,8 @@ function layerExecutorFor(input: {
     Layer.succeed(
       ProviderTurnStartService.ProviderTurnStartServiceV2,
       ProviderTurnStartService.ProviderTurnStartServiceV2.of({
+        getStartingRunIdentity: () => Effect.void,
+        failStartingRun: () => Effect.void,
         start: () =>
           Effect.gen(function* () {
             yield* record("start");
@@ -663,7 +665,7 @@ it.effect.each(["confirmed", "unconfirmed", "failed"] as const)(
 );
 
 it.effect.each(["read_write", "read", "none", undefined] as const)(
-  "turnCompleted steer follow-up preserves %s ceiling (legacy defaults to none)",
+  "pre-submit steer follow-up preserves %s ceiling (legacy defaults to none)",
   (ceiling) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
@@ -717,7 +719,7 @@ it.effect.each(["read_write", "read", "none", undefined] as const)(
             threadId,
             operation: "steer",
             providerTurnId,
-            turnCompleted: true,
+            missedBeforeSubmit: true,
           }),
         threads: {
           getThreadRecords: () => Effect.succeed(records),

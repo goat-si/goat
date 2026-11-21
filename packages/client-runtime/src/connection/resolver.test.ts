@@ -1,3 +1,4 @@
+import { HUB_PROXY_VCS_BRANCH_HEADER } from "@goat/contracts";
 import { vi } from "vite-plus/test";
 import { HubProxyConnectionTarget } from "./model.ts";
 import { HubProxyConnectionProfile } from "./catalog.ts";
@@ -217,6 +218,15 @@ describe("ConnectionResolver", () => {
         socketUrl: `ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
         httpAuthorization: null,
         target,
+        // The shell reads the server's build and shell flags here before the socket opens.
+        descriptor: {
+          environmentId: ENVIRONMENT_ID,
+          label: "Compatible environment",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0-test",
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+          capabilities: { repositoryIdentity: true },
+        },
       });
     }),
   );
@@ -574,6 +584,31 @@ describe("hub proxy preparation", () => {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {},
   };
+
+  it.effect.each([false, true])(
+    "keeps node and relay branch support separate (%s)",
+    (relaySupported) =>
+      Effect.gen(function* () {
+        const layer = yield* makeDependencies({
+          hubAuth: {
+            resolve: () =>
+              Effect.succeed({ httpBaseUrl: "https://hub.test/", authorization: null }),
+          },
+          fetch: ((url) =>
+            Promise.resolve(
+              String(url).includes("websocket-ticket")
+                ? Response.json({ ticket: "hub-ticket", expiresAt: "2026-10-20T00:00:00.000Z" })
+                : Response.json(
+                    { ...descriptor, capabilities: { vcsBranchStatus: true } },
+                    { headers: relaySupported ? { [HUB_PROXY_VCS_BRANCH_HEADER]: "1" } : {} },
+                  ),
+            )) satisfies typeof fetch,
+        });
+        const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+        const prepared = yield* resolver.prepare(catalogEntry(target, Option.some(profile)));
+        expect(prepared.hubVcsBranchSupported).toBe(relaySupported);
+      }),
+  );
 
   it.effect.each([null, { _tag: "Bearer" as const, token: "hub-token" }])(
     "authenticates the descriptor and ticket exactly once, reuses the descriptor and preserves the node prefix (%j)",

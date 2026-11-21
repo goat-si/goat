@@ -24,17 +24,20 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import { bootServiceRuntimeReferences } from "../cloud/bootServiceRuntimeReferences.ts";
+import { findPosixLauncher, writePosixLauncher } from "../cloud/posixLauncher.ts";
 import {
   ensurePinnedRuntimeInstalled,
   launcherOwnsVersionsDir,
-  pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
   pinnedRuntimeVersionsDir,
+  resolveLauncherPath,
   recordPinnedRuntimeLauncher,
   prunePinnedRuntimes,
   windowsShimTarget,
 } from "../cloud/pinnedRuntime.ts";
+export { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
+import { runStagedServicePreflight } from "../cloud/servicePreflight.ts";
 import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -247,7 +250,8 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
-  if (input.launchedAs === undefined) return Option.none<string>();
+  const launchedAs = input.launchedAs;
+  if (launchedAs === undefined) return Option.none<string>();
   const ownsTarget = (candidate: string) =>
     launcherOwnsVersionsDir(path, pinnedRuntimeVersionsDir(path, input.baseDir), candidate);
   const remember = (launcher: string) =>
@@ -258,7 +262,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     );
 
   if (platform === "win32") {
-    const shimPath = yield* findWindowsShim(input.launchedAs);
+    const shimPath = yield* findWindowsShim(launchedAs);
     if (shimPath === undefined) return Option.none<string>();
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
@@ -275,44 +279,48 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     return Option.some(shimPath);
   }
 
-  const linkTarget = yield* fs.readLink(input.launchedAs).pipe(Effect.option);
-  if (Option.isNone(linkTarget)) return Option.none<string>();
-  const resolvedTarget = path.resolve(path.dirname(input.launchedAs), linkTarget.value);
-  if (!ownsTarget(resolvedTarget)) return Option.none<string>();
-  yield* remember(input.launchedAs);
-  const tempLink = `${input.launchedAs}.${process.pid}.tmp`;
-  yield* fs.symlink(input.targetEntryPath, tempLink).pipe(
-    Effect.andThen(fs.rename(tempLink, input.launchedAs)),
+  const environment = yield* HostProcess.Environment;
+  const cwd = yield* HostProcess.WorkingDirectory;
+  const home = yield* HostProcess.HomeDirectory;
+  const launcher = yield* Effect.promise(() =>
+    findPosixLauncher({
+      launchedAs,
+      versionsDir: pinnedRuntimeVersionsDir(path, input.baseDir),
+      environment,
+      cwd,
+      home,
+    }),
+  );
+  if (launcher === undefined) return Option.none<string>();
+  if (!ownsTarget(input.targetEntryPath)) {
+    return yield* new CliUpdateError({ reason: "The target runtime is outside this GOAT home." });
+  }
+  const realVersions = yield* fs
+    .realPath(pinnedRuntimeVersionsDir(path, input.baseDir))
+    .pipe(Effect.option);
+  const realTarget = yield* fs.realPath(input.targetEntryPath).pipe(Effect.option);
+  if (
+    Option.isSome(realVersions) &&
+    Option.isSome(realTarget) &&
+    !launcherOwnsVersionsDir(path, realVersions.value, realTarget.value)
+  ) {
+    return yield* new CliUpdateError({
+      reason: "The target runtime resolves outside this GOAT home.",
+    });
+  }
+  yield* remember(launcher);
+  yield* Effect.tryPromise({
+    try: () => writePosixLauncher(launcher, input.targetEntryPath),
+    catch: () => "launcher-write-failed" as const,
+  }).pipe(
     Effect.mapError(
       () =>
         new CliUpdateError({
-          reason: `Could not repoint the goat launcher at ${input.launchedAs}.`,
+          reason: `Could not repoint the goat launcher at ${launcher}. Check that the target runtime exists.`,
         }),
     ),
   );
-  return Option.some(input.launchedAs);
-});
-
-/** Node preserves argv0's spelling; resolve bare names on PATH to find the launcher symlink. */
-export const resolveLauncherPath = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const fs = yield* FileSystem.FileSystem;
-  const invokedAs = yield* HostProcess.InvokedAs;
-  const cwd = yield* HostProcess.WorkingDirectory;
-  const environment = yield* HostProcess.Environment;
-  const platform = yield* HostProcess.Platform;
-  if (invokedAs.includes("/") || invokedAs.includes("\\")) {
-    return path.resolve(cwd, invokedAs);
-  }
-  const delimiter = platform === "win32" ? ";" : ":";
-  for (const directory of (environment["PATH"] ?? "").split(delimiter)) {
-    if (directory.length === 0) continue;
-    const candidate = path.join(directory, invokedAs);
-    if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return Option.some(launcher);
 });
 
 /** Windows executables see their own path, so find the installer shim by matching goat.cmd targets on PATH. */
@@ -383,6 +391,7 @@ export const updateCommand = Command.make("update", {
       return yield* runUpdate({
         baseDir: config.baseDir,
         logsDir: config.logsDir,
+        databasePath: config.dbPath,
         serverRuntimeStatePath: config.serverRuntimeStatePath,
         channel: Option.getOrUndefined(flags.channel),
         requestedVersion: Option.getOrUndefined(flags.version),
@@ -460,9 +469,10 @@ export function backgroundServiceRunningMessage(
   return `  Background service still running ${running}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`;
 }
 
-const runUpdate = Effect.fn("cli.update.run")(function* (input: {
+export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
+  readonly databasePath: string;
   readonly serverRuntimeStatePath: string;
   readonly channel: CliReleaseChannel | undefined;
   readonly requestedVersion: string | undefined;
@@ -606,31 +616,32 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     platform,
     arch,
     releaseBaseUrl: environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined,
-    validate: (paths) =>
-      runner
-        .run({
-          command: pinnedRuntimeCommand(paths).command,
-          args: [...pinnedRuntimeCommand(paths).args, "--version"],
-          timeout: Duration.seconds(30),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new PinnedRuntimeInstallError({ step: "verifying the downloaded goat", cause }),
-          ),
-          Effect.flatMap((result) =>
-            result.code === 0 && /\bv(\S+)\s*$/.exec(result.stdout)?.[1] === targetVersion
-              ? Effect.void
-              : Effect.fail(
-                  new PinnedRuntimeInstallError({
-                    step: "verifying the downloaded goat",
-                    exitCode: Number(result.code),
-                  }),
-                ),
-          ),
-        ),
+    validate: (runtime) =>
+      runStagedServicePreflight({
+        runner,
+        runtime,
+        targetVersion,
+        databasePath: input.databasePath,
+        requireDatabaseCheck: true,
+      }),
   }).pipe(
     Effect.ensuring(Effect.sync(progress.finish)),
+    Effect.catchTags({
+      PinnedRuntimePreflightBlockedError: (error) =>
+        Effect.fail(new CliUpdateError({ reason: error.reason })),
+    }),
+    Effect.catchIf(
+      (error): error is PinnedRuntimeInstallError & { readonly exitCode: number } =>
+        error._tag === "PinnedRuntimeInstallError" &&
+        error.step === "running the staged service preflight" &&
+        error.exitCode !== undefined,
+      (error) =>
+        Effect.fail(
+          new CliUpdateError({
+            reason: `goat@${targetVersion} could not confirm it supports this database (its check exited with code ${error.exitCode}), so GOAT did not switch to it.`,
+          }),
+        ),
+    ),
     Effect.catchIf(
       (error): error is PinnedRuntimeInstallError =>
         error._tag === "PinnedRuntimeInstallError" &&

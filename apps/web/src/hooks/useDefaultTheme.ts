@@ -1,12 +1,14 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
-import { primaryServerSettingsAtom } from "../state/server";
+import { themeEnvironmentIdAtom } from "../state/desktopHostEnvironment";
+import { themeServerSettingsAtom } from "../state/server";
 import { getThemeDefinition, singleAppearanceOf, subscribeToCustomThemes } from "../themePalette";
-import { setAppearanceMode, setTheme } from "./useTheme";
+import { getThemeSnapshot, setAppearanceMode, setTheme } from "./useTheme";
 
 const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "goat:default-theme-applied:v2:";
+const APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX = "goat:default-appearance-applied:v1:";
+const appliedGenerations = new Map<string, string>();
 
 /** Include set time so reasserting the same theme still applies. */
 export function defaultThemeGeneration(theme: string, setAt: string): string {
@@ -20,7 +22,8 @@ export function defaultThemeToApply(input: {
   readonly appliedGeneration: string | null;
   readonly resolves: boolean;
 }): string | null {
-  if (input.environmentId === null || input.defaultTheme.length === 0) return null;
+  if (input.environmentId === null) return null;
+  if (input.defaultTheme.length === 0 && input.defaultThemeSetAt.length === 0) return null;
   const generation = defaultThemeGeneration(input.defaultTheme, input.defaultThemeSetAt);
   if (input.appliedGeneration === generation) return null;
   // The setting and the palette it names arrive independently, so an id that
@@ -30,8 +33,25 @@ export function defaultThemeToApply(input: {
   return generation;
 }
 
+export function defaultAppearanceToApply(input: {
+  readonly environmentId: string | null;
+  readonly appearance: string;
+  readonly setAt: string;
+  readonly appliedGeneration: string | null;
+}): string | null {
+  if (
+    input.environmentId === null ||
+    (input.appearance !== "light" && input.appearance !== "dark" && input.appearance !== "system")
+  )
+    return null;
+  const generation = defaultThemeGeneration(input.appearance, input.setAt);
+  return generation === input.appliedGeneration ? null : generation;
+}
+
 function readAppliedGeneration(storageKey: string): string | null {
   if (typeof window === "undefined") return null;
+  const inMemory = appliedGenerations.get(storageKey);
+  if (inMemory !== undefined) return inMemory;
   try {
     return migratingStorage(window.localStorage).getItem(storageKey);
   } catch {
@@ -40,18 +60,19 @@ function readAppliedGeneration(storageKey: string): string | null {
 }
 
 function writeAppliedGeneration(storageKey: string, generation: string): void {
+  appliedGenerations.set(storageKey, generation);
   try {
     migratingStorage(window.localStorage).setItem(storageKey, generation);
   } catch {
-    // Unrecordable means the next config event applies again; harmless.
+    // Keep the generation in memory when storage is unavailable.
   }
 }
 
-function adoptDefaultTheme(): void {
+function adoptThemeSelection(): void {
   if (typeof window === "undefined") return;
-  const environmentId = appAtomRegistry.get(primaryEnvironmentIdAtom);
+  const environmentId = appAtomRegistry.get(themeEnvironmentIdAtom);
   if (environmentId === null) return;
-  const { defaultTheme, defaultThemeSetAt } = appAtomRegistry.get(primaryServerSettingsAtom);
+  const { defaultTheme, defaultThemeSetAt } = appAtomRegistry.get(themeServerSettingsAtom);
   const definition = getThemeDefinition(defaultTheme);
   const storageKey = `${APPLIED_DEFAULT_THEME_STORAGE_PREFIX}${environmentId}`;
   const generation = defaultThemeToApply({
@@ -59,9 +80,34 @@ function adoptDefaultTheme(): void {
     defaultTheme,
     defaultThemeSetAt,
     appliedGeneration: readAppliedGeneration(storageKey),
-    resolves: definition !== null,
+    resolves: definition !== null || defaultTheme === "",
   });
-  if (generation === null || definition === null) return;
+  if (generation === null) return;
+  if (definition === null) {
+    if (setTheme(getThemeSnapshot().appearanceMode)) writeAppliedGeneration(storageKey, generation);
+    return;
+  }
+
+  if (definition.css) {
+    const css = definition.css;
+    setTheme(defaultTheme, {
+      canApply: () => {
+        const current = appAtomRegistry.get(themeServerSettingsAtom);
+        return (
+          appAtomRegistry.get(themeEnvironmentIdAtom) === environmentId &&
+          defaultThemeGeneration(current.defaultTheme, current.defaultThemeSetAt) === generation &&
+          getThemeDefinition(defaultTheme)?.css === css
+        );
+      },
+      onResult: (applied) => {
+        if (!applied) return;
+        const half = singleAppearanceOf(definition);
+        if (half !== null && !setAppearanceMode(half)) return;
+        writeAppliedGeneration(storageKey, generation);
+      },
+    });
+    return;
+  }
 
   // A single-appearance theme needs both preference and appearance writes to take effect.
   if (!setTheme(defaultTheme)) return;
@@ -71,16 +117,40 @@ function adoptDefaultTheme(): void {
   writeAppliedGeneration(storageKey, generation);
 }
 
+function adoptDefaultTheme(): void {
+  if (typeof window === "undefined") return;
+  adoptThemeSelection();
+  const environmentId = appAtomRegistry.get(themeEnvironmentIdAtom);
+  if (environmentId === null) return;
+  const { defaultAppearance, defaultAppearanceSetAt } =
+    appAtomRegistry.get(themeServerSettingsAtom);
+  const storageKey = `${APPLIED_DEFAULT_APPEARANCE_STORAGE_PREFIX}${environmentId}`;
+  const generation = defaultAppearanceToApply({
+    environmentId,
+    appearance: defaultAppearance,
+    setAt: defaultAppearanceSetAt,
+    appliedGeneration: readAppliedGeneration(storageKey),
+  });
+  if (
+    generation === null ||
+    (defaultAppearance !== "light" &&
+      defaultAppearance !== "dark" &&
+      defaultAppearance !== "system")
+  )
+    return;
+  if (setAppearanceMode(defaultAppearance)) writeAppliedGeneration(storageKey, generation);
+}
+
 /**
- * Applies the primary environment's default theme once per generation. Start it after the
+ * Applies the selected environment's default theme once per generation. Start it after the
  * environment theme sync so a first-run client adopting the environment's own theme finds it
  * already in the library; it re-checks when published or custom palettes change, so a theme
  * that resolves late still applies.
  */
 export function startDefaultThemeAdoption(): () => void {
   const unsubscribes = [
-    appAtomRegistry.subscribe(primaryEnvironmentIdAtom, adoptDefaultTheme),
-    appAtomRegistry.subscribe(primaryServerSettingsAtom, adoptDefaultTheme),
+    appAtomRegistry.subscribe(themeEnvironmentIdAtom, adoptDefaultTheme),
+    appAtomRegistry.subscribe(themeServerSettingsAtom, adoptDefaultTheme),
     subscribeToCustomThemes(adoptDefaultTheme),
   ];
   adoptDefaultTheme();

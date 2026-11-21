@@ -54,15 +54,15 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
         const bound = yield* projectionStore.getThreadShell(thread.id).pipe(Effect.option);
         if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
         if (branch === null) return void (yield* recreateScratchFolder(worktreePath));
-        const ready =
-          (yield* restorePending.ready(worktreePath)) &&
-          !(yield* setAside.leftover(worktreePath)) &&
-          !(yield* setAside.missing(worktreePath));
-        if (ready || !(yield* isManagedWorktreePath(worktreePath))) return undefined;
         const project = yield* projects.getById(thread.projectId).pipe(
           Effect.map(Option.getOrUndefined),
           Effect.orElseSucceed(() => undefined),
         );
+        const ready =
+          (yield* restorePending.ready(worktreePath, project?.workspaceRoot)) &&
+          !(yield* setAside.leftover(worktreePath)) &&
+          !(yield* setAside.missing(worktreePath));
+        if (ready || !(yield* isManagedWorktreePath(worktreePath))) return undefined;
         if (project === undefined) return undefined;
         yield* Effect.logWarning("provider turn start recreating missing worktree", {
           threadId: thread.id,

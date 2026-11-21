@@ -66,6 +66,8 @@ it.effect(
       runs: [
         {
           id: runId,
+          threadId,
+          rootNodeId,
           status: "starting",
           providerThreadId,
           providerInstanceId: ProviderInstanceId.make("codex"),
@@ -106,6 +108,14 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getMessagesById: (_threadId, ids) =>
+              Effect.succeed(
+                new Map(
+                  projection.messages
+                    .filter((message) => ids.includes(message.id))
+                    .map((message) => [message.id, message]),
+                ),
+              ),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -138,11 +148,23 @@ it.effect(
         "runtime-request.respond",
       ]);
       const events = committedInput?.events ?? [];
+      const notice = events.at(-3);
+      assert.deepInclude(notice, {
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+      });
+      assert.include(notice?.payload, {
+        type: "system_notice",
+        status: "completed",
+        title: "Server restarted",
+        message: "Cancelled because the server restarted before the provider work completed.",
+      });
       assert.deepEqual(
-        events.map((event) => [
-          event.type,
-          "status" in event.payload ? event.payload.status : null,
-        ]),
+        events
+          .filter((event) => event !== notice)
+          .map((event) => [event.type, "status" in event.payload ? event.payload.status : null]),
         [
           ["run.updated", "cancelled"],
           ["run-attempt.updated", "cancelled"],

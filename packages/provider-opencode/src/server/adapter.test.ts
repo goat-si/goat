@@ -1,14 +1,8 @@
-import { OpenCodeSettings } from "../settings.ts";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - Exercise HTTP authentication with the real SDK.
-import * as NodeHttp from "node:http";
-import * as ChildProcess from "effect/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
+import { TestClock } from "effect/testing";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2";
 import {
-  CheckpointId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -31,7 +25,6 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
@@ -60,8 +53,6 @@ import {
   makeOpenCodeRuntimeHarness,
   wp4Snapshot,
 } from "./adapter.harness.testkit.ts";
-
-const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
 
 describe("OpenCodeAdapterV2", () => {
   it.effect.each([
@@ -181,6 +172,18 @@ describe("OpenCodeAdapterV2", () => {
         let promptId = "";
         const harness = yield* makeOpenCodeRuntimeHarness(`usage-${ending}`, "root", {
           event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          provider: {
+            list: async () => ({
+              data: {
+                all: [
+                  {
+                    id: "anthropic",
+                    models: { "claude-sonnet": { limit: { input: 180_000, context: 200_000 } } },
+                  },
+                ],
+              },
+            }),
+          },
           session: {
             create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
             promptAsync: async (input: { messageID: string }) => {
@@ -301,6 +304,10 @@ describe("OpenCodeAdapterV2", () => {
                 hasSubagents: false,
               },
         );
+        if (ending === "completed") {
+          assert.equal(completed?.providerTurn.tokenUsage?.usedTokens, 22);
+          assert.equal(completed?.providerTurn.tokenUsage?.maxTokens, 180_000);
+        }
       }).pipe(
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
         Effect.scoped,
@@ -580,101 +587,6 @@ describe("OpenCodeAdapterV2", () => {
   );
 
   // OpenCode 1.18.32 background tasks complete at launch; children stay busy after root settlement.
-  it.effect("reports a background task child as pending work after the root turn settles", () =>
-    Effect.gen(function* () {
-      const nativeEvents = asyncEventStream();
-      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
-      const root = "ses_root";
-      const child = "ses_child";
-      let promptId = "";
-      const harness = yield* makeOpenCodeRuntimeHarness("background-child", root, {
-        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-        session: {
-          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
-          get: async () => ({
-            data: { id: child, parentID: root, permission: [], time: { created: 2, updated: 2 } },
-          }),
-          update: async () => ({ data: { id: child, parentID: root } }),
-          promptAsync: async (input: { messageID: string }) => {
-            promptId = input.messageID;
-            return { data: true };
-          },
-          abort: async () => ({ data: true }),
-          children: async () => ({ data: [] }),
-        },
-      });
-      const hasPendingBackgroundWork = harness.runtime.hasPendingBackgroundWork;
-      if (hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die("OpenCode runtime must expose hasPendingBackgroundWork.");
-      }
-      yield* harness.startTurn();
-      const terminal = yield* harness.runtime.events.pipe(
-        Stream.filter((event) => event.type === "turn.terminal"),
-        Stream.runHead,
-        Effect.forkScoped,
-      );
-      const taskPart = (status: "running" | "completed") => ({
-        type: "message.part.updated",
-        properties: {
-          sessionID: root,
-          part: {
-            id: "prt_task",
-            sessionID: root,
-            messageID: "msg_root_assistant",
-            type: "tool",
-            tool: "task",
-            callID: "call_task",
-            state: {
-              status,
-              input: {
-                description: "Background sleep task",
-                prompt: "sleep",
-                subagent_type: "general",
-              },
-              title: "Background sleep task",
-              metadata: { parentSessionId: root, sessionId: child, background: true },
-              time: { start: 3, ...(status === "completed" ? { end: 3 } : {}) },
-              ...(status === "completed" ? { output: "Background task started" } : {}),
-            },
-          },
-        },
-      });
-      const status = (sessionID: string, type: "busy" | "idle") => ({
-        type: "session.status",
-        properties: { sessionID, status: { type } },
-      });
-
-      yield* push({
-        type: "message.updated",
-        properties: {
-          sessionID: root,
-          info: { id: promptId, sessionID: root, role: "user", time: { created: 1 } },
-        },
-      });
-      yield* push(status(root, "busy"));
-      yield* push(taskPart("running"));
-      yield* push({
-        type: "session.created",
-        properties: {
-          sessionID: child,
-          info: { id: child, parentID: root, time: { created: 2, updated: 2 } },
-        },
-      });
-      yield* push(status(child, "busy"));
-      yield* push(taskPart("completed"));
-      yield* push(status(root, "idle"));
-      assert.equal(Option.getOrUndefined(yield* Fiber.join(terminal))?.status, "completed");
-      assert.isTrue(yield* hasPendingBackgroundWork, "the running child must pin idle release");
-
-      yield* push(status(child, "idle"));
-      yield* push({ type: "session.idle", properties: { sessionID: child } });
-      assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
   it.effect("projects OpenCode read output and search titles from native tool calls", () =>
     Effect.gen(function* () {
       const directoryOutput =
@@ -1712,6 +1624,146 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
+  it.effect.each([
+    "during",
+    "idle-during-status",
+    "busy-during-status",
+    "after-refused-connection",
+  ] as const)("completes the turn when the session goes idle %s a rejected steer", (idleTiming) =>
+    Effect.gen(function* () {
+      const nativeEvents = asyncEventStream();
+      const sessionId = `native-steer-rejected-${idleTiming}`;
+      const idle = {
+        type: "session.status",
+        properties: { sessionID: sessionId, status: { type: "idle" } },
+      };
+      const promptIds: Array<string> = [];
+      const terminal = yield* Deferred.make<void>();
+      const statusRead = promiseGate<void>();
+      const statusRechecked = promiseGate<void>();
+      let statusCalls = 0;
+      const harness = yield* makeOpenCodeRuntimeHarness(`steer-rejected-${idleTiming}`, sessionId, {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          get: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          messages: async () => ({ data: [] }),
+          status: async () => {
+            statusCalls++;
+            statusRead.resolve();
+            if (idleTiming === "busy-during-status") {
+              if (statusCalls === 1) {
+                await nativeEvents.push({
+                  type: "session.status",
+                  properties: { sessionID: sessionId, status: { type: "busy" } },
+                });
+                return { data: { [sessionId]: { type: "idle" } } };
+              }
+              statusRechecked.resolve();
+              return { data: { [sessionId]: { type: statusCalls === 2 ? "busy" : "idle" } } };
+            }
+            if (idleTiming === "idle-during-status" && statusCalls === 1) {
+              await nativeEvents.push(idle);
+              return { data: { [sessionId]: { type: "busy" } } };
+            }
+            return {
+              data: {
+                [sessionId]: { type: idleTiming === "after-refused-connection" ? "busy" : "idle" },
+              },
+            };
+          },
+          promptAsync: async (input: { messageID: string }) => {
+            promptIds.push(input.messageID);
+            if (promptIds.length === 1) return { data: true };
+            if (idleTiming === "during") await nativeEvents.push(idle);
+            if (idleTiming === "after-refused-connection") {
+              throw new TypeError("fetch failed", {
+                cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+              });
+            }
+            // The SDK wraps an HTTP error reply in an Error with its status on `cause`.
+            throw new Error("steer rejected", { cause: { body: "steer rejected", status: 503 } });
+          },
+          abort: async () => ({ data: true }),
+          children: async () => ({ data: [] }),
+        },
+      });
+      yield* harness.startTurn();
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "message.updated",
+          properties: {
+            sessionID: sessionId,
+            info: {
+              id: promptIds[0],
+              sessionID: sessionId,
+              role: "user",
+              time: { created: DateTime.toEpochMillis(harness.now) },
+            },
+          },
+        }),
+      );
+      const running = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      yield* harness.runtime.events.pipe(
+        Stream.tap((event) =>
+          event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      const steer = yield* Effect.exit(
+        harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: harness.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: running.providerTurns.at(-1)!.id,
+          message: {
+            messageId: MessageId.make(`message-steer-rejected-${idleTiming}`),
+            text: "also cover the README",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        }),
+      );
+      assert.isTrue(Exit.isFailure(steer));
+      yield* Effect.promise(() => statusRead.promise);
+      if (idleTiming === "busy-during-status") {
+        const outcome = yield* Effect.raceFirst(
+          Effect.promise(() => statusRechecked.promise).pipe(Effect.as("rechecked")),
+          Deferred.await(terminal).pipe(Effect.as("completed")),
+        );
+        assert.equal(outcome, "rechecked");
+        const active = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        yield* Effect.promise(() => nativeEvents.push(idle));
+      }
+      if (idleTiming === "after-refused-connection") {
+        const active = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        yield* Effect.promise(() => nativeEvents.push(idle));
+      }
+      yield* Deferred.await(terminal);
+      if (idleTiming !== "busy-during-status") {
+        assert.equal(statusCalls, idleTiming === "idle-during-status" ? 2 : 1);
+      }
+
+      const settled = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.equal(settled.providerTurns.at(-1)?.status, "completed");
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("interrupts an initial prompt while its SDK request is pending", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -2104,6 +2156,15 @@ describe("OpenCodeAdapterV2", () => {
         "unknown",
       );
       assert.isTrue(admission.admissionPending);
+      const stalled = yield* reconcileOpenCodePromptAdmissionStatus(
+        admission,
+        4,
+        Effect.never,
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust("10 seconds");
+      assert.isDefined(stalled.pollUnsafe());
+      assert.equal(yield* Fiber.join(stalled), "unknown");
+      assert.isTrue(admission.admissionPending);
       assert.equal(
         yield* reconcileOpenCodePromptAdmissionStatus(admission, 4, Effect.succeed("idle")),
         "idle",
@@ -2384,6 +2445,7 @@ describe("OpenCodeAdapterV2", () => {
                 data: { id: "memory-root", time: { created: 1, updated: 1 } },
               }),
               get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
+              children: async () => ({ data: [] }),
               promptAsync: async (input: { system?: string; messageID: string }) => {
                 payloads.push(input);
                 if (refusePrompt) throw new Error("prompt refused");
@@ -2808,190 +2870,3 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 });
-
-it.effect.each([false, true])(
-  "OpenCode rewind forks history and validates the retained boundary, invalid=%s",
-  (invalid) =>
-    Effect.gen(function* () {
-      const events = asyncEventStream();
-      const nativeSessionId = "rewind-source";
-      const forkId = "rewind-fork";
-      const calls: string[] = [];
-      const removed = {
-        info: { id: "first-user", sessionID: nativeSessionId, role: "user", time: { created: 1 } },
-        parts: [],
-      };
-      const harness = yield* makeOpenCodeRuntimeHarness("rewind-fork", nativeSessionId, {
-        event: {
-          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            options.signal?.addEventListener("abort", () => events.close(), { once: true });
-            return { stream: events.stream };
-          },
-        },
-        session: {
-          create: async () => ({ data: { id: nativeSessionId, time: { created: 1, updated: 1 } } }),
-          get: async ({ sessionID }: { sessionID: string }) => ({
-            data: { id: sessionID, time: { created: 1, updated: 2 } },
-          }),
-          messages: async ({ sessionID }: { sessionID: string }) => ({
-            data: sessionID === nativeSessionId || invalid ? [removed] : [],
-          }),
-          fork: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
-            assert.equal(sessionID, nativeSessionId);
-            assert.equal(messageID, "first-user");
-            calls.push("fork");
-            return { data: { id: forkId, time: { created: 1, updated: 2 } } };
-          },
-          update: async () => {
-            calls.push("permissions");
-            return { data: {} };
-          },
-          revert: async () => {
-            throw new Error("Native revert would change workspace files");
-          },
-        },
-      });
-      const effect = harness.runtime.rollbackThread({
-        providerThread: harness.providerThread,
-        target: {
-          type: "thread_start",
-          checkpointId: CheckpointId.make("rewind-checkpoint"),
-          appRunOrdinal: 0,
-        },
-        providerThreadTurns: [],
-      });
-      if (invalid) {
-        const error = yield* effect.pipe(Effect.flip);
-        assert.equal(error._tag, "ProviderAdapterRollbackThreadError");
-        assert.deepEqual(calls, ["fork"]);
-      } else {
-        const result = yield* effect;
-        assert.equal(result.providerThread.nativeThreadRef?.nativeId, forkId);
-        assert.equal(result.messages.length, 0);
-        assert.deepEqual(calls, ["fork", "permissions"]);
-      }
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-);
-
-it.live.each([true, false])("opens an authenticated OpenCode session (external=%s)", (external) =>
-  Effect.gen(function* () {
-    const password = external ? "settings-password" : "environment-password";
-    const requests: string[] = [];
-    let eventConnected!: () => void;
-    const eventRequest = new Promise<void>((resolve) => {
-      eventConnected = resolve;
-    });
-    const server = yield* Effect.acquireRelease(
-      Effect.promise(
-        () =>
-          new Promise<ReturnType<typeof NodeHttp.createServer>>((resolve) => {
-            const server = NodeHttp.createServer((request, response) => {
-              if (
-                request.headers.authorization !==
-                `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-              ) {
-                response.writeHead(401).end("Unauthorized");
-                return;
-              }
-              const url = new URL(request.url!, "http://localhost");
-              requests.push(url.pathname);
-              if (url.pathname === "/event") {
-                response.writeHead(200, { "Content-Type": "text/event-stream" });
-                response.write(": connected\n\n");
-                eventConnected();
-                return;
-              }
-              response.writeHead(200, { "Content-Type": "application/json" });
-              response.end(
-                JSON.stringify(
-                  url.pathname.endsWith("/children")
-                    ? []
-                    : url.pathname === "/session"
-                      ? { id: "native-auth", time: { created: 1, updated: 1 } }
-                      : { healthy: true, version: "1.14.19" },
-                ),
-              );
-            });
-            server.listen(0, "127.0.0.1", () => resolve(server));
-          }),
-      ),
-      (server) =>
-        Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              server.closeAllConnections();
-              server.close(() => resolve());
-            }),
-        ),
-    );
-    const address = server.address();
-    assert.isNotNull(address);
-    if (!address || typeof address === "string") return;
-    const url = `http://127.0.0.1:${address.port}`;
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    let managedStarts = 0;
-    const runtimeLayer = OpenCodeRuntime.layer.pipe(
-      Layer.provide(
-        Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make((command) => {
-            assert.isTrue(ChildProcess.isStandardCommand(command));
-            if (!ChildProcess.isStandardCommand(command)) return Effect.die("Unexpected pipeline");
-            assert.include(command.args, "serve");
-            assert.equal(command.options.env?.OPENCODE_SERVER_PASSWORD, password);
-            managedStarts += 1;
-            return spawner.spawn(
-              ChildProcess.make(
-                process.execPath,
-                [
-                  "-e",
-                  `console.log("server listening on " + process.argv[1]); setInterval(() => {}, 1000)`,
-                  url,
-                ],
-                command.options,
-              ),
-            );
-          }),
-        ),
-      ),
-      Layer.provide(OpenCodeServerLedger.layerTest),
-      Layer.provideMerge(NodeServices.layer),
-    );
-    const instanceId = ProviderInstanceId.make("opencode-auth");
-    const adapter = yield* makeOpenCodeAdapterV2({
-      instanceId,
-      settings: yield* decodeOpenCodeSettings({
-        serverUrl: external ? url : "",
-        ...(external ? { serverPassword: password } : {}),
-      }),
-      environment: { OPENCODE_SERVER_PASSWORD: "environment-password" },
-    }).pipe(Effect.provide(runtimeLayer));
-    const session = yield* adapter.openSession({
-      threadId: ThreadId.make("thread-opencode-auth"),
-      providerSessionId: ProviderSessionId.make("session-opencode-auth"),
-      modelSelection: { instanceId, model: "anthropic/claude-sonnet", options: [] },
-      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
-    });
-    yield* session.ensureThread({
-      threadId: ThreadId.make("thread-opencode-auth"),
-      modelSelection: { instanceId, model: "anthropic/claude-sonnet", options: [] },
-      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
-    });
-    assert.include(requests, "/session");
-    yield* Effect.promise(() => eventRequest);
-    assert.include(requests, "/event");
-    assert.include(requests, "/global/health");
-    assert.equal(managedStarts, external ? 0 : 1);
-  }).pipe(
-    Effect.scoped,
-    Effect.provide([
-      NodeServices.layer,
-      TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
-      IdAllocator.layer,
-      McpProviderSessions.layer,
-    ]),
-  ),
-);

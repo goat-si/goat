@@ -40,6 +40,7 @@ export type TaskInput = Pick<
   | "providerTurnOrdinal"
   | "commitCloudTask"
   | "commitCloudTaskMetadata"
+  | "inputDelivery"
 >;
 
 export function matchingPr(text: string, repository: string): string | undefined {
@@ -585,6 +586,7 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
       if (!id) return;
       yield* Effect.gen(function* () {
         const result = yield* relay.prompt(id, prompt);
+        yield* bound?.inputDelivery?.submitted() ?? Effect.void;
         yield* gate.withPermit(
           Effect.gen(function* () {
             if (input !== bound || settled || closed) return;

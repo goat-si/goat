@@ -62,7 +62,8 @@ const sourcemapEnv = process.env.GOAT_WEB_SOURCEMAP?.trim().toLowerCase();
 const builtDev = process.env.GOAT_BUILT_DEV === "1";
 
 const bundledDevEnv = process.env.GOAT_BUNDLED_DEV?.trim().toLowerCase();
-const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
+const disableSourceWatch = process.env.GOAT_DEV_NO_WATCH === "1";
+const bundledDev = !disableSourceWatch && (bundledDevEnv === "1" || bundledDevEnv === "true");
 
 // Bundled dev and `build --watch` pass Rolldown `exclude` but not Vite's default `ignored`, so
 // they watch node_modules. Those files are pnpm-store hardlinks shared by every worktree, so each
@@ -138,7 +139,18 @@ const browserTestProject = {
     include: [
       "vite-plus/test/browser",
       "@base-ui/react/autocomplete",
+      "@daypicker/react/locale/de",
+      "@daypicker/react/locale/es",
+      "@daypicker/react/locale/fr",
+      "@daypicker/react/locale/ja",
+      "@daypicker/react/locale/ko",
+      "@daypicker/react/locale/pt-BR",
+      "@daypicker/react/locale/ru",
+      "@daypicker/react/locale/zh-CN",
       "@effect/vitest",
+      "effect/Hash",
+      "effect/RcMap",
+      "@legendapp/list/react-native",
       "zustand/vanilla",
       "saxes",
       "@betteroffice/docx/editor",
@@ -152,7 +164,7 @@ const browserTestProject = {
       "fast-xml-parser",
       "entities",
       "dompurify",
-      "heic-to/next",
+      "heic-to/csp",
       "jszip",
       "pdfjs-dist",
       "sql.js",
@@ -445,7 +457,7 @@ export default defineConfig(({ command }) => {
               clientFiles: ["./src/main.tsx"],
             },
           }),
-      watch: { exclude: rolldownWatchExclude },
+      watch: disableSourceWatch ? null : { exclude: rolldownWatchExclude },
       ...(devProxyTarget
         ? {
             // Share prefixes with the backend catch-all so the proxy and 404 lists cannot drift.
@@ -483,7 +495,7 @@ export default defineConfig(({ command }) => {
       emptyOutDir: true,
       manifest: true,
       sourcemap: buildSourcemap,
-      ...(builtDev ? { watch: { exclude: rolldownWatchExclude } } : {}),
+      ...(builtDev && !disableSourceWatch ? { watch: { exclude: rolldownWatchExclude } } : {}),
       rolldownOptions: {
         output: {
           // PDF.js resolves decoder modules and ICC data relative to wasmUrl.

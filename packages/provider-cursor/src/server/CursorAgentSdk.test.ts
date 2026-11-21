@@ -200,6 +200,9 @@ describe("CursorAgentSdkRunner", () => {
       const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
         Effect.provideService(CursorSdk.CursorSdk, {
           load: loaders.loadCursorSdk,
+          supportsLocalSandbox: Effect.succeed(false),
+          markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           loadSqlite: loaders.loadCursorSqlite,
         }),
       );
@@ -227,6 +230,9 @@ describe("CursorAgentSdkRunner", () => {
       const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
         Effect.provideService(CursorSdk.CursorSdk, {
           load,
+          supportsLocalSandbox: Effect.succeed(false),
+          markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           loadSqlite: () => {
             throw new Error("unused SQLite");
           },
@@ -547,6 +553,159 @@ describe("CursorAgentSdkRunner", () => {
           },
         ],
       );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "merges shell output that arrives during a dispatch into one chunk of its last 256 KiB",
+    () =>
+      Effect.gen(function* () {
+        const publish = (data: string) =>
+          (Reflect.get(globalThis, Symbol.for("@cursor/sdk.shellStreamOutput")) as Function)({
+            conversationId: "agent-cursor-agent-sdk-test",
+            toolCallId: "tool-shell",
+            event: { case: "stdout", value: { data } },
+          });
+        const release = Promise.withResolvers<void>();
+        const flood = Array.from(
+          { length: 3000 },
+          (_, index) => `${index}`.padEnd(255, ".") + "\n",
+        );
+        cursorSdkMock.runWait.mockImplementationOnce(async () => {
+          publish("first\n");
+          for (const chunk of flood) publish(chunk);
+          release.resolve();
+          return {
+            id: "run-cursor-agent-sdk-test",
+            requestId: "request-cursor-agent-sdk-test",
+            status: "finished",
+            result: "ok",
+            model: { id: "default" },
+            durationMs: 1,
+          };
+        });
+        const updates: Array<unknown> = [];
+        const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
+        const session = yield* runner.open({
+          operation: "create",
+          options: {},
+          threadId: ThreadId.make("thread-cursor-agent-sdk-flood"),
+          providerSessionId: ProviderSessionId.make("provider-session-cursor-agent-sdk-flood"),
+        });
+        const run = yield* session.send({
+          message: "run it",
+          // The first shell chunk holds the dispatch until the whole flood has arrived.
+          onDelta: (update) =>
+            (updates.some(
+              (seen) => (seen as { readonly type: string }).type === "shell-output-delta",
+            ) || (update as { readonly type: string }).type !== "shell-output-delta"
+              ? Effect.void
+              : Effect.promise(() => release.promise)
+            ).pipe(Effect.andThen(Effect.sync(() => updates.push(update)))),
+        });
+        yield* run.wait;
+
+        const data = updates.flatMap((update) =>
+          (update as { readonly type: string }).type === "shell-output-delta"
+            ? [
+                (update as { readonly event: { readonly value: { readonly data: string } } }).event
+                  .value.data,
+              ]
+            : [],
+        );
+        assert.deepStrictEqual(data, ["first\n", flood.join("").slice(-256 * 1024)]);
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("dispatches the last shell chunk before completion with an empty SDK result", () =>
+    Effect.gen(function* () {
+      const callId = "tool-shell";
+      const firstEntered = Promise.withResolvers<void>();
+      const releaseFirst = Promise.withResolvers<void>();
+      const publish = (data: string) =>
+        (Reflect.get(globalThis, Symbol.for("@cursor/sdk.shellStreamOutput")) as Function)({
+          conversationId: "agent-cursor-agent-sdk-test",
+          toolCallId: callId,
+          event: { case: "stdout", value: { data } },
+        });
+      const completed = {
+        type: "tool-call-completed",
+        modelCallId: "model-call",
+        callId,
+        toolCall: {
+          type: "shell",
+          args: { command: "echo tail" },
+          result: {
+            status: "success",
+            value: { exitCode: 0, signal: "", stdout: "", stderr: "", executionTime: 0 },
+          },
+        },
+      };
+      cursorSdkMock.send.mockImplementationOnce(async (_message, options) => ({
+        id: "run-cursor-agent-sdk-test",
+        agentId: "agent-cursor-agent-sdk-test",
+        cancel: cursorSdkMock.runCancel,
+        steer: cursorSdkMock.runSteer,
+        wait: vi.fn(async () => {
+          publish("first\n");
+          await firstEntered.promise;
+          const completion = options.onDelta?.({ update: completed });
+          publish("pending\n");
+          releaseFirst.resolve();
+          await completion;
+          return {
+            id: "run-cursor-agent-sdk-test",
+            requestId: "request-cursor-agent-sdk-test",
+            status: "finished",
+            result: "",
+            model: { id: "default" },
+            durationMs: 1,
+          };
+        }),
+      }));
+      const observed: Array<unknown> = [];
+      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
+      const session = yield* runner.open({
+        operation: "create",
+        options: {},
+        threadId: ThreadId.make("thread-cursor-agent-sdk-shell-complete"),
+        providerSessionId: ProviderSessionId.make(
+          "provider-session-cursor-agent-sdk-shell-complete",
+        ),
+      });
+      const run = yield* session.send({
+        message: "run it",
+        onDelta: (update) =>
+          Effect.gen(function* () {
+            if (update.type === "shell-output-delta") {
+              const { value } = update.event;
+              if (
+                update.event.case !== "stdout" ||
+                typeof value !== "object" ||
+                value === null ||
+                !("data" in value)
+              ) {
+                return;
+              }
+              const { data } = value;
+              if (data === "first\n") {
+                firstEntered.resolve();
+                yield* Effect.promise(() => releaseFirst.promise);
+              }
+              if (data === "pending\n") publish("final-tail\n");
+              observed.push(data);
+            } else if (update.type === "tool-call-completed") {
+              observed.push(update.type);
+            }
+          }),
+      });
+      yield* run.wait;
+      assert.deepStrictEqual(observed, [
+        "first\n",
+        "pending\n",
+        "final-tail\n",
+        "tool-call-completed",
+      ]);
     }).pipe(Effect.provide(layerTest)),
   );
 

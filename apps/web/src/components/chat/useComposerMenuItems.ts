@@ -1,7 +1,10 @@
 import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 import { useProject } from "~/state/entities";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
-import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadSearchEnvironments,
+  matchComposerThreadItems,
+} from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
   matchComposerAppItems,
@@ -161,8 +164,12 @@ export function useComposerMenuItems({
     isPathTrigger ? serverEnvironment.computerUseApps({ environmentId, input: {} }) : null,
   );
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
-  // Mounts older settled threads matching the mention, which shells may leave out.
-  useThreadSearch(isPathTrigger ? [environmentId] : [], pathTriggerQuery, { titlesOnly: true });
+  // Older settled threads may be missing from the shells on any reachable host.
+  const threadSearch = useThreadSearch(
+    composerThreadSearchEnvironments(isPathTrigger ? environmentId : null, sshHostsByEnvironment),
+    pathTriggerQuery,
+    { titlesOnly: true },
+  );
   const previewTabsQuery = useEnvironmentQuery(
     isPathTrigger && activeThreadId
       ? previewEnvironment.list({ environmentId, input: { threadId: activeThreadId } })
@@ -440,7 +447,7 @@ export function useComposerMenuItems({
     return [];
   })();
   const isLoading =
-    (composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending) ||
+    (composerTriggerKind === "path" && workspaceEntries.isPending) ||
     ((composerTriggerKind === "skill" || composerTriggerKind === "slash-command") &&
       workspaceSkillsScanning) ||
     (composerTriggerKind === "pull-request" &&
@@ -469,9 +476,13 @@ export function useComposerMenuItems({
         : "No pull requests found in this repository.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
+      ? threadSearch.failed
+        ? "Couldn't search threads."
+        : "No matching files or folders."
       : "No matching command.";
   })();
 
-  return { items, isLoading, emptyState };
+  const errorText =
+    composerTriggerKind === "path" && threadSearch.failed ? "Couldn't search threads." : undefined;
+  return { items, isLoading, emptyState, errorText };
 }
