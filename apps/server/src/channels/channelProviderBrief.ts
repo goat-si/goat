@@ -3,7 +3,7 @@ import {
   type ChannelInputId,
   type ChannelTask,
   type MessageId,
-  type OrchestrationV2Thread,
+  type OrchestrationV2AppThread,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -33,7 +33,7 @@ export const unbindRemoteWorkerNotes = (sql: SqlClient.SqlClient, threadId: Thre
 
 export const appendRemoteWorkerNotes = Effect.fn("channel.appendRemoteWorkerNotes")(function* (
   sql: Option.Option<SqlClient.SqlClient>,
-  thread: Pick<OrchestrationV2Thread, "id" | "creationSource">,
+  thread: Pick<OrchestrationV2AppThread, "id" | "creationSource">,
   messageId: MessageId,
   text: string,
 ) {
