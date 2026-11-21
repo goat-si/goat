@@ -70,6 +70,12 @@ interface Storage {
   sweep: (expiredBefore?: number) => Promise<void>;
 }
 
+interface InvalidationStore {
+  mark: (id: EnvironmentId | null) => Promise<void>;
+  has: (id: EnvironmentId | null) => Promise<boolean>;
+  clear: (id: EnvironmentId | null) => Promise<void>;
+}
+
 interface ReadLease {
   readonly id: EnvironmentId;
   readonly writtenAt: Record<KeptKind, Map<string, number>>;
@@ -98,7 +104,7 @@ const summarize: { [K in KeptKind]: (answer: Answers[K]) => Contents[K] } = {
   }),
 };
 
-export function createKeptSummaryStore(storage: Storage) {
+export function createKeptSummaryStore(storage: Storage, invalidation?: InvalidationStore) {
   const leases = new Map<EnvironmentId, ReadLease>();
   let tail = Promise.resolve();
   const serialized = <A>(action: () => Promise<A>): Promise<A> => {
@@ -119,9 +125,18 @@ export function createKeptSummaryStore(storage: Storage) {
     for (const [, writeMark] of marks) await writeMark();
     await storage.sweep(now === undefined ? undefined : now - KEPT_SUMMARY_TTL);
     for (const [id, writeMark] of marks) {
+      if (pending.get(id) !== writeMark) continue;
+      await invalidation?.clear(id);
       if (pending.get(id) === writeMark) pending.delete(id);
     }
     initialized = true;
+  }
+
+  async function recoverInvalidation(id: EnvironmentId | null) {
+    if (!invalidation || !(await invalidation.has(id))) return;
+    await storage.deleteSummaries(id);
+    // A purge started during deletion can have written a newer marker.
+    if (!pending.has(id)) await invalidation.clear(id);
   }
 
   function purge(id: EnvironmentId | null) {
@@ -132,8 +147,18 @@ export function createKeptSummaryStore(storage: Storage) {
       () => true,
       () => false,
     );
+    const markIndependent = () =>
+      invalidation?.mark(id).then(
+        () => true,
+        () => false,
+      );
+    let independentlyMarked = markIndependent();
     pending.set(id, async () => {
-      if (await marked) return;
+      const sqliteMarked = await marked;
+      if (!sqliteMarked && (await independentlyMarked) === false)
+        independentlyMarked = markIndependent();
+      await independentlyMarked;
+      if (sqliteMarked) return;
       try {
         await storage.markPurge(id);
       } catch {
@@ -161,6 +186,9 @@ export function createKeptSummaryStore(storage: Storage) {
       return serialized(async () => {
         if (!isCurrent(lease)) return null;
         await reconcile();
+        await recoverInvalidation(null);
+        await recoverInvalidation(lease.id);
+        if (!isCurrent(lease)) return null;
         let newest: KeptSummary<K> | null = null;
         for (const scope of scopes) {
           const raw = await storage.read(lease.id, kind, scope);
@@ -187,13 +215,19 @@ export function createKeptSummaryStore(storage: Storage) {
       return serialized(async () => {
         if (!isCurrent(lease)) return;
         await reconcile();
+        await recoverInvalidation(null);
+        await recoverInvalidation(lease.id);
         const times = lease.writtenAt[kind];
         if (!isCurrent(lease) || readAt < (times.get(scope) ?? 0)) return;
         await storage.write(lease.id, kind, payload, scope);
         times.set(scope, readAt);
       });
     },
-    maintain: (now: number) => serialized(() => reconcile(now)),
+    maintain: (now: number) =>
+      serialized(async () => {
+        await reconcile(now);
+        await recoverInvalidation(null);
+      }),
     purge,
     purgeAll: () => purge(null),
   };

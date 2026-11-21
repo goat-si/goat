@@ -25,6 +25,7 @@ import {
   botSummaryPurgeKey,
   MobileDatabase,
 } from "../../persistence/mobile-database";
+import { secureStore } from "../../persistence/namespaced-secure-store";
 import { environmentSession } from "../../state/session";
 import { createKeptSummaryStore, type KeptKind } from "./keptSummaryStore";
 
@@ -33,30 +34,43 @@ const cacheKind = "shell";
 const summaryKey = (kind: KeptKind, scope: string) => `goat-bot-summary:${kind}:${scope}`;
 const database = <A>(use: (db: MobileDatabase["Service"]) => Effect.Effect<A, unknown>) =>
   runtime.runPromise(Effect.flatMap(MobileDatabase, use));
+const invalidationKey = (id: EnvironmentId | null) =>
+  id === null
+    ? botSummaryGlobalPurgeKey
+    : `${botSummaryPurgeKey}.${Array.from(new TextEncoder().encode(id), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("")}`;
 
 const openStore = () =>
-  createKeptSummaryStore({
-    read: (id, kind, scope) =>
-      database((db) =>
-        Effect.map(db.loadCache(id, cacheKind, summaryKey(kind, scope)), Option.getOrNull),
-      ),
-    write: (id, kind, payload, scope) =>
-      database((db) => db.saveCache(id, cacheKind, summaryKey(kind, scope), 2, payload)),
-    remove: (id, kind, scope) =>
-      database((db) => db.removeCache(id, cacheKind, summaryKey(kind, scope))),
-    markPurge: (id) =>
-      database((db) =>
-        db.saveCache(
-          id ?? botSummaryLocalId,
-          cacheKind,
-          id === null ? botSummaryGlobalPurgeKey : botSummaryPurgeKey,
-          1,
-          "null",
+  createKeptSummaryStore(
+    {
+      read: (id, kind, scope) =>
+        database((db) =>
+          Effect.map(db.loadCache(id, cacheKind, summaryKey(kind, scope)), Option.getOrNull),
         ),
-      ),
-    deleteSummaries: (id) => database((db) => db.deleteBotSummaryCache(id)),
-    sweep: (expiredBefore) => database((db) => db.sweepBotSummaryCache(expiredBefore)),
-  });
+      write: (id, kind, payload, scope) =>
+        database((db) => db.saveCache(id, cacheKind, summaryKey(kind, scope), 2, payload)),
+      remove: (id, kind, scope) =>
+        database((db) => db.removeCache(id, cacheKind, summaryKey(kind, scope))),
+      markPurge: (id) =>
+        database((db) =>
+          db.saveCache(
+            id ?? botSummaryLocalId,
+            cacheKind,
+            id === null ? botSummaryGlobalPurgeKey : botSummaryPurgeKey,
+            1,
+            "null",
+          ),
+        ),
+      deleteSummaries: (id) => database((db) => db.deleteBotSummaryCache(id)),
+      sweep: (expiredBefore) => database((db) => db.sweepBotSummaryCache(expiredBefore)),
+    },
+    {
+      mark: (id) => secureStore.setItem(invalidationKey(id), "1"),
+      has: async (id) => (await secureStore.getItem(invalidationKey(id))) !== null,
+      clear: (id) => secureStore.removeItem(invalidationKey(id)),
+    },
+  );
 
 const accountAtom = Atom.map(managedRelaySessionAtom, (session) => session?.accountId ?? null);
 const fingerprint = (value: string) => digestStringAsync(CryptoDigestAlgorithm.SHA256, value);

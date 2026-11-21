@@ -23,6 +23,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 const fixture = vi.hoisted(() => ({
   credentials: new Map<string, ConnectionCredential>(),
+  secureItems: new Map<string, string>(),
   runDatabase: vi.fn(),
   open: vi.fn(),
   registry: undefined as unknown as AtomRegistry.AtomRegistry,
@@ -62,6 +63,11 @@ vi.mock("expo-crypto", () => ({
   CryptoDigestAlgorithm: { SHA256: "sha256" },
   digestStringAsync: async (algorithm: string, value: string) =>
     NodeCrypto.createHash(algorithm).update(value).digest("hex"),
+}));
+vi.mock("expo-secure-store", () => ({
+  getItemAsync: async (key: string) => fixture.secureItems.get(key) ?? null,
+  setItemAsync: async (key: string, value: string) => void fixture.secureItems.set(key, value),
+  deleteItemAsync: async (key: string) => void fixture.secureItems.delete(key),
 }));
 vi.mock("expo-haptics", () => ({ impactAsync: async () => {} }));
 vi.mock("react-native", () => ({
@@ -314,6 +320,7 @@ function phone() {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-bot-cache-"));
   const filename = NodePath.join(directory, "client.sqlite");
   fixture.credentials.clear();
+  fixture.secureItems.clear();
   fixture.appState.currentState = "active";
   fixture.width = 400;
   let failDeletes = false;
@@ -486,6 +493,18 @@ function observeClerk(accountId: string | null) {
   return { [Symbol.dispose]: attach };
 }
 
+function waitForOfflineRoster(container: HTMLElement) {
+  const rendered = Promise.withResolvers<void>();
+  const check = () => {
+    if (container.textContent?.includes("Scout") && container.textContent.includes("Needs you · 1"))
+      rendered.resolve();
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(container, { childList: true, subtree: true, characterData: true });
+  check();
+  return { rendered: rendered.promise, [Symbol.dispose]: () => observer.disconnect() };
+}
+
 it.each([
   ["compact Home", 400],
   ["the split sidebar", 1200],
@@ -505,6 +524,7 @@ it.each([
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const container = document.createElement("div");
     const root = createRoot(container);
+    using roster = waitForOfflineRoster(container);
     try {
       await act(async () =>
         root.render(
@@ -515,8 +535,7 @@ it.each([
           </RegistryContext>,
         ),
       );
-      await vi.waitFor(() => expect(container.textContent).toContain("Scout"));
-      await vi.waitFor(() => expect(container.textContent).toContain("Needs you · 1"));
+      await roster.rendered;
       expect(container.textContent).toContain("As of");
       expect(container.textContent).not.toContain("Threads view");
       expect(container.textContent).not.toContain("Threads sidebar");
@@ -604,27 +623,42 @@ it("deletes the refused environment's summaries when SQLite cannot write a purge
   ]);
 });
 
-it("fences restores while both the purge marker and targeted SQLite delete fail", async () => {
+it("fences restores across relaunch while both SQLite invalidation writes fail", async () => {
   using device = phone();
+  using _warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  {
+    await using app = device.open();
+    app.pair("token-a");
+    await app.save("Scout");
+    device.failMarkers();
+    void device.failDelete();
+    await expect(app.purge(env)).rejects.toThrow("delete-bot-summary-cache");
+    await expect(app.restore()).rejects.toThrow("delete-bot-summary-cache");
+  }
+  {
+    await using app = device.open();
+    await expect(app.restore()).rejects.toThrow("sweep-bot-summary-cache");
+    device.allowDelete();
+    expect(await app.restore()).toBeNull();
+    app.pair("token-a");
+    await app.save("Scout after a fresh read");
+  }
   await using app = device.open();
-  app.pair("token-a");
-  await app.save("Scout");
-  device.failMarkers();
-  void device.failDelete();
-  await expect(app.purge(env)).rejects.toThrow("delete-bot-summary-cache");
-  await expect(app.restore()).rejects.toThrow("delete-bot-summary-cache");
-  device.allowDelete();
-  expect(await app.restore()).toBeNull();
+  expect((await app.restore())?.data[0]?.name).toBe("Scout after a fresh read");
 });
 
 it("purges kept summaries on the first signed-out Clerk observation after relaunch", async () => {
   using device = phone();
   {
     await using app = device.open();
+    const active = Promise.withResolvers<void>();
+    using _subscription = {
+      [Symbol.dispose]: app.registry.subscribe(managedRelaySessionAtom, (session) => {
+        if (session?.accountId === "account-a") active.resolve();
+      }),
+    };
     using _clerk = observeClerk("account-a");
-    await vi.waitFor(() =>
-      expect(app.registry.get(managedRelaySessionAtom)?.accountId).toBe("account-a"),
-    );
+    await active.promise;
     await device.run(Effect.flatMap(MobileDatabase, (db) => db.clearAllCaches));
     app.pair("token-a");
     await app.save("Scout");
