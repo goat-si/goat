@@ -80,6 +80,7 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
 import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { sessionCarriesNotes } from "./channelProviderBrief.ts";
 import { sessionFollowUpText } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
@@ -201,7 +202,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /** Whether the session still has work in flight that a replacement would orphan. */
   const sessionBusy = Effect.fn("ChannelBotSession.sessionBusy")(function* (
     threadId: ThreadId,
     records: Effect.Success<ReturnType<typeof readRecords>>,
@@ -241,10 +241,6 @@ const make = Effect.gen(function* () {
     return false;
   });
 
-  /**
-   * The newest run any session already holds for this task generation, found by its intents;
-   * "unknown" when a session that may hold one cannot be read now.
-   */
   const sentRun = Effect.fn("ChannelBotSession.sentRun")(function* (task: ChannelTask) {
     const sessions = yield* sql<{ readonly thread_id: ThreadId }>`
       SELECT DISTINCT thread_id FROM channel_bot_session_runs
@@ -331,7 +327,7 @@ const make = Effect.gen(function* () {
         ...confirmation.options,
         initialMessage: {
           messageId: ids.messageId,
-          text: row.context_text ?? "",
+          text: task.instruction,
           attachments,
           ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         },
@@ -343,8 +339,6 @@ const make = Effect.gen(function* () {
       yield* setState(row, "retired");
       return yield* failPermission(stored, owner);
     }
-    // A launch can commit and still fail afterwards (reading its projection, say): look for its
-    // run before deciding nothing started. Only a refusal or a thread that never appeared is final.
     const landed =
       launched._tag === "Success"
         ? launched.success.projection.runs
@@ -380,7 +374,6 @@ const make = Effect.gen(function* () {
   const queueInto = Effect.fn("ChannelBotSession.queueInto")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     threadId: ThreadId,
-    text: string,
     owner: string,
     requester: ChannelRequester,
     attachments: ReadonlyArray<ChatAttachment>,
@@ -398,7 +391,7 @@ const make = Effect.gen(function* () {
         commandId: ids.commandId,
         threadId,
         messageId: ids.messageId,
-        text,
+        text: task.instruction,
         attachments,
         mode: "queue",
         ...confirmation.options,
@@ -465,13 +458,9 @@ const make = Effect.gen(function* () {
     const target = yield* requireTarget(initial.task);
     const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
-    // A task already sent into a session (a pass interrupted after the send) only binds again,
-    // whichever session its requester maps to now: started work runs on, and a new send would
-    // run it twice.
     const sent = yield* sentRun(initial.task);
     if (sent === "unknown") return "deferred" as const;
     if (sent !== undefined) {
-      // A launch interrupted before it marked its session live counts as live once its run exists.
       yield* sql`
         UPDATE channel_bot_sessions SET state = 'active', version = version + 1
         WHERE thread_id = ${sent.threadId} AND state = 'starting'
@@ -479,8 +468,6 @@ const make = Effect.gen(function* () {
       yield* bindWorker(initial, sent.threadId, sent.runId, owner);
       return "served" as const;
     }
-    // The requester as they stand now: a Slack grant lowered since the message arrived counts,
-    // and one that can no longer start work is refused rather than served on intake authority.
     const requester = yield* dispatchRequester(initial.task);
     if (requester === undefined) return yield* failPermission(initial, owner);
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
@@ -531,8 +518,7 @@ const make = Effect.gen(function* () {
     const freeze = (text: string) => freezeChannelBrief(ledger, initial, owner, text, context);
     const confirm = (notesPath: string | undefined) =>
       makeDispatchConfirmation(
-        requester.originKind === "slack" &&
-          (context.notesPath !== undefined || notesPath !== undefined),
+        context.notesPath !== undefined || notesPath !== undefined,
         dispatchRequester(initial.task).pipe(
           Effect.map(
             (current) =>
@@ -552,7 +538,6 @@ const make = Effect.gen(function* () {
         return yield* queueInto(
           stored,
           row.thread_id,
-          message,
           owner,
           requester,
           attachments,
@@ -579,6 +564,7 @@ const make = Effect.gen(function* () {
       const frozen = yield* freezeSessionPrefix(
         ledger,
         initial.task,
+        initial.botId,
         prependStandingInstructions(standingInstructions, GOAT_BOT_SESSION_RULES).text,
         requester,
         message,
@@ -613,7 +599,11 @@ const make = Effect.gen(function* () {
       readonly queued: ReturnType<typeof turnSteerIdsFor>;
     },
     attachments: ReadonlyArray<ChatAttachment>,
-    forward: { readonly sequence: number; readonly sender?: ChannelTaskSender | undefined },
+    forward: {
+      readonly sequence: number;
+      readonly sender?: ChannelTaskSender | undefined;
+      readonly inputId?: ChannelInputId | undefined;
+    },
   ) {
     const task = stored.task;
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
@@ -649,10 +639,15 @@ const make = Effect.gen(function* () {
     }
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
-    const authority = yield* SenderAuthority.requesterForDelivery(task, forward.sender).pipe(
+    const carriesNotes = yield* sessionCarriesNotes(sql, threadId).pipe(
+      Effect.mapError(asLedgerError("session notes")),
+    );
+    const { sender, inputId } = forward;
+    const live = SenderAuthority.requesterForDelivery(task, sender, inputId, carriesNotes).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
+    const authority = yield* live;
     if (authority._tag !== "allowed")
       return {
         _tag: "permission_changed",
@@ -660,11 +655,16 @@ const make = Effect.gen(function* () {
       } as const;
     const requester = authority.requester;
     const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
-    if (
-      memoryGrantCeiling === "none" &&
-      (yield* ledger.latestTaskBrief(task.taskId))?.context.notesPath !== undefined
-    )
-      return { _tag: "permission_changed", senderName: undefined } as const;
+    const confirmation = yield* makeDispatchConfirmation(
+      carriesNotes,
+      live.pipe(
+        Effect.map(
+          (current) =>
+            current._tag === "allowed" &&
+            sessionMemoryCeiling(current.requester, task.target) === memoryGrantCeiling,
+        ),
+      ),
+    );
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup", forward.sequence).pipe(
@@ -678,6 +678,7 @@ const make = Effect.gen(function* () {
               text,
               attachments,
               mode,
+              ...confirmation.options,
               ...(mode === "steer" && current !== undefined ? { targetRunId: current.id } : {}),
               ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
               createdBy: "user",
@@ -694,14 +695,18 @@ const make = Effect.gen(function* () {
       sent === undefined ||
       (sent._tag === "Failure" &&
         rejected(sent.failure) &&
+        !(yield* confirmation.refused) &&
         (yield* Ref.get(refused)) === undefined &&
         ids.queued.messageId !== ids.first.messageId)
     ) {
       which = ids.queued;
       sent = yield* attempt("queue", ids.queued);
     }
-    if (sent._tag === "Failure")
+    if (sent._tag === "Failure") {
+      if (yield* confirmation.refused)
+        return { _tag: "permission_changed", senderName: sender?.requester.displayName } as const;
       return { _tag: "failed", failure: sent.failure, refusal: yield* Ref.get(refused) } as const;
+    }
     yield* recordRun(
       threadId,
       which.messageId,
@@ -741,7 +746,11 @@ const make = Effect.gen(function* () {
       sessionFollowUpText(event.payload),
       ids,
       event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
-      { sequence: pending.sequence, sender: event.payload.sender },
+      {
+        sequence: pending.sequence,
+        sender: event.payload.sender,
+        inputId: event.actor === "user" ? event.payload.inputId : undefined,
+      },
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "permission_changed" && result.senderName !== undefined)
@@ -802,7 +811,11 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
       [],
-      { sequence: pending.sequence, sender: event.payload.sender },
+      {
+        sequence: pending.sequence,
+        sender: event.payload.sender,
+        inputId: event.actor === "user" ? event.payload.inputId : undefined,
+      },
     );
     if (result._tag === "failed" || result._tag === "permission_changed") {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))

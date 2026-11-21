@@ -6,17 +6,16 @@ export const canReadChannelBotNotes = (viewer: ChannelRequester) =>
 
 export const recheckReceptionNotes = Effect.fn("channel.recheckReceptionNotes")(function* <E>(
   input: ChannelReceptionInput,
-  liveScopes: Effect.Effect<ReadonlyArray<string>, E>,
+  liveViewer: Effect.Effect<ChannelRequester, E>,
 ) {
   if (
-    input.requester.originKind !== "slack" ||
     !canReadChannelBotNotes(input.requester) ||
     (input.notes === undefined && input.readResults === undefined)
   )
     return input;
   if (
-    yield* liveScopes.pipe(
-      Effect.map((scopes) => scopes.includes("memory:read")),
+    yield* liveViewer.pipe(
+      Effect.map(canReadChannelBotNotes),
       Effect.orElseSucceed(() => false),
     )
   )

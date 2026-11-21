@@ -272,6 +272,10 @@ const make = Effect.gen(function* () {
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
+          if (files.sharedNotes === undefined)
+            return (yield* held)
+              ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
+              : yield* refuse("not_saved", CHANNEL_COPY.sharedNoteConfirmationRequired);
           // Checked again under the writer's lock; this check orders the save, so a turn that
           // finishes between it and the write finishes after the save.
           const written = yield* writer.saveIf(

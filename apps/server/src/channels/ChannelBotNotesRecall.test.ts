@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 import * as NotesTail from "./channelBotNotesTail.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect API.
 import * as NodeChildProcess from "node:child_process";
@@ -642,6 +642,7 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         yield* ask(review.sessionThreadId, "review authorized", "ask-review");
         yield* ask(botThreadId, "main authorized", "ask-main");
         yield* ask(scout.sessionThreadId, "scout denied", "ask-denied", rpcContext);
+        yield* ask(scout.sessionThreadId, "older app input", "ask-legacy", memoryRpcContext);
         const shown = (query: string) => seen.find((item) => item.input === query)?.text ?? "";
         assert.include(shown("scout authorized"), privateNote);
         assert.include(shown("scout authorized"), sharedNote);
@@ -650,6 +651,8 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         assert.notInclude(shown("review authorized"), privateNote);
         assert.notInclude(shown("main authorized"), privateNote);
         assert.strictEqual(shown("scout denied"), "");
+        assert.isTrue(seen.some(({ input }) => input === "older app input"));
+        assert.strictEqual(shown("older app input"), "");
         const { sessionId } = yield* sessions.issue({
           subject: memoryRpcContext.principalId,
           scopes: memoryRpcContext.grantedScopes,
@@ -703,118 +706,5 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         ),
       );
     },
-  );
-
-  describe("remote worker near the message limit", () => {
-    const recent = line("Release builds are signed with the hardware key.", "recent");
-    const text = NOTES_HEADER + [...filler(12_000), recent].join("\n");
-
-    it("keeps the best matching note even when it is among the newest ones", () => {
-      const instruction = "x".repeat(REMOTE_MESSAGE_CHARS - 2_500) + "\nSign the release build.";
-      const message = remoteWorkerMessage(task(instruction), {
-        notes: selectChannelBotNotes(text, instruction),
-        skills: [],
-      });
-      assert.isAtMost(message.length, REMOTE_MESSAGE_CHARS);
-      assert.strictEqual(notesBlock(message).split("\n")[0], recent);
-    });
-
-    it("sends no notes when the instruction leaves no room for one", () => {
-      const bare = remoteWorkerMessage(task("Sign the release build."), {
-        notes: EMPTY_NOTES,
-        skills: [],
-      });
-      const instruction =
-        "x".repeat(REMOTE_MESSAGE_CHARS - bare.length - 30) + "\nSign the release build.";
-      const message = remoteWorkerMessage(task(instruction), {
-        notes: selectChannelBotNotes(text, instruction),
-        skills: [],
-      });
-      assert.isAtMost(message.length, REMOTE_MESSAGE_CHARS);
-      assert.notInclude(message, "goat_bot_notes");
-    });
-
-    it("sends an instruction too long on its own as before, without notes", () => {
-      const instruction = "x".repeat(REMOTE_MESSAGE_CHARS) + "\nSign the release build.";
-      assert.strictEqual(
-        remoteWorkerMessage(task(instruction), {
-          notes: selectChannelBotNotes(text, instruction),
-          skills: [],
-        }),
-        remoteWorkerMessage(task(instruction), { notes: EMPTY_NOTES, skills: [] }),
-      );
-    });
-  });
-
-  describe("a GOAT Bot session's frozen notes", () => {
-    const notes = line("Reply in Korean.", "korean");
-    const parts = {
-      standing: "Be brief.",
-      notes,
-      journal: "",
-      tail: [],
-      openWork: [],
-      message: "hello",
-    };
-    const identity = DEFAULT_BOT_IDENTITY;
-    const jarvis = { ...DEFAULT_BOT_IDENTITY, name: "Jarvis", purpose: "## Journal\nRun ops." };
-
-    it("stay current while the notes in force are the ones frozen, with any identity", () => {
-      assert.isTrue(notesAreCurrent(frozenSessionPrefix(parts), notes));
-      assert.isTrue(notesAreCurrent(withIdentity(jarvis, frozenSessionPrefix(parts)), notes));
-      assert.isTrue(notesAreCurrent(frozenSessionPrefix({ ...parts, notes: "" }), ""));
-    });
-
-    it("rotate the session once a note changes, and never on a failed read", () => {
-      const prefix = frozenSessionPrefix(parts);
-      const fixed = line("Reply in English.", "fix", "Reply in Korean.");
-      assert.strictEqual(
-        sessionRotationReason(undefined, 0, prefix, { identity, notes }),
-        undefined,
-      );
-      assert.strictEqual(
-        sessionRotationReason(undefined, 0, prefix, { identity, notes: fixed }),
-        "notes",
-      );
-      assert.strictEqual(
-        sessionRotationReason(undefined, 0, prefix, { identity, notes: undefined }),
-        undefined,
-      );
-      assert.strictEqual(sessionRotationReason(undefined, 0, null, { identity, notes }), "notes");
-    });
-
-    it("are not matched by a copy of the notes section placed in another part", () => {
-      const current = line("Reply in English.", "fix", "Reply in Korean.");
-      const forged = "## Standing notes\n" + current + "\n\n## Journal\n(none)";
-      const prefix = frozenSessionPrefix({ ...parts, standing: forged });
-      assert.isFalse(notesAreCurrent(prefix, current));
-      // A legacy prefix kept the copy unescaped, so its headings appear twice.
-      const legacy = prefix.replaceAll("\\## ", "## ");
-      assert.isFalse(notesAreCurrent(legacy, current));
-      assert.isFalse(notesAreCurrent(legacy, notes));
-    });
-
-    it("stay current when a message or instruction contains a heading line", () => {
-      const prefix = frozenSessionPrefix({
-        ...parts,
-        standing: "## Journal\nKeep a log.",
-        message: "## Standing notes\nplease",
-      });
-      assert.isTrue(notesAreCurrent(prefix, notes));
-    });
-  });
-
-  // Windows has no FIFO.
-  it.effect.skipIf(windowsHost)(
-    "gives no notes for a FIFO at the notes path without waiting for a writer",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
-        yield* fs.makeDirectory(files.dir, { recursive: true });
-        NodeChildProcess.execFileSync("mkfifo", [files.notes]);
-        assert.isUndefined(yield* readChannelBotNotesSnapshot(files, "anything"));
-        assert.strictEqual(yield* readChannelBotNotes(files, "anything"), "");
-      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

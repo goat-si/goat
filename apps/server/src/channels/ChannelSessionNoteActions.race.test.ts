@@ -11,22 +11,25 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import * as ServerConfig from "../config.ts";
-import { ask, runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import { runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { makeChannelBotNoteWriter } from "./channelBotNoteTabEdits.ts";
 import { NOTES_HEADER } from "./channelBotNoteLines.ts";
-import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelSessionNoteActions from "./channelSessionNoteActions.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { memoryRpcContext, owner as ownerFor, setupBot } from "./testkit/ChannelHarness.ts";
+import { owner as ownerFor } from "./testkit/ChannelHarness.ts";
+
+import {
+  askMemberNotes,
+  memberNoteFiles as files,
+  setupMemberNotes,
+} from "./testkit/memberNotes.ts";
 
 /** The edges of a session notes change that need the service itself: races and a failed queue. */
 
@@ -34,14 +37,10 @@ type Harness = ReturnType<typeof sessionHarness>;
 
 const line = (text: string, id: string) => "- 2026-11-01: " + text + " (asked in " + id + ")";
 
-const files = Effect.gen(function* () {
-  return channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
-});
-
 /** A reception-started turn in the bot's session and the run that carries its request. */
 const turn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
-    const task = yield* ask("look: " + text, key, memoryRpcContext);
+    const task = yield* askMemberNotes(text, key);
     const rows = yield* (yield* SqlClient.SqlClient)<{
       readonly thread_id: ThreadId;
       readonly message_id: string;
@@ -70,7 +69,7 @@ const actionsWith = (overrides: Layer.Layer<never>) =>
 it.effect("a grant racing the task's completion is refused once the task finished", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const tidy = yield* turn(harness, "tidy my notes", "tidy");
     const ledger = yield* ChannelLedger.ChannelLedger;
     const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
@@ -114,7 +113,7 @@ it.effect("a grant racing the task's completion is refused once the task finishe
 it.effect("a remember issued during a forget's rewrite lands after it", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const fs = yield* FileSystem.FileSystem;
     const notes = yield* files;
     yield* fs.makeDirectory(notes.dir, { recursive: true });
@@ -145,10 +144,11 @@ it.effect("a remember issued during a forget's rewrite lands after it", () => {
       );
     });
     const forgot = yield* writer.tabEdit(
-      { intent: "message", text: goatBotForgetNoteMessage("I deploy on Fridays.") },
+      { intent: "message", text: goatBotForgetNoteMessage("I deploy on Fridays.", "private") },
       "tab-forget",
       "2026-11-02T00:00:00.000Z",
       Effect.succeed(remember.task.requester),
+      notes,
     );
     assert.strictEqual(forgot?.text, CHANNEL_COPY.noteForgotten);
     assert.strictEqual((yield* Fiber.join(saving!)).outcome, "saved");
@@ -161,7 +161,7 @@ it.effect("a remember issued during a forget's rewrite lands after it", () => {
 it.effect("when the notice cannot be queued the tool does not say the person was told", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const asked = yield* turn(harness, "remember that I deploy on Fridays", "quote");
     const ledger = yield* ChannelLedger.ChannelLedger;
     const actions = yield* actionsWith(
@@ -190,7 +190,7 @@ it.effect(
   () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const tidy = yield* turn(harness, "tidy my notes", "tidy");
       const ledger = yield* ChannelLedger.ChannelLedger;
       const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
@@ -244,7 +244,7 @@ it.effect(
 it.effect("a remember waiting for the writer is not saved once its task was retried", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const fs = yield* FileSystem.FileSystem;
     const notes = yield* files;
     yield* fs.makeDirectory(notes.dir, { recursive: true });
@@ -295,7 +295,7 @@ it.effect("a remember waiting for the writer is not saved once its task was retr
 it.effect("a session turn is never retried into a new generation under a call it bound", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const asked = yield* turn(harness, "remember that staging is staging-02", "remember");
     const ledger = yield* ChannelLedger.ChannelLedger;
     const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
@@ -318,7 +318,7 @@ it.effect("a session turn is never retried into a new generation under a call it
 it.effect("a remember whose check passed is saved when the turn finishes before the write", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const fs = yield* FileSystem.FileSystem;
     const notes = yield* files;
     yield* fs.makeDirectory(notes.dir, { recursive: true });
@@ -368,7 +368,7 @@ it.effect("a remember whose check passed is saved when the turn finishes before 
 it.effect("two edits for different tasks never both hold a notes grant", () => {
   const harness = sessionHarness();
   return Effect.gen(function* () {
-    yield* setupBot;
+    yield* setupMemberNotes;
     const tidy = yield* turn(harness, "tidy my notes", "tidy");
     const forget = yield* turn(harness, "forget the deploy note", "forget");
     const ledger = yield* ChannelLedger.ChannelLedger;

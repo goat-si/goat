@@ -3,10 +3,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import {
-  canReadChannelBotNotes,
-  recheckReceptionNotes,
-} from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes, recheckReceptionNotes } from "./slack/slackNoteAccess.ts";
 import {
   type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -76,7 +73,7 @@ import {
   recallChannelBotNotes,
 } from "./channelBotNotes.ts";
 import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
-import { sharedBotNoteReply } from "./channelSharedBotNote.ts";
+import { confirmMainBotNote, sharedBotNoteReply } from "./channelSharedBotNote.ts";
 import { droppedNoteNotice, mayWriteBotNotes } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
@@ -331,7 +328,10 @@ const make = Effect.gen(function* () {
       });
   };
 
-  const generateOutcome = (input: ChannelReceptionInput, authority?: { connectionId: string; inputId: ChannelInputId }) =>
+  const generateOutcome = (
+    input: ChannelReceptionInput,
+    authority?: { connectionId: string; inputId: ChannelInputId },
+  ) =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.option);
       const generateReception = textGeneration.generateChannelReception;
@@ -346,9 +346,7 @@ const make = Effect.gen(function* () {
             ? input
             : yield* recheckReceptionNotes(
                 input,
-                viewerNow(input.requester, authority.connectionId, authority.inputId).pipe(
-                  Effect.map((viewer) => viewer.grantedScopes),
-                ),
+                viewerNow(input.requester, authority.connectionId, authority.inputId),
               ),
         modelSelection: settings.value.textGenerationModelSelection,
       }).pipe(
@@ -371,7 +369,6 @@ const make = Effect.gen(function* () {
         }),
       );
     });
-  // Narration falls back to the worker's own words when the model cannot phrase them.
   const generate = (input: ChannelReceptionInput) =>
     generateOutcome(input).pipe(
       Effect.map((outcome) => (outcome.ok ? Option.some(outcome.result) : Option.none())),
@@ -405,9 +402,13 @@ const make = Effect.gen(function* () {
     });
 
   /** The owner's newest tasks this requester may see. */
-  const visibleTasks = (viewer: ChannelRequester, conversationId: ChannelConversationId) =>
+  const visibleTasks = (
+    viewer: ChannelRequester,
+    conversationId: ChannelConversationId,
+    botId?: BotId,
+  ) =>
     ledger
-      .listTasks({ ownerId: viewer.ownerId, limit: RECALL_TASK_SCAN })
+      .listTasks({ ownerId: viewer.ownerId, limit: RECALL_TASK_SCAN, botId })
       .pipe(
         Effect.map((page) => page.tasks.filter((task) => canSeeTask(viewer, task, conversationId))),
       );
@@ -504,7 +505,7 @@ const make = Effect.gen(function* () {
           const notes = yield* notesFor(botId, viewer, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
-            yield* visibleTasks(viewer, conversationId),
+            yield* visibleTasks(viewer, conversationId, botId),
             RECALL_TASK_SCAN,
             Number.POSITIVE_INFINITY,
           );
@@ -867,7 +868,6 @@ const make = Effect.gen(function* () {
         return;
       }
       if (origin.kind === "goat" && !routine) {
-        // The task and answer the accepted copy decided stay on the message (TimelineRecords).
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -1006,7 +1006,7 @@ const make = Effect.gen(function* () {
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
                 const journal = journalFor(
-                  yield* visibleTasks(viewer, conversationId).pipe(
+                  yield* visibleTasks(viewer, conversationId, stored.botId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
@@ -1109,7 +1109,7 @@ const make = Effect.gen(function* () {
                     : results;
                 recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
                 const journalNow = journalFor(
-                  yield* visibleTasks(current, conversationId).pipe(
+                  yield* visibleTasks(current, conversationId, stored.botId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
@@ -1183,8 +1183,6 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // Notes are the owner's standing rules for every conversation, so only a person linked now
-      // may change them; someone let in without a link, or whose access ended, may not.
       const mayChangeNotes = !routine && (yield* allowedNotesWrite);
       // Notes shape every later reply, so a note is kept only when a person asked for it in this
       // input: the quote the model returns must occur in the message itself, never in the tail.
@@ -1204,8 +1202,6 @@ const make = Effect.gen(function* () {
       if (decision.remember !== undefined && rememberRefusal !== undefined) {
         yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
-      // Saved before the result commits so a restart re-runs this input and saves it then; the note
-      // names its input, so a second pass for the same input does not add it twice.
       const asked = "notesChangeRequested" in decision.action ? decision.action : undefined;
       const editRefusal =
         asked?.notesChangeRequested === undefined
@@ -1215,8 +1211,11 @@ const make = Effect.gen(function* () {
             : quotedFromInput(asked.notesChangeRequested, message.text)
               ? undefined
               : "quote_not_in_input";
+      const sharedProposal = yield* confirmMainBotNote(stored, decision, rememberRefusal, botNotes);
       const saved =
-        decision.remember !== undefined && rememberRefusal === undefined
+        decision.remember !== undefined &&
+        rememberRefusal === undefined &&
+        sharedProposal === undefined
           ? yield* botNotes.save(
               decision.remember,
               readAt,
@@ -1229,8 +1228,8 @@ const make = Effect.gen(function* () {
       const noteNotice =
         (saved === undefined ? droppedNoteNotice(rememberRefusal) : saved.notice) ??
         droppedNoteNotice(editRefusal);
-      let replyText = decision.replyText;
-      let finalDecision = decision;
+      let finalDecision = sharedProposal ?? decision;
+      let replyText = finalDecision.replyText;
       if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
@@ -1332,7 +1331,7 @@ const make = Effect.gen(function* () {
                 text: message.text,
                 from: sender.displayName,
                 generation: storedTask.task.generation,
-                sender: senderOf(sender, message.connectionId),
+                sender: senderOf(sender, message.connectionId, inputId),
               },
             },
             now,
@@ -1481,7 +1480,7 @@ const make = Effect.gen(function* () {
                 questionId: action.questionId,
                 answer: action.answer,
                 inputId,
-                sender: senderOf(answerer, message.connectionId),
+                sender: senderOf(answerer, message.connectionId, inputId),
               },
             },
             now,
@@ -1536,6 +1535,7 @@ const make = Effect.gen(function* () {
           inputId,
           task: relatedTask,
           mentionActorId: mention,
+          byWord: sharedProposal !== undefined,
           options:
             finalDecision.action.type === "clarify" ? finalDecision.action.options : undefined,
         }),

@@ -11,16 +11,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import * as ServerConfig from "../config.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../mcp/McpToolAccess.ts";
 import * as ChannelHandlers from "../mcp/toolkits/channel/handlers.ts";
 import { ChannelToolkit } from "../mcp/toolkits/channel/tools.ts";
-import { ask, runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import { runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -28,20 +26,28 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
-import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
+import { appendChannelBotNote } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
-  botMessages,
   environmentId,
-  goatInput,
   linkSlackUser,
   memoryRpcContext,
-  setupBot,
   memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+
+import { providerBrief } from "./testkit/providerBrief.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  askMemberNotes,
+  memberNoteFiles as notesFile,
+  memberNoteInput,
+  notesMember,
+  setupMemberNotes,
+  writeMemberNotes as writeNotes,
+} from "./testkit/memberNotes.ts";
 
 /**
  * Notes changes asked for in chat under the default session routing: the session's model calls
@@ -98,17 +104,6 @@ const callNotes = (harness: Harness, caller: Caller, args: Record<string, unknow
     return out.at(-1)!.result as unknown as NotesResult;
   }).pipe(Effect.provide(scopeFor(caller)));
 
-const notesFile = Effect.gen(function* () {
-  return channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
-});
-const writeNotes = (text: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const files = yield* notesFile;
-    yield* fs.makeDirectory(files.dir, { recursive: true });
-    yield* fs.writeFileString(files.notes, text);
-    return files;
-  });
 const readNotes = Effect.gen(function* () {
   return yield* (yield* FileSystem.FileSystem).readFileString((yield* notesFile).notes);
 });
@@ -136,7 +131,9 @@ const boundTurn = (harness: Harness, inputId: ChannelInputId) =>
       task,
       inputId,
       caller: { threadId, runId: run.id } satisfies Caller,
-      sent: sentText(harness, rows[0]!.message_id),
+      sent:
+        (yield* providerBrief(threadId, rows[0]!.message_id)) ??
+        sentText(harness, rows[0]!.message_id),
     };
   });
 
@@ -144,7 +141,7 @@ const boundTurn = (harness: Harness, inputId: ChannelInputId) =>
 const sessionTurn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
     const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-      goatInput(text, key),
+      yield* memberNoteInput(text, key),
       memoryRpcContext,
     );
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
@@ -157,7 +154,7 @@ const sessionTurn = (harness: Harness, text: string, key: string) =>
  */
 const lookTurn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
-    const task = yield* ask("look: " + text, key, memoryRpcContext);
+    const task = yield* askMemberNotes(text, key);
     return yield* boundTurn(harness, task.originInputId);
   });
 
@@ -168,7 +165,7 @@ const followUp = (harness: Harness, taskId: ChannelTaskId, text: string, key: st
     const runtime = yield* ChannelRuntime.ChannelRuntime;
     const before = harness.world.sends.length;
     const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-      { ...goatInput(text, key), taskId },
+      { ...(yield* memberNoteInput(text, key)), taskId },
       memoryRpcContext,
     );
     yield* runtime.drain;
@@ -207,7 +204,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
     () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         yield* writeNotes(NOTES_HEADER);
         const turn = yield* sessionTurn(harness, "remember that I deploy on Fridays", "remember");
         const inputId = inputIdIn(turn.sent, /Request input: (\S+)/u);
@@ -224,7 +221,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("an actually correction is saved with a replaces marker", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
       const turn = yield* sessionTurn(harness, "actually I deploy on Mondays", "correct");
       const result = yield* callNotes(
@@ -244,7 +241,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a correction naming words two current notes share saves nothing and says so", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const text = NOTES_HEADER + line("Use pnpm", "a") + "\n" + line("Use pnpm", "b") + "\n";
       yield* writeNotes(text);
       const turn = yield* sessionTurn(harness, "actually use vp", "alike");
@@ -261,7 +258,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("the input id is read from the text GOAT sent the session", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const turn = yield* lookTurn(harness, "look into the deploy", "look");
       assert.strictEqual(inputIdIn(turn.sent, /Request input: (\S+)/u), turn.inputId);
       const more = yield* followUp(harness, turn.task.taskId, "also check the logs", "more");
@@ -272,7 +269,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a run of another task in the same session cannot change notes for this task", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const first = yield* lookTurn(harness, "look into the deploy", "first");
       const second = yield* lookTurn(harness, "remember that I deploy on Fridays", "second");
@@ -289,7 +286,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a call that lands before the run is recorded is accepted", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const turn = yield* sessionTurn(harness, "remember that I deploy on Fridays", "early");
       yield* (yield* SqlClient.SqlClient)`
@@ -306,7 +303,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a queued run or a finished run cannot change notes", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const first = yield* lookTurn(harness, "remember that I deploy on Fridays", "first");
       const second = yield* lookTurn(harness, "remember that staging is staging-02", "second");
@@ -330,7 +327,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a remember reception already saved for the input adds no second line", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const files = yield* writeNotes(NOTES_HEADER);
       const turn = yield* sessionTurn(harness, "remember that I deploy on Fridays", "dup");
       yield* appendChannelBotNote(
@@ -354,7 +351,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a follow-up's first remember is saved under the follow-up's input", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const turn = yield* lookTurn(harness, "look into the deploy", "look");
       const more = yield* followUp(
@@ -375,7 +372,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a follow-up from a sender who may not change notes is refused", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const turn = yield* lookTurn(harness, "look into the deploy", "look");
       const more = yield* followUp(
@@ -407,7 +404,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a follow-up a session tool wrote cannot carry a notes change", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const target = yield* lookTurn(harness, "remember that I deploy on Fridays", "target");
       const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
@@ -439,7 +436,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("naming an earlier input is judged by that input's sender and text", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const turn = yield* lookTurn(harness, "remember that releases are on Fridays", "first");
       yield* followUp(
@@ -468,7 +465,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("remember is refused while a notes edit is granted", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
       const other = yield* lookTurn(harness, "remember that staging is staging-02", "other");
@@ -493,7 +490,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("the granted task's own other remember is refused, not folded into its edit", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
       yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
@@ -517,7 +514,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
     () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         const forget = yield* lookTurn(harness, "forget the deploy note", "forget");
         yield* callNotes(harness, forget.caller, edit(forget, "forget the deploy note"));
         const more = yield* followUp(harness, forget.task.taskId, "also tidy my notes", "more");
@@ -536,7 +533,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("an edit is granted once, and a repeated call for the same input adds no event", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const tidy = yield* sessionTurn(harness, "tidy my notes", "tidy");
       const granted = yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
       assert.strictEqual(granted.outcome, "granted");
@@ -557,7 +554,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
     () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         yield* writeNotes(NOTES_HEADER);
         // Reception already sent this turn's receipt; on a session-first turn the outbox would send
         // the notice after the turn's answer, keeping one task's messages in order.
@@ -603,12 +600,12 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a forwarded Memory tab forget refused during a grant is put back after it", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const kept = line(fridays, "earlier");
       yield* writeNotes(NOTES_HEADER + kept + "\n");
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
       yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
-      const sentence = goatBotForgetNoteMessage(fridays);
+      const sentence = goatBotForgetNoteMessage(fridays, "private");
       const more = yield* followUp(harness, tidy.task.taskId, sentence, "more");
       const result = yield* callNotes(harness, tidy.caller, {
         ...edit(tidy, sentence),
@@ -628,7 +625,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a later refusal for a new reason posts its own notice", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
       const other = yield* lookTurn(harness, "remember that staging is staging-02", "other");
@@ -656,7 +653,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("an edit for a finished task posts the task-done notice", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const turn = yield* sessionTurn(harness, "tidy my notes", "tidy");
       const ledger = yield* ChannelLedger.ChannelLedger;
       yield* commitTransition(
@@ -673,7 +670,10 @@ describe("notes changes from a GOAT Bot session turn", () => {
 
   const memoryUpdated = Effect.gen(function* () {
     yield* (yield* ChannelBotEvents.ChannelBotEvents).flush;
-    const records = yield* botMessages;
+    const records = yield* (yield* ThreadManagement.ThreadManagementService).getThreadRecords(
+      (yield* notesMember).sessionThreadId,
+      ["turnItems"],
+    );
     return records.turnItems.flatMap((item) =>
       item.type === "notification" && item.source.kind === "goat_bot_event" ? [item.summary] : [],
     );
@@ -684,12 +684,12 @@ describe("notes changes from a GOAT Bot session turn", () => {
     () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         yield* linkSlackUser("U1", true);
         yield* writeNotes(NOTES_HEADER);
         const ingested = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-          slackInput("remember that I deploy on Fridays", "slack-session"),
-          memorySlackContext,
+          slackInput("Scout: remember that I deploy on Fridays", "slack-session"),
+          { ...memorySlackContext, slackRouting: { allowName: true } },
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         const turn = yield* boundTurn(harness, ingested.inputId);
@@ -714,7 +714,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
   it.effect("a remember from the GOAT app and a refused one leave no Memory updated line", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* writeNotes(NOTES_HEADER);
       const turn = yield* sessionTurn(harness, "remember that I deploy on Mondays", "goat-session");
       const saved = yield* callNotes(

@@ -112,7 +112,11 @@ const make = Effect.gen(function* () {
       !mayDirect(requester, connectionId, target.task)
     )
       return yield* fail("not_found");
-    return { target, requester, sender: senderOf(requester, connectionId) };
+    return {
+      target,
+      requester,
+      sender: senderOf(requester, connectionId, source.task.originInputId),
+    };
   });
   const findEvent = Effect.fn("ChannelSessionTaskActions.findEvent")(function* (
     taskId: ChannelTaskId,

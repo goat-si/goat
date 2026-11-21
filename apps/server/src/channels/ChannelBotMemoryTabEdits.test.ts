@@ -1,3 +1,4 @@
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   goatBotChangeNoteMessage,
@@ -813,7 +814,13 @@ describe("corrections the model reports", () => {
     return Effect.gen(function* () {
       yield* setupBot;
       yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
-      yield* send("Actually I deploy on Mondays", "correct");
+      const message = goatInput("Actually I deploy on Mondays", "correct");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const input = yield* gateway.ingest(message, memoryRpcContext);
+      yield* runtime.drain;
+      yield* confirmSharedNote(input.inputId, message, memoryRpcContext);
+      yield* runtime.drain;
       assert.include(yield* readNotes, '(replaces: "I deploy on Fridays.")');
     }).pipe(Effect.provide(layer));
   });

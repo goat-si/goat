@@ -9,6 +9,7 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
+import { bindWorkerProviderBrief } from "./channelProviderBrief.ts";
 import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
@@ -285,6 +286,10 @@ export class ChannelLedger extends Context.Service<
       ChannelLedgerError
     >;
     /** Most recently frozen brief, including earlier generations for version allocation. */
+    readonly bindWorkerProviderBrief: (
+      task: ChannelTask,
+      threadId: ThreadId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     readonly latestTaskBrief: (
       taskId: ChannelTaskId,
     ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
@@ -895,7 +900,7 @@ const make = Effect.gen(function* () {
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
-  acceptInput: (input) =>
+    acceptInput: (input) =>
       acceptChannelInput(sql, readInbox, input).pipe(Effect.mapError(toLedgerError("acceptInput"))),
     inputSessionScopes: (id) =>
       inputSessionScopes(id).pipe(Effect.mapError(toLedgerError("inputSessionScopes"))),
@@ -1059,6 +1064,7 @@ const make = Effect.gen(function* () {
         };
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
 
+    bindWorkerProviderBrief: (task, threadId) => bindWorkerProviderBrief(sql, task, threadId),
     latestTaskBrief: (taskId) =>
       sql<{ readonly event_json: string }>`
         SELECT event_json FROM channel_task_events

@@ -57,6 +57,8 @@ export const CHANNEL_COPY = {
     "I couldn't pass that approval on. That machine can't take approvals from here. Update GOAT there, or answer it in the thread.",
   noteCorrectionUnmatched:
     "I saved that, but couldn't find the earlier note it changes. If an older note says otherwise, ask me to forget it.",
+  sharedNoteConfirmationRequired:
+    "To save a note for all bots, ask “Remember for all bots:” followed by the note, then confirm the reply.",
   noteNotSaved: "I couldn't save that note, so it won't apply yet. Please ask me again.",
   noteChanged: "Changed that note.",
   noteForgotten: "Forgot that note.",

@@ -10,6 +10,7 @@ import {
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelRequester,
   type ChannelTask,
+  type BotId,
   type MemoryTaskGrantCeiling,
 } from "@goat/contracts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
@@ -97,13 +98,14 @@ export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
 export const freezeSessionPrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
   task: ChannelTask,
+  botId: BotId,
   standing: string,
   requester: ChannelRequester,
   message: string,
   notes: string,
 ) {
   const visible = yield* ledger
-    .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
+    .listTasks({ ownerId: task.requester.ownerId, botId, limit: RECALL_TASK_SCAN })
     .pipe(
       Effect.map((page) =>
         page.tasks.filter((other) => canSeeTask(requester, other, task.conversationId)),

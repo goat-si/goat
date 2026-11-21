@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -32,7 +33,11 @@ import {
 } from "./testkit/ChannelHarness.ts";
 
 const main = BotId.make("main");
-const rename = (fields: { readonly name?: string; readonly purpose?: string }) =>
+const rename = (fields: {
+  readonly name?: string;
+  readonly purpose?: string;
+  readonly instructions?: string;
+}) =>
   ChannelBotProfiles.ChannelBotProfiles.pipe(
     Effect.flatMap((profiles) => profiles.update({ botId: main, ...fields }, owner)),
   );
@@ -45,7 +50,7 @@ const sessionState = (threadId: string) =>
     Effect.map((rows) => rows[0]?.state),
   );
 const launchedText = (harness: ReturnType<typeof sessionHarness>, index: number) =>
-  harness.world.launches[index]?.initialMessage?.text ?? "";
+  launchBrief(harness.world.launches[index]);
 
 describe("GOAT Bot sessions and the bot's profile", () => {
   it.effect("keeps another bot's journal out of the session-first model input", () => {
@@ -82,8 +87,8 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       const second = yield* send(review, "Review the launch checklist", "review-journal");
       const worker = (yield* current(taskIdFor(second.inputId, 0))).worker;
       const input = harness.world.launches.find((launch) => launch.threadId === worker?.threadId);
-      assert.include(input?.initialMessage?.text ?? "", "Review the launch checklist");
-      assert.notInclude(input?.initialMessage?.text ?? "", privateFact);
+      assert.include(yield* launchBrief(input), "Review the launch checklist");
+      assert.notInclude(yield* launchBrief(input), privateFact);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -93,14 +98,14 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* setupBot;
       const first = yield* ask("look: one", "p1");
       const thread = first.worker!.threadId;
-      assert.isTrue(launchedText(harness, 0).startsWith("## Standing instructions\n"));
+      assert.isTrue((yield* launchedText(harness, 0)).startsWith("## Standing instructions\n"));
       harness.world.setStatus(thread, 1, "completed", "Done.");
       yield* settle;
       yield* rename({ name: "Jarvis", purpose: "Watch the deploys." });
       const second = yield* ask("look: two", "p2");
       assert.notStrictEqual(second.worker?.threadId, thread);
       assert.lengthOf(harness.world.launches, 2);
-      const text = launchedText(harness, 1);
+      const text = yield* launchedText(harness, 1);
       assert.isTrue(text.startsWith('## Identity\nThe person named you "Jarvis".'));
       assert.include(text, '"Watch the deploys."');
       assert.strictEqual(yield* sessionState(thread), "retired");
@@ -110,6 +115,36 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       const third = yield* ask("look: three", "p3");
       assert.strictEqual(third.worker?.threadId, second.worker?.threadId);
       assert.lengthOf(harness.world.launches, 2);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("saving and clearing instructions each rotate the warm session", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const initial = yield* ask("look: check build one", "instructions-before");
+      const first = initial.worker?.threadId;
+      if (first === undefined) return yield* Effect.die("The initial session did not start");
+      harness.world.setStatus(first, 1, "completed", "Done.");
+      yield* settle;
+
+      const instruction = "Read the release checklist before reporting.";
+      yield* rename({ instructions: instruction });
+      const saved = yield* ask("look: check build two", "instructions-saved");
+      const second = saved.worker?.threadId;
+      if (second === undefined) return yield* Effect.die("The edited session did not start");
+      assert.notStrictEqual(second, first);
+      assert.strictEqual(yield* sessionState(first), "retired");
+      assert.include(yield* launchedText(harness, 1), instruction);
+      harness.world.setStatus(second, 1, "completed", "Done.");
+      yield* settle;
+
+      yield* rename({ instructions: "" });
+      const cleared = yield* ask("look: check build three", "instructions-cleared");
+      assert.isDefined(cleared.worker);
+      assert.notStrictEqual(cleared.worker?.threadId, second);
+      assert.strictEqual(yield* sessionState(second), "retired");
+      assert.notInclude(yield* launchedText(harness, 2), instruction);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -130,7 +165,7 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* settle;
       const rotated = yield* current(waiting.taskId);
       assert.notStrictEqual(rotated.worker?.threadId, thread);
-      assert.isTrue(launchedText(harness, 1).startsWith("## Identity\n"));
+      assert.isTrue((yield* launchedText(harness, 1)).startsWith("## Identity\n"));
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -140,13 +175,13 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* setupBot;
       yield* rename({ name: "Jarvis" });
       const first = yield* ask("look: one", "d1");
-      assert.isTrue(launchedText(harness, 0).startsWith("## Identity\n"));
+      assert.isTrue((yield* launchedText(harness, 0)).startsWith("## Identity\n"));
       harness.world.setStatus(first.worker!.threadId, 1, "completed", "Done.");
       yield* settle;
       yield* rename({ name: "GOAT Bot" });
       const second = yield* ask("look: two", "d2");
       assert.notStrictEqual(second.worker?.threadId, first.worker?.threadId);
-      assert.isTrue(launchedText(harness, 1).startsWith("## Standing instructions\n"));
+      assert.isTrue((yield* launchedText(harness, 1)).startsWith("## Standing instructions\n"));
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -217,7 +252,7 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* sql`UPDATE channel_runtime_state SET value_json = ${good} WHERE key = ${key}`;
       const next = yield* ask("look: two", "f2");
       assert.isDefined(next.worker);
-      assert.isTrue(launchedText(harness, 0).startsWith("## Identity\n"));
+      assert.isTrue((yield* launchedText(harness, 0)).startsWith("## Identity\n"));
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -252,13 +287,13 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* rename({ name: "Jarvis" });
       yield* runtime.drain;
       assert.strictEqual((yield* current(waiting.taskId)).worker?.threadId, next);
-      assert.isTrue(launchedText(harness, 1).startsWith("## Standing instructions\n"));
+      assert.isTrue((yield* launchedText(harness, 1)).startsWith("## Standing instructions\n"));
       harness.world.setStatus(next, 1, "completed", "Done.");
       yield* settle;
       const third = yield* ask("look: three", "o3");
       assert.notStrictEqual(third.worker?.threadId, next);
       assert.isTrue(
-        launchedText(harness, 2).startsWith('## Identity\nThe person named you "Jarvis".'),
+        (yield* launchedText(harness, 2)).startsWith('## Identity\nThe person named you "Jarvis".'),
       );
     }).pipe(Effect.provide(harness.layer));
   });
@@ -300,7 +335,7 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       yield* Effect.gen(function* () {
         const second = yield* ask("look: two", "r2");
         assert.notStrictEqual(second.worker?.threadId, thread);
-        assert.isTrue(launchedText(harness, 1).startsWith("## Identity\n"));
+        assert.isTrue((yield* launchedText(harness, 1)).startsWith("## Identity\n"));
         harness.world.setStatus(second.worker!.threadId, 1, "completed", "Done.");
         yield* settle;
       }).pipe(Effect.provide(harness.layer));

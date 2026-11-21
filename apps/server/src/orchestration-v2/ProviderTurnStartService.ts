@@ -51,6 +51,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
+  isGoatBotSessionThreadId,
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
@@ -61,6 +62,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
+import { readChannelProviderBrief } from "../channels/channelProviderBrief.ts";
+import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -139,6 +143,7 @@ export const layer: Layer.Layer<
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
@@ -705,10 +710,19 @@ export const layer: Layer.Layer<
       let effectiveHandoffs = cloud ? [] : handoffs;
       let resumeFellBack = false;
       let forkFellBack = false;
+      const privateBrief =
+        !nativeResume &&
+        Option.isSome(sql) &&
+        (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
+          ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
+          : undefined;
       const userText = nativeResume
         ? ""
         : yield* providerTextWithSkills(Option.some(serverSettings), {
-            message: providerMessage,
+            message:
+              privateBrief === undefined
+                ? providerMessage
+                : { ...providerMessage, text: privateBrief },
             driver: session.driver,
             globalSkillsDir,
             project: Effect.succeed(projection.thread.projectId),

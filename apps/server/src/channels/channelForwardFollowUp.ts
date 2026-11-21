@@ -91,7 +91,11 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       return;
     }
     // The requester and, for someone else's follow-up, its sender, as they stand now.
-    const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
+    const authority = yield* requesterForDelivery(
+      stored.task,
+      event.payload.sender,
+      event.actor === "user" ? event.payload.inputId : undefined,
+    ).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );

@@ -23,7 +23,6 @@ import {
   resolveProjectProviderInstanceEnabled,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
-import { prependStandingInstructions } from "@goat/shared/standingInstructions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -56,9 +55,7 @@ import { makeForwardFollowUp } from "./channelForwardFollowUp.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
-import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
-import { identitySection } from "./channelBotSessionBrief.ts";
-import { channelBotFilesFor, recallChannelBotNotes } from "./channelBotNotes.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
@@ -73,11 +70,10 @@ import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
-import { freezeChannelBrief, localNotesBriefContext } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
-import { workerInstruction } from "./channelWorkerBrief.ts";
+import { freezeLocalWorkerBrief } from "./channelLocalWorkerBrief.ts";
 import {
   ENDED_RUN_STATUSES,
   isThreadMissing,
@@ -422,40 +418,24 @@ const make = Effect.gen(function* () {
       const botFiles = filesFor(initial.botId);
       const mayRead = initial.task.routineWork !== true && canReadChannelBotNotes(requester);
       const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
-      const notes = yield* recallChannelBotNotes(botFiles, initial.task.instruction, mayRead).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-      );
       const identity = yield* profiles.identity(initial.ownerId, initial.botId).pipe(Effect.option);
       if (Option.isNone(identity)) return yield* refuseDispatch(initial, owner);
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-      // The project's standing instructions go in front, as goat_thread_launch puts them, so a
-      // channel worker follows the rules every thread in that project follows.
-      const standing = resolveProjectSettings(settings, initial.task.target.projectId).settings
-        .standingInstructions;
-      const { stored, brief } = yield* freezeChannelBrief(
+      const { standingInstructions } = resolveProjectSettings(
+        settings,
+        initial.task.target.projectId,
+      ).settings;
+      const storedBrief = yield* freezeLocalWorkerBrief(
         ledger,
         initial,
         owner,
-        prependStandingInstructions(
-          standing,
-          identitySection(identity.value) +
-            workerInstruction(initial.task, botFiles, {
-              read: mayRead,
-              write: mayWrite,
-              notes: notes === undefined ? "" : channelBotNotesSection(notes),
-            }),
-        ).text,
-        {
-          ...(mayRead ? { notesPath: botFiles.notes } : {}),
-          notesRevision:
-            mayRead && initial.task.briefVersion === undefined
-              ? yield* channelNotesRevision(botFiles.notes).pipe(
-                  Effect.provideService(FileSystem.FileSystem, fileSystem),
-                )
-              : null,
-          skillsPath: botFiles.skills,
-        },
-      );
+        botFiles,
+        identity.value,
+        standingInstructions,
+        mayRead,
+        mayWrite,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      const { stored, brief } = storedBrief;
       const task = stored.task;
       const target = task.target!;
       const workspaceStrategy = yield* prepareChannelWorkerWorkspace(
@@ -463,24 +443,25 @@ const make = Effect.gen(function* () {
         target,
         ledger.recordLaunchHead,
       ).pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projects));
-      const hasSlackNotes =
-        requester.originKind === "slack" && brief.context.notesPath !== undefined;
+      const carriesNotes = brief.context.notesPath !== undefined;
       const canDispatch = dispatchGrant(task).pipe(
         Effect.map(
           (current) =>
             current !== undefined &&
             (brief.context.notesPath === undefined ||
-              (mayRead && brief.context.notesPath === botFiles.notes &&
+              (mayRead &&
+                brief.context.notesPath === botFiles.notes &&
                 canReadChannelBotNotes(current) &&
                 sessionMemoryCeiling(current, target) === (target.memoryGrantCeiling ?? "none"))),
         ),
       );
       if (!(yield* canDispatch)) return yield* refuseDispatch(stored, owner);
       const confirmation = yield* makeDispatchConfirmation(
-        task.routineWork === true || hasSlackNotes,
+        task.routineWork === true || carriesNotes,
         canDispatch,
       );
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
+      yield* ledger.bindWorkerProviderBrief(task, ids.threadId);
       const launched = yield* launches
         .launch({
           commandId: ids.commandId,
@@ -495,7 +476,7 @@ const make = Effect.gen(function* () {
           ...confirmation.options,
           initialMessage: {
             messageId: ids.messageId,
-            text: brief.deliveredText,
+            text: task.instruction,
             attachments: [],
             ...(target.memoryGrantCeiling === undefined
               ? {}
@@ -506,7 +487,7 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.result);
       if (launched._tag === "Failure") {
-        if (hasSlackNotes && (yield* confirmation.refused))
+        if (carriesNotes && (yield* confirmation.refused))
           return yield* refuseDispatch(stored, owner);
         yield* Effect.logWarning("channel worker launch failed", {
           taskId: task.taskId,
@@ -1118,7 +1099,11 @@ const make = Effect.gen(function* () {
         return;
       }
       const ids = answerForwardIdsFor(event.eventId);
-      const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
+      const authority = yield* requesterForDelivery(
+        stored.task,
+        event.payload.sender,
+        event.actor === "user" ? event.payload.inputId : undefined,
+      ).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );

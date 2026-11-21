@@ -1,3 +1,4 @@
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   BotId,
@@ -52,8 +53,12 @@ const remembering = () => {
 
 const say = (text: string, key: string) =>
   Effect.gen(function* () {
-    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), memoryRpcContext);
-    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    const message = goatInput(text, key);
+    const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(message, memoryRpcContext);
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* runtime.drain;
+    yield* confirmSharedNote(input.inputId, message, memoryRpcContext);
+    yield* runtime.drain;
   });
 
 const notesAs = (viewer: ChannelConnectionOwner) =>

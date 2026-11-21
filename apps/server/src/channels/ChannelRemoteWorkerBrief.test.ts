@@ -6,6 +6,7 @@ import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -93,6 +94,45 @@ describe("what a worker on another machine is told", () => {
       assert.include(message, "ship it");
       assert.notInclude(message, "<goat_bot_notes>");
       assert.notInclude(message, "open PRs as drafts");
+    }).pipe(Effect.provide(harness.layer));
+  });
+  it.effect("withholds a member's scoped notes from a remote worker for a denied requester", () => {
+    const { launch, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const scout = yield* members.create(
+        {
+          clientRequestId: "remote-scout",
+          name: "Scout",
+          avatar: null,
+          purpose: "",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+        scout.botId,
+      );
+      const fs = yield* FileSystem.FileSystem;
+      const fact = "Use the synthetic Juniper key for rollout.";
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      yield* fs.writeFileString(files.notes, "- 2026-10-17: " + fact + " (asked in x)\n");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const input = yield* gateway.ingest(
+        slackInput("Scout: do@mac-studio: check rollout", "scout-remote-denied"),
+        { ...slackContext, slackRouting: { allowName: true } },
+      );
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual((yield* ledger.getInput(input.inputId))?.botId, scout.botId);
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const message = (yield* launch).message ?? "";
+      assert.include(message, "check rollout");
+      assert.notInclude(message, fact);
+      assert.notInclude(message, files.notes);
     }).pipe(Effect.provide(harness.layer));
   });
 });

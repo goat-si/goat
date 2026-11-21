@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -1296,9 +1297,7 @@ describe("what a channel worker is told", () => {
       yield* gateway.ingest(goatInput("do: tidy the docs", "standing-local"), rpcContext);
       yield* runtime.drain;
       assert.strictEqual(harness.world.launches.length, 1);
-      const first = splitStandingInstructions(
-        harness.world.launches[0]?.initialMessage?.text ?? "",
-      );
+      const first = splitStandingInstructions(yield* launchBrief(harness.world.launches[0]));
       // The same versioned block goat_thread_launch writes, so clients show it collapsed.
       assert.strictEqual(first.block?.text, "Open pull requests as drafts.");
       assert.isTrue(first.text.startsWith("tidy the docs\n"));
@@ -2431,7 +2430,7 @@ describe("notes require a request in the current input", () => {
         const created = yield* decodeTaskEventJsonEffect(rows[0]!.event_json);
         assert.strictEqual(created.type, "task.created");
         if (created.type !== "task.created") return yield* Effect.die("expected task.created");
-        const instruction = harness.world.launches[0]!.initialMessage!.text;
+        const instruction = yield* launchBrief(harness.world.launches[0]);
         if (scenario === "quoted") {
           assert.strictEqual(task.notesChangeRequested, quote);
           assert.strictEqual(created.payload.notesChangeRequested, quote);

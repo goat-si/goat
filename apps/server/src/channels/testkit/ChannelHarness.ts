@@ -843,7 +843,6 @@ export function makeHarness(
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
     Layer.provideMerge(layerDatabase),
   );
-  /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {
     const index = shells.findIndex((shell) => shell.id === id);
     if (index !== -1) shells.splice(index, 1);
@@ -948,7 +947,7 @@ export const linkSlackUser = (user = "U1", withMemory: boolean | typeof owner = 
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
-    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...(withMemory || {}) };
+    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...withMemory };
     const { code } = yield* identities.createLink(
       {
         connectionId: "slack-1",

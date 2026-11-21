@@ -231,7 +231,7 @@ const make = Effect.gen(function* () {
                     text: stored.message.text,
                     from: requester.displayName,
                     generation: threadTask.task.generation,
-                    sender: senderOf(requester, stored.message.connectionId),
+                    sender: senderOf(requester, stored.message.connectionId, inputId),
                   },
                 },
                 now,

@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
 import { ChannelQuestionId, CommandId, ThreadId } from "@goat/contracts";
@@ -651,8 +652,8 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
         const launch = harness.world.launches.find(
           (candidate) => candidate.threadId === served.worker?.threadId,
         );
-        assert.include(launch!.initialMessage!.text, "check the build");
-        assert.notInclude(launch!.initialMessage!.text, "payroll export");
+        assert.include(yield* launchBrief(launch), "check the build");
+        assert.notInclude(yield* launchBrief(launch), "payroll export");
       }).pipe(Effect.provide(harness.layer));
     },
   );
@@ -666,7 +667,7 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       const wide = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "w1"));
       const wideThread = wide.worker!.threadId;
       const wideLaunch = harness.world.launches.find((launch) => launch.threadId === wideThread);
-      assert.include(wideLaunch!.initialMessage!.text, "payroll export");
+      assert.include(yield* launchBrief(wideLaunch), "payroll export");
       harness.world.setStatus(wideThread, 1, "completed", "Done.");
       yield* settle;
       yield* narrowTeammate;
@@ -680,7 +681,7 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       const narrowLaunch = harness.world.launches.find(
         (launch) => launch.threadId === narrow.worker?.threadId,
       );
-      assert.notInclude(narrowLaunch!.initialMessage!.text, "payroll export");
+      assert.notInclude(yield* launchBrief(narrowLaunch), "payroll export");
     }).pipe(Effect.provide(harness.layer));
   });
 

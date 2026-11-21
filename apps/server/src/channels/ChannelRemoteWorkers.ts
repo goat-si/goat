@@ -53,7 +53,7 @@ import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { makeRemoteBotBrief } from "./channelRemoteBotBrief.ts";
+import { makeRemoteBotBrief } from "./channelRemoteWorkerBrief.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import {
   answerForwardIdsFor,
@@ -62,7 +62,6 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
-import { freezeRemoteWorkerBrief } from "./channelRemoteWorkerBrief.ts";
 import {
   decodeOffered,
   matchingOfferedProviders,
@@ -1391,9 +1390,11 @@ const make = Effect.gen(function* () {
     requesterForDispatch(task).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-      Effect.mapError(() => new Superseded()),
+      Effect.mapError(() => new AuthorityLost()),
       Effect.flatMap((who) =>
-        who !== undefined && canReadChannelBotNotes(who) ? Effect.void : Effect.fail(new Superseded()),
+        who !== undefined && canReadChannelBotNotes(who)
+          ? Effect.void
+          : Effect.fail(new AuthorityLost()),
       ),
     );
 
@@ -2521,7 +2522,11 @@ const make = Effect.gen(function* () {
       // Runs last in authorize, which the SSH layer repeats right before each request, so requester
       // and sender are judged together at that point. Whether an earlier attempt reached the host
       // stays unknown either way.
-      const senderGate = requesterForDelivery(stored.task, event.payload.sender).pipe(
+      const senderGate = requesterForDelivery(
+        stored.task,
+        event.payload.sender,
+        event.actor === "user" ? event.payload.inputId : undefined,
+      ).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         Effect.mapError(() => new Superseded()),

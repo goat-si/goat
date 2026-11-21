@@ -420,7 +420,11 @@ export const makeChannelBotNoteWriter = (
     const refusedMessage = Effect.fn("channelBotNoteTabEdits.refusedMessage")(
       function* (message: string, files = sharedFiles) {
         const request = tabRequest(message);
-        if (request?.kind !== "forget") return;
+        if (
+          request?.kind !== "forget" ||
+          (request.scope === "private" && files.sharedNotes === undefined)
+        )
+          return;
         const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
         yield* recordRefusedQuietly(
           request.note,
@@ -602,6 +606,8 @@ export const makeChannelBotNoteWriter = (
           Effect.gen(function* () {
             const who = yield* judged.pipe(Effect.orElseSucceed(() => undefined));
             if (who === undefined || !mayWriteBotNotes(who)) return CHANNEL_COPY.noteEditNotAllowed;
+            if (request.scope === "private" && files.sharedNotes === undefined)
+              return "This bot has no private notes. Choose All bots in Memory.";
             if (request.scope === undefined && files.sharedNotes !== undefined)
               return "Choose This bot or All bots in Memory, then send the request again.";
             return yield* apply(

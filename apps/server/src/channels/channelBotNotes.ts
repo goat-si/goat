@@ -116,7 +116,7 @@ export const recallChannelBotNotes = Effect.fn("channelBotNotes.recall")(functio
   const own = yield* readChannelBotNotesSnapshot(files, query);
   if (files.sharedNotes === undefined) return own;
   const shared = yield* readChannelBotNotesSnapshot({ ...files, notes: files.sharedNotes }, query);
-  if (own === undefined || shared === undefined) return undefined;
+  if (own === undefined || shared === undefined) return own ?? shared;
   return {
     standing: [shared.standing, own.standing].filter(Boolean).join("\n"),
     matched: [shared.matched, own.matched].filter(Boolean).join("\n"),

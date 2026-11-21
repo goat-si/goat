@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope, ChannelReceptionInput, ChannelTaskId } from "@goat/contracts";
 import { ChannelQuestionId } from "@goat/contracts";
@@ -161,7 +162,7 @@ it.effect("a Slack follow-up after revocation cannot reuse a warm session holdin
     yield* appendChannelBotNote(fs, files, note, "2026-11-21T00:00:00Z", "fixture");
     yield* link("U2", "teammate", ["memory:read"]);
     const stored = yield* start(opening, "start-with-notes");
-    assert.include(harness.world.launches[0]?.initialMessage?.text ?? "", note);
+    assert.include(yield* launchBrief(harness.world.launches[0]), note);
     yield* say("U2", "more:" + stored.task.taskId + " check again", "follow");
     yield* narrow("U2", ["orchestration:read", "orchestration:operate"]);
     yield* forwardAll;

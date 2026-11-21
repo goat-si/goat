@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -460,6 +461,7 @@ it.effect(
       );
       yield* reception.receive(input.inputId, "local-brief-owner");
       const task = yield* onlyTask;
+      const sql = yield* SqlClient.SqlClient;
       let frozenTaskVersion: number | undefined;
       harness.launch.afterAccepted = (launch) =>
         Effect.gen(function* () {
@@ -467,7 +469,8 @@ it.effect(
           const brief = yield* ledger.latestTaskBrief(task.taskId);
           assert.strictEqual(stored.task.status, "dispatching");
           assert.strictEqual(stored.task.briefVersion, 1);
-          assert.strictEqual(brief?.deliveredText, launch.initialMessage?.text);
+          assert.strictEqual(brief?.deliveredText, yield* launchBrief(launch));
+          assert.strictEqual(launch.initialMessage?.text, task.instruction);
           assert.strictEqual(brief?.instruction, task.instruction);
           assert.strictEqual(brief?.intent, "inspect the build");
           assert.isDefined(brief?.context.notesPath);
@@ -480,7 +483,7 @@ it.effect(
           assert.strictEqual(brief?.target.model, launch.modelSelection.model);
           frozenTaskVersion = stored.task.version;
           return yield* Effect.die("simulated interruption after launch acceptance");
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
       const interrupted = yield* dispatcher
         .dispatch(task.taskId, "local-brief-owner")
         .pipe(Effect.exit);
@@ -491,8 +494,9 @@ it.effect(
         Effect.gen(function* () {
           assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.version, frozenTaskVersion);
           assert.deepStrictEqual(yield* ledger.latestTaskBrief(task.taskId), frozen);
-          assert.strictEqual(launch.initialMessage?.text, frozen?.deliveredText);
-        }).pipe(Effect.orDie);
+          assert.strictEqual(yield* launchBrief(launch), frozen?.deliveredText);
+          assert.strictEqual(launch.initialMessage?.text, task.instruction);
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
       yield* dispatcher.dispatch(task.taskId, "local-brief-owner");
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "running");
       assert.lengthOf(harness.world.launches, 2);

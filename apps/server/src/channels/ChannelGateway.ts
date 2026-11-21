@@ -159,7 +159,7 @@ export const originConnectionOf = (task: ChannelTask) =>
   task.originAddress.kind === "goat" ? GOAT_CONNECTION_ID : task.originAddress.connectionId;
 
 /** The task's requester themself: the same person, account and connection. */
-export const isSameIdentity = (
+const isSameIdentity = (
   sender: ChannelRequester,
   connectionId: string | undefined,
   task: ChannelTask,

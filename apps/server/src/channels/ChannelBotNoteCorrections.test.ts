@@ -1,3 +1,4 @@
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionResult } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -56,8 +57,12 @@ const notesFiles = Effect.gen(function* () {
 
 const send = (text: string, key: string) =>
   Effect.gen(function* () {
-    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), memoryRpcContext);
-    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    const message = goatInput(text, key);
+    const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(message, memoryRpcContext);
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* runtime.drain;
+    yield* confirmSharedNote(input.inputId, message, memoryRpcContext);
+    yield* runtime.drain;
   });
 
 describe("GOAT Bot note corrections through reception", () => {
@@ -98,7 +103,7 @@ describe("GOAT Bot note corrections through reception", () => {
       yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "earlier");
       yield* send("Actually I deploy on Mondays", "correct");
       const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
-      assert.include(texts, "Got it. " + CHANNEL_COPY.noteCorrectionUnmatched);
+      assert.include(texts, CHANNEL_COPY.noteCorrectionUnmatched);
       const saved = yield* fs.readFileString(files.notes);
       assert.include(saved, "I deploy on Mondays.");
       assert.notInclude(saved, "(replaces:");
@@ -163,7 +168,7 @@ describe("GOAT Bot note corrections through reception", () => {
         const saved = yield* fs.readFileString(files.notes);
         yield* send("Actually I deploy on Mondays", "correct");
         const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
-        assert.include(texts, "Got it. " + CHANNEL_COPY.noteCorrectionUnmatched);
+        assert.include(texts, CHANNEL_COPY.noteCorrectionUnmatched);
         assert.strictEqual(yield* fs.readFileString(files.notes), saved);
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
@@ -200,7 +205,7 @@ describe("GOAT Bot note corrections through reception", () => {
       yield* fs.makeDirectory((yield* notesFiles).notes, { recursive: true });
       yield* send("Remember I deploy on Mondays", "remember");
       const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
-      assert.include(texts, "Got it. " + CHANNEL_COPY.noteNotSaved);
+      assert.include(texts, CHANNEL_COPY.noteNotSaved);
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
@@ -232,15 +237,15 @@ describe("GOAT Bot note corrections through reception", () => {
       const files = yield* notesFiles;
       yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "earlier");
       const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(
-        goatInput("Actually I deploy on Mondays", "goat-fix"),
-        memoryRpcContext,
-      );
-      yield* gateway.ingest(
-        slackInput("Actually I deploy on Tuesdays", "slack-fix"),
-        memorySlackContext,
-      );
-      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const app = goatInput("Actually I deploy on Mondays", "goat-fix");
+      const slack = slackInput("Actually I deploy on Tuesdays", "slack-fix");
+      const appInput = yield* gateway.ingest(app, memoryRpcContext);
+      const slackInputResult = yield* gateway.ingest(slack, memorySlackContext);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* runtime.drain;
+      yield* confirmSharedNote(appInput.inputId, app, memoryRpcContext);
+      yield* confirmSharedNote(slackInputResult.inputId, slack, memorySlackContext);
+      yield* runtime.drain;
       assert.strictEqual(deciding, 2);
       const current = (yield* readChannelBotNotes(files, "")).split("\n");
       assert.lengthOf(current, 1);

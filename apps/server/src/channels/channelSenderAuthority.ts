@@ -2,20 +2,27 @@
  * Whether someone other than a task's requester may still direct it when their follow-up or answer
  * is delivered: the acceptance rule (mayAnswerFor) again, with both people as they stand now.
  */
-import type { ChannelRequester, ChannelTask, ChannelTaskSender } from "@goat/contracts";
+import type {
+  ChannelInputId,
+  ChannelRequester,
+  ChannelTask,
+  ChannelTaskSender,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import { isSameIdentity, mayAnswerFor } from "./ChannelGateway.ts";
+import { mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { currentRequester, requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import { deliveryIdFor } from "./channelIds.ts";
+import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 
-export const senderOf = (requester: ChannelRequester, connectionId: string): ChannelTaskSender => ({
-  requester,
-  connectionId,
-});
+export const senderOf = (
+  requester: ChannelRequester,
+  connectionId: string,
+  inputId: ChannelInputId,
+): ChannelTaskSender => ({ requester, connectionId, inputId });
 
 /** The message an approval reply came in: its channel for the record, its connection for identity. */
 export type ApprovalVia = {
@@ -30,14 +37,34 @@ export type ApprovalVia = {
 export const requesterForDelivery = Effect.fn("channel.requesterForDelivery")(function* (
   task: ChannelTask,
   sender: ChannelTaskSender | undefined,
+  inputId: ChannelInputId | undefined,
+  requiresMemory = false,
 ) {
   const requester = yield* requesterForDispatch(task);
-  if (requester === undefined) return { _tag: "requester_changed" } as const;
-  if (sender === undefined) return { _tag: "allowed", requester } as const;
-  const current = yield* currentRequester(sender.requester, sender.connectionId);
-  const same = isSameIdentity(sender.requester, sender.connectionId, task);
-  if (current === undefined || !mayAnswerFor(current, requester, same))
-    return { _tag: "sender_changed", name: sender.requester.displayName } as const;
+  if (requester === undefined || (requiresMemory && !canReadChannelBotNotes(requester)))
+    return { _tag: "requester_changed" } as const;
+  const sourceId = sender?.inputId ?? inputId;
+  if (sender === undefined && !requiresMemory) return { _tag: "allowed", requester } as const;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const original =
+    sender === undefined && sourceId !== undefined ? yield* ledger.getInput(sourceId) : undefined;
+  const snapshot = sender?.requester ?? original?.requester;
+  if (
+    snapshot === undefined ||
+    (requiresMemory && snapshot.originKind === "goat" && sourceId === undefined)
+  )
+    return { _tag: "requester_changed" } as const;
+  const current = yield* currentRequester(
+    snapshot,
+    sender?.connectionId ?? original?.message.connectionId,
+    sourceId,
+  );
+  if (
+    current === undefined ||
+    !mayAnswerFor(current, requester) ||
+    (requiresMemory && !canReadChannelBotNotes(current))
+  )
+    return { _tag: "sender_changed", name: snapshot.displayName } as const;
   return { _tag: "allowed", requester } as const;
 });
 
