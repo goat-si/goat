@@ -258,6 +258,15 @@ export const layer: Layer.Layer<
               runOrdinal: replaySource.ordinal,
             };
       const nativeResume = resumeDelivery?.type === "native";
+      const privateBrief =
+        !observeOnly &&
+        !nativeResume &&
+        Option.isSome(sql) &&
+        (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
+          ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
+          : undefined;
+      const turnMessage =
+        privateBrief === undefined ? providerMessage : { ...providerMessage, text: privateBrief };
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -267,12 +276,9 @@ export const layer: Layer.Layer<
         attempt,
         expectedStartStatus,
       });
-      if (
-        providerMessage.attachments.length === 0 &&
-        providerMessage.text.trimStart().startsWith("/")
-      ) {
+      if (turnMessage.attachments.length === 0 && turnMessage.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
-          providerMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
+          turnMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
         // Preparation may select a new provider; account commands still target the last native session.
         const nativeThreads = new Map(
           projection.providerThreads
@@ -303,7 +309,7 @@ export const layer: Layer.Layer<
               providerAuth.tryHandlePromptCommand({
                 instanceId: authInstanceId,
                 text: projectComposerContextForProvider({
-                  text: providerMessage.text,
+                  text: turnMessage.text,
                   records: providerMessage.context?.records ?? [],
                 }),
                 hasAttachments: false,
@@ -344,7 +350,7 @@ export const layer: Layer.Layer<
                 : {
                     type: "command_execution",
                     title: "Provider signed out",
-                    input: providerMessage.text.trim(),
+                    input: turnMessage.text.trim(),
                     output: "Provider signed out",
                     exitCode: 0,
                   },
@@ -630,7 +636,7 @@ export const layer: Layer.Layer<
           runId: run.id,
           startsTurn:
             input.reattach !== true &&
-            !(yield* startsNoModelTurn(codexSurvivors, run, providerMessage, noteContinuation)),
+            !(yield* startsNoModelTurn(codexSurvivors, run, turnMessage, noteContinuation)),
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,
@@ -710,25 +716,16 @@ export const layer: Layer.Layer<
       let effectiveHandoffs = cloud ? [] : handoffs;
       let resumeFellBack = false;
       let forkFellBack = false;
-      const privateBrief =
-        !nativeResume &&
-        Option.isSome(sql) &&
-        (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
-          ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
-          : undefined;
       const userText = nativeResume
         ? ""
         : yield* providerTextWithSkills(Option.some(serverSettings), {
-            message:
-              privateBrief === undefined
-                ? providerMessage
-                : { ...providerMessage, text: privateBrief },
+            message: turnMessage,
             driver: session.driver,
             globalSkillsDir,
             project: Effect.succeed(projection.thread.projectId),
           });
       const goalDriver = hasNativeGoals(session);
-      const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
+      const goalCommand = goalDriver && parseGoalCommand(turnMessage) !== null;
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
@@ -765,7 +762,7 @@ export const layer: Layer.Layer<
           attachments: providerMessage.attachments,
           goalDriver,
           carriesImages:
-            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(providerMessage),
+            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(turnMessage),
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
           replayedInput,
         });
@@ -905,7 +902,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: resumedRetryHandoff.budget,
-            deferInline: isCompactionCommandMessage(providerMessage) || goalCommand,
+            deferInline: isCompactionCommandMessage(turnMessage) || goalCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
