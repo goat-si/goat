@@ -478,7 +478,8 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
       const privateNote = "Scout staging uses Juniper.";
       const sharedNote = "Everyone releases on Thursday.";
       harness.script.current = (input) => {
-        if (input.mode !== "input") return defaultScript(input);
+        if (input.mode !== "input" || input.inputText?.startsWith("do:"))
+          return defaultScript(input);
         if (input.inputText === "Remember Juniper") {
           return Effect.succeed({
             replyText: "Saved.",
@@ -583,6 +584,30 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         yield* runtime.drain;
         assert.strictEqual(shown("scout revoked"), "");
         assert.isTrue(seen.some(({ input }) => input === "scout revoked"));
+
+        const work = (bot: typeof scout, title: string, context?: ChannelIngressContext) =>
+          Effect.gen(function* () {
+            yield* ask(bot.sessionThreadId, "do: " + title, title, context);
+            const tasks = yield* ledger.listTasks({
+              ownerId: owner.ownerId,
+              botId: bot.botId,
+              limit: 10,
+            });
+            const launched = tasks.tasks.find((task) => task.title === title);
+            assert.isDefined(launched?.worker);
+            const brief =
+              launched === undefined ? undefined : yield* ledger.latestTaskBrief(launched.taskId);
+            return brief?.deliveredText ?? "";
+          });
+        const scoutBrief = yield* work(scout, "scout worker");
+        const reviewBrief = yield* work(review, "review worker");
+        const deniedBrief = yield* work(scout, "worker without notes", rpcContext);
+        assert.include(scoutBrief, privateNote);
+        assert.include(scoutBrief, sharedNote);
+        assert.include(reviewBrief, sharedNote);
+        assert.notInclude(reviewBrief, privateNote);
+        assert.notInclude(deniedBrief, privateNote);
+        assert.notInclude(deniedBrief, sharedNote);
 
         yield* ask(
           scout.sessionThreadId,

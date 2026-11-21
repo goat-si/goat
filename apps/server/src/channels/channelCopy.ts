@@ -65,7 +65,7 @@ export const CHANNEL_COPY = {
     "Another change to my notes is still in progress, so nothing changed. Try again when it finishes.",
   noteEditFailed: "I couldn't change my notes just now, so nothing changed. Please try again.",
   noteFileTooLarge: "My notes file is too large to edit here, so nothing changed.",
-  noteEditNotAllowed: "Only someone linked to GOAT Bot can change its notes.",
+  noteEditNotAllowed: "Changing GOAT Bot notes requires memory read and write access.",
   noteEditTaskDone:
     "That notes change didn't start: the request it belonged to had already finished. Ask me again.",
   noteCameBack:

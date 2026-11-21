@@ -49,6 +49,7 @@ import {
   modelSelection,
   onlyTask,
   owner,
+  memoryRpcContext,
   rpcContext,
   setupBot,
   slackContext,
@@ -455,7 +456,7 @@ it.effect(
       yield* ledger.claimOwnership({ token: "local-brief-owner", now, staleBefore: now });
       const input = yield* gateway.ingest(
         goatInput("do: inspect the build", "local-brief"),
-        rpcContext,
+        memoryRpcContext,
       );
       yield* reception.receive(input.inputId, "local-brief-owner");
       const task = yield* onlyTask;

@@ -31,9 +31,9 @@ import {
   linkSlackUser,
   makeHarness,
   ownerId,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
-  slackContext,
+  memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
@@ -82,7 +82,7 @@ const readNotes = Effect.gen(function* () {
 
 const send = (text: string, key: string) =>
   Effect.gen(function* () {
-    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), rpcContext);
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), memoryRpcContext);
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
   });
 
@@ -365,7 +365,7 @@ describe("Memory tab requests to change or forget a note", () => {
     const { layer } = harnessFor();
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* linkSlackUser();
+      yield* linkSlackUser("U1", true);
       const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
       yield* writeNotes(text);
       yield* (yield* ChannelLedger.ChannelLedger).unlinkIdentity({
@@ -374,7 +374,7 @@ describe("Memory tab requests to change or forget a note", () => {
       });
       yield* (yield* ChannelGateway.ChannelGateway).ingest(
         slackInput(goatBotForgetNoteMessage(fridays), "slack-forget"),
-        slackContext,
+        memorySlackContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual(yield* readNotes, text);
@@ -425,7 +425,7 @@ describe("Memory tab requests with the default session routing", () => {
       const ledger = yield* ChannelLedger.ChannelLedger;
       const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
         goatInput("Inspect disks", "work"),
-        rpcContext,
+        memoryRpcContext,
       );
       yield* runtime.drain;
       const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!;
@@ -446,7 +446,7 @@ describe("Memory tab requests with the default session routing", () => {
     Effect.gen(function* () {
       const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
         { ...goatInput(text, key), taskId },
-        rpcContext,
+        memoryRpcContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       return input.inputId;
@@ -518,7 +518,7 @@ describe("Memory tab requests with the default session routing", () => {
     const { harness, layer } = sessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* linkSlackUser();
+      yield* linkSlackUser("U1", true);
       const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
       yield* writeNotes(text);
       yield* (yield* ChannelLedger.ChannelLedger).unlinkIdentity({
@@ -527,7 +527,7 @@ describe("Memory tab requests with the default session routing", () => {
       });
       yield* (yield* ChannelGateway.ChannelGateway).ingest(
         slackInput(goatBotForgetNoteMessage(fridays), "slack-forget"),
-        slackContext,
+        memorySlackContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual(yield* readNotes, text);
@@ -684,7 +684,7 @@ describe("Memory tab requests with the default session routing", () => {
         const tasks = yield* taskCount;
         const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
           goatInput(rememberText, "remember-" + variant),
-          rpcContext,
+          memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         assert.deepStrictEqual(

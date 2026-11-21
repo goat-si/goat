@@ -37,9 +37,9 @@ import {
   environmentId,
   goatInput,
   linkSlackUser,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
-  slackContext,
+  memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
@@ -144,7 +144,7 @@ const sessionTurn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
     const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
       goatInput(text, key),
-      rpcContext,
+      memoryRpcContext,
     );
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
     return yield* boundTurn(harness, input.inputId);
@@ -156,7 +156,7 @@ const sessionTurn = (harness: Harness, text: string, key: string) =>
  */
 const lookTurn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
-    const task = yield* ask("look: " + text, key);
+    const task = yield* ask("look: " + text, key, memoryRpcContext);
     return yield* boundTurn(harness, task.originInputId);
   });
 
@@ -168,7 +168,7 @@ const followUp = (harness: Harness, taskId: ChannelTaskId, text: string, key: st
     const before = harness.world.sends.length;
     const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
       { ...goatInput(text, key), taskId },
-      rpcContext,
+      memoryRpcContext,
     );
     yield* runtime.drain;
     const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
@@ -685,11 +685,11 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
         yield* setupBot;
-        yield* linkSlackUser();
+        yield* linkSlackUser("U1", true);
         yield* writeNotes(NOTES_HEADER);
         const ingested = yield* (yield* ChannelGateway.ChannelGateway).ingest(
           slackInput("remember that I deploy on Fridays", "slack-session"),
-          slackContext,
+          memorySlackContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         const turn = yield* boundTurn(harness, ingested.inputId);

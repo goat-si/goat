@@ -26,7 +26,7 @@ import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelSessionNoteActions from "./channelSessionNoteActions.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { owner as ownerFor, setupBot } from "./testkit/ChannelHarness.ts";
+import { memoryRpcContext, owner as ownerFor, setupBot } from "./testkit/ChannelHarness.ts";
 
 /** The edges of a session notes change that need the service itself: races and a failed queue. */
 
@@ -41,7 +41,7 @@ const files = Effect.gen(function* () {
 /** A reception-started turn in the bot's session and the run that carries its request. */
 const turn = (harness: Harness, text: string, key: string) =>
   Effect.gen(function* () {
-    const task = yield* ask("look: " + text, key);
+    const task = yield* ask("look: " + text, key, memoryRpcContext);
     const rows = yield* (yield* SqlClient.SqlClient)<{
       readonly thread_id: ThreadId;
       readonly message_id: string;

@@ -25,9 +25,9 @@ import {
   linkSlackUser,
   makeHarness,
   ownerId,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
-  slackContext,
+  memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
@@ -56,7 +56,7 @@ const notesFiles = Effect.gen(function* () {
 
 const send = (text: string, key: string) =>
   Effect.gen(function* () {
-    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), rpcContext);
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), memoryRpcContext);
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
   });
 
@@ -227,13 +227,19 @@ describe("GOAT Bot note corrections through reception", () => {
     };
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* linkSlackUser();
+      yield* linkSlackUser("U1", true);
       const fs = yield* FileSystem.FileSystem;
       const files = yield* notesFiles;
       yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "earlier");
       const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(goatInput("Actually I deploy on Mondays", "goat-fix"), rpcContext);
-      yield* gateway.ingest(slackInput("Actually I deploy on Tuesdays", "slack-fix"), slackContext);
+      yield* gateway.ingest(
+        goatInput("Actually I deploy on Mondays", "goat-fix"),
+        memoryRpcContext,
+      );
+      yield* gateway.ingest(
+        slackInput("Actually I deploy on Tuesdays", "slack-fix"),
+        memorySlackContext,
+      );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual(deciding, 2);
       const current = (yield* readChannelBotNotes(files, "")).split("\n");
