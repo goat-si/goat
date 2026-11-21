@@ -32,7 +32,7 @@ const remoteHarness = () => {
 
 describe("what a worker on another machine is told", () => {
   it.effect(
-    "carries this machine's GOAT Bot notes, the named skill, and the same safety rules",
+    "sends notes in the provider payload and keeps the skill and rules in the launch message",
     () => {
       const { launch, harness } = remoteHarness();
       return Effect.gen(function* () {
@@ -55,8 +55,9 @@ describe("what a worker on another machine is told", () => {
           { ...slackContext, grantedScopes },
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-        const message = (yield* launch).message ?? "";
-        assert.include(message, "<goat_bot_notes>\n- 2026-10-17: open PRs as drafts (asked in x)");
+        const { message = "", providerNotes } = yield* launch;
+        assert.include(providerNotes ?? "", "- 2026-10-17: open PRs as drafts (asked in x)");
+        assert.notInclude(message, "open PRs as drafts");
         assert.include(message, '<goat_bot_skill name="deploy-staging">\n# Deploy staging');
         assert.notInclude(message, "Unrelated");
         assert.include(message, "ask first: show the draft or plan in a needs_input report.");
@@ -90,10 +91,11 @@ describe("what a worker on another machine is told", () => {
         slackContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      const message = (yield* launch).message ?? "";
+      const { message = "", providerNotes } = yield* launch;
       assert.include(message, "ship it");
       assert.notInclude(message, "<goat_bot_notes>");
       assert.notInclude(message, "open PRs as drafts");
+      assert.isUndefined(providerNotes);
     }).pipe(Effect.provide(harness.layer));
   });
   it.effect("withholds a member's scoped notes from a remote worker for a denied requester", () => {
@@ -129,10 +131,11 @@ describe("what a worker on another machine is told", () => {
       const ledger = yield* ChannelLedger.ChannelLedger;
       assert.strictEqual((yield* ledger.getInput(input.inputId))?.botId, scout.botId);
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      const message = (yield* launch).message ?? "";
+      const { message = "", providerNotes } = yield* launch;
       assert.include(message, "check rollout");
       assert.notInclude(message, fact);
       assert.notInclude(message, files.notes);
+      assert.isUndefined(providerNotes);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -165,7 +168,9 @@ describe("what a worker on another machine is told", () => {
         { ...slackContext, grantedScopes, slackRouting: { allowName: true } },
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      assert.include((yield* launch).message ?? "", note.trimEnd());
+      const { message = "", providerNotes } = yield* launch;
+      assert.include(providerNotes ?? "", note.trimEnd());
+      assert.notInclude(message, note.trimEnd());
       const ledger = yield* ChannelLedger.ChannelLedger;
       const brief = yield* ledger.latestTaskBrief((yield* onlyTask).taskId);
       assert.strictEqual(brief?.context.notesRevision, sha256(note));
