@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import {
+  CommandId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -275,6 +276,34 @@ const intervalTask: ScheduledTask = {
   enabled: true,
   runtimeMode: "approval-required",
 };
+
+it.effect("list_scheduled_tasks returns bounded run history and its incomplete marker", () => {
+  const { stored, served } = updateFixture();
+  const recentRuns = [
+    {
+      firingId: CommandId.make("routine-firing"),
+      origin: "event" as const,
+      taskThreadId: ThreadId.make("routine-work"),
+      status: "completed",
+      requestedAt: webhookTask.createdAt,
+      completedAt: webhookTask.lastRunAt,
+    },
+  ];
+  stored.task = {
+    ...webhookTask,
+    routineMode: "work",
+    recentRuns,
+    recentRunsIncomplete: true,
+    webhook: { path: "/hooks/token", url: "https://example.test/hooks/token", hasSecret: true },
+  };
+  return Effect.gen(function* () {
+    const result = yield* callTool("goat_schedule_list", {});
+    expect(result.structuredContent).toMatchObject({
+      tasks: [{ scheduledTaskId: stored.task.id, recentRuns, recentRunsIncomplete: true }],
+    });
+    expect(JSON.stringify(result)).not.toContain("https://example.test/hooks/token");
+  }).pipe(Effect.provide(served));
+});
 
 it.effect("keeps one thread when fresh sessions are turned off before the first run", () => {
   const { upserts, stored, served } = updateFixture();
