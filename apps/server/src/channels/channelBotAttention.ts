@@ -74,17 +74,17 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
   },
 ) {
   const { before, next, event, ownerId, botId } = input;
-  const prior = new Set(asksFor(before).map((ask) => JSON.stringify([ask.kind, ask.identity])));
+  const prior = new Set(asksFor(before).map((ask) => ask.kind + ":" + ask.identity));
   const added: ReadonlyArray<{ kind: ChannelAttentionKind; identity: string; requestId?: string }> =
     event.type === "task.completed" || event.type === "task.failed"
       ? [{ kind: event.type === "task.completed" ? "finished" : "failed", identity: "" }]
-      : asksFor(next).filter((ask) => !prior.has(JSON.stringify([ask.kind, ask.identity])));
+      : asksFor(next).filter((ask) => !prior.has(ask.kind + ":" + ask.identity));
   if (added.length === 0) return;
   for (const entry of added) {
     const eventId = attentionEventIdFor(
       next.taskId,
       next.generation,
-      JSON.stringify([entry.kind, entry.identity]),
+      entry.kind + ":" + entry.identity,
     );
     yield* sql`INSERT INTO channel_bot_attention
       (owner_id, bot_id, task_id, event_id, kind, request_id, generation, occurred_at)

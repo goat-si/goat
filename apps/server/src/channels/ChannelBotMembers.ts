@@ -457,7 +457,7 @@ const make = Effect.gen(function* () {
     const environmentId = yield* environment.getEnvironmentId;
     const bots = yield* profiles.list(owner);
     const names = new Map<BotId, string>([
-      [MAIN_BOT_ID, ChannelBotProfiles.DEFAULT_BOT_IDENTITY.name],
+      [BotId.make(MAIN_BOT_ID), ChannelBotProfiles.DEFAULT_BOT_IDENTITY.name],
     ]);
     for (const bot of bots) names.set(bot.botId, bot.name);
     return yield* readBotAttention(sql, {

@@ -148,10 +148,11 @@ describe("open asks across bots", () => {
       assert.include(page.events[0], {
         kind: "question",
         taskId: task.taskId,
-        botId: "main",
-        requestId: asks[0]?.questionId,
+
         generation: 1,
       });
+      assert.strictEqual(page.events[0]?.botId, "main");
+      assert.strictEqual(page.events[0]?.requestId, asks[0]?.questionId);
       assert.notProperty(page.events[0], "text");
       assert.notProperty(page.events[0], "title");
       assert.deepStrictEqual(
