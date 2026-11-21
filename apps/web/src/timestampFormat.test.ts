@@ -3,6 +3,7 @@ import { goatBotRowTime } from "@goat/client-runtime/goatBot";
 
 import {
   formatDayAwareTimestamp,
+  formatTimeOfDay,
   formatRelativeElapsed,
   formatUpcomingTimestamp,
 } from "./timestampFormat";
@@ -47,4 +48,10 @@ describe("timestamps in an explicit time zone", () => {
       /^yesterday at /,
     );
   });
+});
+
+it("formats schedule wall times using the selected time format", () => {
+  expect(formatTimeOfDay("16:31", "12-hour")).toMatch(/4:31.*PM/i);
+  expect(formatTimeOfDay("16:31", "24-hour")).toBe("16:31");
+  expect(formatTimeOfDay("bad", "12-hour")).toBe("bad");
 });
