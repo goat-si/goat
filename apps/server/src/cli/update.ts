@@ -262,7 +262,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     );
 
   if (platform === "win32") {
-    const shimPath = yield* findWindowsShim(launchedAs);
+    const shimPath = yield* findWindowsShim(launchedAs, input.baseDir);
     if (shimPath === undefined) return Option.none<string>();
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
@@ -326,16 +326,31 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
 /** Windows executables see their own path, so find the installer shim by matching goat.cmd targets on PATH. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
   executablePath: string,
+  baseDir?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const environment = yield* HostProcess.Environment;
+  const recorded =
+    baseDir === undefined
+      ? ""
+      : yield* fs
+          .readFileString(path.join(baseDir, "runtime", "launchers"))
+          .pipe(Effect.orElseSucceed(() => ""));
   const candidates = [
     ...(environment["GOAT_INSTALL_BIN_DIR"] ? [environment["GOAT_INSTALL_BIN_DIR"]] : []),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
-  ].filter((entry) => entry.trim().length > 0);
-  for (const directory of candidates) {
-    const shimPath = path.join(directory, "goat.cmd");
+  ]
+    .filter((entry) => entry.trim().length > 0)
+    .map((directory) => path.join(directory, "goat.cmd"));
+  candidates.push(
+    ...recorded
+      .split(/\r?\n/)
+      .filter(
+        (entry) => path.isAbsolute(entry) && path.basename(entry).toLowerCase() === "goat.cmd",
+      ),
+  );
+  for (const shimPath of candidates) {
     const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
     if (Option.isNone(contents)) continue;
     const target = windowsShimTarget(contents.value);
