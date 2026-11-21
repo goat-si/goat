@@ -1,11 +1,19 @@
 import {
   botTaskActivityText,
+  botTaskActivityWorkerRef,
   type BotWorkTask,
   type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, BotWorkResult, EnvironmentId, ThreadId } from "@goat/contracts";
+import type {
+  BotThreadRow,
+  BotWorkResult,
+  ChannelBotTaskActivityEntry,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { useThreadShell } from "../../state/entities";
 import type { MobileBotHomeItem } from "./MobileBotTaskList";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
@@ -149,6 +157,25 @@ export function mobileBotWorkDetails(props: {
   return items;
 }
 
+function TaskActivityRow({
+  entry,
+  workers,
+}: {
+  readonly entry: ChannelBotTaskActivityEntry;
+  readonly workers: BotWorkResult["codingRows"];
+}) {
+  const thread = useThreadShell(botTaskActivityWorkerRef(entry));
+  return (
+    <View className="pb-2">
+      <Text className="text-foreground">{botTaskActivityText(entry, workers, thread?.title)}</Text>
+      <Text className="text-xs text-foreground-muted">
+        {new Date(entry.at).toLocaleString()} ·{" "}
+        {entry.actor === "goat" ? "GOAT" : entry.actor === "bot" ? "Bot" : "Person"}
+      </Text>
+    </View>
+  );
+}
+
 export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }) {
   const [expanded, setExpanded] = useState(false);
   const activity = work.activity;
@@ -167,13 +194,7 @@ export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }
       {expanded && (
         <ScrollView className="max-h-52" nestedScrollEnabled>
           {activity.entries.map((entry) => (
-            <View key={entry.id} className="pb-2">
-              <Text className="text-foreground">{botTaskActivityText(entry, work.codingRows)}</Text>
-              <Text className="text-xs text-foreground-muted">
-                {new Date(entry.at).toLocaleString()} ·{" "}
-                {entry.actor === "goat" ? "GOAT" : entry.actor === "bot" ? "Bot" : "Person"}
-              </Text>
-            </View>
+            <TaskActivityRow key={entry.id} entry={entry} workers={work.codingRows} />
           ))}
           {activity.incompleteBefore && (
             <Text className="text-xs text-foreground-muted">

@@ -75,8 +75,48 @@ const decodeRemoteWork = Schema.decodeSync(BotRemoteWork);
 const decodeRow = Schema.decodeSync(BotThreadRow);
 const decodeLookupWork = Schema.decodeUnknownSync(BotWorkResult);
 const at = "2026-11-09T00:00:00.000Z";
+it("labels Activity with the worker's thread title or a readable fallback", async () => {
+  const threadId = "channel-worker:reception";
+  state.shellTitles = { [threadId]: "Add second hello to README" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Update the project", status: "completed", updatedAt: at },
+      worker: { environmentId: "local", threadId },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { id: "end", type: "worker_finished", actor: "goat", at, environmentId: "local", threadId },
+        { id: "start", type: "worker_started", actor: "bot", at, environmentId: "local", threadId },
+        {
+          id: "previous",
+          type: "worker_finished",
+          actor: "goat",
+          at,
+          environmentId: "local",
+          threadId: "channel-worker:previous",
+        },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect
+    .element(screen.getByText("Worker started · Add second hello to README"))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Add second hello to README"))
+    .toBeVisible();
+  await expect.element(screen.getByText("Worker finished · Work thread")).toBeVisible();
+  await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
+});
+
 it("shows unpaired SSH worker Activity as text even when a local thread has the same id", async () => {
-  const subject = { host: "unpaired", threadId: "worker" };
+  const subject = { host: "unpaired", threadId: "channel-worker:ssh" };
   const work = decodeLookupWork({
     task: {
       state: "unavailable",
@@ -87,7 +127,7 @@ it("shows unpaired SSH worker Activity as text even when a local thread has the 
         kind: "coding",
         taskId: "task-1",
         environmentId: "local",
-        threadId: "worker",
+        threadId: subject.threadId,
         title: "Local work",
         state: "completed",
         lastActivityAt: at,
@@ -105,8 +145,9 @@ it("shows unpaired SSH worker Activity as text even when a local thread has the 
   });
   await using screen = await render(<GoatBotTaskActivity work={work} />);
   await userEvent.click(screen.getByText("Activity", { exact: true }));
-  await expect.element(screen.getByText("Worker started · worker on unpaired")).toBeVisible();
-  await expect.element(screen.getByText("Worker finished · worker on unpaired")).toBeVisible();
+  await expect.element(screen.getByText("Worker started · Work thread on unpaired")).toBeVisible();
+  await expect.element(screen.getByText("Worker finished · Work thread on unpaired")).toBeVisible();
+  await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
   expect(screen.getByRole("link").all()).toHaveLength(0);
 });
 
