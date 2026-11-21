@@ -26,7 +26,11 @@ import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
 import { GOAT_PIERRE_ICONS } from "~/pierre-icons";
-import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import {
+  PIERRE_TREE_UNSAFE_CSS,
+  pierreTreeStyle,
+  titleClippedPierreTreeRow,
+} from "~/pierre-tree-theme";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { joinHostPath } from "./filePath";
@@ -742,6 +746,7 @@ export default function FileBrowserPanel({
           aria-label={`${projectName} files`}
           className="min-h-0 flex-1 overflow-hidden"
           style={pierreTreeStyle(resolvedTheme)}
+          onPointerOver={titleClippedPierreTreeRow}
         />
       )}
     </div>
