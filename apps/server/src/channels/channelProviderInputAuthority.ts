@@ -82,7 +82,7 @@ const makeProviderInputRefusal = Effect.gen(function* () {
 export class ChannelProviderInputAuthority extends Context.Service<
   ChannelProviderInputAuthority,
   Effect.Success<typeof makeProviderInputRefusal>
->()("goat/channels/ChannelProviderInputAuthority") {}
+>()("goat/channels/channelProviderInputAuthority") {}
 
 export const layer = Layer.effect(ChannelProviderInputAuthority, makeProviderInputRefusal).pipe(
   Layer.provide(ChannelLedger.layer),
