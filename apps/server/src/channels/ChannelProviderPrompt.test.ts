@@ -216,7 +216,7 @@ describe("GOAT Bot thread transcripts", () => {
       });
     },
   );
-  it.effect.each(["app", "iMessage"] as const)(
+  it.effect.each(["app", "app with an Instructions edit", "iMessage"] as const)(
     "settles a warm queued turn whose %s requester loses memory before provider start",
     (origin) =>
       Effect.gen(function* () {
@@ -286,6 +286,11 @@ describe("GOAT Bot thread transcripts", () => {
           assert.strictEqual((yield* readRun)?.status, "queued");
           if (external === undefined) yield* sessions.revoke(queuedSender.sessionId);
           else yield* external.revoke;
+          if (origin === "app with an Instructions edit")
+            yield* (yield* ChannelBotProfiles.ChannelBotProfiles).update(
+              { botId: BotId.make("main"), instructions: "Check the new release checklist." },
+              owner,
+            );
 
           yield* finishRecordedRun(threadId, firstRun);
           yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
