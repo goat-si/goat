@@ -1248,7 +1248,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
         ) : null}
         {result.error && result.nextCursor ? (
           <View className="self-center">
-            <Button label="Retry loading remaining files" tone="text" onPress={result.refresh} />
+            <Button label="Retry loading remaining files" tone="text" onPress={result.retry} />
           </View>
         ) : null}
         {parsed.kind === "files" && parsed.notice ? (
