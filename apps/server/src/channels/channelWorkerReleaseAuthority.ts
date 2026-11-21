@@ -34,6 +34,8 @@ export class ChannelWorkerReleaseDenied extends Schema.TaggedError<ChannelWorker
   }
 }
 
+const isReleaseDenial = Schema.is(ChannelWorkerReleaseDenied);
+
 export const makePreparedWorkerRelease = Effect.fn("channel.makePreparedWorkerRelease")(function* (
   dispatch: ThreadManagement.ThreadManagementService["Service"]["dispatch"],
 ) {
@@ -127,10 +129,9 @@ export const makePreparedWorkerRelease = Effect.fn("channel.makePreparedWorkerRe
         (cause) =>
           new CommitGuardRefused({
             code: CHANNEL_WORKER_RELEASE_DENIED,
-            reason:
-              cause instanceof ChannelWorkerReleaseDenied
-                ? cause.reason
-                : "The GOAT Bot work trigger's authority could not be verified.",
+            reason: isReleaseDenial(cause)
+              ? cause.reason
+              : "The GOAT Bot work trigger's authority could not be verified.",
           }),
       ),
     );

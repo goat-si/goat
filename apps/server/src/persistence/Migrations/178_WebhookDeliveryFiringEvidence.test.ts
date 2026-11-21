@@ -14,6 +14,7 @@ it.effect("preserves proven firings when upgrading a delivery log", () =>
       body_truncated, outcome, signature_verified, missing_fields_json
     ) VALUES
       ('ran', 'work', ${at}, 'POST', '', '{}', '', 0, 0, 'accepted', 1, '[]'),
+      ('pruned', 'work', ${at}, 'POST', '', '{}', '', 0, 0, 'accepted', 1, '[]'),
       ('pending', 'work', ${at}, 'POST', '', '{}', '', 0, 0, 'accepted', 1, '[]')`;
     yield* sql`INSERT INTO scheduled_task_runs (
       firing_id, task_id, task_created_at, message_id, trigger_kind, admitted_schedule_digest,
@@ -21,12 +22,17 @@ it.effect("preserves proven firings when upgrading a delivery log", () =>
       dispatch_bookkept_at, completed_at, snapshot_json
     ) VALUES ('run', 'work', ${at}, 'message', 'webhook', 'fixture',
       1, 'ran', 'accepted', 'completed', ${at}, ${at}, ${at}, '{}')`;
+    yield* sql`INSERT INTO scheduled_task_channel_inputs (
+      firing_id, task_id, payload_json, state, created_at, settled_at
+    ) VALUES ('pruned-run', 'work', '{"webhookDeliveryId":"pruned"}', 'settled', ${at}, ${at}),
+      ('pending-run', 'work', '{"webhookDeliveryId":"pending"}', 'pending', ${at}, NULL)`;
     assert.deepStrictEqual(yield* runMigrations(), [[178, "WebhookDeliveryFiringEvidence"]]);
     assert.deepStrictEqual(
       yield* sql`SELECT delivery_id, firing_accepted
         FROM scheduled_task_webhook_deliveries ORDER BY delivery_id`,
       [
         { delivery_id: "pending", firing_accepted: 0 },
+        { delivery_id: "pruned", firing_accepted: 1 },
         { delivery_id: "ran", firing_accepted: 1 },
       ],
     );

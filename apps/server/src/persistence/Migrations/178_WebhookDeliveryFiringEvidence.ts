@@ -9,5 +9,10 @@ export default Effect.gen(function* () {
     WHERE delivery_id IN (
       SELECT webhook_delivery_id FROM scheduled_task_runs
       WHERE webhook_delivery_id IS NOT NULL AND dispatch_status = 'accepted'
+      UNION ALL
+      SELECT CASE WHEN json_valid(payload_json)
+        THEN json_extract(payload_json, '$.webhookDeliveryId') END
+      FROM scheduled_task_channel_inputs
+      WHERE state IN ('ingested', 'settled') AND error IS NULL
     )`;
 });
