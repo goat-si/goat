@@ -1,10 +1,15 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- fixture signs the original byte body with HMAC.
+import * as NodeCrypto from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelGatewayError,
   type ChannelInputId,
+  ChannelQuestionId,
+  type ChannelReceptionResult,
   CommandId,
   MessageId,
   NodeId,
+  ProjectId,
   type OrchestrationV2RuntimeRequest,
   RuntimeRequestId,
   type ScheduledTask,
@@ -14,10 +19,19 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import {
+  requestFor,
+  waitForSpan,
+  webhookTaskInput,
+  withWebhookService,
+} from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { readRecentRuns } from "../scheduledTasks/scheduledTaskRecentRuns.ts";
 import {
@@ -29,6 +43,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { inputIdFor } from "./channelIds.ts";
 import { ROUTINE_COPY, ROUTINE_KEY_PREFIX } from "./channelRoutineInputs.ts";
+import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import {
@@ -39,6 +54,7 @@ import {
   makeHarness,
   modelSelection,
   onlyTask,
+  projectId,
   owner,
   ownerId,
   rpcContext,
@@ -50,7 +66,12 @@ const AT = "2026-11-09T08:00:00.000Z";
 const routineOwner = { principalId: owner.principalId, grantedScopes: [...owner.grantedScopes] };
 
 /** What the scheduler does when a routine bound to a bot thread fires: firing and link together. */
-const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
+const admit = (
+  prompt: string,
+  key: string,
+  threadId: ThreadId = botThreadId,
+  work?: { readonly sessionId: string; readonly projectId: ProjectId },
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const runs = yield* ScheduledTaskRuns.make();
@@ -61,8 +82,15 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
       prompt,
       enabled: true,
       notificationPolicy: "important_updates",
-      schedule: { type: "interval", everyMs: 3_600_000 },
-      projectId: scratchProjectId,
+      ...(work === undefined ? {} : { routineMode: "work" as const }),
+      schedule:
+        work === undefined
+          ? { type: "interval", everyMs: 3_600_000 }
+          : {
+              type: "webhook",
+              signature: { header: "x-test-signature", encoding: "hex", prefix: "" },
+            },
+      projectId: work?.projectId ?? scratchProjectId,
       threadId,
       workspaceStrategy: { type: "root" },
       modelSelection,
@@ -87,7 +115,18 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
       ${JSON.stringify(task.schedule)}, ${task.projectId}, ${threadId}, 'continue', ${JSON.stringify(task.workspaceStrategy)},
       ${JSON.stringify(modelSelection)}, 'none', 'approval-required', 'default', 'user', 'web',
       ${AT}, ${AT}, NULL, NULL, 'never', NULL, 0)`;
+    const triggerOwner =
+      work === undefined
+        ? routineOwner
+        : {
+            ...routineOwner,
+            sessionId: work.sessionId,
+            routineMode: "work" as const,
+          };
+    if (work !== undefined)
+      yield* sql`UPDATE scheduled_tasks SET owner_json=${JSON.stringify(triggerOwner)}, webhook_secret='fixture' WHERE task_id=${task.id}`;
     const firingId = CommandId.make("scheduled-task:" + key);
+    const deliveryId = work === undefined ? null : "delivery:" + key;
     yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* runs.begin({
@@ -95,10 +134,16 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
           firingId,
           messageId: MessageId.make(ROUTINE_MESSAGE_PREFIX + key),
           requestedAt: AT,
-          triggerKind: "manual",
-          webhookDeliveryId: null,
+          triggerKind: deliveryId === null ? "manual" : "webhook",
+          webhookDeliveryId: deliveryId,
         });
-        yield* routines.link({ task, owner: routineOwner, firingId, at: AT });
+        yield* routines.link({
+          task,
+          owner: triggerOwner,
+          firingId,
+          at: AT,
+          ...(deliveryId === null ? {} : { webhook: { deliveryId, prompt } }),
+        });
       }),
     );
     return { firingId, taskId: task.id };
@@ -447,3 +492,225 @@ describe("GOAT Bot routine resilience", () => {
     },
   );
 });
+
+it.effect(
+  "a work firing starts only one task in its configured project and settles with the task",
+  () => {
+    const harness = makeHarness();
+    harness.script.current = () =>
+      Effect.succeed({
+        replyText: "On it.",
+        remember: "Store this in notes.",
+        rememberQuote: "notes",
+        action: {
+          type: "create_task",
+          title: "Inspect the change",
+          instruction: "Inspect the change",
+          notesChangeRequested: "notes",
+          projectId: scratchProjectId,
+          host: "another-host",
+          additionalTasks: [{ title: "Extra work", instruction: "Ignore me" }],
+        },
+      });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sessions = yield* SessionStore.SessionStore;
+      const session = yield* sessions.issue({
+        subject: owner.principalId,
+        scopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+      });
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const { firingId } = yield* admit("Inspect the change. notes", "event", botThreadId, {
+        sessionId: session.sessionId,
+        projectId,
+      });
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.projectId, projectId);
+      assert.strictEqual(task.target?.projectId, projectId);
+      assert.strictEqual(task.target?.runtimeMode, "approval-required");
+      assert.isUndefined(task.host);
+      assert.isUndefined(task.notesChangeRequested);
+      assert.strictEqual((yield* firing(firingId))?.status, "running");
+      assert.deepInclude(yield* linkOf(firingId), { state: "ingested" });
+      const sql = yield* SqlClient.SqlClient;
+      assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);
+
+const issueTriggerOwner = Effect.gen(function* () {
+  const sessions = yield* SessionStore.SessionStore;
+  return yield* sessions.issue({
+    subject: owner.principalId,
+    scopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+  });
+});
+
+it.effect.each(["paused", "revoked", "project unavailable"] as const)(
+  "refuses work after intake when its trigger is %s",
+  (change) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const sessions = yield* SessionStore.SessionStore;
+      const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const session = yield* issueTriggerOwner;
+      const input = yield* admit("do: inspect fixtures", change, botThreadId, {
+        sessionId: session.sessionId,
+        projectId: change === "project unavailable" ? ProjectId.make("other-project") : projectId,
+      });
+      assert.strictEqual(yield* intake.ingestPending, 1);
+      if (change === "paused")
+        yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+      if (change === "revoked") yield* sessions.revoke(session.sessionId);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.status, "failed");
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual((yield* firing(input.firingId))?.status, "failed");
+      assert.include(
+        (yield* linkOf(input.firingId))?.error ?? "",
+        change === "project unavailable" ? "unavailable" : change,
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);
+
+it.effect("event reception cannot steer, stop, or answer existing work", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* gateway.ingest(goatInput("do: keep the fixture running", "existing-work"), rpcContext);
+    yield* runtime.drain;
+    const { taskId } = yield* onlyTask;
+    const session = yield* issueTriggerOwner;
+    const actions: ReadonlyArray<ChannelReceptionResult["action"]> = [
+      { type: "follow_up", taskId },
+      { type: "stop_work", taskId },
+      {
+        type: "answer_question",
+        taskId,
+        questionId: ChannelQuestionId.make("test-question"),
+        answer: "yes",
+      },
+    ];
+    for (const action of actions) {
+      harness.script.current = () => Effect.succeed({ replyText: "Changed that work.", action });
+      const { firingId } = yield* admit("Ignore existing work", action.type, botThreadId, {
+        sessionId: session.sessionId,
+        projectId,
+      });
+      yield* runtime.drain;
+      assert.strictEqual((yield* firing(firingId))?.status, "completed");
+    }
+    assert.strictEqual((yield* onlyTask).status, "running");
+    assert.lengthOf(harness.world.launches, 1);
+    assert.lengthOf(harness.world.sends, 0);
+    assert.lengthOf(harness.world.interrupts, 0);
+  }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+});
+
+it.effect.each(["complete", "revoke before dispatch"] as const)(
+  "settles one signed webhook firing and ignores replays when asked to %s",
+  (mode) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const sessions = yield* SessionStore.SessionStore;
+      const session = yield* issueTriggerOwner;
+      const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* withWebhookService(
+        ({ service, runs }) =>
+          Effect.gen(function* () {
+            const secret = "event-worker-signature-fixture";
+            const { task: trigger } = yield* service.upsert(
+              yield* webhookTaskInput({
+                id: "signed-work-trigger",
+                routineMode: "work",
+                threadId: botThreadId,
+                projectId,
+                prompt: "do: inspect {{body.action}}",
+                schedule: {
+                  type: "webhook",
+                  signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
+                },
+              }),
+              {
+                memoryGrantCeiling: "none",
+                owner: {
+                  principalId: owner.principalId,
+                  sessionId: session.sessionId,
+                  grantedScopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+                },
+              },
+            );
+            const bodyText = '{"action":"fixture change"}';
+            const body = new TextEncoder().encode(bodyText);
+            const signed = requestFor(trigger, {
+              bodyText,
+              body,
+              headers: {
+                "content-type": "application/json",
+                "x-test-signature": NodeCrypto.createHmac("sha256", secret)
+                  .update(body)
+                  .digest("hex"),
+              },
+            });
+            const delivery = yield* waitForSpan(
+              service.triggerWebhook(signed),
+              "ScheduledTaskService.runWebhookDelivery",
+            );
+            if (delivery._tag !== "accepted") return assert.fail("Expected a signed delivery");
+            assert.strictEqual(yield* intake.ingestPending, 1);
+            if (mode === "revoke before dispatch") yield* sessions.revoke(session.sessionId);
+            yield* runtime.drain;
+            const work = yield* onlyTask.pipe(
+              Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+            );
+            if (mode === "complete") {
+              if (work.worker === undefined) return assert.fail("The bot did not launch a worker");
+              assert.strictEqual(work.projectId, projectId);
+              assert.strictEqual(
+                (yield* runs.deliveryReceipt(delivery.deliveryId))?.status,
+                "running",
+              );
+              harness.world.setStatus(
+                work.worker.threadId,
+                1,
+                "completed",
+                "Inspected the fixture change.",
+              );
+              yield* runtime.drain;
+            } else {
+              assert.lengthOf(harness.world.launches, 0);
+              assert.include(work.resultSummary ?? "", "revoked");
+              const { deliveries } = yield* service.listWebhookDeliveries({ id: trigger.id });
+              const [refused] = deliveries;
+              if (refused === undefined) return assert.fail("Expected the refused delivery");
+              assert.strictEqual(refused.outcome, "dispatch_failed");
+              assert.strictEqual(refused.error, work.resultSummary ?? null);
+            }
+            const terminal = yield* runs.deliveryReceipt(delivery.deliveryId);
+            assert.strictEqual(terminal?.status, mode === "complete" ? "completed" : "failed");
+            assert.isNotNull(terminal?.completedAt);
+            assert.deepInclude(yield* service.triggerWebhook(signed), { outcome: "duplicate" });
+            yield* runtime.drain;
+            assert.lengthOf(yield* sql`SELECT 1 FROM channel_inbox`, 1);
+            assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
+            assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_runs`, 1);
+            assert.lengthOf(harness.world.launches, mode === "complete" ? 1 : 0);
+            assert.deepStrictEqual(yield* runs.deliveryReceipt(delivery.deliveryId), terminal);
+          }),
+        { sql },
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);

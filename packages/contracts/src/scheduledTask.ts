@@ -59,9 +59,11 @@ const ScheduledTaskWebhookSignatureFields = {
   }),
 };
 
-export const ScheduledTaskWebhookSignature = Schema.Struct(
-  ScheduledTaskWebhookSignatureFields,
-).annotate({ description: "HMAC-SHA256 check on the raw body." });
+export const ScheduledTaskWebhookSignature = Schema.Struct({
+  ...ScheduledTaskWebhookSignatureFields,
+  required: Schema.optional(Schema.Literal(true)),
+  secretSet: Schema.optional(Schema.Boolean),
+}).annotate({ description: "HMAC-SHA256 check on the raw body." });
 export type ScheduledTaskWebhookSignature = typeof ScheduledTaskWebhookSignature.Type;
 
 /** Matches how long the relay holds a request for an offline environment. */
@@ -137,6 +139,7 @@ const ScheduledTaskWebhookSchedule = Schema.Struct({
   maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
   dedupe: Schema.optional(ScheduledTaskWebhookDedupe),
   filters: Schema.optional(ScheduledTaskWebhookFilters),
+  allowChecksWithoutPullRequest: Schema.optional(Schema.Boolean),
 }).annotate({
   description: "Run on each webhook request.",
 });
@@ -147,6 +150,8 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         ...ScheduledTaskWebhookSignatureFields,
+        required: Schema.optional(Schema.Literal(true)),
+        secretSet: Schema.optional(Schema.Boolean),
         secret: Schema.optional(TrimmedNonEmptyString).annotate({
           description: "Default: stored secret.",
         }),
@@ -161,6 +166,7 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
   maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
   dedupe: Schema.optional(ScheduledTaskWebhookDedupe),
   filters: Schema.optional(ScheduledTaskWebhookFilters),
+  allowChecksWithoutPullRequest: Schema.optional(Schema.Boolean),
 }).annotate({
   description:
     "Run per webhook request. Prompt can use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}}, {{request}}.",
@@ -260,7 +266,10 @@ export function scheduledTaskThreadMode(
   return task.threadMode ?? (task.threadId === null ? "new_thread" : "continue");
 }
 
+const RoutineMode = Schema.Literals(["check_in", "work"]);
+
 export const ScheduledTask = Schema.Struct({
+  routineMode: ForwardCompatibleOptional(RoutineMode),
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
   id: ScheduledTaskId,
@@ -307,6 +316,7 @@ export const ScheduledTaskListResult = Schema.Struct({
 export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;
 
 const ScheduledTaskUpsertInputFields = Schema.Struct({
+  routineMode: Schema.optional(RoutineMode),
   id: Schema.optional(ScheduledTaskId),
   requireExisting: Schema.optional(Schema.Boolean).annotate({
     description: "Reject the save if the task no longer exists, for edits from a client form.",

@@ -186,6 +186,8 @@ describe("V2 preview upgrade", () => {
         [169, "TurnItemInlineWorkOutput"],
         [170, "RepairStaleTitleRegeneration"],
         [175, "AcpSessionOwnerIndex"],
+        [176, "ChannelWorkerLaunchHeads"],
+        [177, "WorkTriggerAuthorityFence"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -382,6 +384,8 @@ describe("V2 preview upgrade", () => {
         [169, "TurnItemInlineWorkOutput"],
         [170, "RepairStaleTitleRegeneration"],
         [175, "AcpSessionOwnerIndex"],
+        [176, "ChannelWorkerLaunchHeads"],
+        [177, "WorkTriggerAuthorityFence"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

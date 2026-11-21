@@ -112,7 +112,7 @@ bot's tasks, and a task opens in its own view.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
   see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
-  looks over its tasks and writes only when something needs you. A routine whose last run failed
+  looks over its tasks and writes only when something needs you. A timer routine whose last run failed
   shows **Run now**. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
   and files.
@@ -137,7 +137,23 @@ bot's tasks, and a task opens in its own view.
   files download, or open the share sheet on mobile. Files over 20 MB don't open.
 - **Machines** shows which machines the bot's running tasks use.
 
+From a named bot's **Home → Routines**, choose **New trigger** on web or desktop. Pick **Pull
+request opened**, **Check failed**, or **Any webhook**, choose the project, and add a signing
+secret. Copy the webhook URL from the saved trigger and configure the sender to sign each
+delivery. A trigger saved without a secret stays paused until you add one in Scheduled tasks.
+A trigger starts new work only in its selected project, with approvals required. Pausing it or
+revoking the device session that authorized it blocks queued work. Open and save the trigger
+again from a trusted session to authorize future work.
+
+The trigger's **Deliveries** in Scheduled tasks shows why unsigned, duplicate, and own-work
+events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
+them in the trigger. You can pause or resume a configured trigger on mobile.
+
 ## Going back to an older GOAT
+
+Once you save a work trigger, older GOAT versions that cannot check its dispatch grant refuse to
+open that database. To go back to one of those versions, restore a backup from before you saved
+the first work trigger.
 
 An older GOAT keeps your bots' data, but it doesn't know about added bots. Before you go back,
 let added bots finish or stop their tasks, and don't edit added bots while the older version

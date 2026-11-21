@@ -5,6 +5,20 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 export const FIRST_V2_MIGRATION_ID = 55;
 
+const CHANNEL_LEDGER_MIGRATION = "ChannelLedger";
+const WORK_TRIGGER_LEDGER_FENCE = "ChannelLedgerRequiresWorkTriggerAuthority";
+export const WORK_TRIGGER_FENCE_MIGRATION_NAME = "WorkTriggerAuthorityFence";
+
+// Older builds already reject a changed name at a required V2 migration id.
+export const canonicalMigrationName = (name: string) =>
+  name === WORK_TRIGGER_LEDGER_FENCE ? CHANNEL_LEDGER_MIGRATION : name;
+
+export const fenceWorkTriggerRollback = Effect.fn("fenceWorkTriggerRollback")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`UPDATE effect_sql_migrations SET name = ${WORK_TRIGGER_LEDGER_FENCE}
+    WHERE name = ${CHANNEL_LEDGER_MIGRATION}`;
+});
+
 const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
@@ -26,7 +40,8 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ServerActivityIndexes",
   "RemoteReports",
   "RemoteDispatches",
-  "ChannelLedger",
+  CHANNEL_LEDGER_MIGRATION,
+  WORK_TRIGGER_LEDGER_FENCE,
   "RemoteDispatchQuestions",
   "ThreadRunResults",
   "RemoteReportRelay",
@@ -100,6 +115,8 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "TurnItemInlineWorkOutput",
   "RepairStaleTitleRegeneration",
   "AcpSessionOwnerIndex",
+  "ChannelWorkerLaunchHeads",
+  WORK_TRIGGER_FENCE_MIGRATION_NAME,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -157,7 +174,9 @@ export const goatMigrationIdsMove = <E>(
 ): boolean => {
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   return history.some(
-    (row) => GOAT_MIGRATION_NAMES.has(row.name) && currentIds.get(row.name) !== row.migration_id,
+    (row) =>
+      GOAT_MIGRATION_NAMES.has(row.name) &&
+      currentIds.get(canonicalMigrationName(row.name)) !== row.migration_id,
   );
 };
 
@@ -174,7 +193,9 @@ export const displacedUpstreamMigrations = <E>(
   const highestGoat = Math.max(
     0,
     ...history.map((row) =>
-      GOAT_MIGRATION_NAMES.has(row.name) ? (currentIds.get(row.name) ?? 0) : 0,
+      GOAT_MIGRATION_NAMES.has(row.name)
+        ? (currentIds.get(canonicalMigrationName(row.name)) ?? 0)
+        : 0,
     ),
   );
   const highestUpstream = highestUpstreamBelowGoat(entries, history);
@@ -216,7 +237,15 @@ export const skippedV2Migrations = <E>(
   throughId?: number,
   highestRecorded = upTo,
 ) => {
-  const recordedNames = new Map(history.map((row) => [row.migration_id, row.name]));
+  const supportsWorkTriggers = entries.some(
+    ([, name]) => name === WORK_TRIGGER_FENCE_MIGRATION_NAME,
+  );
+  const recordedNames = new Map(
+    history.map((row) => [
+      row.migration_id,
+      supportsWorkTriggers ? canonicalMigrationName(row.name) : row.name,
+    ]),
+  );
   const skipped = entries.flatMap(([id, name]) => {
     if (id < FIRST_V2_MIGRATION_ID || id > upTo || (throughId !== undefined && id > throughId))
       return [];
@@ -272,7 +301,7 @@ export function memoryMigrationProblem<E>(
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
-      const currentId = currentIds.get(row.name);
+      const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
       const recordedId =
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
@@ -282,9 +311,9 @@ export function memoryMigrationProblem<E>(
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
     }),
   );
-  const recordedNames = new Set(history.map((row) => row.name));
+  const recordedNames = new Set(history.map((row) => canonicalMigrationName(row.name)));
   const skipsEarlierGoat = memoryRows.some((row) => {
-    const memoryId = currentIds.get(row.name);
+    const memoryId = currentIds.get(canonicalMigrationName(row.name));
     return (
       memoryId !== undefined &&
       entries.some(
@@ -298,7 +327,7 @@ export function memoryMigrationProblem<E>(
   });
   const incompatibleLedger =
     memoryRows.length > 0 &&
-    (memoryRows.some((row) => !currentIds.has(row.name)) ||
+    (memoryRows.some((row) => !currentIds.has(canonicalMigrationName(row.name))) ||
       goatOffsets.size > 1 ||
       skipsEarlierGoat);
   const unrecordedMemory = hasMemoryTables && !history.some((row) => row.name === "Memory");
@@ -368,7 +397,9 @@ export const plannedGoatLedger = <E>(
   if (!goatMigrationIdsMove(entries, history)) return undefined;
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const goatRows = history.flatMap((row) => {
-    const id = GOAT_MIGRATION_NAMES.has(row.name) ? currentIds.get(row.name) : undefined;
+    const id = GOAT_MIGRATION_NAMES.has(row.name)
+      ? currentIds.get(canonicalMigrationName(row.name))
+      : undefined;
     return id === undefined ? [] : [{ migration_id: id, name: row.name }];
   });
   const upstreamRows = new Map(
@@ -377,7 +408,8 @@ export const plannedGoatLedger = <E>(
       .map((row) => [row.migration_id, row.name]),
   );
   const unknownGoat = history.some(
-    (row) => GOAT_MIGRATION_NAMES.has(row.name) && !currentIds.has(row.name),
+    (row) =>
+      GOAT_MIGRATION_NAMES.has(row.name) && !currentIds.has(canonicalMigrationName(row.name)),
   );
   if (unknownGoat || goatRows.some((row) => upstreamRows.has(row.migration_id))) {
     return new Migrator.MigrationError({

@@ -32,6 +32,7 @@ const decodeLastRunJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Sched
 export const decodeRow = Effect.fnUntraced(
   function* (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) {
     const schedule = yield* decodeScheduleJson(row.schedule_json);
+    const owner = routineOwnerOf(row.owner_json);
     const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
@@ -63,7 +64,9 @@ export const decodeRow = Effect.fnUntraced(
       lastRunError: row.last_run_error,
       runCount: row.run_count,
       ...(webhook === undefined ? {} : { webhook }),
-      ...(Option.isSome(routineOwnerOf(row.owner_json)) ? { goatBotRoutine: true } : {}),
+      ...(Option.isSome(owner)
+        ? { goatBotRoutine: true, routineMode: owner.value.routineMode }
+        : {}),
     });
   },
   (effect, row, _origin?) =>

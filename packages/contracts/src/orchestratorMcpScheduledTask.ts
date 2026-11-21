@@ -15,6 +15,7 @@ export const OrchestratorMcpLastRunError = Schema.optional(Schema.String).annota
 });
 
 export const OrchestratorMcpScheduledTask = Schema.Struct({
+  routineMode: Schema.optional(Schema.Literal("work")),
   scheduledTaskId: ScheduledTaskId,
   title: Schema.String,
   prompt: Schema.String,

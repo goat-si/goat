@@ -1584,7 +1584,6 @@ const make = Effect.gen(function* () {
         );
 
       const callerCeiling = state.connection?.runtimeModeCeiling ?? requester.runtimeModeCeiling;
-      // The project may have gone since the dispatcher chose it; ask instead of recreating it.
       const listed = yield* listRemoteProjects(state.host, authorize, connectionFor(state)).pipe(
         Effect.result,
       );
@@ -1593,18 +1592,15 @@ const make = Effect.gen(function* () {
           yield* failTask(owner, stored, "host_unavailable", REMOTE_COPY.unreachable(state.host));
         return;
       }
-      if (
-        !listed.success.some(
-          (project) =>
-            project.workspaceRoot === remote.cwd &&
-            (remote.automatic === undefined ||
-              canonicalKeyOf(project) === remote.automatic.canonicalKey),
-        )
-      ) {
+      const project = listed.success.find(
+        (project) =>
+          project.workspaceRoot === remote.cwd &&
+          (remote.automatic === undefined ||
+            canonicalKeyOf(project) === remote.automatic.canonicalKey),
+      );
+      if (project === undefined)
         return yield* askAgain(owner, stored, REMOTE_COPY.projectGone(state.host));
-      }
 
-      // A moved task starts from the copied work: place it in the new project first.
       const resume =
         state.resumeFrom?.generation === task.generation ? state.resumeFrom : undefined;
       if (resume !== undefined) {
@@ -1642,12 +1638,9 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
-      // A moved task's worker reads where its work came from; that is part of its brief.
       const message =
         (yield* workerMessage(task)) +
         (resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt));
-      // SSH's extra reporting note is transport guidance, excluded from deliveredText.
-      // The notes travel inside the message unless they were dropped to fit its limit.
       const notesRevision =
         stored.task.briefVersion === undefined && message.includes("<goat_bot_notes>")
           ? yield* channelNotesRevision(botFiles.notes).pipe(
@@ -1656,6 +1649,13 @@ const make = Effect.gen(function* () {
           : null;
       const frozen = yield* freezeChannelBrief(ledger, stored, owner, message, { notesRevision });
       stored = frozen.stored;
+      if (resume !== undefined || target.workspaceStrategy.type === "worktree")
+        yield* ledger.recordLaunchHead({
+          taskId,
+          generation: task.generation,
+          repository: canonicalKeyOf(project)?.match(/^github\.com\/(.+)$/i)?.[1],
+          branch: remoteBranchFor(taskId, task.generation),
+        });
       const launched = yield* ssh
         .launchThread(
           {
