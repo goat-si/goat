@@ -9,8 +9,8 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const MissingFieldsJson = Schema.fromJsonString(Schema.Array(Schema.String));
-export const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
-export const decodeMissingFieldsJson = Schema.decodeUnknownOption(MissingFieldsJson);
+const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
+const decodeMissingFieldsJson = Schema.decodeUnknownOption(MissingFieldsJson);
 export const encodeHeadersJson = Schema.encodeSync(HeadersJson);
 export const encodeMissingFieldsJson = Schema.encodeSync(MissingFieldsJson);
 

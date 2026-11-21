@@ -793,9 +793,7 @@ it.effect.each([
         assert.strictEqual(yield* intake.ingestPending, 1);
         if (mode === "revoke before dispatch") yield* sessions.revoke(session.sessionId);
         yield* runtime.drain;
-        const work = yield* onlyTask.pipe(
-          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        );
+        const work = yield* onlyTask;
         if (mode !== "revoke before dispatch") {
           if (work.worker === undefined) return assert.fail("The bot did not launch a worker");
           assert.strictEqual(work.projectId, projectId);
@@ -847,7 +845,7 @@ it.effect.each([
         assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
         assert.lengthOf(harness.world.launches, mode === "revoke before dispatch" ? 0 : 1);
         assert.deepStrictEqual(yield* runs.deliveryReceipt(delivered.deliveryId), terminal);
-      });
+      }).pipe(Effect.provideService(ChannelLedger.ChannelLedger, ledger));
     if (mode === "restart" || legacy) {
       const accepted = yield* withWebhookService(accept, { sql, workers });
       const recoveredWorkers = new Map<string, Effect.Effect<void>>();
