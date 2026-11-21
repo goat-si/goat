@@ -842,19 +842,20 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
-        const legacy = migrationEntries.filter(([id]) => id <= 176);
-        const checkOldBuild = Effect.gen(function* () {
-          const history = yield* sql<{
-            migration_id: number;
-            name: string;
-          }>`SELECT migration_id, name FROM effect_sql_migrations`;
-          return skippedV2Migrations(
-            legacy,
-            history,
-            Math.max(...history.map((row) => row.migration_id)),
-          );
-        });
-        assert.isUndefined(yield* checkOldBuild);
+        const checkOldBuild = (through: 176 | 177) =>
+          Effect.gen(function* () {
+            const history = yield* sql<{
+              migration_id: number;
+              name: string;
+            }>`SELECT migration_id, name FROM effect_sql_migrations`;
+            return skippedV2Migrations(
+              migrationEntries.filter(([id]) => id <= through),
+              history,
+              Math.max(...history.map((row) => row.migration_id)),
+            );
+          });
+        assert.isUndefined(yield* checkOldBuild(176));
+        assert.isUndefined(yield* checkOldBuild(177));
         yield* registerBot(sql);
         yield* service.upsert(
           yield* routineInput({
@@ -864,23 +865,26 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           }),
           eventTriggerOwner,
         );
-        assert.include(
-          (yield* checkOldBuild)?.message ?? "",
-          "would skip required schema migrations",
-        );
+        for (const through of [176, 177] as const) {
+          assert.include(
+            (yield* checkOldBuild(through))?.message ?? "",
+            "would skip required schema migrations",
+            `startup through migration ${through} must refuse the database`,
+          );
+        }
         const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
         assert.isEmpty(yield* migrate);
         // The published build could already have a work trigger without the fence.
         yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
         yield* sql`ALTER TABLE scheduled_task_webhook_deliveries DROP COLUMN firing_accepted`;
-        assert.isUndefined(yield* checkOldBuild);
+        assert.isUndefined(yield* checkOldBuild(176));
         assert.deepStrictEqual(yield* migrate, [
           [177, "WorkTriggerAuthorityFence"],
           [178, "WebhookDeliveryFiringEvidence"],
         ]);
         assert.include(
-          (yield* checkOldBuild)?.message ?? "",
+          (yield* checkOldBuild(176))?.message ?? "",
           "would skip required schema migrations",
         );
         assert.isEmpty(yield* migrate);

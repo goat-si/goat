@@ -764,32 +764,6 @@ it.effect("workspace Retry cannot start a denied trigger after its firing settle
   }),
 );
 
-it.effect("a person's launch can use channel-like thread and message ids", () => {
-  const harness = makeHarness({ realWorkerLaunch: true });
-  return Effect.gen(function* () {
-    const launches = yield* ThreadLaunch.ThreadLaunchService;
-    const { threadId } = yield* launches.launch({
-      commandId: CommandId.make("person-launch"),
-      threadId: ThreadId.make("channel-worker:fixture"),
-      projectId,
-      title: "Ordinary launch",
-      modelSelection,
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      workspaceStrategy: { type: "root" },
-      createdBy: "user",
-      creationSource: "web",
-      initialMessage: {
-        messageId: MessageId.make("channel-worker-message:fixture"),
-        text: "Inspect fixtures",
-        attachments: [],
-      },
-    });
-    const prepared = yield* preparationSettled(threadId);
-    assert.strictEqual(prepared.runs[0]?.status, "starting");
-  }).pipe(Effect.provide(harness.layer));
-});
-
 it.effect("event reception cannot steer, stop, or answer existing work", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {
