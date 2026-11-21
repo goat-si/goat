@@ -65,6 +65,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { MemoryQuarantineFilter } from "./MemoryQuarantineFilter";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
@@ -82,7 +83,6 @@ import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
-import { Switch } from "../ui/switch";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
 import { formatTimestamp } from "../../timestampFormat";
@@ -567,6 +567,7 @@ function ScopedMemoryRecords({
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
   const [quarantine, setQuarantine] = useState(false);
+  const searching = query !== "";
   const navigate = useNavigate();
   if (!canWrite && adding) setAdding(false);
   const input = memoryBrowseInput({
@@ -577,7 +578,7 @@ function ScopedMemoryRecords({
     ...(capabilities?.scopeMoves ? { includeScopeVersion: true } : {}),
     ...(cursor ? { cursor } : {}),
   });
-  const atom = query
+  const atom = searching
     ? memoryEnvironment.search({ environmentId, input: memorySearchInput(input, query) })
     : memoryEnvironment.list({
         environmentId,
@@ -713,19 +714,13 @@ function ScopedMemoryRecords({
           />
         ) : null}
         {batch.controls}
-        <SettingsRow
-          title="Quarantined memories"
-          description="Review memories that need attention."
-          control={
-            <Switch
-              aria-label="Include quarantined memories"
-              checked={quarantine}
-              onCheckedChange={(checked) => {
-                setQuarantine(checked);
-                setCursor(undefined);
-              }}
-            />
-          }
+        <MemoryQuarantineFilter
+          checked={quarantine}
+          searching={searching}
+          onCheckedChange={(checked) => {
+            setQuarantine(checked);
+            setCursor(undefined);
+          }}
         />
         {page.error ? (
           <SettingsRow

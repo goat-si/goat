@@ -7,6 +7,8 @@ import {
   activeItem,
   exerciseMemoryMove,
   checkVirtualizedMemorySelection,
+  checkQuarantineSearch,
+  enterText,
   resolution,
   entry,
   retained,
@@ -529,12 +531,6 @@ async function click(label: string) {
   );
   expect(button).toBeDefined();
   await act(async () => button!.click());
-}
-async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  await act(() => {
-    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  });
 }
 // Settings renders the import and browse scope pickers under one name, so callers pass the section.
 function namedSelect(name: string, section = "") {
@@ -1792,6 +1788,8 @@ it("does not silently browse user memory when a project binding lookup fails", a
   expect(container.querySelector('[aria-label="Search memories"]')).not.toBeNull();
 });
 
+it("disables the quarantine filter during search and restores it when search is cleared", () =>
+  checkQuarantineSearch(container, click, state.queries, state.requests, supportedScreen));
 it.each([{ items: [] }, { items: [activeItem] }])(
   "shows incomplete search coverage with matching items %j",
   async ({ items }) => {
