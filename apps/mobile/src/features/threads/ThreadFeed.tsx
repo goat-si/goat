@@ -102,10 +102,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import {
-  classifyMarkdownImageSource,
-  markdownImageSourceFragment,
-} from "@goat/client-runtime/markdown-images";
+import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { videoMimeType } from "@goat/shared/video";
@@ -2309,20 +2306,20 @@ export const ThreadFeed = memo(function ThreadFeed({
         />
       );
     }
-    if (imageSource._tag === "Blocked") {
+    if (
+      media?.kind !== "image" ||
+      !("resource" in media.source) ||
+      media.source.resource._tag !== "media-file"
+    ) {
       return <ThreadMarkdownImageUnavailable alt={image.alt} />;
     }
     return (
       <ThreadMarkdownImage
-        environmentId={props.environmentId}
-        resource={{
-          _tag: "media-file",
-          threadId: props.threadId,
-          path: imageSource.path,
-        }}
+        environmentId={media.source.environmentId}
+        resource={media.source.resource}
         alt={image.alt}
-        srcFragment={markdownImageSourceFragment(image.href)}
-        actionsSource={media?.source.actionsSource}
+        srcFragment={media.source.srcFragment}
+        actionsSource={media.source.actionsSource}
         onPressPreview={onPressPreview}
       />
     );

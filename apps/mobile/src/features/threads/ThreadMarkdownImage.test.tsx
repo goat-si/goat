@@ -322,3 +322,29 @@ it("follows a reconnect for a remote environment's localhost image, both ways", 
   expect(container.querySelector("img")).toBeNull();
   expect(container.textContent).toContain("localhost:5173 is on Build box");
 });
+
+it("preserves the tapped workspace image fragment in the preview", () => {
+  const onPressPreview = vi.fn();
+  const resource = {
+    _tag: "media-file",
+    threadId: ThreadId.make("thread"),
+    path: "/repo/image.png",
+  } as const;
+  act(() =>
+    root.render(
+      <ThreadMarkdownImage
+        environmentId={EnvironmentId.make("remote")}
+        resource={resource}
+        alt="Diagram"
+        srcFragment="#view"
+        onPressPreview={onPressPreview}
+      />,
+    ),
+  );
+  const button = container.querySelector<HTMLButtonElement>('button[aria-label="Diagram"]');
+  if (!button) throw new Error("Missing preview button");
+  act(() => button.click());
+  expect(onPressPreview).toHaveBeenCalledWith(
+    expect.objectContaining({ resource, srcFragment: "#view" }),
+  );
+});
