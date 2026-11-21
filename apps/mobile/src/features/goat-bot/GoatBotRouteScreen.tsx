@@ -12,7 +12,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileBotManage } from "./useMobileBotManage";
-import { MobileGoatBotAlertTask } from "./MobileGoatBotAlertTask";
+import { MobileGoatBotAlertTask } from "./mobileGoatBotAlertRoute";
 import { GoatBotScreen } from "./GoatBotScreen";
 import {
   recordGoatBotLocalRead,

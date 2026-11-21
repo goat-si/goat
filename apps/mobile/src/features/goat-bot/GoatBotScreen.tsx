@@ -1,4 +1,4 @@
-import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./MobileGoatBotAlertTask";
+import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";

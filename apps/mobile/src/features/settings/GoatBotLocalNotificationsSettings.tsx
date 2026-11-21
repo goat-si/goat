@@ -1,3 +1,4 @@
+import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
@@ -24,22 +25,21 @@ export function GoatBotLocalNotificationsSettings() {
       return;
     }
     setRequesting(true);
-    try {
-      const permission = await runtime.runPromise(requestAgentNotificationPermission);
-      if (permission.type === "granted") {
-        setStatus("enabled");
-        update({ goatBotLocalAlerts: true });
-      } else if (permission.type === "denied") {
-        setStatus("disabled");
-        Dialog.alert("Notifications disabled", "Allow notifications for GOAT in system settings.", [
-          { text: "Cancel", style: "cancel" },
-          { text: "Open settings", onPress: () => void Linking.openSettings() },
-        ]);
-      }
-    } catch {
+    const result = await settlePromise(() =>
+      runtime.runPromise(requestAgentNotificationPermission),
+    );
+    setRequesting(false);
+    if (result._tag === "Failure") {
       Dialog.alert("Notifications unavailable", "Could not request notification permission.");
-    } finally {
-      setRequesting(false);
+    } else if (result.value.type === "granted") {
+      setStatus("enabled");
+      update({ goatBotLocalAlerts: true });
+    } else if (result.value.type === "denied") {
+      setStatus("disabled");
+      Dialog.alert("Notifications disabled", "Allow notifications for GOAT in system settings.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Open settings", onPress: () => void Linking.openSettings() },
+      ]);
     }
   };
 
