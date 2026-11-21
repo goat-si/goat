@@ -35,6 +35,19 @@ export const makeDispatchConfirmation = Effect.fn("channel.makeDispatchConfirmat
   };
 });
 
+export const narrowRequester = (
+  snapshot: ChannelRequester,
+  current: ChannelLedger.ChannelIdentity | undefined,
+) => {
+  if (current?.ownerId !== snapshot.ownerId || current.principalId !== snapshot.principalId)
+    return undefined;
+  return {
+    ...snapshot,
+    grantedScopes: snapshot.grantedScopes.filter((scope) => current.grantedScopes.includes(scope)),
+    runtimeModeCeiling: lowerRuntimeMode(snapshot.runtimeModeCeiling, current.runtimeModeCeiling),
+  };
+};
+
 /**
  * A linked account as it stands now on its own connection: scopes narrowed to its link and the
  * lower runtime mode; undefined once the link is gone or now belongs to someone else.
@@ -49,17 +62,7 @@ export const currentRequester = Effect.fn("channel.currentRequester")(function* 
     connectionId,
     externalActorId: snapshot.externalActorId,
   });
-  if (
-    current === undefined ||
-    current.ownerId !== snapshot.ownerId ||
-    current.principalId !== snapshot.principalId
-  )
-    return undefined;
-  return {
-    ...snapshot,
-    grantedScopes: snapshot.grantedScopes.filter((scope) => current.grantedScopes.includes(scope)),
-    runtimeModeCeiling: lowerRuntimeMode(snapshot.runtimeModeCeiling, current.runtimeModeCeiling),
-  };
+  return narrowRequester(snapshot, current);
 });
 
 /** Intake is a snapshot; a queued task cannot keep a revoked or reassigned external grant. */

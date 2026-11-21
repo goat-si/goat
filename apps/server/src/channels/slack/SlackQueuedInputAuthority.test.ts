@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderTurnId } from "@goat/contracts";
+import { ChannelQuestionId, ProviderDriverKind, ProviderTurnId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -16,7 +16,8 @@ import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
-import { inputIdFor, turnSteerIdsFor } from "../channelIds.ts";
+import { answerForwardIdsFor, inputIdFor, turnSteerIdsFor } from "../channelIds.ts";
+import { commitTransition } from "../channelTaskWrites.ts";
 import {
   defaultScript,
   modelSelection,
@@ -29,9 +30,15 @@ import { emit, ROOT_TS, slackScenario, tasks } from "./slackChannelScenarioHarne
 import { channelMention, directMessage } from "./slackChannelTestSupport.ts";
 
 describe("Provider start for queued Slack inputs", () => {
-  it.effect.each(["sender", "requester", "workspace access"] as const)(
-    "refuses a queued Slack follow-up after revoking %s",
-    (revoked) =>
+  it.effect.each([
+    { kind: "follow-up", revoked: "sender", provenance: "recorded" },
+    { kind: "follow-up", revoked: "requester", provenance: "recorded" },
+    { kind: "follow-up", revoked: "workspace access", provenance: "recorded" },
+    { kind: "answer", revoked: "sender", provenance: "recorded" },
+    { kind: "follow-up", revoked: "sender", provenance: "legacy" },
+  ] as const)(
+    "refuses a queued Slack $kind after revoking $revoked with $provenance provenance",
+    ({ kind, revoked, provenance }) =>
       Effect.gen(function* () {
         const provider = yield* nextTurnSelectionHarness(
           "slack-queued-followup",
@@ -99,11 +106,34 @@ describe("Provider start for queued Slack inputs", () => {
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
             goatBotSessionRouting: "reception",
           });
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const questionId = ChannelQuestionId.make("question:queued-slack-answer");
+          if (kind === "answer") {
+            const stored = yield* ledger.getTask(task.taskId);
+            assert(stored !== undefined);
+            yield* commitTransition(
+              ledger,
+              stored,
+              {
+                type: "task.question.opened",
+                payload: { question: { questionId, text: "Which logs?", askedAt: task.updatedAt } },
+              },
+              { owner: runtime.ownerToken },
+            );
+          }
           harness.script.current = (input) =>
             input.inputText === "Also check the logs"
               ? Effect.succeed({
                   replyText: "On it.",
-                  action: { type: "follow_up", taskId: task.taskId },
+                  action:
+                    kind === "answer"
+                      ? {
+                          type: "answer_question",
+                          taskId: task.taskId,
+                          questionId,
+                          answer: input.inputText,
+                        }
+                      : { type: "follow_up", taskId: task.taskId },
                 })
               : defaultScript(input);
           const followupEventId = "EvForwardQueued";
@@ -128,11 +158,23 @@ describe("Provider start for queued Slack inputs", () => {
             turnSteerIdsFor(followupInputId, "first").messageId,
             turnSteerIdsFor(followupInputId, "queued").messageId,
           ];
+          if (kind === "answer") {
+            const [answer] = yield* ledger.recentAnswers(task.taskId, 1);
+            assert(answer !== undefined);
+            messageIds.push(answerForwardIdsFor(answer.eventId).messageId);
+          }
           const orchestrator = yield* Orchestrator.OrchestratorV2;
           const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
           const queued = runs.find((run) => messageIds.some((id) => id === run.userMessageId));
           assert(queued !== undefined);
           assert.strictEqual(queued.status, "queued");
+          if (provenance === "legacy") {
+            const sql = yield* SqlClient.SqlClient;
+            const removed = yield* sql`DELETE FROM channel_runtime_state
+              WHERE key = ${"channel-session-forward:" + threadId + ":" + queued.userMessageId}
+              RETURNING key`;
+            assert.lengthOf(removed, 1);
+          }
           if (guest) {
             yield* settings.configure(
               {
@@ -143,10 +185,12 @@ describe("Provider start for queued Slack inputs", () => {
               owner,
             );
           } else {
-            const sql = yield* SqlClient.SqlClient;
-            yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]'
-              WHERE connection_id = ${connection.connectionId}
-              AND external_actor_id = ${revoked === "sender" ? "U0BOB" : "U0ALICE"}`;
+            assert.isTrue(
+              yield* ledger.unlinkIdentity({
+                connectionId: connection.connectionId,
+                externalActorId: revoked === "sender" ? "U0BOB" : "U0ALICE",
+              }),
+            );
           }
           const sink = yield* EventSink.EventSinkV2;
           const afterSequence = yield* sink.latestSequence({ threadId });
@@ -182,10 +226,7 @@ describe("Provider start for queued Slack inputs", () => {
             ),
           );
           yield* runtime.drain;
-          assert.strictEqual(
-            (yield* (yield* ChannelLedger.ChannelLedger).getTask(task.taskId))?.task.status,
-            "failed",
-          );
+          assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "failed");
         }).pipe(Effect.provide(layer));
       }),
   );

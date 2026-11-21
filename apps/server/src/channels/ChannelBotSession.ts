@@ -607,7 +607,6 @@ const make = Effect.gen(function* () {
       .withPermits(1)(serveNow(initial, owner))
       .pipe(Effect.mapError(asLedgerError("serve")));
 
-  /** One message into the task's own live run, else as the task's next run; never another's. */
   const sendForTask = Effect.fn("ChannelBotSession.sendForTask")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     threadId: ThreadId,
@@ -616,8 +615,8 @@ const make = Effect.gen(function* () {
       readonly first: ReturnType<typeof turnSteerIdsFor>;
       readonly queued: ReturnType<typeof turnSteerIdsFor>;
     },
-    attachments: ReadonlyArray<ChatAttachment> = [],
-    sender?: ChannelTaskSender,
+    attachments: ReadonlyArray<ChatAttachment>,
+    forward: { readonly sequence: number; readonly sender?: ChannelTaskSender | undefined },
   ) {
     const task = stored.task;
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
@@ -657,8 +656,7 @@ const make = Effect.gen(function* () {
     // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
-    // The requester and, for someone else's message, its sender, as they stand now.
-    const authority = yield* SenderAuthority.requesterForDelivery(task, sender).pipe(
+    const authority = yield* SenderAuthority.requesterForDelivery(task, forward.sender).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
@@ -671,7 +669,7 @@ const make = Effect.gen(function* () {
     const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
-      writeIntent(threadId, which.messageId, task, "followup").pipe(
+      writeIntent(threadId, which.messageId, task, "followup", forward.sequence).pipe(
         Effect.andThen(
           threads
             .sendToThread({
@@ -745,7 +743,7 @@ const make = Effect.gen(function* () {
       sessionFollowUpText(event.payload),
       ids,
       event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
-      event.payload.sender,
+      { sequence: pending.sequence, sender: event.payload.sender },
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "permission_changed" && result.senderName !== undefined)
@@ -806,7 +804,7 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
       [],
-      event.payload.sender,
+      { sequence: pending.sequence, sender: event.payload.sender },
     );
     if (result._tag === "failed" || result._tag === "permission_changed") {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))

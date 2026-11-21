@@ -1,15 +1,22 @@
-import { isGoatBotSessionThreadId, type MessageId, type OrchestrationV2Run } from "@goat/contracts";
+import {
+  isGoatBotSessionThreadId,
+  type ChannelRequester,
+  type MessageId,
+  type OrchestrationV2Run,
+} from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
-import { isUnlinkedPrincipal, lowerRuntimeMode } from "./ChannelGateway.ts";
+import { isUnlinkedPrincipal, lowerRuntimeMode, mayDirect } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { sessionIntentFor } from "./channelBotSessionRuns.ts";
-import { sessionMemoryCeiling } from "./channelDispatchAuthority.ts";
+import { narrowRequester, sessionMemoryCeiling } from "./channelDispatchAuthority.ts";
+import { sessionForwardEventFor } from "./channelSessionForwardEvent.ts";
+import { makeReadSlackWorkspaceIdentity } from "./slack/slackChannelSettingsFile.ts";
 import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 
 export const CHANNEL_PERMISSION_CHANGED = "permission_changed";
@@ -26,6 +33,22 @@ const permissionChanged = makeProviderFailure({
 const makeProviderInputRefusal = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const workspaceIdentity = yield* makeReadSlackWorkspaceIdentity;
+  const currentRequester = Effect.fn("ChannelBotSession.currentProviderInputRequester")(function* (
+    requester: ChannelRequester,
+    connectionId: string | undefined,
+  ) {
+    if (requester.originKind !== "slack" && requester.originKind !== "imessage") return requester;
+    const externalActorId = requester.externalActorId;
+    if (externalActorId === undefined || connectionId === undefined) return undefined;
+    const linked = yield* ledger.findIdentity({ connectionId, externalActorId });
+    const live =
+      linked ??
+      (requester.originKind === "slack" && isUnlinkedPrincipal(requester.principalId)
+        ? yield* workspaceIdentity(connectionId, externalActorId)
+        : undefined);
+    return narrowRequester(requester, live);
+  });
   return Effect.fn("ChannelBotSession.refuseProviderInput")(
     function* (
       threadId: OrchestrationV2Run["threadId"],
@@ -35,37 +58,44 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       if (!isGoatBotSessionThreadId(threadId)) return undefined;
       // The intent is written before dispatch and survives queueing and restart.
       const intent = yield* sessionIntentFor(sql, threadId, messageId);
-      if (intent === undefined || intent.kind === "followup") return undefined;
+      if (intent === undefined) return undefined;
       const stored = yield* ledger.getTask(intent.task_id);
       if (stored === undefined) return permissionChanged;
       const { task } = stored;
       const { requester, originAddress } = task;
       if (requester.originKind !== "slack" || originAddress.kind !== "slack") return undefined;
       if (task.generation !== intent.task_generation) return permissionChanged;
-      // Workspace guests never receive a link grant for notes or a run memory ceiling.
-      if (isUnlinkedPrincipal(requester.principalId)) return undefined;
-      if (requester.externalActorId === undefined) return permissionChanged;
-      const brief = yield* ledger.latestTaskBrief(task.taskId);
-      const live = yield* ledger.findIdentity({
-        connectionId: originAddress.connectionId,
-        externalActorId: requester.externalActorId,
-      });
-      if (live?.ownerId !== requester.ownerId || live.principalId !== requester.principalId)
-        return permissionChanged;
-      const current = {
-        ...requester,
-        grantedScopes: requester.grantedScopes.filter((scope) =>
-          live.grantedScopes.includes(scope),
-        ),
-      };
+      const current = yield* currentRequester(requester, originAddress.connectionId);
       const mode = task.target?.runtimeMode;
-      return current.grantedScopes.includes("orchestration:operate") &&
-        (mode === undefined || lowerRuntimeMode(mode, live.runtimeModeCeiling) === mode) &&
-        (brief?.context.notesPath === undefined || canReadChannelBotNotes(current)) &&
-        MEMORY_GRANT_RANK[sessionMemoryCeiling(current, task.target)] >=
+      if (
+        current === undefined ||
+        !current.grantedScopes.includes("orchestration:operate") ||
+        (mode !== undefined && lowerRuntimeMode(mode, current.runtimeModeCeiling) !== mode) ||
+        MEMORY_GRANT_RANK[sessionMemoryCeiling(current, task.target)] <
           MEMORY_GRANT_RANK[memoryGrantCeiling ?? "none"]
-        ? undefined
-        : permissionChanged;
+      )
+        return permissionChanged;
+      const brief = yield* ledger.latestTaskBrief(task.taskId);
+      if (brief?.context.notesPath !== undefined && !canReadChannelBotNotes(current))
+        return permissionChanged;
+
+      if (intent.kind === "followup") {
+        const forward = yield* sessionForwardEventFor(sql, threadId, messageId, task);
+        if (forward === undefined) return permissionChanged;
+        const { sender, inputId } = forward.payload;
+        if (sender === undefined && forward.actor !== "user") return undefined;
+        const input =
+          sender === undefined && inputId !== undefined
+            ? yield* ledger.getInput(inputId)
+            : undefined;
+        const snapshot = sender?.requester ?? input?.requester;
+        if (snapshot === undefined) return permissionChanged;
+        const connectionId = sender?.connectionId ?? input?.message.connectionId;
+        const live = yield* currentRequester(snapshot, connectionId);
+        if (live === undefined || !mayDirect(live, connectionId, { ...task, requester: current }))
+          return permissionChanged;
+      }
+      return undefined;
     },
     (effect, threadId) =>
       effect.pipe(

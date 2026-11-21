@@ -328,6 +328,10 @@ export function layerWithRegistry<Error>(
     readonly projects?: Layer.Layer<ProjectService.ProjectService>;
     readonly continuationRequests?: Layer.Layer<never>;
     readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
+    readonly serverConfigLayer?: Layer.Layer<
+      ServerConfig.ServerConfig,
+      PlatformError.PlatformError
+    >;
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
@@ -353,10 +357,12 @@ export function layerWithRegistry<Error>(
   | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | ReplayDatabaseError
 > {
-  const layerServerConfig = Layer.effect(
-    ServerConfig.ServerConfig,
-    makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
-  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+  const layerServerConfig =
+    options.serverConfigLayer ??
+    Layer.effect(
+      ServerConfig.ServerConfig,
+      makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
+    ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const layerRuntime =
     scenario.runtimePolicyOverride === undefined
       ? RuntimePolicy.layer

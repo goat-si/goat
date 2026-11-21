@@ -12,18 +12,11 @@
  * @module SlackChannelSettings.live
  */
 import {
-  AuthEnvironmentScopes,
   MAIN_BOT_ID,
   SLACK_BOT_BINDING_LIMIT,
-  SlackBotBindings,
   resolveSlackAccess,
-  RuntimeMode,
   SlackChannelConnectionId,
-  SlackChannelDefaultTarget,
-  SlackChannelScope,
   SlackChannelSettingsError,
-  SlackUserAccess,
-  TrimmedNonEmptyString,
   type SlackChannelConfigureInput,
   type SlackChannelSettings as SlackChannelSettingsSnapshot,
   type SlackChannelSettingsErrorReason,
@@ -37,7 +30,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -47,50 +39,20 @@ import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelBotProfiles from "../ChannelBotProfiles.ts";
 import { isGoatBotHome } from "../ChannelBotHome.ts";
-import { unlinkedIdentity } from "../ChannelGateway.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
+import {
+  decodeSettingsFile,
+  encodeSettingsFile,
+  SETTINGS_FILE_NAME,
+  type StoredConnection,
+  workspaceIdentity,
+} from "./slackChannelSettingsFile.ts";
 import type { SlackRevocationEvent } from "./slackEventMapping.ts";
 import * as SlackSdk from "./SlackSdk.ts";
 
-const StoredOwner = Schema.Struct({
-  ownerId: TrimmedNonEmptyString,
-  principalId: TrimmedNonEmptyString,
-  displayName: TrimmedNonEmptyString,
-  grantedScopes: AuthEnvironmentScopes,
-  runtimeModeCeiling: RuntimeMode,
-});
-
-const StoredConnection = Schema.Struct({
-  connectionId: SlackChannelConnectionId,
-  enabled: Schema.Boolean,
-  teamId: Schema.optional(TrimmedNonEmptyString),
-  botUserId: Schema.optional(TrimmedNonEmptyString),
-  appTokenSavedAt: Schema.optional(Schema.Number),
-  botTokenSavedAt: Schema.optional(Schema.Number),
-  revoked: Schema.optional(Schema.Literals(["bot_revoked", "app_uninstalled"])),
-  allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
-  // Absent in files saved before these existed; resolveSlackAccess supplies the defaults.
-  channelScope: Schema.optional(SlackChannelScope),
-  userAccess: Schema.optional(SlackUserAccess),
-  unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
-  defaultTarget: Schema.optional(SlackChannelDefaultTarget),
-  botBindings: Schema.optionalKey(SlackBotBindings),
-  owner: Schema.optional(StoredOwner),
-});
-type StoredConnection = typeof StoredConnection.Type;
-
-const SettingsFile = Schema.Struct({
-  version: Schema.Literal(1),
-  connections: Schema.Array(StoredConnection),
-});
-const SettingsFileJson = Schema.fromJsonString(SettingsFile);
-const decodeSettingsFile = Schema.decodeUnknownEffect(SettingsFileJson);
-const encodeSettingsFile = Schema.encodeEffect(SettingsFileJson);
-
 const REVOCATION_SKEW_MARGIN_SECONDS = 300;
-const SETTINGS_FILE_NAME = "slack-channel-settings.json";
 /** Server-generated connection ids. Only these are ever used in secret file names. */
 const CONNECTION_ID_PATTERN = /^slack-[a-f0-9]{12}$/;
 
@@ -566,19 +528,14 @@ export const make = Effect.gen(function* () {
         ),
       ),
     unlinkedIdentity: (connectionId, externalActorId) =>
-      Effect.map(Ref.get(state), (current) => {
-        const connection = current.connections.find((c) => c.connectionId === connectionId);
-        if (connection?.owner === undefined) return Option.none();
-        const access = resolveSlackAccess(connection);
-        if (access.userAccess !== "workspace") return Option.none();
-        return Option.some(
-          unlinkedIdentity(connection.owner, {
-            connectionId,
+      Effect.map(Ref.get(state), (current) =>
+        Option.fromUndefinedOr(
+          workspaceIdentity(
+            current.connections.find((connection) => connection.connectionId === connectionId),
             externalActorId,
-            runtimeModeCeiling: access.unlinkedRuntimeModeCeiling,
-          }),
-        );
-      }),
+          ),
+        ),
+      ),
   });
 
   /**

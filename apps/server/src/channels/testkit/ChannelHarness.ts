@@ -358,6 +358,7 @@ export function makeHarness(
   };
 
   const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
+  const layerFiles = AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-");
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
     ProviderAdapterRegistry.layerFromAdapters([
@@ -369,7 +370,7 @@ export function makeHarness(
           ),
       },
     ]),
-    { databaseLayer: layerDatabase, runEffectWorker: false },
+    { databaseLayer: layerDatabase, serverConfigLayer: layerFiles, runEffectWorker: false },
   );
   const layerSettings =
     options.settingsLayer ??
@@ -747,7 +748,7 @@ export function makeHarness(
     layerSettings,
   ).pipe(
     // Server config, platform services, and the attachment files the gateway claims into.
-    Layer.provideMerge(AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-")),
+    Layer.provideMerge(layerFiles),
   );
 
   const layerLaunchDependencies = Layer.mergeAll(
