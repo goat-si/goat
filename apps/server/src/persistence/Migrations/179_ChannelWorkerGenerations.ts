@@ -42,5 +42,5 @@ export default Effect.gen(function* () {
       })),
     )}`;
   }
-  if (yield* hasPersistedWorkTriggers) yield* fenceWorkerReleaseRollback();
+  if (yield* hasPersistedWorkTriggers()) yield* fenceWorkerReleaseRollback();
 });

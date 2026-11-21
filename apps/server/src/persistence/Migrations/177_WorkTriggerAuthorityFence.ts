@@ -5,5 +5,5 @@ import {
 } from "../reconcileGoatMigrationIds.ts";
 
 export default Effect.gen(function* () {
-  if (yield* hasPersistedWorkTriggers) yield* fenceWorkTriggerRollback();
+  if (yield* hasPersistedWorkTriggers()) yield* fenceWorkTriggerRollback();
 });

@@ -927,7 +927,10 @@ it.effect(
 it.effect("startup fences a work-trigger input written by #3795 after migration 179", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 179 });
+    assert.deepInclude(yield* runMigrations({ skipStartupRepairs: true }), [
+      179,
+      "ChannelWorkerGenerations",
+    ]);
     const at = "2026-11-21T00:00:00.000Z";
     const payload = JSON.stringify({
       ...owner,
