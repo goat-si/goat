@@ -848,6 +848,8 @@ function MountedCoordinators({
 it.each([
   ["handoff only", "needs_you", "one", "channel-worker:abc", ["Scout needs approval"], "online"],
   ["handoff only", "off", "one", "channel-worker:abc", [], "online"],
+  ["pre-bind handoff only", "off", "one", "channel-worker:abc", [], "online"],
+  ["pre-bind handoff only", "off", "one", "goat-bot-session:abc", [], "online"],
   ["older SSH destination", "needs_you", "two", "mcp:worker", ["Scout has a question"], "online"],
   ["older SSH destination", "off", "two", "mcp:worker", [], "online"],
   ["SSH handoff only", "needs_you", "two", "mcp:worker", ["Scout needs approval"], "online"],
@@ -864,6 +866,8 @@ it.each([
     state.shells.set(destination, shell(worker));
     app.registry.set(decisionAtom(destination), { handoffs: [] });
     const handoff = scenario.endsWith("handoff only");
+    const preBind = scenario.startsWith("pre-bind");
+    const alert = { ...attentionEvent, kind: "approval", requestId: "approval" } as const;
     state.feed.mockResolvedValue(
       AsyncResult.success({ cursor: 0, hasMore: false, mode, events: [] }),
     );
@@ -883,11 +887,7 @@ it.each([
               cursor: 1,
               hasMore: false,
               mode,
-              events: [
-                handoff
-                  ? { ...attentionEvent, kind: "approval", requestId: "approval" }
-                  : attentionEvent,
-              ],
+              events: preBind ? [] : [handoff ? alert : attentionEvent],
             }
           : {
               cursor: 0,
@@ -909,7 +909,7 @@ it.each([
     if (handoff) {
       app.registry.set(
         decisionAtom(destination),
-        approvalDecisionFeed(worker, destination === "one"),
+        approvalDecisionFeed(worker, destination === "one" && !preBind),
       );
     }
     if (destination === "two" && origin !== "absent") {

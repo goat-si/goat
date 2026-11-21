@@ -1,14 +1,17 @@
 import { RegistryContext } from "@effect/atom-react";
+import { botAttentionDecisionSearch } from "@goat/client-runtime/goatBot";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
 import {
+  BotId,
   ChannelTaskId,
   EnvironmentId,
   ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
+  type ChannelTask,
   type Handoff,
   type OrchestrationV2GetTurnItemInput,
   type OrchestrationV2GetTurnItemResult,
@@ -503,17 +506,21 @@ it("a remote approval target never chooses a request with the same id on another
     .not.toBeInTheDocument();
 });
 
-it.each([true, false])(
-  "reads the oldest of 201 pending handoffs by id (available: %s)",
-  async (available) => {
+it.each(["open", "missing", "declined"] as const)(
+  "reads the oldest handoff by id and follows the alert's task if it cleared (%s)",
+  async (stateOfHandoff) => {
     const createdAt = DateTime.makeUnsafe("2026-10-01T00:00:00.000Z");
+    const ref =
+      stateOfHandoff === "declined"
+        ? { ...a.ref, threadId: ThreadId.make("goat-bot-session:shared") }
+        : a.ref;
     const handoff: Handoff = {
       handoffId: TurnItemId.make("oldest"),
       kind: "approval",
       title: "Approve the oldest handoff",
       reason: "The worker needs permission to continue.",
       requestedBy: {
-        threadId: a.ref.threadId,
+        threadId: ref.threadId,
         providerInstanceId: ProviderInstanceId.make("codex"),
         path: "agent",
       },
@@ -547,16 +554,16 @@ it.each([true, false])(
         input: OrchestrationV2GetTurnItemInput;
       }) => {
         const found =
-          available &&
-          environmentId === a.ref.environmentId &&
-          input.threadId === a.ref.threadId &&
+          stateOfHandoff !== "missing" &&
+          environmentId === ref.environmentId &&
+          input.threadId === ref.threadId &&
           input.itemId === handoff.handoffId;
         const item: OrchestrationV2GetTurnItemResult["item"] = found
           ? {
               type: "human_handoff",
               threadId: input.threadId,
               id: input.itemId,
-              handoff,
+              handoff: stateOfHandoff === "declined" ? { ...handoff, state: "declined" } : handoff,
               runId: null,
               nodeId: null,
               providerThreadId: null,
@@ -564,7 +571,7 @@ it.each([true, false])(
               nativeItemRef: null,
               parentItemId: null,
               ordinal: 1,
-              status: "waiting",
+              status: stateOfHandoff === "declined" ? "completed" : "waiting",
               title: null,
               startedAt: createdAt,
               updatedAt: createdAt,
@@ -575,13 +582,12 @@ it.each([true, false])(
       },
     );
     const targetedRouter = makeRouter();
-    const search = {
-      ...a.ref,
-      requestId: RuntimeRequestId.make(handoff.handoffId),
-      requestKind: "handoff" as const,
-      originEnvironmentId: primary,
-      originTaskId: ChannelTaskId.make("origin-task"),
-    };
+    const taskId = ChannelTaskId.make("task:a");
+    const search = botAttentionDecisionSearch(
+      { ...ref, requestId: RuntimeRequestId.make(handoff.handoffId), requestKind: "handoff" },
+      { environmentId: primary, botId: BotId.make("main"), taskId },
+      { originAddress: { kind: "goat" } } as ChannelTask,
+    );
     await targetedRouter.navigate({ to: "/decisions", search });
     // Use the router that handles the Decisions target and originating task.
     await using screen = await render(
@@ -592,12 +598,12 @@ it.each([true, false])(
       </RegistryContext.Provider>,
       { router: false },
     );
-    if (available) {
+    if (stateOfHandoff === "open") {
       await expect.element(screen.getByRole("region", { name: handoff.title })).toBeVisible();
     } else {
       await expect.element(screen.getByText("Opened Bot task")).toBeVisible();
       expect(targetedRouter.state.location.search).toMatchObject({
-        task: "origin-task",
+        task: taskId,
         attentionEnvironment: primary,
       });
     }

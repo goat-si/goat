@@ -50,10 +50,12 @@ export const withApprovals = <A, E, R>(
   body: (input: {
     readonly approvals: ApprovalHandoffs.ApprovalHandoffs["Service"];
     readonly handoffs: Handoffs.Handoffs["Service"];
+    readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
   }) => Effect.Effect<A, E, R>,
-  options: { readonly startedBy?: "person" | "agent" } = {},
+  options: { readonly startedBy?: "person" | "agent"; readonly threadId?: ThreadId } = {},
 ) =>
   Effect.gen(function* () {
+    const approvalThreadId = options.threadId ?? threadId;
     const fake = yield* makeFakeCloudAdapter(true, instanceId);
     const adapter = {
       ...fake.adapter,
@@ -70,7 +72,7 @@ export const withApprovals = <A, E, R>(
       yield* orchestrator.dispatch({
         type: "thread.create",
         commandId: CommandId.make("create-thread"),
-        threadId,
+        threadId: approvalThreadId,
         projectId: ProjectId.make("project:approval"),
         title: "Hub change",
         modelSelection: { instanceId, model: "fake" },
@@ -84,7 +86,7 @@ export const withApprovals = <A, E, R>(
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("start-run"),
-        threadId,
+        threadId: approvalThreadId,
         messageId: MessageId.make("message:approval"),
         text: "Join the device",
         attachments: [],
@@ -143,6 +145,7 @@ export const withApprovals = <A, E, R>(
         return yield* body({
           approvals: yield* ApprovalHandoffs.ApprovalHandoffs,
           handoffs: yield* Handoffs.Handoffs,
+          orchestrator,
         });
       }).pipe(
         Effect.provide(
