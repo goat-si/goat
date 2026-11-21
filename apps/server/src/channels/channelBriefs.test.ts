@@ -1,9 +1,15 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
+import { ChannelTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 
+import { ThreadLaunchParameters } from "../mcp/toolkits/project/tools.ts";
 import { channelNotesRevision } from "./channelBriefs.ts";
+import { remoteWorkerLaunchPrompt, remoteWorkerMessage } from "./channelWorkerBrief.ts";
+
+const decodeLaunch = Schema.decodeUnknownSync(ThreadLaunchParameters);
 
 const fileError = (tag: "NotFound" | "PermissionDenied") =>
   PlatformError.systemError({
@@ -47,4 +53,43 @@ describe("channel notes launch revision", () => {
       ),
     ),
   );
+});
+
+describe("SSH worker launch notes", () => {
+  const task = {
+    taskId: ChannelTaskId.make("private-ssh-brief"),
+    generation: 1,
+    instruction: "Check the rollout",
+  };
+
+  it("keeps both note scopes at their combined limit through the launch schema", () => {
+    const sharedStanding = "s".repeat(6000);
+    const privateStanding = "p".repeat(6000);
+    const sharedMatched = "S".repeat(2999);
+    const privateMatched = "P".repeat(2999);
+    const standing = `${sharedStanding}\n${privateStanding}`;
+    const matched = `${sharedMatched}\n${privateMatched}`;
+    const frozen = remoteWorkerMessage(task, {
+      notes: { standing, matched, ranked: [] },
+      skills: [],
+    });
+    const prompt = remoteWorkerLaunchPrompt(task, frozen);
+    expect(prompt.message).toContain(task.instruction);
+    expect(prompt.message).not.toContain(sharedStanding);
+    expect(prompt.message).not.toContain(privateStanding);
+    expect(prompt.providerNotes?.length).toBe(18001);
+    expect(prompt.providerNotes).toBe(`${matched}\n${standing}`);
+    expect(decodeLaunch({ title: task.instruction, ...prompt }).providerNotes).toBe(
+      prompt.providerNotes,
+    );
+  });
+
+  it("withholds a frozen brief whose notes wrapper is malformed", () => {
+    const note = "Only the scoped provider may see this synthetic note.";
+    const frozen = `${task.instruction}\n<goat_bot_notes>\n${note}\n</goat_bot_notes>`;
+    const prompt = remoteWorkerLaunchPrompt(task, frozen);
+    expect(prompt.message).toContain(task.instruction);
+    expect(prompt.message).not.toContain(note);
+    expect(prompt.providerNotes).toBeUndefined();
+  });
 });
