@@ -1,3 +1,4 @@
+import { US_MAC_OPTION_GLYPH_LETTERS } from "./keybindingOptionGlyphs.ts";
 import {
   type KeybindingRule,
   type KeybindingShortcut,
@@ -92,6 +93,8 @@ export function shortcutKeyFromEvent(
 ): string {
   const layoutKey = normalizeEventKey(event.key);
   if (/^[a-z]$/.test(layoutKey)) return layoutKey;
+  const usOptionLetter = event.altKey ? US_MAC_OPTION_GLYPH_LETTERS.get(event.key) : undefined;
+  if (usOptionLetter && event.code === `Key${usOptionLetter.toUpperCase()}`) return usOptionLetter;
   if (layoutKey === "+" && !event.shiftKey && !event.altKey && !event.code?.startsWith("Digit"))
     return layoutKey;
   const physicalKey = event.code ? EVENT_CODE_SHORTCUT_KEYS[event.code] : undefined;
