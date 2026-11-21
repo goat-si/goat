@@ -22,9 +22,18 @@ import {
   requesterForDispatch,
   sessionMemoryCeiling,
 } from "./channelDispatchAuthority.ts";
-import { isChannelWorkerThreadId } from "./channelIds.ts";
-import { sessionCarriesNotes, workerBriefOwner } from "./channelProviderBrief.ts";
+import {
+  isChannelFollowUpMessageId,
+  isChannelWorkerThreadId,
+  workerLaunchIdsFor,
+} from "./channelIds.ts";
+import {
+  sessionCarriesNotes,
+  workerContextOwner,
+  workerFollowUpSenderInput,
+} from "./channelProviderBrief.ts";
 import { sessionForwardEventFor } from "./channelSessionForwardEvent.ts";
+import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { makeReadSlackWorkspaceIdentity } from "./slack/slackChannelSettingsFile.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 
@@ -74,24 +83,35 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       const session = isGoatBotSessionThreadId(threadId);
       if (!session && !isChannelWorkerThreadId(threadId)) return undefined;
       const intent = session ? yield* sessionIntentFor(sql, threadId, messageId) : undefined;
-      const worker = session ? undefined : yield* workerBriefOwner(sql, threadId, messageId);
-      const taskId = intent?.task_id ?? worker?.task_id;
-      if (taskId === undefined) return undefined;
-      const stored = yield* ledger.getTask(taskId);
+      const worker = session ? undefined : yield* workerContextOwner(sql, threadId);
+      const workerFollowUp = !session && isChannelFollowUpMessageId(messageId);
       if (
-        stored === undefined ||
-        stored.task.generation !== (intent?.task_generation ?? worker?.generation)
+        worker !== undefined &&
+        !workerFollowUp &&
+        workerLaunchIdsFor(worker.task_id, worker.generation).messageId !== messageId
       )
+        return undefined;
+      const taskId = intent?.task_id ?? worker?.task_id;
+      const stored =
+        taskId !== undefined
+          ? yield* ledger.getTask(taskId)
+          : workerFollowUp
+            ? yield* ledger.findTaskByWorkerThread(threadId)
+            : undefined;
+      if (stored === undefined) return taskId === undefined ? undefined : permissionChanged;
+      const generation = intent?.task_generation ?? worker?.generation;
+      if (generation !== undefined && stored.task.generation !== generation)
         return permissionChanged;
 
       const { task } = stored;
       const { requester, originAddress } = task;
       const slackSession =
         session && requester.originKind === "slack" && originAddress.kind === "slack";
-      const brief = yield* ledger.latestTaskBrief(taskId);
+      const brief = yield* ledger.latestTaskBrief(task.taskId, task.generation);
       const carriesNotes =
         brief?.context.notesPath !== undefined ||
         (session && (yield* sessionCarriesNotes(sql, threadId)));
+      if (workerFollowUp && !carriesNotes) return undefined;
       if (
         !slackSession &&
         !carriesNotes &&
@@ -100,8 +120,18 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       )
         return undefined;
 
-      const current =
-        slackSession && task.routineWork !== true
+      const current = workerFollowUp
+        ? yield* requesterForDelivery(
+            task,
+            undefined,
+            yield* workerFollowUpSenderInput(sql, threadId, messageId),
+            true,
+          ).pipe(
+            Effect.map((authority) =>
+              authority._tag === "allowed" ? authority.requester : undefined,
+            ),
+          )
+        : slackSession && task.routineWork !== true
           ? yield* currentRequester(requester, originAddress.connectionId, task.originInputId)
           : yield* requesterForDispatch(task);
       const mode = task.target?.runtimeMode;

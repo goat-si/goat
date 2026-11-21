@@ -512,11 +512,17 @@ export function layerWithRegistry<Error>(
         ),
       ),
     );
-  const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(layerStores, layerProviderSessionManagerProvided, layerEventSinkProvided),
-    ),
-  );
+  const layerProviderTurnControlServiceProvided =
+    ProviderTurnControlService.layerWithChannelAuthority.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerDatabase,
+          layerStores,
+          layerProviderSessionManagerProvided,
+          layerEventSinkProvided,
+        ),
+      ),
+    );
   const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
   );

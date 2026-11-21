@@ -169,11 +169,17 @@ export const childWorkStopCommandIdFor = (childWorkId: ChannelChildWorkId, attem
  * "queued" attempt is the second and last one, used only after the orchestrator rejected the
  * first, since a rejected command id is refused for good.
  */
+const TURN_STEER_MESSAGE = "channel-steer-message";
+const TOOL_STEER_MESSAGE = "channel-tool-steer-message";
+
+export const isChannelFollowUpMessageId = (messageId: MessageId) =>
+  messageId.startsWith(TURN_STEER_MESSAGE + ":") || messageId.startsWith(TOOL_STEER_MESSAGE + ":");
+
 export const turnSteerIdsFor = (inputId: ChannelInputId, attempt: "first" | "queued" = "first") => {
   const key = attempt === "first" ? [inputId] : [inputId, "queued"];
   return {
     commandId: CommandId.make(stableId("channel-steer", key)),
-    messageId: MessageId.make(stableId("channel-steer-message", key)),
+    messageId: MessageId.make(stableId(TURN_STEER_MESSAGE, key)),
   };
 };
 
@@ -184,7 +190,7 @@ export const toolSteerIdsFor = (forwardKey: string, attempt: "first" | "queued" 
   const key = attempt === "first" ? [forwardKey] : [forwardKey, "queued"];
   return {
     commandId: CommandId.make(stableId("channel-tool-steer", key)),
-    messageId: MessageId.make(stableId("channel-tool-steer-message", key)),
+    messageId: MessageId.make(stableId(TOOL_STEER_MESSAGE, key)),
   };
 };
 

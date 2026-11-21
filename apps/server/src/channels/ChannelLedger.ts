@@ -9,7 +9,7 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
-import { bindWorkerProviderBrief } from "./channelProviderBrief.ts";
+import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
 import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
@@ -40,6 +40,7 @@ import {
   type ChannelTaskEventId,
   type ChannelTaskId,
   type ChannelTaskStatus,
+  type MessageId,
   RuntimeMode,
   MAIN_BOT_ID,
   type ThreadId,
@@ -285,13 +286,19 @@ export class ChannelLedger extends Context.Service<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
     >;
-    /** Most recently frozen brief, including earlier generations for version allocation. */
     readonly bindWorkerProviderBrief: (
       task: ChannelTask,
       threadId: ThreadId,
     ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly bindWorkerFollowUpSender: (
+      threadId: ThreadId,
+      messageId: MessageId,
+      inputId: ChannelInputId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
+    /** Most recently frozen brief, including earlier generations when none is specified. */
     readonly latestTaskBrief: (
       taskId: ChannelTaskId,
+      generation?: number,
     ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
     /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
@@ -1065,10 +1072,13 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
 
     bindWorkerProviderBrief: (task, threadId) => bindWorkerProviderBrief(sql, task, threadId),
-    latestTaskBrief: (taskId) =>
+    bindWorkerFollowUpSender: (threadId, messageId, inputId) =>
+      bindWorkerFollowUpSender(sql, threadId, messageId, inputId),
+    latestTaskBrief: (taskId, generation) =>
       sql<{ readonly event_json: string }>`
         SELECT event_json FROM channel_task_events
         WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
+        ${generation === undefined ? sql`` : sql`AND json_extract(event_json, '$.payload.brief.generation') = ${generation}`}
         ORDER BY sequence DESC LIMIT 1
       `.pipe(
         Effect.map((rows) => {

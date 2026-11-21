@@ -1,10 +1,13 @@
-import type { ChannelTask, MessageId, ThreadId } from "@goat/contracts";
+import type { ChannelInputId, ChannelTask, MessageId, ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import { isChannelWorkerThreadId, workerLaunchIdsFor } from "./channelIds.ts";
 
 const keyFor = (threadId: ThreadId) => "channel-worker-context:" + threadId;
+const followUpKeyFor = (threadId: ThreadId, messageId: MessageId) =>
+  "channel-worker-followup-sender:" + threadId + ":" + messageId;
 
 export const bindWorkerProviderBrief = Effect.fn("channel.bindWorkerProviderBrief")(function* (
   sql: SqlClient.SqlClient,
@@ -27,10 +30,9 @@ export const bindWorkerProviderBrief = Effect.fn("channel.bindWorkerProviderBrie
   );
 });
 
-export const workerBriefOwner = Effect.fn("channel.workerBriefOwner")(function* (
+export const workerContextOwner = Effect.fn("channel.workerContextOwner")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
-  messageId: MessageId,
 ) {
   const [owner] = yield* sql<{
     readonly task_id: ChannelTask["taskId"];
@@ -40,24 +42,59 @@ export const workerBriefOwner = Effect.fn("channel.workerBriefOwner")(function* 
       json_extract(value_json, '$.generation') AS generation
     FROM channel_runtime_state WHERE key = ${keyFor(threadId)}
   `;
-  return owner !== undefined &&
-    workerLaunchIdsFor(owner.task_id, owner.generation).messageId === messageId
-    ? owner
-    : undefined;
+  return owner;
 });
+
+export const bindWorkerFollowUpSender = Effect.fn("channel.bindWorkerFollowUpSender")(function* (
+  sql: SqlClient.SqlClient,
+  threadId: ThreadId,
+  messageId: MessageId,
+  inputId: ChannelInputId,
+) {
+  const now = DateTime.formatIso(yield* DateTime.now);
+  yield* sql`
+    INSERT INTO channel_runtime_state (key, value_json, updated_at)
+    VALUES (${followUpKeyFor(threadId, messageId)}, json_quote(${inputId}), ${now})
+    ON CONFLICT (key) DO NOTHING
+  `.pipe(
+    Effect.mapError(
+      (cause) =>
+        new ChannelLedgerError({
+          reason: "persistence",
+          detail: "Could not bind the worker follow-up sender.",
+          cause,
+        }),
+    ),
+  );
+});
+
+export const workerFollowUpSenderInput = (
+  sql: SqlClient.SqlClient,
+  threadId: ThreadId,
+  messageId: MessageId,
+) =>
+  sql<{ readonly input_id: ChannelInputId }>`
+    SELECT json_extract(value_json, '$') AS input_id
+    FROM channel_runtime_state WHERE key = ${followUpKeyFor(threadId, messageId)}
+  `.pipe(Effect.map((rows) => rows[0]?.input_id));
 
 export const readChannelProviderBrief = Effect.fn("channel.readProviderBrief")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
   messageId: MessageId,
 ) {
-  const owner = isChannelWorkerThreadId(threadId)
-    ? yield* workerBriefOwner(sql, threadId, messageId)
+  const worker = isChannelWorkerThreadId(threadId);
+  const owner = worker
+    ? yield* workerContextOwner(sql, threadId)
     : (yield* sql<{ readonly task_id: ChannelTask["taskId"]; readonly generation: number }>`
         SELECT task_id, task_generation AS generation FROM channel_bot_session_runs
         WHERE thread_id = ${threadId} AND message_id = ${messageId} AND kind IN ('launch','task')
       `)[0];
-  if (owner === undefined) return undefined;
+  if (
+    owner === undefined ||
+    (worker && workerLaunchIdsFor(owner.task_id, owner.generation).messageId !== messageId)
+  )
+    return undefined;
   const [row] = yield* sql<{ readonly delivered_text: string }>`
     SELECT json_extract(event_json, '$.payload.brief.deliveredText') AS delivered_text
     FROM channel_task_events
