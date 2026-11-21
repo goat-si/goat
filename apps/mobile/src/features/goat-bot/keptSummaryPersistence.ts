@@ -175,7 +175,10 @@ export function createMobileKeptSummaryPersistence() {
   const accountFingerprint = (id: string | null) => (id === null ? null : fingerprint(id));
   function observeAccount(id: string | null) {
     const update = async () => {
-      const previous = await readAccount();
+      const previous = await readAccount().catch(async (error: unknown) => {
+        if (id === null) await store.purgeAll();
+        throw error;
+      });
       const next = await accountFingerprint(id);
       if (next === previous) return;
       if (previous !== null) await store.purgeAll();

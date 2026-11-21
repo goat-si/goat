@@ -277,7 +277,12 @@ vi.mock("../../native/native-layout-metrics", () => ({
 
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentSession } from "../../state/session";
-import { layer, MobileDatabase } from "../../persistence/mobile-database";
+import {
+  botSummaryCloudAccountKey,
+  botSummaryGlobalPurgeKey,
+  layer,
+  MobileDatabase,
+} from "../../persistence/mobile-database";
 import { cloudAccountService } from "../cloud/cloudAccountService";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { AdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -325,6 +330,7 @@ function phone() {
   fixture.width = 400;
   let failDeletes = false;
   let failMarkers = false;
+  let failAccountRead = false;
   let didFailDelete = Promise.withResolvers<void>();
   let nextSweep: PromiseWithResolvers<void> | undefined;
   let readTime = now;
@@ -347,7 +353,7 @@ function phone() {
         runAsync: async (sql: string, ...args: (string | number)[]) => {
           if (
             failMarkers &&
-            args[2] === "goat-bot-summary-purge" &&
+            (args[2] === "goat-bot-summary-purge" || args[2] === botSummaryGlobalPurgeKey) &&
             /INSERT INTO client_cache/.test(sql)
           )
             throw new Error("SQLite purge marker write failed");
@@ -362,8 +368,11 @@ function phone() {
           }
           return result;
         },
-        getFirstAsync: async (sql: string, ...args: (string | number)[]) =>
-          sqlite.prepare(sql).get(...args) ?? null,
+        getFirstAsync: async (sql: string, ...args: (string | number)[]) => {
+          if (failAccountRead && args.includes(botSummaryCloudAccountKey))
+            throw new Error("SQLite account read failed");
+          return sqlite.prepare(sql).get(...args) ?? null;
+        },
         getAllAsync: async (sql: string, ...args: (string | number)[]) =>
           sqlite.prepare(sql).all(...args),
         withExclusiveTransactionAsync: async (op: (db: unknown) => Promise<void>) => {
@@ -462,6 +471,9 @@ function phone() {
     },
     failMarkers: () => {
       failMarkers = true;
+    },
+    failAccountRead: (fail: boolean) => {
+      failAccountRead = fail;
     },
     onNextSweep: () => {
       nextSweep = Promise.withResolvers<void>();
@@ -670,6 +682,50 @@ it("purges kept summaries on the first signed-out Clerk observation after relaun
   expect(
     device.inspect().some((row) => String(row.cache_key).startsWith("goat-bot-summary:")),
   ).toBe(false);
+});
+
+it("discards the previous summary on same-account sign-in after a cold sign-out with failed SQLite reads and writes", async () => {
+  using device = phone();
+  using _warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  {
+    await using app = device.open();
+    const active = Promise.withResolvers<void>();
+    using _subscription = {
+      [Symbol.dispose]: app.registry.subscribe(managedRelaySessionAtom, (session) => {
+        if (session?.accountId === "account-a") active.resolve();
+      }),
+    };
+    using _clerk = observeClerk("account-a");
+    await active.promise;
+    app.pair("token-a");
+    await app.save("Scout");
+  }
+  {
+    const swept = device.onNextSweep();
+    await using app = device.open();
+    await swept;
+    device.failAccountRead(true);
+    device.failMarkers();
+    void device.failDelete();
+    using _clerk = observeClerk(null);
+    await expect(app.restore()).rejects.toThrow();
+    expect(device.inspect().some((row) => String(row.payload).includes("Scout"))).toBe(true);
+  }
+  device.failAccountRead(false);
+  device.allowDelete();
+  await using app = device.open();
+  const active = Promise.withResolvers<void>();
+  using _subscription = {
+    [Symbol.dispose]: app.registry.subscribe(managedRelaySessionAtom, (session) => {
+      if (session?.accountId === "account-a") active.resolve();
+    }),
+  };
+  using _clerk = observeClerk("account-a");
+  await active.promise;
+  expect(await app.restore()).toBeNull();
+  app.pair("token-a");
+  await app.save("Fresh Scout");
+  expect((await app.restore())?.data[0]?.name).toBe("Fresh Scout");
 });
 
 it("sweeps expired rows at startup and foreground without an eligible pairing or roster, preserving older shell caches", async () => {
