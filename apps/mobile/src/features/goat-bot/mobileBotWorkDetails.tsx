@@ -1,4 +1,6 @@
 import {
+  botTaskActivityFallbackName,
+  botTaskActivityFallbackNames,
   botTaskActivityText,
   botTaskActivityWorkerRef,
   type BotWorkTask,
@@ -160,14 +162,18 @@ export function mobileBotWorkDetails(props: {
 function TaskActivityRow({
   entry,
   workers,
+  fallbackName,
 }: {
   readonly entry: ChannelBotTaskActivityEntry;
   readonly workers: BotWorkResult["codingRows"];
+  readonly fallbackName: string | undefined;
 }) {
   const thread = useThreadShell(botTaskActivityWorkerRef(entry));
   return (
     <View className="pb-2">
-      <Text className="text-foreground">{botTaskActivityText(entry, workers, thread?.title)}</Text>
+      <Text className="text-foreground">
+        {botTaskActivityText(entry, workers, thread?.title, fallbackName)}
+      </Text>
       <Text className="text-xs text-foreground-muted">
         {new Date(entry.at).toLocaleString()} ·{" "}
         {entry.actor === "goat" ? "GOAT" : entry.actor === "bot" ? "Bot" : "Person"}
@@ -181,6 +187,7 @@ export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }
   const activity = work.activity;
   if (activity === undefined || (activity.entries.length === 0 && !activity.incompleteBefore))
     return null;
+  const fallbackNames = botTaskActivityFallbackNames(activity.entries);
   return (
     <View>
       <Pressable
@@ -194,7 +201,12 @@ export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }
       {expanded && (
         <ScrollView className="max-h-52" nestedScrollEnabled>
           {activity.entries.map((entry) => (
-            <TaskActivityRow key={entry.id} entry={entry} workers={work.codingRows} />
+            <TaskActivityRow
+              key={entry.id}
+              entry={entry}
+              workers={work.codingRows}
+              fallbackName={botTaskActivityFallbackName(entry, fallbackNames)}
+            />
           ))}
           {activity.incompleteBefore && (
             <Text className="text-xs text-foreground-muted">

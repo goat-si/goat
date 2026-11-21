@@ -111,7 +111,7 @@ it("labels Activity with the worker's thread title or a readable fallback", asyn
   await expect
     .element(screen.getByText("Worker finished · Add second hello to README"))
     .toBeVisible();
-  await expect.element(screen.getByText("Worker finished · Work thread")).toBeVisible();
+  await expect.element(screen.getByText("Worker finished · Work thread 1")).toBeVisible();
   await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
 });
 
@@ -149,6 +149,39 @@ it("shows unpaired SSH worker Activity as text even when a local thread has the 
   await expect.element(screen.getByText("Worker finished · Work thread on unpaired")).toBeVisible();
   await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
   expect(screen.getByRole("link").all()).toHaveLength(0);
+});
+
+it("tells two unnamed workers on one host apart in Activity", async () => {
+  const first = { host: "builder", threadId: "channel-worker:first" };
+  const second = { host: "builder", threadId: "channel-worker:second" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Work", status: "completed", updatedAt: at },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { ...second, id: "second-end", type: "worker_finished", actor: "goat", at },
+        { ...first, id: "first-end", type: "worker_finished", actor: "goat", at },
+        { ...second, id: "second-start", type: "worker_started", actor: "bot", at },
+        { ...first, id: "first-start", type: "worker_started", actor: "bot", at },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect.element(screen.getByText("Worker started · Work thread 1 on builder")).toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Work thread 1 on builder"))
+    .toBeVisible();
+  await expect.element(screen.getByText("Worker started · Work thread 2 on builder")).toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Work thread 2 on builder"))
+    .toBeVisible();
 });
 
 const rows = [

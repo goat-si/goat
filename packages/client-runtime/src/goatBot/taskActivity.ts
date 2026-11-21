@@ -9,10 +9,38 @@ export function botTaskActivityWorkerRef(entry: ChannelBotTaskActivityEntry) {
     : null;
 }
 
+const workerKey = (entry: ChannelBotTaskActivityEntry) =>
+  entry.type === "worker_started" || entry.type === "worker_finished"
+    ? JSON.stringify([entry.host ?? null, entry.environmentId ?? null, entry.threadId])
+    : null;
+
+/** A fallback name per worker, numbered in start order when the task had more than one. */
+export function botTaskActivityFallbackNames(
+  entries: readonly ChannelBotTaskActivityEntry[],
+): ReadonlyMap<string, string> {
+  const order: string[] = [];
+  for (const entry of [...entries].reverse()) {
+    const key = workerKey(entry);
+    if (key !== null && !order.includes(key)) order.push(key);
+  }
+  return new Map(
+    order.map((key, index) => [key, order.length > 1 ? `Work thread ${index + 1}` : "Work thread"]),
+  );
+}
+
+export function botTaskActivityFallbackName(
+  entry: ChannelBotTaskActivityEntry,
+  names: ReadonlyMap<string, string>,
+): string | undefined {
+  const key = workerKey(entry);
+  return key === null ? undefined : names.get(key);
+}
+
 export function botTaskActivityText(
   entry: ChannelBotTaskActivityEntry,
   workers: BotWorkResult["codingRows"],
   threadTitle?: string | undefined,
+  fallbackName?: string | undefined,
 ): string {
   switch (entry.type) {
     case "created":
@@ -29,7 +57,7 @@ export function botTaskActivityText(
           : workers.find(
               (row) => row.environmentId === ref.environmentId && row.threadId === ref.threadId,
             );
-      const title = threadTitle?.trim() || worker?.title?.trim() || "Work thread";
+      const title = threadTitle?.trim() || worker?.title?.trim() || fallbackName || "Work thread";
       const subject = entry.host === undefined ? title : `${title} on ${entry.host}`;
       return `${label} · ${subject}`;
     }

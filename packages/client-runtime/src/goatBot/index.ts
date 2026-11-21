@@ -40,7 +40,12 @@ export * from "./botNameRowDismissal.ts";
 
 export { homeWorkGoverns, type HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
 
-export { botTaskActivityText, botTaskActivityWorkerRef } from "./taskActivity.ts";
+export {
+  botTaskActivityFallbackName,
+  botTaskActivityFallbackNames,
+  botTaskActivityText,
+  botTaskActivityWorkerRef,
+} from "./taskActivity.ts";
 export {
   BOT_TASK_SNOOZE_CHOICES,
   botTaskSnoozeInput,

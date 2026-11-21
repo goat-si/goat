@@ -435,7 +435,7 @@ it("shows the bot's criterion and uses readable worker names in Activity", async
   expect(text()).not.toMatch(/channel-worker:local|remote-worker/);
   for (const action of ["started", "finished"]) {
     const entry = [...container.querySelectorAll("span")].find(
-      (item) => item.textContent === `Worker ${action} · Work thread on unpaired`,
+      (item) => item.textContent === `Worker ${action} · Work thread 1 on unpaired`,
     );
     expect(entry?.closest("a, button, [role='link']")).toBeNull();
   }
