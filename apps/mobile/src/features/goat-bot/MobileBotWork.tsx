@@ -160,7 +160,6 @@ export function MobileBotWork(props: {
     member: member !== null,
   });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
-  // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -230,10 +229,11 @@ export function MobileBotWork(props: {
     botId,
     taskId: props.taskId ?? null,
     enabled,
-    lookupSupported: capabilities?.goatBotTaskLookupSearch === true,
+    capabilities,
     list: threads,
     holdsTask: task !== undefined,
     needsApprovalObservation: renderTaskApprovals !== undefined,
+    workRevision: props.workRevision,
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;

@@ -1,5 +1,5 @@
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -8,6 +8,8 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { appAtomRegistry } from "../../state/atom-registry";
+
+const taskChanges = Atom.make(AsyncResult.success({ subscription: 1, value: { revision: 0 } }));
 
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -172,7 +174,10 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: Atom.Atom<unknown>) =>
-    state.readApprovalAtoms && Atom.isAtom(atom) ? appAtomRegistry.get(atom) : true,
+    useSyncExternalStore(
+      (notify) => (atom === taskChanges ? appAtomRegistry.subscribe(atom, notify) : () => {}),
+      () => (state.readApprovalAtoms && Atom.isAtom(atom) ? appAtomRegistry.get(atom) : true),
+    ),
 }));
 vi.mock("../../state/presentation", () => ({
   environmentPresentations: {
@@ -234,6 +239,8 @@ vi.mock("../../state/channels", () => ({
     retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
     getBotTask: { label: "lookup", permissionAtom: () => "permission", run: state.lookup },
     searchBotTasks: { label: "search", permissionAtom: () => "permission" },
+    taskChanges: () => taskChanges,
+    taskChangesPermission: () => "permission",
   },
 }));
 vi.mock("../../state/server", () => ({
@@ -266,6 +273,7 @@ vi.mock("../../state/environments", () => ({
                 goatBotChildWork: true,
                 goatBotMembers: true,
                 goatBotTaskLookupSearch: state.lookupCapable,
+                goatBotTaskChanges: state.lookupCapable,
               },
             },
           },
@@ -565,7 +573,7 @@ it("shows task details in the header when a card is available for a listed task"
   expect(container.textContent).toContain("Task summary");
 });
 
-it("opens a reachable waiting worker from task detail after the transcript chip ages out", async () => {
+it("opens the waiting worker and follows approval changes while its transcript chip is absent", async () => {
   reset();
   state.readApprovalAtoms = true;
   state.lookupCapable = true;
@@ -583,20 +591,30 @@ it("opens a reachable waiting worker from task detail after the transcript chip 
     worker,
   });
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
-  state.lookup.mockResolvedValue(
-    AsyncResult.success({
-      task: { state: "known", row },
-      approvalObservation: {
-        worker,
-        needsYou: [
-          { kind: "approval", since: at, approval: { requestId: "request", threadId: "worker" } },
-        ],
-      },
-      codingRows: [],
-      remoteWork: [],
-      launchesTruncated: false,
-      partial: false,
-    }),
+  const request = (requestId: string, threadId: ThreadId) => ({
+    kind: "approval",
+    since: at,
+    approval: { requestId, threadId },
+  });
+  const serveApprovals = (...needsYou: ReturnType<typeof request>[]) =>
+    state.lookup.mockResolvedValue(
+      AsyncResult.success({
+        task: { state: "known", row },
+        approvalObservation: {
+          worker,
+          needsYou,
+        },
+        codingRows: [],
+        remoteWork: [],
+        launchesTruncated: false,
+        partial: false,
+      }),
+    );
+  const workerApproval = request("request", worker.threadId);
+  serveApprovals(workerApproval);
+  appAtomRegistry.set(
+    taskChanges,
+    AsyncResult.success({ subscription: 1, value: { revision: 0 } }),
   );
   const onOpenThread = vi.fn();
   root = createRoot(container);
@@ -627,6 +645,24 @@ it("opens a reachable waiting worker from task detail after the transcript chip 
   expect(link).not.toBeNull();
   await act(async () => link?.click());
   expect(onOpenThread).toHaveBeenCalledWith({ environmentId, id: worker.threadId });
+  serveApprovals(workerApproval, request("new-request", ThreadId.make("child")));
+  await act(async () =>
+    appAtomRegistry.set(
+      taskChanges,
+      AsyncResult.success({ subscription: 1, value: { revision: 1 } }),
+    ),
+  );
+  expect(container.textContent).toContain("2 waiting");
+
+  serveApprovals();
+  await act(async () =>
+    appAtomRegistry.set(
+      taskChanges,
+      AsyncResult.success({ subscription: 1, value: { revision: 2 } }),
+    ),
+  );
+  expect(container.textContent).not.toContain("waiting");
+  expect(container.querySelector('[aria-label="Open worker · Waiting worker"]')).toBeNull();
 });
 
 it("names a task the server no longer lists from its conversation card, as older work", async () => {

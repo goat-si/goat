@@ -242,6 +242,18 @@ it("a task change during a refresh waits for it; a refresh that returns the task
   expect(asked()).toEqual(["t1", "t2"]);
 });
 
+it("coalesces approval changes during an in-flight lookup into one follow-up read", async () => {
+  setup();
+  await show({ approvalRevision: "0" });
+  await show({ approvalRevision: "1" });
+  await show({ approvalRevision: "2" });
+  expect(asked()).toEqual(["t1"]);
+  await net.calls[0]?.answer(known("t1"));
+  expect(asked()).toEqual(["t1", "t1"]);
+  await net.calls[1]?.answer(known("t1"));
+  expect(asked()).toEqual(["t1", "t1"]);
+});
+
 it("an answer stays through a refresh, also a failed one, and is read again only once it is stale", async () => {
   setup();
   await show();

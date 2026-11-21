@@ -47,7 +47,7 @@ export type TaskLookupFacts = {
   readonly holdsTask: boolean;
   /** The saved answer is this task's; a failed read is an answer too. */
   readonly held: boolean;
-  /** An action on this task completed after its last read started. */
+  /** An action or approval refresh signal followed the start of the last read. */
   readonly stale: boolean;
   /** A read for this task is running. */
   readonly inFlight: boolean;
@@ -55,9 +55,7 @@ export type TaskLookupFacts = {
 
 /**
  * What the task screen shows, and whether a read starts by itself. Nothing else starts a read
- * except Try again; so a task change during a refresh waits for it, an action's reread waits for
- * its refresh to settle (success or failure), and a refresh that returns the task reads nothing.
- * A held answer, a failure included, is read again only once an action made it stale.
+ * except Try again. Rereads wait for the current-list refresh and any in-flight read to settle.
  */
 export function taskLookupDecision(facts: TaskLookupFacts): {
   readonly view: "off" | "row" | "denied" | "answer" | "loading";
@@ -71,9 +69,10 @@ export function taskLookupDecision(facts: TaskLookupFacts): {
 }
 
 /** The last answer for one task: what it read, or why it could not. */
-type Saved =
-  | { readonly key: string; readonly value: BotWorkResult }
-  | { readonly key: string; readonly error: "missing" | "denied" | "failed" };
+type Saved = { readonly key: string; readonly approvalRevision: string | undefined } & (
+  | { readonly value: BotWorkResult }
+  | { readonly error: "missing" | "denied" | "failed" }
+);
 
 /** not_found, a refusal by the server's access check, or any other failure. */
 function failureKind(error: unknown): "missing" | "denied" | "failed" {
@@ -103,10 +102,12 @@ export function useMobileBotTaskLookup(input: {
   readonly established: boolean;
   readonly refreshing: boolean;
   readonly holdsTask: boolean;
+  /** Changes while the task needs approval observations from the lookup. */
+  readonly approvalRevision?: string | undefined;
   /** Child work read for this task, for its subagents. */
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
 }) {
-  const { environmentId, botId, taskId } = input;
+  const { environmentId, botId, taskId, approvalRevision } = input;
   const able = input.supported && environmentId !== null && taskId !== null;
   const permitted = useAtomValue(
     able && environmentId !== null
@@ -129,7 +130,7 @@ export function useMobileBotTaskLookup(input: {
     refreshing: input.refreshing,
     holdsTask: input.holdsTask,
     held: saved?.key === key,
-    stale: staleKey === key,
+    stale: staleKey === key || (saved?.key === key && saved.approvalRevision !== approvalRevision),
     inFlight: inFlight?.key === key,
   });
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
@@ -152,8 +153,12 @@ export function useMobileBotTaskLookup(input: {
       // A failure replaces the answer, so an action's failed reread never leaves the old state.
       setSaved(
         result._tag === "Success"
-          ? { key: sentKey, value: result.value }
-          : { key: sentKey, error: failureKind(squashAtomCommandFailure(result)) },
+          ? { key: sentKey, approvalRevision, value: result.value }
+          : {
+              key: sentKey,
+              approvalRevision,
+              error: failureKind(squashAtomCommandFailure(result)),
+            },
       );
     });
   };

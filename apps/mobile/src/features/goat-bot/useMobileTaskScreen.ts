@@ -1,11 +1,16 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { SessionStreamUpdate } from "@goat/client-runtime/rpc";
 import type {
   BotId,
   ChannelChildWorkGroup,
+  ChannelTaskChangesEvent,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
+  ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useLayoutEffect, useRef } from "react";
 
 import { channelEnvironment } from "../../state/channels";
@@ -13,6 +18,10 @@ import { updateMobileTaskView } from "./mobileTaskViewUpdate";
 import { useMobileBotTaskLookup } from "./useMobileBotTaskLookup";
 
 const identityOf = (owner: string, taskId: ChannelTaskId) => JSON.stringify([owner, taskId]);
+const NO_PERMISSION = Atom.make(false);
+const NO_TASK_CHANGES = Atom.make(
+  AsyncResult.initial<SessionStreamUpdate<ChannelTaskChangesEvent>, never>(false),
+);
 
 /**
  * A task screen's lookup of a task the current list does not hold, and Pin, Done, Retry and read
@@ -29,8 +38,9 @@ export function useMobileTaskScreen(input: {
   readonly taskId: ChannelTaskId | null;
   /** Connected, with a server that can change task views. */
   readonly enabled: boolean;
-  /** The server looks tasks up by id. */
-  readonly lookupSupported: boolean;
+  readonly capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "goatBotTaskLookupSearch" | "goatBotTaskChanges">
+    | undefined;
   /** The bot's current-list read. */
   readonly list: {
     readonly data: unknown;
@@ -39,17 +49,42 @@ export function useMobileTaskScreen(input: {
   };
   /** The last successful current list holds the task. */
   readonly holdsTask: boolean;
-  readonly needsApprovalObservation?: boolean;
+  readonly needsApprovalObservation: boolean;
+  readonly workRevision: string | null | undefined;
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
 }) {
+  const { environmentId, capabilities } = input;
+  const lookupSupported = capabilities?.goatBotTaskLookupSearch === true;
+  const watchApprovals =
+    input.needsApprovalObservation &&
+    input.enabled &&
+    lookupSupported &&
+    capabilities.goatBotTaskChanges === true &&
+    environmentId !== null &&
+    input.taskId !== null;
+  const mayWatchApprovals = useAtomValue(
+    watchApprovals ? channelEnvironment.taskChangesPermission(environmentId) : NO_PERMISSION,
+  );
+  const watching = watchApprovals && mayWatchApprovals;
+  const changes = useAtomValue(
+    watching ? channelEnvironment.taskChanges({ environmentId, input: {} }) : NO_TASK_CHANGES,
+  );
+  const event = watching ? Option.getOrNull(AsyncResult.value(changes)) : null;
+  const approvalRevision =
+    event !== null && "value" in event
+      ? `stream:${event.subscription}:${event.value.revision}`
+      : input.needsApprovalObservation && input.workRevision != null
+        ? `transcript:${input.workRevision}`
+        : undefined;
   const { lookup, approvalTask, invalidate } = useMobileBotTaskLookup({
     environmentId: input.environmentId,
     botId: input.botId,
     taskId: input.taskId,
-    supported: input.enabled && input.lookupSupported,
+    supported: input.enabled && lookupSupported,
     established: input.list.data !== null,
     refreshing: input.list.isPending,
     holdsTask: input.holdsTask && !input.needsApprovalObservation,
+    approvalRevision,
     childGroups: input.childGroups,
   });
   const permitted = useAtomValue(
