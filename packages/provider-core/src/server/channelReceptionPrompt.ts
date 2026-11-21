@@ -41,7 +41,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   ]),
   title: Schema.String,
   instruction: Schema.String,
-  doneMeans: Schema.optionalKey(Schema.String),
+  doneMeans: Schema.String,
   projectId: Schema.String,
   host: Schema.String,
   taskId: Schema.String,
@@ -59,7 +59,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
     Schema.Struct({
       title: Schema.String,
       instruction: Schema.String,
-      doneMeans: Schema.optionalKey(Schema.String),
+      doneMeans: Schema.String,
       projectId: Schema.String,
       host: Schema.String,
     }),
@@ -73,6 +73,7 @@ export const EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT = {
   action: "report_only",
   title: "",
   instruction: "",
+  doneMeans: "",
   projectId: "",
   host: "",
   taskId: "",
@@ -107,7 +108,7 @@ function notesChangeFrom(text: string) {
 }
 
 const decodeDoneMeans = Schema.decodeUnknownOption(ChannelTaskDoneMeans);
-function completionCriterion(text: string | undefined) {
+function completionCriterion(text: string) {
   const criterion = decodeDoneMeans(text);
   return Option.isSome(criterion) ? { doneMeans: criterion.value } : {};
 }
@@ -466,7 +467,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "Choose exactly one action:",
     "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back), and doneMeans (one sentence of at most 280 characters describing what the person can verify when finished). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below. When the person asks for several independent coding tasks in one message, put the first in title/instruction/doneMeans/projectId/host and up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
-      " more in additionalTasks (each with title, instruction, projectId, and host); otherwise leave additionalTasks empty.",
+      " more in additionalTasks (each with title, instruction, doneMeans, projectId, and host); otherwise leave additionalTasks empty.",
     "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). When the message also asks for independent coding tasks alongside your turn (including while joining a running turn), put up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
       " coding tasks in additionalTasks.",
