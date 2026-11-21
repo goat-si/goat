@@ -25,10 +25,6 @@ export const reconcileChannelWorkerGenerations = Effect.fn("reconcileChannelWork
     // The status list lets SQLite use the partial recovery index.
     const preparing = sql`status = 'preparing' AND
       status IN ('queued', 'preparing', 'starting', 'running', 'waiting')`;
-    const pending = yield* sql`SELECT 1 FROM orchestration_v2_projection_runs
-      WHERE ${preparing} AND thread_id GLOB 'channel-worker:*' LIMIT 1`;
-    if (pending.length === 0) return;
-
     let afterThread = "";
     let afterTask = "";
     while (true) {
@@ -57,7 +53,7 @@ export const reconcileChannelWorkerGenerations = Effect.fn("reconcileChannelWork
       );
     }
 
-    // An unbound preparation can only be matched by deriving its thread id from the task.
+    // A local dispatch claim can survive a restart before the worker's run exists.
     let afterRow = 0;
     while (true) {
       const tasks = yield* sql<{
@@ -66,8 +62,13 @@ export const reconcileChannelWorkerGenerations = Effect.fn("reconcileChannelWork
         readonly generation: number;
         readonly indexed_thread: ThreadId | null;
         readonly indexed_generation: number | null;
+        readonly local_claim: 1 | 0;
       }>`SELECT t.rowid AS row_id, t.task_id, t.generation,
-          w.worker_thread_id AS indexed_thread, w.generation AS indexed_generation
+          w.worker_thread_id AS indexed_thread, w.generation AS indexed_generation,
+          CASE WHEN json_valid(t.task_json) THEN
+            json_type(t.task_json, '$.target') IS 'object'
+              AND json_type(t.task_json, '$.target.remote') IS NULL
+          ELSE 0 END AS local_claim
         FROM channel_tasks t LEFT JOIN channel_worker_generations w ON w.task_id = t.task_id
         WHERE t.status = 'dispatching' AND t.status NOT IN ('completed', 'failed', 'cancelled')
           AND t.rowid > ${afterRow} AND t.worker_thread_id IS NULL
@@ -81,21 +82,33 @@ export const reconcileChannelWorkerGenerations = Effect.fn("reconcileChannelWork
           ? []
           : [
               {
-                task_id: task.task_id,
-                generation: task.generation,
-                worker_thread_id: worker.threadId,
+                localClaim: task.local_claim === 1,
+                row: {
+                  task_id: task.task_id,
+                  generation: task.generation,
+                  worker_thread_id: worker.threadId,
+                },
               },
             ];
       });
-      if (candidates.length === 0) continue;
-      const prepared = yield* sql<{ readonly thread_id: ThreadId }>`
-        SELECT DISTINCT thread_id FROM orchestration_v2_projection_runs
-        WHERE ${preparing} AND thread_id IN ${sql.in(candidates.map((row) => row.worker_thread_id))}`;
+      const unconfirmed = candidates.flatMap(({ localClaim, row }) =>
+        localClaim ? [] : [row.worker_thread_id],
+      );
+      const prepared =
+        unconfirmed.length === 0
+          ? []
+          : yield* sql<{ readonly thread_id: ThreadId }>`
+              SELECT DISTINCT thread_id FROM orchestration_v2_projection_runs
+              WHERE ${preparing} AND thread_id IN ${sql.in(unconfirmed)}`;
       const preparedThreads = new Set(prepared.map((row) => row.thread_id));
-      yield* write(candidates.filter((row) => preparedThreads.has(row.worker_thread_id)));
+      yield* write(
+        candidates.flatMap(({ localClaim, row }) =>
+          localClaim || preparedThreads.has(row.worker_thread_id) ? [row] : [],
+        ),
+      );
     }
   },
   Effect.catchCause((cause) =>
-    Effect.logWarning("Could not repair prepared channel workers", { cause }),
+    Effect.logWarning("Could not repair channel worker generations", { cause }),
   ),
 );
