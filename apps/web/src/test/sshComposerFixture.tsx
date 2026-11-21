@@ -104,6 +104,7 @@ vi.mock("/src/components/chat/useAutoBalanceUpdateBanner", () => ({
   useAutoBalanceUpdateBanner: () => null,
 }));
 vi.mock("/src/components/ThreadStatusIndicators", () => ({
+  ThreadPullRequestsMiniList: () => null,
   useLinkedThreadPullRequest: () => null,
 }));
 vi.mock("/src/components/chat/ChatHeader", () => ({ ChatHeader: () => null }));
