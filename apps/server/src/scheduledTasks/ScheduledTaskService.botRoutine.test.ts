@@ -874,19 +874,28 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         }
         const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
         assert.isEmpty(yield* migrate);
-        // The published build could already have a work trigger without the fence.
-        yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
+        yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkerReleaseAuthority'`;
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
-        yield* sql`ALTER TABLE scheduled_task_webhook_deliveries DROP COLUMN firing_accepted`;
+        yield* sql`DROP TABLE scheduled_task_webhook_firings`;
+        yield* sql`DROP TABLE channel_worker_generations`;
         assert.isUndefined(yield* checkOldBuild(176));
-        assert.deepStrictEqual(yield* migrate, [
-          [177, "WorkTriggerAuthorityFence"],
-          [178, "WebhookDeliveryFiringEvidence"],
-        ]);
-        assert.include(
-          (yield* checkOldBuild(176))?.message ?? "",
-          "would skip required schema migrations",
+        assert.deepStrictEqual(
+          yield* runMigrations({ toMigrationInclusive: 177 }).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          ),
+          [[177, "WorkTriggerAuthorityFence"]],
         );
+        assert.isUndefined(yield* checkOldBuild(177));
+        assert.deepStrictEqual(yield* migrate, [
+          [178, "WebhookDeliveryFiringEvidence"],
+          [179, "ChannelWorkerGenerations"],
+        ]);
+        for (const through of [176, 177] as const) {
+          assert.include(
+            (yield* checkOldBuild(through))?.message ?? "",
+            "would skip required schema migrations",
+          );
+        }
         assert.isEmpty(yield* migrate);
       }),
     {},

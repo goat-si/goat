@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { fenceWorkTriggerRollback } from "../persistence/reconcileGoatMigrationIds.ts";
+import { fenceWorkerReleaseRollback } from "../persistence/reconcileGoatMigrationIds.ts";
 import { filterRoutineOwnWork } from "../channels/channelRoutineOwnWork.ts";
 import type { PendingWebhookTask } from "./webhookDedupe.ts";
 import { WebhookDeliverySkipped } from "./webhookTriggerTypes.ts";
@@ -188,7 +188,9 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
               : (previous?.revision ?? 0) + 1;
           const result = yield* save;
           if (owner?.routineMode === "work")
-            yield* fenceWorkTriggerRollback().pipe(Effect.provideService(SqlClient.SqlClient, sql));
+            yield* fenceWorkerReleaseRollback().pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
           yield* saveOwner(
             task.id,
             owner?.routineMode === "work" ? { ...owner, bindingRevision: revision } : owner,

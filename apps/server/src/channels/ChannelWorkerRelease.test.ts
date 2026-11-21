@@ -98,7 +98,10 @@ it.effect.each(["bound", "upgraded unbound"] as const)(
         const observe: Statement.Transformer = (statement) =>
           Effect.sync(() => {
             const compiled = statement.compile();
-            if (/\bchannel_tasks\b/.test(compiled[0])) reads.push(compiled);
+            if (
+              /\b(?:channel_tasks|scheduled_task_channel_inputs|auth_sessions)\b/.test(compiled[0])
+            )
+              reads.push(compiled);
             return statement;
           });
         yield* threads

@@ -49,14 +49,26 @@ const makeChannelWorkerReleaseAuthority = Effect.fn("channel.makeWorkerReleaseAu
         readonly project_id: string;
         readonly message_id: string;
         readonly author: string | null;
+        readonly task_id: string | null;
+        readonly generation: number | null;
+        readonly status: string | null;
+        readonly routine_work: number | null;
+        readonly input_id: string | null;
       }>`
         SELECT t.project_id, json_extract(r.payload_json, '$.userMessageId') AS message_id,
           COALESCE(json_extract(m.payload_json, '$.createdBy'),
-            json_extract(t.payload_json, '$.createdBy')) AS author
+            json_extract(t.payload_json, '$.createdBy')) AS author,
+          task.task_id, task.generation, task.status,
+          json_extract(task.task_json, '$.routineWork') AS routine_work,
+          json_extract(task.task_json, '$.originInputId') AS input_id
         FROM orchestration_v2_projection_runs r
         JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
         LEFT JOIN orchestration_v2_projection_messages m
           ON m.thread_id = r.thread_id AND m.message_id = json_extract(r.payload_json, '$.userMessageId')
+        LEFT JOIN channel_worker_generations w ON w.worker_thread_id = r.thread_id
+        LEFT JOIN channel_tasks task ON task.task_id = w.task_id AND task.generation = w.generation
+          AND (task.worker_thread_id = r.thread_id OR
+            (task.worker_thread_id IS NULL AND task.status = 'dispatching'))
         WHERE r.run_id = ${runId} AND r.thread_id = ${threadId}`;
       if (run === undefined)
         return yield* new ChannelWorkerReleaseDenied({
@@ -69,53 +81,36 @@ const makeChannelWorkerReleaseAuthority = Effect.fn("channel.makeWorkerReleaseAu
       )
         return;
 
-      let after = "";
-      while (true) {
-        // A launch may acquire its channel binding while workspace preparation is running.
-        const rows = yield* sql<{
-          readonly task_id: string;
-          readonly generation: number;
-          readonly status: string;
-          readonly routine_work: number | null;
-          readonly input_id: string | null;
-        }>`SELECT task_id, generation, status, json_extract(task_json, '$.routineWork') AS routine_work,
-            json_extract(task_json, '$.originInputId') AS input_id
-          FROM (
-            SELECT task_id, generation, status, task_json FROM channel_tasks
-            WHERE worker_thread_id = ${threadId} AND task_id > ${after}
-            UNION ALL
-            SELECT task_id, generation, status, task_json FROM channel_tasks
-            WHERE task_id > ${after} AND status = 'dispatching' AND worker_thread_id IS NULL
-          )
-          ORDER BY task_id LIMIT 64`;
-        if (rows.length === 0)
-          return yield* new ChannelWorkerReleaseDenied({
-            reason: "The GOAT Bot work trigger's task generation is missing.",
-          });
-        for (const row of rows) {
-          after = row.task_id;
-          const worker = workerLaunchIdsFor(ChannelTaskId.make(row.task_id), row.generation);
-          if (worker.threadId !== threadId || worker.messageId !== run.message_id) continue;
-          if (row.routine_work !== 1) return;
-          if (!["dispatching", "running", "waiting_input"].includes(row.status))
-            return yield* new ChannelWorkerReleaseDenied({
-              reason: "The GOAT Bot work trigger's task generation is no longer active.",
-            });
-          if (row.input_id === null)
-            return yield* new ChannelWorkerReleaseDenied({
-              reason: "The GOAT Bot work trigger's input is missing.",
-            });
-          const grant = yield* routineAuthority(ChannelInputId.make(row.input_id));
-          const reason =
-            "error" in grant
-              ? grant.error
-              : grant.projectId !== run.project_id
-                ? "The GOAT Bot work trigger's project changed after this delivery arrived."
-                : undefined;
-          if (reason !== undefined) return yield* new ChannelWorkerReleaseDenied({ reason });
-          return;
-        }
-      }
+      if (
+        run.task_id === null ||
+        run.generation === null ||
+        workerLaunchIdsFor(ChannelTaskId.make(run.task_id), run.generation).messageId !==
+          run.message_id
+      )
+        return yield* new ChannelWorkerReleaseDenied({
+          reason: "The GOAT Bot work trigger's task generation is missing.",
+        });
+      if (run.routine_work !== 1) return;
+      if (
+        run.status !== "dispatching" &&
+        run.status !== "running" &&
+        run.status !== "waiting_input"
+      )
+        return yield* new ChannelWorkerReleaseDenied({
+          reason: "The GOAT Bot work trigger's task generation is no longer active.",
+        });
+      if (run.input_id === null)
+        return yield* new ChannelWorkerReleaseDenied({
+          reason: "The GOAT Bot work trigger's input is missing.",
+        });
+      const grant = yield* routineAuthority(ChannelInputId.make(run.input_id));
+      const reason =
+        "error" in grant
+          ? grant.error
+          : grant.projectId !== run.project_id
+            ? "The GOAT Bot work trigger's project changed after this delivery arrived."
+            : undefined;
+      if (reason !== undefined) return yield* new ChannelWorkerReleaseDenied({ reason });
     });
   },
 );

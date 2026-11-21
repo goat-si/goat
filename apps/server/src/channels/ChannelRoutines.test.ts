@@ -660,13 +660,22 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
   "refuses a work trigger %s while release is planning its commit",
   (change) =>
     Effect.gen(function* () {
+      const preparing = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
       const planning = yield* Deferred.make<void>();
       const commit = yield* Deferred.make<void>();
+      let branchReads = 0;
       const harness = makeHarness({
         realWorkerLaunch: true,
+        getWorkerBranch: () =>
+          Effect.gen(function* () {
+            if (branchReads++ === 0) return null;
+            yield* Deferred.succeed(preparing, undefined);
+            yield* Deferred.await(release);
+            return null;
+          }),
         beforeWorkerCapabilities: Effect.gen(function* () {
-          const span = yield* Effect.currentSpan.pipe(Effect.orElseSucceed(() => undefined));
-          if (span?.name !== "Orchestrator.dispatchPreparedRunRelease") return;
+          if (!(yield* Deferred.isDone(release))) return;
           yield* Deferred.succeed(planning, undefined);
           yield* Deferred.await(commit);
         }),
@@ -683,6 +692,13 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
         yield* runtime.drain;
         const { taskId, worker } = yield* onlyTask;
         if (worker === undefined) return assert.fail("Expected a bound worker");
+        yield* Deferred.await(preparing);
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        assert.strictEqual(
+          (yield* threads.getThreadProjection(worker.threadId)).runs[0]?.status,
+          "preparing",
+        );
+        yield* Deferred.succeed(release, undefined);
         yield* Deferred.await(planning);
         if (change === "paused")
           yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;

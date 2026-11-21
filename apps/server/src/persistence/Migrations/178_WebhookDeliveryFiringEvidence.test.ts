@@ -78,5 +78,31 @@ it.effect("preserves proven firings when upgrading a delivery log", () =>
         { delivery_id: "ran", pending_window: 0, has_accepted_firing: 1 },
       ],
     );
+    yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE delivery_id = 'inbox-only'`;
+    assert.isEmpty(
+      yield* sql`SELECT 1 FROM scheduled_task_webhook_firings
+      WHERE delivery_id = 'inbox-only'`,
+    );
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("carries firing evidence from a database opened by the earlier draft", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 177 });
+    yield* sql`ALTER TABLE scheduled_task_webhook_deliveries
+      ADD COLUMN firing_accepted INTEGER NOT NULL DEFAULT 0`;
+    yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+      VALUES (178, 'WebhookDeliveryFiringEvidence')`;
+    yield* sql`INSERT INTO scheduled_task_webhook_deliveries (
+      delivery_id, task_id, received_at, method, query, headers_json, body, body_bytes,
+      body_truncated, outcome, signature_verified, missing_fields_json, firing_accepted
+    ) VALUES ('draft', 'work', '2026-11-21', 'POST', '', '{}', '', 0, 0, 'accepted', 1, '[]', 1)`;
+    yield* runMigrations();
+    assert.deepStrictEqual(
+      yield* sql`SELECT ${deliveryEvidence(sql)} FROM scheduled_task_webhook_deliveries d`,
+      [{ pending_window: 0, has_accepted_firing: 1 }],
+    );
+    assert.isEmpty(yield* runMigrations());
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
