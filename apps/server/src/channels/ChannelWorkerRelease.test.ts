@@ -6,9 +6,11 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { preparationSettled } from "../orchestration-v2/testkit/preparationSettled.ts";
+import { nextTurnSelectionHarness } from "../orchestration-v2/testkit/SteeringHarness.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
@@ -56,10 +58,12 @@ it.effect("a person's launch can use channel-like thread and message ids", () =>
 
 it.effect("releases an ordinary worker claimed before launch during rollback to #3797", () =>
   Effect.gen(function* () {
+    const provider = yield* nextTurnSelectionHarness("rollback-channel-claim");
     const claimed = yield* Deferred.make<void>();
     const ready = yield* Deferred.make<void>();
     const harness = makeHarness({
       realWorkerLaunch: true,
+      workerAdapter: provider.adapter,
       channelsLayer: ChannelLayers.layerServices.pipe(
         Layer.updateService(ThreadLaunch.ThreadLaunchService, (service) =>
           ThreadLaunch.ThreadLaunchService.of({
@@ -102,8 +106,14 @@ it.effect("releases an ordinary worker claimed before launch during rollback to 
       assert.strictEqual((yield* preparationSettled(threadId)).runs[0]?.status, "starting");
       yield* runtime.drain;
       assert.lengthOf(yield* providerStarts(sql, threadId), 1);
+      const effectWorker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* effectWorker.drain();
+      assert.deepStrictEqual(
+        provider.started.map((turn) => turn.providerThread.appThreadId),
+        [threadId],
+      );
     }).pipe(Effect.provide(harness.layer));
-  }),
+  }).pipe(Effect.scoped),
 );
 
 it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale"] as const)(
