@@ -53,6 +53,8 @@ const prefixFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ":";
 const afterFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ";";
 const isDelegateSurface = (surface: ChannelChildWork["surface"]) =>
   surface === "delegate_local" || surface === "delegate_remote";
+const isRemoteLaunchSurface = (surface: ChannelChildWork["surface"]) =>
+  surface === "ssh_thread_launch" || surface === "delegate_remote";
 const SETTLED_STATES: ReadonlyArray<ChannelChildWorkState> = ["completed", "failed", "cancelled"];
 
 export type AcknowledgedRemoteDestination = {
@@ -300,7 +302,7 @@ const make = Effect.gen(function* () {
           const current = decode(rows[0].value_json);
           if (!input.from.includes(current.state)) return undefined;
           const filled =
-            input.acknowledgement === undefined || current.surface !== "ssh_thread_launch"
+            input.acknowledgement === undefined || !isRemoteLaunchSurface(current.surface)
               ? (input.destination ?? current.destination)
               : fillAcknowledgedDestination(current.destination, input.acknowledgement);
           if (
@@ -339,10 +341,11 @@ const make = Effect.gen(function* () {
         ORDER BY key LIMIT ${limit}
       ) c
       LEFT JOIN remote_dispatches d
-        ON json_extract(c.value_json, '$.surface') = 'ssh_thread_launch'
+        ON d.correlation_id = json_extract(c.value_json, '$.destination.correlationId')
+        AND d.host = json_extract(c.value_json, '$.destination.host')
+        AND ((json_extract(c.value_json, '$.surface') = 'ssh_thread_launch' AND d.kind = 'thread')
+          OR (json_extract(c.value_json, '$.surface') = 'delegate_remote' AND d.kind = 'task'))
         AND json_extract(c.value_json, '$.state') IN ${sql.in(SETTLED_STATES)}
-        AND d.correlation_id = json_extract(c.value_json, '$.destination.correlationId')
-        AND d.kind = 'thread' AND d.host = json_extract(c.value_json, '$.destination.host')
         AND (json_extract(c.value_json, '$.destination.threadId') IS NULL
           OR (d.remote_thread_id = json_extract(c.value_json, '$.destination.threadId')
             AND d.remote_environment_id IS NOT NULL
@@ -383,7 +386,7 @@ const make = Effect.gen(function* () {
             `;
           if (rows[0] === undefined) return false;
           const current = decode(rows[0].value_json);
-          if (current.surface !== "ssh_thread_launch" || !SETTLED_STATES.includes(current.state))
+          if (!isRemoteLaunchSurface(current.surface) || !SETTLED_STATES.includes(current.state))
             return false;
           const destination = fillAcknowledgedDestination(
             current.destination,

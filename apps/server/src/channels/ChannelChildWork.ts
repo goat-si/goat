@@ -694,8 +694,8 @@ const make = Effect.gen(function* () {
       remote_environment_id: environmentId,
     } = rows[0];
     const acknowledgement =
-      record.surface === "ssh_thread_launch" &&
-      kind === "thread" &&
+      ((record.surface === "ssh_thread_launch" && kind === "thread") ||
+        (record.surface === "delegate_remote" && kind === "task")) &&
       host === record.destination?.host &&
       isThreadId(threadId) &&
       (record.destination.threadId === undefined ||
