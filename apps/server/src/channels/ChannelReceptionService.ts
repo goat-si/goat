@@ -1206,7 +1206,8 @@ const make = Effect.gen(function* () {
             ? "not_linked"
             : !quotedFromInput(asked.notesChangeRequested, message.text)
               ? "quote_not_in_input"
-              : stored.botId === MAIN_BOT_ID
+              : stored.botId === MAIN_BOT_ID &&
+                  (asked.type === "run_turn" || asked.type === "create_task")
                 ? "shared_confirmation_required"
                 : undefined;
       const sharedProposal = yield* confirmMainBotNote(stored, decision, rememberRefusal, botNotes);
