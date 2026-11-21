@@ -82,7 +82,7 @@ const readLaunchLinks = (
       WHERE task_id = ${task.taskId} AND type = 'task.worker.bound' AND json_valid(event_json)
         AND json_extract(event_json, '$.payload.worker.environmentId') = ${environmentId}
         AND json_extract(event_json, '$.payload.worker.host') IS NULL
-      ORDER BY task_version DESC LIMIT ${limit}
+      GROUP BY thread_id ORDER BY MAX(task_version) DESC LIMIT ${limit}
     ), recent_local AS (
       SELECT p.thread_id
       FROM launches l JOIN orchestration_v2_projection_threads p ON p.thread_id = l.thread_id
@@ -130,6 +130,37 @@ const readLaunchLinks = (
   );
 };
 
+const readNativeQuestions = (sql: SqlClient.SqlClient, taskId: ChannelTaskId) =>
+  sql<{
+    readonly type: "asked" | "answered";
+    readonly at: string;
+    readonly host: string | null;
+    readonly thread_id: string;
+    readonly request_id: string;
+  }>`
+    WITH seen AS (
+      SELECT json_extract(n.value, '$.question.requestId') AS request_id,
+        json_extract(n.value, '$.question.threadId') AS thread_id,
+        json_extract(n.value, '$.question.host') AS host,
+        MIN(json_extract(n.value, '$.since')) AS at
+      FROM channel_task_events e
+      JOIN json_each(CASE WHEN json_valid(e.event_json) THEN e.event_json END,
+        '$.payload.observed.needsYou') n
+      WHERE e.task_id = ${taskId} AND e.type = 'task.worker.observed' AND n.type = 'object'
+        AND json_extract(n.value, '$.kind') = 'question'
+        AND typeof(request_id) = 'text' AND typeof(thread_id) = 'text'
+      GROUP BY request_id, thread_id, host
+    )
+    SELECT 'asked' AS type, at, host, thread_id, request_id FROM seen WHERE at IS NOT NULL
+    UNION ALL
+    SELECT 'answered' AS type, r.resolved_at AS at, s.host, s.thread_id, s.request_id
+    FROM seen s JOIN orchestration_v2_projection_runtime_requests r
+      ON r.runtime_request_id = s.request_id AND r.thread_id = s.thread_id
+    WHERE s.host IS NULL AND r.status = 'resolved' AND r.resolved_at IS NOT NULL
+      AND r.kind IN ('user_input', 'mcp-elicitation')
+    ORDER BY at DESC, type, host, thread_id, request_id LIMIT ${limit}
+  `;
+
 const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
   function* (
     sql: SqlClient.SqlClient,
@@ -160,8 +191,19 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
       readonly event_json: string;
       readonly type: string;
       readonly worker_json: string | null;
+      readonly first_bind: 0 | 1;
     }>`
-    SELECT e.type, e.event_json, CASE WHEN e.type IN ('task.completed', 'task.failed', 'task.cancelled', 'task.moved') THEN (
+    WITH first_binds AS (
+      SELECT MIN(task_version) AS task_version
+      FROM channel_task_events
+      WHERE task_id = ${task.taskId} AND type = 'task.worker.bound' AND json_valid(event_json)
+      GROUP BY json_extract(event_json, '$.payload.worker.generation'),
+        json_extract(event_json, '$.payload.worker.environmentId'),
+        json_extract(event_json, '$.payload.worker.threadId'),
+        json_extract(event_json, '$.payload.worker.host')
+    )
+    SELECT e.type, e.event_json, (b.task_version IS NOT NULL) AS first_bind,
+      CASE WHEN e.type IN ('task.completed', 'task.failed', 'task.cancelled', 'task.moved') THEN (
       SELECT w.event_json FROM channel_task_events w
       WHERE w.task_id = e.task_id AND w.task_version < e.task_version AND w.type = 'task.worker.bound'
         AND NOT EXISTS (
@@ -171,12 +213,16 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
         )
       ORDER BY w.task_version DESC LIMIT 1
     ) END AS worker_json
-    FROM channel_task_events e
+    FROM channel_task_events e LEFT JOIN first_binds b
+      ON e.type = 'task.worker.bound' AND e.task_version = b.task_version
     WHERE e.task_id = ${task.taskId} AND e.type IN (
       'task.created', 'task.dispatch.claimed', 'task.worker.bound', 'task.question.opened',
       'task.question.answered', 'task.completed', 'task.failed', 'task.cancelled',
       'task.moved', 'task.retry.requested', 'task.view.snoozed', 'task.view.unsnoozed'
     )
+      AND (e.type != 'task.worker.bound' OR b.task_version IS NOT NULL OR CASE
+        WHEN json_valid(e.event_json) THEN json_extract(e.event_json, '$.statusAfter') IS NOT NULL
+        ELSE 1 END)
     ORDER BY e.occurred_at DESC, e.sequence DESC LIMIT ${limit}
   `;
     const [coverage] = yield* sql<{ readonly updated_at: string }>`
@@ -212,7 +258,7 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
           break;
         case "task.worker.bound": {
           const { environmentId, threadId } = event.payload.worker;
-          if (!isGoatBotSessionThreadId(threadId))
+          if (row.first_bind && !isGoatBotSessionThreadId(threadId))
             entries.push({ ...meta, type: "worker_started", environmentId, threadId });
           break;
         }
@@ -242,6 +288,18 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
             threadId,
           });
       }
+    }
+    for (const question of yield* readNativeQuestions(sql, task.taskId)) {
+      const key = [question.host ?? "", question.thread_id, question.request_id]
+        .map((part) => encodeURIComponent(part))
+        .join(":");
+      entries.push({
+        id: `native:${question.type}:${key}`,
+        type: question.type,
+        actor: question.type === "asked" ? "bot" : "person",
+        at: question.at,
+        requestId: question.request_id,
+      });
     }
     for (const child of children) {
       const {
