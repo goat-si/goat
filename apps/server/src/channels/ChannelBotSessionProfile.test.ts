@@ -12,6 +12,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
@@ -20,6 +21,7 @@ import { goatBotSessionThreadIdFor, taskIdFor } from "./channelIds.ts";
 import { ask, botModel, current, sessionHarness, settle } from "./ChannelBotSession.testkit.ts";
 import {
   defaultScript,
+  environmentId,
   goatInput,
   makeHarness,
   modelSelection,
@@ -46,6 +48,45 @@ const launchedText = (harness: ReturnType<typeof sessionHarness>, index: number)
   harness.world.launches[index]?.initialMessage?.text ?? "";
 
 describe("GOAT Bot sessions and the bot's profile", () => {
+  it.effect("keeps another bot's journal out of the session-first model input", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const create = (name: string) =>
+        members.create(
+          { clientRequestId: name, name, avatar: null, purpose: "", defaultModelSelection: null },
+          owner,
+        );
+      const scout = yield* create("Scout");
+      const review = yield* create("Review buddy");
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const send = (member: typeof scout, message: string, key: string) =>
+        gateway
+          .ingest(
+            {
+              ...goatInput(message, key),
+              conversationKey: member.sessionThreadId,
+              replyAddress: { kind: "goat", environmentId, threadId: member.sessionThreadId },
+            },
+            rpcContext,
+          )
+          .pipe(Effect.tap(() => runtime.drain));
+      const privateFact = "Scout rollout key synthetic-juniper";
+      const first = yield* send(scout, privateFact, "scout-journal");
+      const scoutTask = yield* current(taskIdFor(first.inputId, 0));
+      assert.isDefined(scoutTask.worker);
+      assert.strictEqual(scoutTask.title, privateFact);
+
+      const second = yield* send(review, "Review the launch checklist", "review-journal");
+      const worker = (yield* current(taskIdFor(second.inputId, 0))).worker;
+      const input = harness.world.launches.find((launch) => launch.threadId === worker?.threadId);
+      assert.include(input?.initialMessage?.text ?? "", "Review the launch checklist");
+      assert.notInclude(input?.initialMessage?.text ?? "", privateFact);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("a rename starts the next idle request in a new session that knows the name", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
