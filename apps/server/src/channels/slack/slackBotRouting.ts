@@ -59,20 +59,20 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
   const stored = yield* readStoredBotProfiles(sql, ownerId);
   const mainName =
     stored.find((profile) => profile.role === "main")?.name ?? DEFAULT_BOT_IDENTITY.name;
-  const candidates = [
-    { botId: main, name: mainName, hidden: false },
-    ...stored.flatMap((profile) =>
-      profile.role === "member" && profile.state !== "deleted" ? [profile] : [],
-    ),
+  const names = [
+    { botId: main, name: mainName, hidden: false, state: "active" },
+    ...stored.filter((profile) => profile.role === "member"),
   ];
+  const candidates = names.filter((profile) => profile.state !== "deleted");
   let chosen =
     prefixes.length === 0 ? candidates.find((candidate) => candidate.botId === bound) : undefined;
   let bodyStart = 0;
   for (const prefix of prefixes) {
     const name = normalizeBotName(prefix.name);
-    const matches = candidates.filter((candidate) => normalizeBotName(candidate.name) === name);
+    const matches = names.filter((candidate) => normalizeBotName(candidate.name) === name);
     if (matches.length === 0) continue;
-    chosen = matches.length === 1 ? matches[0] : undefined;
+    const active = matches.filter((profile) => profile.state !== "deleted");
+    chosen = active.length === 1 ? active[0] : undefined;
     bodyStart = prefix.bodyStart;
     break;
   }

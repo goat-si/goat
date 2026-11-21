@@ -130,8 +130,8 @@ export type SlackEventClassification =
   /** `link CODE` sent to the bot in a DM. */
   | { readonly _tag: "link"; readonly event: SlackClassifiedMessage; readonly code: string }
   /**
-   * A link command that cannot be used: no code, extra words, or posted in a channel where the
-   * code would be public. Any code is dropped; the gateway sends the matching notice.
+   * An incomplete or invalid link command, or one posted in a channel. The gateway sends
+   * the matching notice without the code.
    */
   | {
       readonly _tag: "link_notice";
@@ -146,7 +146,6 @@ const ignored = (reason: SlackIgnoredReason): SlackEventClassification => ({
 
 const LINK_COMMAND = /^link(?:\s+(\S+))?\s*$/i;
 const LINK_PREFIX = /^link\b(?![ \t]*:)/i;
-const LINK_CODE_PREFIX = /^link\s+[0-9]{6}(?=\s|$)/i;
 
 /** Bounds on reading a message's rich text; the payload is the sender's to shape. */
 const RICH_TEXT_MAX_NODES = 2000;
@@ -295,10 +294,7 @@ export function classifySlackEvent(
     text: messageText,
   });
 
-  if (
-    LINK_PREFIX.test(text) &&
-    (LINK_CODE_PREFIX.test(text) || slackBotAddresses(text).next().done === true)
-  ) {
+  if (LINK_PREFIX.test(text) && slackBotAddresses(text).next().done === true) {
     if (surface === "mention") {
       return { _tag: "link_notice", event: classified(""), notice: "link_help" };
     }
