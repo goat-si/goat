@@ -35,27 +35,20 @@ export const reconcileWorkerReleaseRollback = Effect.fn("reconcileWorkerReleaseR
     const [ledger] = yield* sql<{ readonly name: string }>`SELECT name FROM effect_sql_migrations
       WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE}) LIMIT 1`;
     if (ledger === undefined) return;
-    if (ledger.name === CHANNEL_LEDGER_MIGRATION) {
-      // These partial indexes also cover retained inputs and tasks after their routine is deleted.
-      yield* sql`CREATE INDEX IF NOT EXISTS scheduled_tasks_work_trigger_idx ON scheduled_tasks(task_id)
-        WHERE CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END = 'work'`;
-      yield* sql`CREATE INDEX IF NOT EXISTS scheduled_task_channel_inputs_work_trigger_idx
-        ON scheduled_task_channel_inputs(firing_id)
-        WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.routineMode') END = 'work'`;
-      yield* sql`CREATE INDEX IF NOT EXISTS channel_tasks_work_trigger_idx ON channel_tasks(task_id)
-        WHERE CASE WHEN json_valid(task_json) THEN json_extract(task_json, '$.routineWork') END = 1`;
-      if (!(yield* hasPersistedWorkTriggers({ indexed: true }))) return;
-    }
+    if (ledger.name === CHANNEL_LEDGER_MIGRATION && !(yield* hasPersistedWorkTriggers())) return;
     yield* fenceWorkerReleaseRollback();
   },
 );
 
-export const hasPersistedWorkTriggers = Effect.fn("hasPersistedWorkTriggers")(function* ({
-  indexed = false,
-}: { readonly indexed?: boolean } = {}) {
+export const hasPersistedWorkTriggers = Effect.fn("hasPersistedWorkTriggers")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const useIndex = (name: string) => (indexed ? sql`INDEXED BY ${sql(name)}` : sql``);
-  const rows = yield* sql`
+  // Migration 177 and databases that recorded the preview of 179 can lack these indexes.
+  const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+    WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+      'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')`;
+  const useIndex = (name: string) =>
+    indexes.some((index) => index.name === name) ? sql`INDEXED BY ${sql(name)}` : sql``;
+  const rows = yield* sql`SELECT 1 WHERE EXISTS (
     SELECT 1 FROM scheduled_tasks ${useIndex("scheduled_tasks_work_trigger_idx")}
       WHERE CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END = 'work'
     UNION ALL
@@ -64,7 +57,7 @@ export const hasPersistedWorkTriggers = Effect.fn("hasPersistedWorkTriggers")(fu
     UNION ALL
     SELECT 1 FROM channel_tasks ${useIndex("channel_tasks_work_trigger_idx")}
       WHERE CASE WHEN json_valid(task_json) THEN json_extract(task_json, '$.routineWork') END = 1
-    LIMIT 1`;
+    LIMIT 1)`;
   return rows.length > 0;
 });
 

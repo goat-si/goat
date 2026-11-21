@@ -42,5 +42,13 @@ export default Effect.gen(function* () {
       })),
     )}`;
   }
+  // Retained inputs and tasks can outlive their work routine.
+  yield* sql`CREATE INDEX IF NOT EXISTS scheduled_tasks_work_trigger_idx ON scheduled_tasks(task_id)
+    WHERE CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END = 'work'`;
+  yield* sql`CREATE INDEX IF NOT EXISTS scheduled_task_channel_inputs_work_trigger_idx
+    ON scheduled_task_channel_inputs(firing_id)
+    WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.routineMode') END = 'work'`;
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_tasks_work_trigger_idx ON channel_tasks(task_id)
+    WHERE CASE WHEN json_valid(task_json) THEN json_extract(task_json, '$.routineWork') END = 1`;
   if (yield* hasPersistedWorkTriggers()) yield* fenceWorkerReleaseRollback();
 });

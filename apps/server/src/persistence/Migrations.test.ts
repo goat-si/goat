@@ -221,5 +221,19 @@ it.effect.each(["with indexes", "without indexes"] as const)(
       yield* sql`PRAGMA query_only = ON`;
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* history, migrationManifest);
+      const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+        WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+          'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')
+        ORDER BY name`;
+      assert.deepStrictEqual(
+        indexes.map(({ name }) => name),
+        indexState === "with indexes"
+          ? [
+              "channel_tasks_work_trigger_idx",
+              "scheduled_task_channel_inputs_work_trigger_idx",
+              "scheduled_tasks_work_trigger_idx",
+            ]
+          : [],
+      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
