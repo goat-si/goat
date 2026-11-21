@@ -117,7 +117,7 @@ describe("GOAT Bot thread transcripts", () => {
           const threadId = task.worker?.threadId;
           if (threadId === undefined) return yield* Effect.die("The task did not launch");
           const mcp = yield* OrchestratorMcp.OrchestratorMcpService;
-          const result = yield* mcp.readThread(
+          const read = mcp.readThread(
             {
               environmentId,
               requestNamespace: "client:read-without-memory",
@@ -129,6 +129,7 @@ describe("GOAT Bot thread transcripts", () => {
             },
             { threadId, maxCharsPerItem: 20_000 },
           );
+          const result = yield* read;
           const userMessage = result.items.find((item) => item.type === "user_message");
           assert.notInclude(JSON.stringify(result), note);
           assert.strictEqual(userMessage?.text, instruction);
@@ -137,6 +138,7 @@ describe("GOAT Bot thread transcripts", () => {
           if (runId === undefined) return yield* Effect.die("No worker run");
           yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
           assert.include(provider.started[0]?.message.text ?? "", note);
+          assert.notInclude(JSON.stringify(yield* read), note);
         }).pipe(Effect.provide(layerMcpRead), Effect.provide(harness.layer));
       });
     },
