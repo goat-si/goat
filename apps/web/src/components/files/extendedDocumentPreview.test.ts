@@ -27,6 +27,15 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("hides tracked deletions while retaining replacement text", () => {
+    expect(html(String.raw`{\rtf1 aaa{\deleted bbb}{\revised BBB}ccc}`)).toEqual([
+      "<p>aaaBBBccc</p>",
+    ]);
+    expect(html(String.raw`{\rtf1 A\deleted old\deleted0 B\deleted old\plain C}`)).toEqual([
+      "<p>ABC</p>",
+    ]);
+    expect(html(String.raw`{\rtf1 A{\deleted\uc1\u945\deleted0 old}B}`)).toEqual(["<p>AB</p>"]);
+  });
   it("decodes Mac Roman rich text", () => {
     for (const header of [String.raw`\mac`, String.raw`\mac\ansicpg10000`]) {
       expect(html(String.raw`{\rtf1` + header + String.raw` Caf\'8e Cr\'8fme}`)).toEqual([
