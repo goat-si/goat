@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, type ChannelReceptionInput, type RuntimeMode } from "@goat/contracts";
+import {
+  BotId,
+  type ChannelReceptionInput,
+  ProviderDriverKind,
+  type RuntimeMode,
+} from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -16,7 +21,7 @@ import { nextTurnSelectionHarness } from "../../orchestration-v2/testkit/Steerin
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelBotThreads from "../ChannelBotThreads.ts";
 import * as ChannelBotMembers from "../ChannelBotMembers.ts";
-import { channelBotFilesFor } from "../channelBotNotes.ts";
+import { channelBotFilesFor, readChannelBotNotesSnapshot } from "../channelBotNotes.ts";
 import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
@@ -283,7 +288,13 @@ describe("Slack runtime on the channel core", () => {
           botWorkspaceRoot: provider.cwd,
           settingsLayer: ServerSettings.layerTest({
             goatBotModelSelection: modelSelection,
-            providerInstances: { codex: { driver: "codex", config: {}, enabled: true } },
+            providerInstances: {
+              [modelSelection.instanceId]: {
+                driver: ProviderDriverKind.make("codex"),
+                config: {},
+                enabled: true,
+              },
+            },
           }).pipe(Layer.orDie),
         });
         yield* Effect.gen(function* () {
@@ -295,17 +306,29 @@ describe("Slack runtime on the channel core", () => {
             (yield* ServerConfig.ServerConfig).stateDir,
           );
           yield* fs.makeDirectory(files.dir, { recursive: true });
+          const question = "What is the deploy phrase?";
           yield* fs.writeFileString(
             files.notes,
-            "- 2026-03-01: The deploy phrase is cobalt. (asked in x)\n",
+            [
+              "- 2026-02-01: The deploy phrase is cobalt. (asked in x)",
+              ...Array.from(
+                { length: 40 },
+                (_, index) =>
+                  "- 2026-02-10: " + ("Checklist " + index + ". ").repeat(20) + "(asked in x)",
+              ),
+              "- 2026-03-01: Check with the on-call engineer named Indigo. (asked in y)",
+            ].join("\n") + "\n",
           );
+          const notes = yield* readChannelBotNotesSnapshot(files, question);
+          assert.include(notes?.matched ?? "", "cobalt");
+          assert.include(notes?.standing ?? "", "Indigo");
           yield* connect(sdk, {
             botBindings: [{ channelId: "C0ALLOWED", botId: scout.botId }],
           });
           yield* linkAlice(sdk);
           const input = yield* receive(
             sdk,
-            channelMention({ text: "<@U0BOT> What is the deploy phrase?" }),
+            channelMention({ text: "<@U0BOT> " + question }),
             "EvDefaultNotes",
           );
           const [task] = (yield* tasks).tasks;
@@ -314,7 +337,7 @@ describe("Slack runtime on the channel core", () => {
           yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
           assert.lengthOf(provider.started, 1);
           const text = provider.started[0]?.message.text ?? "";
-          assert.include(text, "What is the deploy phrase?");
+          assert.include(text, question);
           assert.notInclude(text, "cobalt");
           assert.notInclude(text, "Indigo");
           assert.notInclude(text, files.notes);

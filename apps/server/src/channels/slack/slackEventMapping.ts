@@ -144,7 +144,7 @@ const ignored = (reason: SlackIgnoredReason): SlackEventClassification => ({
 });
 
 const LINK_COMMAND = /^link(?:\s+(\S+))?\s*$/i;
-const LINK_PREFIX = /^link(?![ \t]*:)(?:\s|$)/i;
+const LINK_PREFIX = /^link\b(?![ \t]*:)/i;
 
 /** Bounds on reading a message's rich text; the payload is the sender's to shape. */
 const RICH_TEXT_MAX_NODES = 2000;

@@ -81,7 +81,7 @@ export interface SlackBotApi {
   }) => Promise<{ readonly ts: string }>;
   readonly postEphemeral: (input: {
     readonly channel: string;
-    readonly threadTs: string;
+    readonly threadTs?: string;
     readonly userId: string;
     readonly text: string;
   }) => Promise<{ readonly ts: string }>;
@@ -355,7 +355,12 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
     },
     postEphemeral: ({ channel, threadTs, userId, text }) =>
       client.chat
-        .postEphemeral({ channel, thread_ts: threadTs, user: userId, text })
+        .postEphemeral({
+          channel,
+          user: userId,
+          text,
+          ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
+        })
         .then((response) => {
           if (!nonEmpty(response.message_ts)) {
             throw new SlackSdkFailure({ operation: "chat.postEphemeral", category: "unconfirmed" });
