@@ -346,8 +346,9 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   const markDeliveryFired = (deliveryId: string | null) =>
     deliveryId === null
       ? Effect.void
-      : sql`UPDATE scheduled_task_webhook_deliveries SET firing_accepted=1
-          WHERE delivery_id=${deliveryId} AND firing_accepted=0`.pipe(Effect.asVoid);
+      : sql`INSERT INTO scheduled_task_webhook_firings (delivery_id)
+          SELECT delivery_id FROM scheduled_task_webhook_deliveries WHERE delivery_id=${deliveryId}
+          ON CONFLICT (delivery_id) DO NOTHING`.pipe(Effect.asVoid);
 
   const intakeBusy: ScheduledTaskRuns["Service"]["intakeBusy"] = Effect.fn(
     "ScheduledTaskRuns.intakeBusy",

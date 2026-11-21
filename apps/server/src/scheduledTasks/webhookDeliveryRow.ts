@@ -37,7 +37,8 @@ export const deliveryEvidence = (sql: SqlClient.SqlClient) => sql`
   EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p
     WHERE p.delivery_id = d.delivery_id AND p.coalesce_key <> p.delivery_id
       AND p.state IN ('pending', 'dispatching')) AS pending_window,
-  (d.firing_accepted = 1 OR EXISTS (SELECT 1 FROM scheduled_task_runs r
+  (EXISTS (SELECT 1 FROM scheduled_task_webhook_firings f WHERE f.delivery_id = d.delivery_id)
+    OR EXISTS (SELECT 1 FROM scheduled_task_runs r
     WHERE r.webhook_delivery_id = d.delivery_id AND r.dispatch_status = 'accepted')) AS has_accepted_firing`;
 
 export const deliveryHeaders = (row: WebhookDeliveryRow): Readonly<Record<string, string>> =>
