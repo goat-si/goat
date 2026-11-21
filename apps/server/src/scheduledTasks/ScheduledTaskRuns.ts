@@ -50,6 +50,10 @@ export type FiringTerminalObserver = (input: {
 export class ScheduledTaskRuns extends Context.Service<
   ScheduledTaskRuns,
   {
+    readonly intakeBusy: (
+      task: Pick<ScheduledTask, "id" | "createdAt">,
+      except?: CommandId,
+    ) => Effect.Effect<boolean, ScheduledTaskError>;
     readonly begin: (input: {
       readonly task: ScheduledTask;
       readonly firingId: CommandId;
@@ -339,6 +343,18 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
         ORDER BY requested_at DESC,firing_id DESC LIMIT 5)`;
   });
 
+  const intakeBusy: ScheduledTaskRuns["Service"]["intakeBusy"] = Effect.fn(
+    "ScheduledTaskRuns.intakeBusy",
+  )(
+    function* (task, except) {
+      const rows = yield* sql`SELECT 1 FROM scheduled_task_runs
+      WHERE task_id=${task.id} AND task_created_at=${task.createdAt} AND firing_id<>${except ?? ""}
+        AND (dispatch_bookkept_at IS NULL OR dispatch_status='dispatching') LIMIT 1`;
+      return rows.length !== 0;
+    },
+    Effect.mapError(failure("Could not check firing intake readiness.")),
+  );
+
   const begin: ScheduledTaskRuns["Service"]["begin"] = Effect.fn("ScheduledTaskRuns.begin")(
     function* (input) {
       return yield* sql.withTransaction(
@@ -397,11 +413,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             )
               return { created: false, dispatch: false };
           }
-          const busy =
-            yield* sql`SELECT 1 FROM scheduled_task_runs WHERE task_id=${input.task.id} AND task_created_at=${input.task.createdAt} AND firing_id<>${input.firingId} AND (dispatch_bookkept_at IS NULL OR dispatch_status='dispatching')`;
-          if (busy.length && input.triggerKind === "webhook" && input.task.routineMode === "work")
+          const busy = yield* intakeBusy(input.task, input.firingId);
+          if (busy && input.triggerKind === "webhook" && input.task.routineMode === "work")
             return { created: false, dispatch: false, deferred: true } as const;
-          if (busy.length)
+          if (busy)
             return yield* new ScheduledTaskError({
               message: "Schedule task is already running.",
             });
@@ -846,6 +861,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     }
   }).pipe(Effect.mapError(failure("Could not reconcile scheduled firings.")));
   return ScheduledTaskRuns.of({
+    intakeBusy,
     begin,
     finishDispatch,
     finishChannelFiring,

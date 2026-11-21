@@ -17,6 +17,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,7 +27,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { preparationSettled } from "../orchestration-v2/testkit/preparationSettled.ts";
 import {
+  drainPendingDispatch,
   requestFor,
   waitForSpan,
   webhookTaskInput,
@@ -579,6 +584,78 @@ it.effect.each(["paused", "revoked", "project unavailable"] as const)(
   },
 );
 
+it.effect.each(["paused during launch", "revoked during recovery"] as const)(
+  "never enqueues a provider start for a work trigger %s",
+  (change) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const recovering = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let branchReads = 0;
+      const harness = makeHarness({
+        realWorkerLaunch: true,
+        getWorkerBranch: () =>
+          Effect.gen(function* () {
+            // The first read only seeds the thread shell, before it has a preparing run.
+            if (branchReads++ === 0) return null;
+            if (yield* Deferred.succeed(started, undefined)) {
+              if (change === "revoked during recovery") return yield* Effect.never;
+            } else {
+              yield* Deferred.succeed(recovering, undefined);
+            }
+            yield* Deferred.await(resume);
+            return null;
+          }),
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        const sessions = yield* SessionStore.SessionStore;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const session = yield* issueTriggerOwner;
+        const input = yield* admit("do: inspect fixtures", change, botThreadId, {
+          sessionId: session.sessionId,
+          projectId,
+        });
+        yield* runtime.drain;
+        const { worker } = yield* onlyTask;
+        if (worker === undefined) return assert.fail("Expected a bound worker in preparation");
+        yield* Deferred.await(started);
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const before = yield* threads.getThreadProjection(worker.threadId);
+        const run = before.runs[0];
+        if (run?.status !== "preparing") return assert.fail("Expected a durable preparing run");
+        if (change === "revoked during recovery") {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          yield* launches.prepareRun({
+            commandId: CommandId.make(`${harness.world.launches[0]?.commandId}:recovery`),
+            threadId: worker.threadId,
+            runId: run.id,
+          });
+          yield* Deferred.await(recovering);
+          yield* sessions.revoke(session.sessionId);
+        } else {
+          yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+        }
+        yield* Deferred.succeed(resume, undefined);
+        const prepared = yield* preparationSettled(worker.threadId);
+        assert.lengthOf(
+          yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
+            WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
+          0,
+        );
+        assert.strictEqual(prepared.runs[0]?.status, "failed");
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, "failed");
+        assert.strictEqual((yield* firing(input.firingId))?.status, "failed");
+        assert.include(
+          (yield* linkOf(input.firingId))?.error ?? "",
+          change === "paused during launch" ? "paused" : "revoked",
+        );
+      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+    }),
+);
+
 it.effect("event reception cannot steer, stop, or answer existing work", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {
@@ -615,102 +692,175 @@ it.effect("event reception cannot steer, stop, or answer existing work", () => {
   }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
 });
 
-it.effect.each(["complete", "revoke before dispatch"] as const)(
-  "settles one signed webhook firing and ignores replays when asked to %s",
-  (mode) => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const sql = yield* SqlClient.SqlClient;
-      const sessions = yield* SessionStore.SessionStore;
-      const session = yield* issueTriggerOwner;
-      const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const ledger = yield* ChannelLedger.ChannelLedger;
-      yield* withWebhookService(
-        ({ service, runs }) =>
-          Effect.gen(function* () {
-            const secret = "event-worker-signature-fixture";
-            const { task: trigger } = yield* service.upsert(
-              yield* webhookTaskInput({
-                id: "signed-work-trigger",
-                routineMode: "work",
-                threadId: botThreadId,
-                projectId,
-                prompt: "do: inspect {{body.action}}",
-                schedule: {
-                  type: "webhook",
-                  signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
-                },
-              }),
-              {
-                memoryGrantCeiling: "none",
-                owner: {
-                  principalId: owner.principalId,
-                  sessionId: session.sessionId,
-                  grantedScopes: ["orchestration:read", "orchestration:operate", "settings:write"],
-                },
-              },
-            );
-            const bodyText = '{"action":"fixture change"}';
-            const body = new TextEncoder().encode(bodyText);
-            const signed = requestFor(trigger, {
-              bodyText,
-              body,
-              headers: {
-                "content-type": "application/json",
-                "x-test-signature": NodeCrypto.createHmac("sha256", secret)
-                  .update(body)
-                  .digest("hex"),
-              },
-            });
-            const delivery = yield* waitForSpan(
-              service.triggerWebhook(signed),
+it.effect.each([
+  "immediate",
+  "coalesced",
+  "restart",
+  "legacy window",
+  "legacy window with a second delivery",
+  "revoke before dispatch",
+] as const)("settles one signed webhook firing and ignores replays for %s", (mode) => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const sql = yield* SqlClient.SqlClient;
+    const sessions = yield* SessionStore.SessionStore;
+    const session = yield* issueTriggerOwner;
+    const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const coalesces = mode !== "immediate" && mode !== "revoke before dispatch";
+    const legacy = mode === "legacy window" || mode === "legacy window with a second delivery";
+    const secret = "event-worker-signature-fixture";
+    const triggerInput = yield* webhookTaskInput({
+      id: "signed-work-trigger",
+      routineMode: "work",
+      threadId: botThreadId,
+      projectId,
+      prompt: "do: inspect {{body.action}}",
+      schedule: {
+        type: "webhook",
+        signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
+        ...(coalesces
+          ? { dedupe: { coalesceKey: "{{body.group}}", coalesceWindowSeconds: 10 } }
+          : {}),
+      },
+    });
+    const captured = {
+      memoryGrantCeiling: "none" as const,
+      owner: {
+        principalId: owner.principalId,
+        sessionId: session.sessionId,
+        grantedScopes: ["orchestration:read", "orchestration:operate", "settings:write"] as const,
+      },
+    };
+    const workers = new Map<string, Effect.Effect<void>>();
+    const accept = ({ service }: WebhookServices) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(triggerInput, captured);
+        const signed = (action: string) => {
+          const bodyText = JSON.stringify({ action, group: "fixture" });
+          const body = new TextEncoder().encode(bodyText);
+          return requestFor(task, {
+            bodyText,
+            body,
+            headers: {
+              "content-type": "application/json",
+              "x-test-signature": NodeCrypto.createHmac("sha256", secret)
+                .update(body)
+                .digest("hex"),
+            },
+          });
+        };
+        const first = signed("first fixture");
+        const delivered = coalesces
+          ? yield* service.triggerWebhook(first)
+          : yield* waitForSpan(
+              service.triggerWebhook(first),
               "ScheduledTaskService.runWebhookDelivery",
             );
-            if (delivery._tag !== "accepted") return assert.fail("Expected a signed delivery");
-            assert.strictEqual(yield* intake.ingestPending, 1);
-            if (mode === "revoke before dispatch") yield* sessions.revoke(session.sessionId);
-            yield* runtime.drain;
-            const work = yield* onlyTask.pipe(
-              Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-            );
-            if (mode === "complete") {
-              if (work.worker === undefined) return assert.fail("The bot did not launch a worker");
-              assert.strictEqual(work.projectId, projectId);
-              assert.strictEqual(
-                (yield* runs.deliveryReceipt(delivery.deliveryId))?.status,
-                "running",
-              );
-              harness.world.setStatus(
-                work.worker.threadId,
-                1,
-                "completed",
-                "Inspected the fixture change.",
-              );
-              yield* runtime.drain;
-            } else {
-              assert.lengthOf(harness.world.launches, 0);
-              assert.include(work.resultSummary ?? "", "revoked");
-              const { deliveries } = yield* service.listWebhookDeliveries({ id: trigger.id });
-              const [refused] = deliveries;
-              if (refused === undefined) return assert.fail("Expected the refused delivery");
-              assert.strictEqual(refused.outcome, "dispatch_failed");
-              assert.strictEqual(refused.error, work.resultSummary ?? null);
-            }
-            const terminal = yield* runs.deliveryReceipt(delivery.deliveryId);
-            assert.strictEqual(terminal?.status, mode === "complete" ? "completed" : "failed");
-            assert.isNotNull(terminal?.completedAt);
-            assert.deepInclude(yield* service.triggerWebhook(signed), { outcome: "duplicate" });
-            yield* runtime.drain;
-            assert.lengthOf(yield* sql`SELECT 1 FROM channel_inbox`, 1);
-            assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
-            assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_runs`, 1);
-            assert.lengthOf(harness.world.launches, mode === "complete" ? 1 : 0);
-            assert.deepStrictEqual(yield* runs.deliveryReceipt(delivery.deliveryId), terminal);
-          }),
-        { sql },
+        if (delivered._tag !== "accepted" || delivered.outcome !== "accepted")
+          return yield* Effect.die("Expected a signed delivery");
+        const latest = signed("latest fixture");
+        if (legacy) {
+          // Legacy windows stored the bare SHA-256 key and omitted the binding revision.
+          yield* sql`UPDATE scheduled_task_webhook_pending SET coalesce_key=substr(coalesce_key, -64),
+            task_json=json_remove(task_json, '$.bindingRevision') WHERE delivery_id=${delivered.deliveryId}`;
+          yield* sql`UPDATE scheduled_tasks SET owner_json=json_remove(owner_json, '$.bindingRevision')
+            WHERE task_id=${task.id}`;
+        } else if (coalesces) {
+          assert.deepInclude(yield* service.triggerWebhook(latest), { outcome: "coalesced" });
+        }
+        return { task, delivered, first, latest };
+      });
+    const settle = (
+      { service, runs }: WebhookServices,
+      { task, delivered, first, latest }: Effect.Success<ReturnType<typeof accept>>,
+      activeWorkers: Map<string, Effect.Effect<void>>,
+    ) =>
+      Effect.gen(function* () {
+        const hasLatest =
+          mode === "coalesced" ||
+          mode === "restart" ||
+          mode === "legacy window with a second delivery";
+        if (legacy) yield* service.upsert(triggerInput, captured);
+        if (mode === "legacy window with a second delivery")
+          assert.deepInclude(yield* service.triggerWebhook(latest), { outcome: "coalesced" });
+        if (coalesces) {
+          yield* TestClock.adjust("10 seconds");
+          yield* drainPendingDispatch(activeWorkers);
+        }
+        assert.strictEqual(yield* intake.ingestPending, 1);
+        if (mode === "revoke before dispatch") yield* sessions.revoke(session.sessionId);
+        yield* runtime.drain;
+        const work = yield* onlyTask;
+        if (mode !== "revoke before dispatch") {
+          if (work.worker === undefined) return assert.fail("The bot did not launch a worker");
+          assert.strictEqual(work.projectId, projectId);
+          assert.include(
+            harness.world.launches[0]?.initialMessage?.text ?? "",
+            hasLatest ? "latest fixture" : "first fixture",
+          );
+          assert.strictEqual(
+            (yield* runs.deliveryReceipt(delivered.deliveryId))?.status,
+            "running",
+          );
+          assert.isTrue(
+            (yield* service.getWebhookDelivery({
+              id: task.id,
+              deliveryId: delivered.deliveryId,
+            })).delivery.firingAccepted,
+          );
+          harness.world.setStatus(
+            work.worker.threadId,
+            1,
+            "completed",
+            "Inspected the fixture change.",
+          );
+          yield* runtime.drain;
+          assert.strictEqual((yield* onlyTask).status, "completed");
+        } else {
+          assert.lengthOf(harness.world.launches, 0);
+          assert.include(work.resultSummary ?? "", "revoked");
+          const {
+            deliveries: [refused],
+          } = yield* service.listWebhookDeliveries({ id: task.id });
+          if (refused === undefined) return assert.fail("Expected the refused delivery");
+          assert.strictEqual(refused.outcome, "dispatch_failed");
+          assert.strictEqual(refused.error, work.resultSummary ?? null);
+        }
+        const terminal = yield* runs.deliveryReceipt(delivered.deliveryId);
+        assert.strictEqual(
+          terminal?.status,
+          mode === "revoke before dispatch" ? "failed" : "completed",
+        );
+        assert.isNotNull(terminal?.completedAt);
+        assert.deepInclude(yield* service.triggerWebhook(first), { outcome: "duplicate" });
+        if (hasLatest)
+          assert.deepInclude(yield* service.triggerWebhook(latest), { outcome: "duplicate" });
+        yield* runtime.drain;
+        assert.lengthOf(yield* sql`SELECT 1 FROM channel_inbox`, 1);
+        assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_runs`, 1);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
+        assert.lengthOf(harness.world.launches, mode === "revoke before dispatch" ? 0 : 1);
+        assert.deepStrictEqual(yield* runs.deliveryReceipt(delivered.deliveryId), terminal);
+      }).pipe(Effect.provideService(ChannelLedger.ChannelLedger, ledger));
+    if (mode === "restart" || legacy) {
+      const accepted = yield* withWebhookService(accept, { sql, workers });
+      const recoveredWorkers = new Map<string, Effect.Effect<void>>();
+      yield* withWebhookService((context) => settle(context, accepted, recoveredWorkers), {
+        sql,
+        workers: recoveredWorkers,
+      });
+    } else {
+      yield* withWebhookService(
+        (context) =>
+          Effect.flatMap(accept(context), (accepted) => settle(context, accepted, workers)),
+        { sql, workers },
       );
-    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
-  },
-);
+    }
+  }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+});
+
+type WebhookServices = Parameters<Parameters<typeof withWebhookService>[0]>[0];

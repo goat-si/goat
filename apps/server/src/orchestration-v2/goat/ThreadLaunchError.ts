@@ -1,5 +1,6 @@
 import { CommandId, ProjectId, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import { ChannelWorkerReleaseDenied } from "../../channels/channelWorkerReleaseAuthority.ts";
 
 import { classifyPreparationFailure } from "./PreparationFailure.ts";
 
@@ -30,8 +31,10 @@ export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
 }
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
+const isChannelWorkerReleaseDenied = Schema.is(ChannelWorkerReleaseDenied);
 
 export function failureDetail(error: unknown): string {
+  if (isChannelWorkerReleaseDenied(error)) return error.reason;
   if (isThreadLaunchError(error)) {
     const cause = error.cause;
     const detail = cause instanceof Error ? cause.message : String(cause);

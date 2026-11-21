@@ -86,8 +86,9 @@ import {
 } from "./scheduledBotRoutines.ts";
 import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
 import {
-  decodeHeadersJson,
-  decodeMissingFieldsJson,
+  decodeDeliverySummary,
+  deliveryEvidence,
+  deliveryHeaders,
   encodeHeadersJson,
   encodeMissingFieldsJson,
   type WebhookDeliveryRow,
@@ -1272,28 +1273,11 @@ export const layer = Layer.effect(
       return { task: yield* loadTask(input.id) };
     });
 
-    const deliveryHeaders = (row: WebhookDeliveryRow): Readonly<Record<string, string>> =>
-      Option.getOrElse(decodeHeadersJson(row.headers_json), () => ({}));
-    const decodeDeliverySummary = (row: WebhookDeliveryRow) => ({
-      id: ScheduledTaskWebhookDeliveryId.make(row.delivery_id),
-      taskId: ScheduledTaskId.make(row.task_id),
-      receivedAt: row.received_at,
-      method: row.method,
-      contentType: deliveryHeaders(row)["content-type"] ?? null,
-      bodyBytes: row.body_bytes,
-      outcome: row.outcome as ScheduledTaskWebhookDeliveryOutcome,
-      signatureVerified: row.signature_verified === 1,
-      pendingWindow: row.outcome === "accepted" && row.pending_window === 1,
-      missingFields: Option.getOrElse(decodeMissingFieldsJson(row.missing_fields_json), () => []),
-      error: row.error,
-    });
-
     const listWebhookDeliveries: ScheduledTaskService["Service"]["listWebhookDeliveries"] = (
       input,
     ) =>
       sql<WebhookDeliveryRow>`
-        SELECT d.*, EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p
-          WHERE p.delivery_id = d.delivery_id AND p.state IN ('pending', 'dispatching')) AS pending_window
+        SELECT d.*, ${deliveryEvidence(sql)}
         FROM scheduled_task_webhook_deliveries d WHERE task_id = ${input.id}
         ORDER BY received_at DESC, rowid DESC
       `.pipe(
@@ -1314,8 +1298,7 @@ export const layer = Layer.effect(
       "ScheduledTaskService.getWebhookDelivery",
     )(function* (input) {
       const rows = yield* sql<WebhookDeliveryRow>`
-          SELECT d.*, EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p
-            WHERE p.delivery_id = d.delivery_id AND p.state IN ('pending', 'dispatching')) AS pending_window
+          SELECT d.*, ${deliveryEvidence(sql)}
           FROM scheduled_task_webhook_deliveries d WHERE task_id = ${input.id} AND delivery_id = ${input.deliveryId}
         `.pipe(
         NodeSqliteClient.readOnly,
@@ -2140,9 +2123,21 @@ export const layer = Layer.effect(
                 yield* cleanupDelivery(entry.delivery_id);
                 continue;
               }
+              const current = yield* findTask(taskId);
+              const stored = yield* decodePendingTask(entry.task_json).pipe(Effect.result);
+              if (
+                stored._tag === "Success" &&
+                stored.success.routineMode === "work" &&
+                current?.enabled &&
+                current.routineMode === "work" &&
+                current.createdAt === stored.success.createdAt &&
+                current.projectId === stored.success.projectId &&
+                current.threadId === stored.success.threadId &&
+                (yield* scheduledRuns.intakeBusy(current))
+              )
+                return;
               const prepared = yield* Effect.gen(function* () {
-                const current = yield* findTask(taskId);
-                const snapshot = yield* decodePendingTask(entry.task_json);
+                const snapshot = yield* Effect.fromResult(stored);
                 const task =
                   current?.createdAt === snapshot.createdAt && current.prompt !== snapshot.prompt
                     ? { ...snapshot, prompt: current.prompt }
