@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import { assert, it } from "@effect/vitest";
 import { BotId, CommandId, ScheduledTaskId } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -921,4 +922,38 @@ it.effect(
         assert.isEmpty(yield* migrate);
       }),
     ),
+);
+
+it.effect("startup fences a work-trigger input written by #3795 after migration 179", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 179 });
+    const at = "2026-11-21T00:00:00.000Z";
+    const payload = JSON.stringify({
+      ...owner,
+      routineMode: "work",
+      threadId: botThread,
+      text: "Triage the event",
+      receivedAt: at,
+      projectId: "rollback-project",
+      webhookDeliveryId: "rollback-delivery",
+      taskCreatedAt: at,
+    });
+    yield* sql`INSERT INTO scheduled_task_channel_inputs
+      (firing_id, task_id, payload_json, state, created_at)
+      VALUES ('rollback-firing', 'rollback-routine', ${payload}, 'pending', ${at})`;
+    for (const through of [176, 177] as const) {
+      assert.isUndefined(yield* checkRollbackPredecessor(sql, through));
+    }
+
+    assert.isEmpty(yield* runMigrations());
+
+    for (const through of [176, 177] as const) {
+      assert.include(
+        (yield* checkRollbackPredecessor(sql, through))?.message ?? "",
+        "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
+        `startup through migration ${through} must refuse the database`,
+      );
+    }
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
