@@ -556,8 +556,7 @@ export default function ChatView(props: ChatViewProps) {
   const clientSettingsHydrated = useClientSettingsHydrated();
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
-  // Selects primitives: an object here is new on every router store update, which
-  // re-renders ChatView on unrelated navigation state changes.
+  // Select primitives to avoid re-rendering on unrelated router updates.
   const citationHref = useLocation({ select: (location) => location.href });
   const citationKey = useLocation({
     select: (location) => location.state.assistantCitationActivation ?? location.state.__TSR_key,
@@ -1187,8 +1186,7 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectIsScratch,
     logicalProjectEnvironments,
   );
-  // Run on opens when there is a choice or a machine to explain; keyboard cycling
-  // and auto balance still need two machines with the project.
+  // Keyboard cycling and auto balance need two machines with the project.
   const canPickEnvironment = hasMultipleEnvironments || environmentsWithoutProject.length > 0;
   // This device's copy of the active project: the source an SSH worktree copies.
   const sshSourceProjectId =
@@ -2480,6 +2478,7 @@ export default function ChatView(props: ChatViewProps) {
     copyRightPanelFilePathStable,
     createBrowserSurface,
     createBrowserSurfaceStable,
+    duplicateBrowserSurfaceStable,
     moveRightPanelSurfaceStable,
     onOpenTurnDiffStable,
     openChangesFromThreadPanelStable,
@@ -4161,6 +4160,7 @@ export default function ChatView(props: ChatViewProps) {
           onCopyFilePath={copyRightPanelFilePathStable}
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurfaceStable}
+          onDuplicateBrowser={duplicateBrowserSurfaceStable}
           onAddTerminal={addTerminalSurfaceStable}
           onAddDiff={addDiffSurfaceStable}
           onAddFiles={addFilesSurfaceStable}
