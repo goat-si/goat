@@ -1,7 +1,12 @@
+import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { attentionCursorKey } from "@goat/client-runtime/goatBot";
+import { vi } from "vite-plus/test";
+import { stubGlobal } from "../../test/render";
 import * as DateTime from "effect/DateTime";
 
 export const thread = {
   id: "thread",
+  creationSource: undefined as "mcp" | undefined,
   title: "Test thread",
   archivedAt: null as string | null,
   snoozedUntil: null as string | null,
@@ -45,7 +50,7 @@ export function toV2ThreadShell(input: typeof thread) {
     },
     forkedFrom: null,
     createdBy: "user",
-    creationSource: input.subagentOf === null ? "web" : "mcp",
+    creationSource: input.creationSource ?? (input.subagentOf === null ? "web" : "mcp"),
     launchedBy: input.launchedBy,
     latestRunId: latestTurn.turnId,
     activeRunId: null,
@@ -81,4 +86,43 @@ export function toV2ThreadShell(input: typeof thread) {
     lastVisitedAt: null,
     deletedAt: null,
   };
+}
+
+export class TestNotification extends EventTarget {
+  static permission = "granted";
+  static sent: TestNotification[] = [];
+  close = vi.fn();
+  get tag() {
+    return this.options.tag ?? "";
+  }
+  constructor(
+    readonly title: string,
+    readonly options: NotificationOptions,
+  ) {
+    super();
+    TestNotification.sent.push(this);
+  }
+}
+
+export const attentionEnvironment = EnvironmentId.make("one");
+export const cursorKey = attentionCursorKey(attentionEnvironment);
+export const attentionEvent = {
+  environmentId: attentionEnvironment,
+  botId: BotId.make("main"),
+  taskId: ChannelTaskId.make("task"),
+  eventId: "event",
+  sequence: 1,
+  generation: 1,
+  occurredAt: "2026-11-21T00:00:00Z",
+  kind: "question",
+  requestId: "ask",
+  botName: "Scout",
+} as const;
+
+export function stubAttentionStorage() {
+  const storage = new Map([[cursorKey, "0"]]);
+  return stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
 }

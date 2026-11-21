@@ -1,7 +1,5 @@
 import type { AnyRouter } from "@tanstack/react-router";
-import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import type { ChannelAttentionFeedResult } from "@goat/contracts/channel-bot-attention";
-import { attentionCursorKey } from "@goat/client-runtime/goatBot";
 import { createElement, useEffect } from "react";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
@@ -9,7 +7,15 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 import { fakeTimers, render, stubGlobal } from "../../test/render";
-import { thread, toV2ThreadShell } from "./threadNotificationTestShell";
+import {
+  attentionEnvironment,
+  attentionEvent,
+  cursorKey,
+  stubAttentionStorage,
+  TestNotification,
+  thread,
+  toV2ThreadShell,
+} from "./threadNotificationTestShell";
 import { RELEASED_COMPLETION_GRACE_MS } from "./ThreadNotificationCoordinator.logic";
 
 const state = vi.hoisted(() => ({
@@ -142,22 +148,6 @@ const presentationAtom = Atom.family((id: string) =>
 );
 const environmentIdsAtom = Atom.make<ReadonlyArray<string>>([]);
 state.shells = { set: (id, value) => registry.set(shellAtom(id), value) };
-
-class TestNotification extends EventTarget {
-  static permission = "granted";
-  static sent: TestNotification[] = [];
-  close = vi.fn();
-  get tag() {
-    return this.options.tag ?? "";
-  }
-  constructor(
-    readonly title: string,
-    readonly options: NotificationOptions,
-  ) {
-    super();
-    TestNotification.sent.push(this);
-  }
-}
 
 let focused = false;
 let visibility = "visible";
@@ -854,68 +844,83 @@ function MountedCoordinators({
   return null;
 }
 
-const attentionEnvironment = EnvironmentId.make("one");
-const cursorKey = attentionCursorKey(attentionEnvironment);
-const attentionEvent = {
-  environmentId: attentionEnvironment,
-  botId: BotId.make("main"),
-  taskId: ChannelTaskId.make("task"),
-  eventId: "event",
-  sequence: 1,
-  generation: 1,
-  occurredAt: "2026-11-21T00:00:00Z",
-  kind: "question",
-  requestId: "ask",
-  botName: "Scout",
-} as const;
-
-function stubAttentionStorage() {
-  const storage = new Map([[cursorKey, "0"]]);
-  return stubGlobal("localStorage", {
-    getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => storage.set(key, value),
-  });
-}
-
 it.each([
-  ["one", "channel-worker:abc", "needs_you"],
-  ["one", "channel-worker:abc", "off"],
-  ["two", "remote-channel-worker:mcp:worker", "needs_you"],
-  ["two", "remote-channel-worker:mcp:worker", "off"],
+  ["handoff only", "needs_you", "one", "channel-worker:abc", ["Scout needs approval"]],
+  ["handoff only", "off", "one", "channel-worker:abc", []],
+  ["older SSH destination", "needs_you", "two", "mcp:worker", ["Scout has a question"]],
+  ["older SSH destination", "off", "two", "mcp:worker", []],
 ] as const)(
-  "environment %s routes worker %s through only its origin's bot alerts in %s mode",
-  async (destination, id, mode) => {
+  "%s routes only through bot alerts in %s mode",
+  async (scenario, mode, destination, id, titles) => {
     await using app = setup();
     using _storage = stubAttentionStorage();
     app.registry.set(supported, true);
-    const worker = { id, title: "Private task" };
+    const worker = { id, title: "Private task", creationSource: "mcp" as const };
     state.shells.set(destination, shell(worker));
     app.registry.set(decisionAtom(destination), { handoffs: [] });
+    const handoff = scenario === "handoff only";
     state.feed.mockResolvedValue(
-      AsyncResult.success({ cursor: 1, hasMore: false, mode, events: [attentionEvent] }),
+      AsyncResult.success({ cursor: 0, hasMore: false, mode, events: [] }),
     );
 
-    // Both coordinators observe the two connected environments as they do at startup.
+    // Both coordinators use the supplied registry and router.
     await using screen = await render(createElement(MountedCoordinators, { app }), {
       router: false,
     });
-    state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
-    app.registry.set(decisionAtom(destination), {
-      handoffs: [
-        {
-          handoff: {
-            handoffId: "approval",
-            createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
-            requestedBy: { threadId: worker.id },
-            title: "Private approval",
+    await vi.waitFor(() => expect(state.feed).toHaveBeenCalled());
+    state.feed.mockImplementation(async (_registry, target) =>
+      AsyncResult.success(
+        target.input.worker === undefined
+          ? {
+              cursor: 1,
+              hasMore: false,
+              mode,
+              events: [
+                handoff
+                  ? { ...attentionEvent, kind: "approval", requestId: "approval" }
+                  : attentionEvent,
+              ],
+            }
+          : {
+              cursor: 0,
+              hasMore: false,
+              mode,
+              events: [],
+              ownsWorker:
+                target.environmentId === "one" &&
+                target.input.worker.environmentId === destination &&
+                target.input.worker.threadId === id,
+            },
+      ),
+    );
+    if (handoff) {
+      app.registry.set(decisionAtom(destination), {
+        handoffs: [
+          {
+            handoff: {
+              handoffId: "approval",
+              requestedBy: { threadId: id },
+              title: "Private approval",
+              createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
+            },
+            threadTitle: worker.title,
+            botAttentionOwned: true,
           },
-          threadTitle: worker.title,
-        },
-      ],
-    });
+        ],
+      });
+    } else {
+      app.registry.set(revisions, AsyncResult.success({ value: 1 }));
+      state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
+      await vi.waitFor(() =>
+        expect(state.feed).toHaveBeenCalledWith(app.registry, {
+          environmentId: "one",
+          input: { worker: { environmentId: "two", threadId: id } },
+        }),
+      );
+    }
     await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
     expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
-      mode === "off" ? [] : [["Scout has a question", undefined]],
+      titles.map((title) => [title, undefined]),
     );
     expect(screen.container.textContent).toBe("");
   },

@@ -171,6 +171,21 @@ it.effect.each([176, 177])(
 );
 
 describe("bot attention preview ledgers", () => {
+  it.effect("leaves an invalid attention preview ledger intact when startup refuses it", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 175 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({ "176_ChannelBotAttention": channelBotAttention }),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 55`;
+      const before = yield* history;
+      const failure = yield* Effect.flip(runMigrations());
+      assert.include(failure.message, "55_");
+      assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect.each([176, 177, 178])(
     "preserves an alert written by the PR preview at migration %s",
     (id) =>

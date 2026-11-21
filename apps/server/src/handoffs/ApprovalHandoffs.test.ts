@@ -1,3 +1,6 @@
+import { EnvironmentId } from "@goat/contracts";
+import * as SqlClient from "effect/sql/SqlClient";
+import { readBotAttention } from "../channels/channelBotAttention.ts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -66,4 +69,44 @@ it.effect("a declined approval approves nothing", () =>
       expect(result.message).toContain("was not given");
     }),
   ),
+);
+
+it.effect.each(["needs_you", "off"] as const)(
+  "a worker handoff is the only attention event in %s mode",
+  (mode) =>
+    withApprovals(({ approvals }) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const environmentId = EnvironmentId.make("origin");
+        yield* sql`INSERT INTO channel_conversations
+          (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
+          VALUES ('conversation', 'owner', 'goat', 'connection', 'key', ${now})`;
+        yield* sql`INSERT INTO channel_tasks
+          (task_id, owner_id, conversation_id, status, version, generation, worker_thread_id,
+           task_json, created_at, updated_at)
+          VALUES ('task', 'owner', 'conversation', 'running', 2, 1, ${threadId},
+           ${JSON.stringify({ worker: { threadId, environmentId } })}, ${now}, ${now})`;
+        const handoff = yield* ask(approvals);
+        const read = (ownerId: string) =>
+          readBotAttention(sql, {
+            ownerId,
+            environmentId,
+            mode,
+            request: { cursor: 0 },
+            resolveName: () => Effect.succeed("Scout"),
+          });
+        const page = yield* read("owner");
+        expect(page.mode).toBe(mode);
+        expect(page.events).toMatchObject([
+          {
+            kind: "approval",
+            taskId: "task",
+            requestId: handoff.handoffId,
+            request: { kind: "handoff", threadId, requestId: handoff.handoffId },
+          },
+        ]);
+        expect((yield* read("another-owner")).events).toEqual([]);
+      }),
+    ),
 );

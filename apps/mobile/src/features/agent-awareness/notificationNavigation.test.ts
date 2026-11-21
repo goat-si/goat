@@ -109,83 +109,125 @@ describe("extractAgentNotificationDeepLink", () => {
 });
 
 describe("routeAgentNotificationResponseOnce", () => {
-  it("navigates to the exact remote native approval from a cold notification tap", async () => {
-    const registry = AtomRegistry.make();
-    try {
-      const allowed = Atom.make(true);
-      const task = {
-        originAddress: { kind: "slack" },
-        generation: 1,
-        openQuestions: [],
-        worker: { host: "box", environmentId: "remote/env", threadId: "remote-worker" },
-        observed: {
-          needsYou: [
-            {
-              kind: "approval",
-              approval: { host: "box", threadId: "subagent/one", requestId: "command:7/8" },
-            },
-          ],
-        },
-      };
-      const channels = {
-        listBotAttention: { permissionAtom: () => allowed },
-        readAttentionTask: { run: vi.fn().mockResolvedValue(AsyncResult.success(task)) },
-      } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
-      const require = NodeModule.createRequire(import.meta.url);
-      const nativeRequire = NodeModule.createRequire(require.resolve("@react-navigation/native"));
-      const corePath = nativeRequire.resolve("@react-navigation/core");
-      const coreRequire = NodeModule.createRequire(corePath);
-      const { getStateFromPath, getActionFromState } = await import(
-        NodeURL.pathToFileURL(corePath).href
-      );
-      const { StackRouter } = await import(
-        NodeURL.pathToFileURL(coreRequire.resolve("@react-navigation/routers")).href
-      );
-      const linking = { screens: { Home: "", GoatBot: "bot", Decisions: "decisions" } };
-      const options = {
-        routeNames: Object.keys(linking.screens),
-        routeParamList: {},
-        routeGetIdList: {},
-      };
-      const stack = StackRouter({});
-      let state = stack.getInitialState(options);
-      const response = responseWithData({
-        kind: "goat-bot-attention",
-        environmentId: "origin",
-        botId: "main",
-        taskId: "task",
-        requestId: "command:7/8",
-        generation: 1,
-      }) as NotificationResponse;
-      await consumeLastAgentNotificationResponse({
-        getLastResponse: async () => response,
-        clearLastResponse: async () => {},
-        handleResponse: (response) =>
-          routeAgentNotificationResponseOnce({
-            response,
-            handledResponseIds: new Set(),
-            resolveBotTarget: (target) => resolveMobileBotAttentionLink(registry, channels, target),
-            navigate: (href) => {
-              const linked = getStateFromPath(href, linking);
-              if (linked === undefined)
-                throw new Error("Notification path did not match the stack");
-              const action = getActionFromState(linked, linking);
-              if (action === undefined)
-                throw new Error("Notification path did not produce an action");
-              const next = stack.getStateForAction(state, action, options);
-              if (next == null) throw new Error("Stack did not handle the notification");
-              state = next;
-            },
+  it.each([true, false])(
+    "routes an exact native approval with duplicate ids (available: %s)",
+    async (available) => {
+      const registry = AtomRegistry.make();
+      try {
+        const allowed = Atom.make(true);
+        const task = {
+          originAddress: { kind: "slack" },
+          generation: 1,
+          openQuestions: [],
+          worker: { environmentId: "origin", threadId: "local-worker" },
+          observed: {
+            needsYou: [
+              {
+                kind: "approval",
+                approval: { host: "box", threadId: "subagent/one", requestId: "command:7/8" },
+              },
+              {
+                kind: "approval",
+                approval: { host: "other", threadId: "subagent/two", requestId: "command:7/8" },
+              },
+            ],
+          },
+        };
+        const channels = {
+          listBotAttention: { permissionAtom: () => allowed },
+          readAttentionTask: { run: vi.fn().mockResolvedValue(AsyncResult.success(task)) },
+        } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+        const resolveDecision = vi.fn(async () =>
+          available
+            ? { environmentId: "remote/env", threadId: "subagent/one", requestId: "command:7/8" }
+            : null,
+        ) as unknown as Parameters<typeof resolveMobileBotAttentionLink>[3];
+        const require = NodeModule.createRequire(import.meta.url);
+        const nativeRequire = NodeModule.createRequire(require.resolve("@react-navigation/native"));
+        const corePath = nativeRequire.resolve("@react-navigation/core");
+        const coreRequire = NodeModule.createRequire(corePath);
+        const { getStateFromPath, getActionFromState } = await import(
+          NodeURL.pathToFileURL(corePath).href
+        );
+        const { StackRouter } = await import(
+          NodeURL.pathToFileURL(coreRequire.resolve("@react-navigation/routers")).href
+        );
+        const linking = { screens: { Home: "", GoatBot: "bot", Decisions: "decisions" } };
+        const options = {
+          routeNames: Object.keys(linking.screens),
+          routeParamList: {},
+          routeGetIdList: {},
+        };
+        const stack = StackRouter({});
+        let state = stack.getInitialState(options);
+        const response = responseWithData({
+          kind: "goat-bot-attention",
+          environmentId: "origin",
+          botId: "main",
+          taskId: "task",
+          requestId: "command:7/8",
+          request: {
+            kind: "runtime",
+            host: "box",
+            threadId: "subagent/one",
+            requestId: "command:7/8",
+          },
+          generation: 1,
+        }) as NotificationResponse;
+        await consumeLastAgentNotificationResponse({
+          getLastResponse: async () => response,
+          clearLastResponse: async () => {},
+          handleResponse: (response) =>
+            routeAgentNotificationResponseOnce({
+              response,
+              handledResponseIds: new Set(),
+              resolveBotTarget: (target) =>
+                resolveMobileBotAttentionLink(registry, channels, target, resolveDecision),
+              navigate: (href) => {
+                const linked = getStateFromPath(href, linking);
+                if (linked === undefined)
+                  throw new Error("Notification path did not match the stack");
+                const action = getActionFromState(linked, linking);
+                if (action === undefined)
+                  throw new Error("Notification path did not produce an action");
+                const next = stack.getStateForAction(state, action, options);
+                if (next == null) throw new Error("Stack did not handle the notification");
+                state = next;
+              },
+            }),
+        });
+        expect(resolveDecision).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "runtime",
+            host: "box",
+            threadId: "subagent/one",
+            requestId: "command:7/8",
           }),
-      });
-      expect(state.routes.at(-1)).toMatchObject({
-        name: "Decisions",
-        params: { environmentId: "remote/env", threadId: "subagent/one", requestId: "command:7/8" },
-      });
-    } finally {
-      registry.dispose();
-    }
-  });
+        );
+        expect(state.routes.at(-1)).toMatchObject(
+          available
+            ? {
+                name: "Decisions",
+                params: {
+                  environmentId: "remote/env",
+                  threadId: "subagent/one",
+                  requestId: "command:7/8",
+                },
+              }
+            : {
+                name: "GoatBot",
+                params: {
+                  taskId: "task",
+                  attentionEnvironment: "origin",
+                  attentionDetail: "external",
+                },
+              },
+        );
+      } finally {
+        registry.dispose();
+      }
+    },
+  );
 
   it("retries a failed initial response and deduplicates it after navigation succeeds", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
