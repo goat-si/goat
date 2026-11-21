@@ -4,6 +4,7 @@ import { ScheduledTask, ScheduledTaskError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import type { WebhookTriggerRequest } from "./webhookTriggerTypes.ts";
 import { renderWebhookPrompt, type WebhookRequest } from "./webhookTemplate.ts";
 
 function key(template: string | undefined, request: WebhookRequest): string {
@@ -42,9 +43,26 @@ const claimReplayKey = Effect.fn(function* (
     VALUES (${taskId}, ${replayKey}, ${deliveryId}, ${now + 7 * 24 * 60 * 60 * 1000})`;
 });
 
+const replayKeys = (task: ScheduledTask, request: WebhookTriggerRequest) =>
+  [
+    key(task.schedule.type === "webhook" ? task.schedule.dedupe?.replayKey : undefined, request),
+    ...(task.routineMode === "work"
+      ? ["body:" + NodeCrypto.createHash("sha256").update(request.body).digest("hex")]
+      : []),
+  ].filter((key) => key !== "");
+
+const pendingRequest = (request: WebhookRequest) =>
+  encodePendingRequest({
+    method: request.method,
+    path: request.path,
+    query: request.query,
+    headers: request.headers,
+    bodyText: request.bodyText,
+  });
+
 export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhookDedupe")(function* (
   task: ScheduledTask,
-  request: WebhookRequest,
+  request: WebhookTriggerRequest,
   deliveryId: string,
   now: number,
   reserve: Effect.Effect<void, "first_rejected" | "rejected">,
@@ -55,8 +73,9 @@ export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhook
   const sql = yield* SqlClient.SqlClient;
   const dedupe = task.schedule.type === "webhook" ? task.schedule.dedupe : undefined;
   if (dedupe === undefined) return "run" as const;
-  const replayKey = key(dedupe.replayKey, request);
-  if (yield* hasReplayKey(task.id, replayKey, now)) return "duplicate" as const;
+  const keys = replayKeys(task, request);
+  for (const replayKey of keys)
+    if (yield* hasReplayKey(task.id, replayKey, now)) return "duplicate" as const;
   const coalesceKey = key(dedupe.coalesceKey, request);
   if (coalesceKey === "") return "run" as const;
   const pending = yield* sql<{
@@ -69,14 +88,9 @@ export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhook
     yield* reserve;
   }
   // Coalesced requests retain their validation slot, bounding writes without dropping accepted payloads.
-  yield* claimReplayKey(task.id, replayKey, pending[0]?.delivery_id ?? deliveryId, now);
-  const requestJson = yield* encodePendingRequest({
-    method: request.method,
-    path: request.path,
-    query: request.query,
-    headers: request.headers,
-    bodyText: request.bodyText,
-  });
+  for (const replayKey of keys)
+    yield* claimReplayKey(task.id, replayKey, pending[0]?.delivery_id ?? deliveryId, now);
+  const requestJson = yield* pendingRequest(request);
   if (pending.length > 0) {
     yield* sql`UPDATE scheduled_task_webhook_pending SET request_json = ${requestJson},
       delivery_ids_json = json_insert(delivery_ids_json, '$[#]', ${deliveryId}) WHERE delivery_id = ${pending[0]!.delivery_id}`;
@@ -95,18 +109,20 @@ export const acceptImmediateWebhookDedupe = Effect.fn(
   "ScheduledTaskService.acceptImmediateWebhookDedupe",
 )(function* (
   task: ScheduledTask,
-  request: WebhookRequest,
+  request: WebhookTriggerRequest,
   deliveryId: string,
   now: number,
   reserve: Effect.Effect<void, "first_rejected" | "rejected" | "queue_full" | ScheduledTaskError>,
 ) {
-  const replayKey = key(
-    task.schedule.type === "webhook" ? task.schedule.dedupe?.replayKey : undefined,
-    request,
-  );
-  if (yield* hasReplayKey(task.id, replayKey, now)) return "duplicate" as const;
+  const keys = replayKeys(task, request);
+  for (const replayKey of keys)
+    if (yield* hasReplayKey(task.id, replayKey, now)) return "duplicate" as const;
   yield* reserve;
-  yield* claimReplayKey(task.id, replayKey, deliveryId, now);
+  for (const replayKey of keys) yield* claimReplayKey(task.id, replayKey, deliveryId, now);
+  if (task.routineMode === "work")
+    yield* (yield* SqlClient.SqlClient)`INSERT INTO scheduled_task_webhook_pending
+      (delivery_id, task_id, coalesce_key, state, due_at, task_json, request_json, delivery_ids_json)
+      VALUES (${deliveryId}, ${task.id}, ${deliveryId}, 'dispatching', ${now}, ${yield* encodePendingTask(task)}, ${yield* pendingRequest(request)}, json_array(${deliveryId}))`;
   return "run" as const;
 });
 

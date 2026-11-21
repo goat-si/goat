@@ -163,6 +163,7 @@ export const ChannelReceptionInput = Schema.Struct({
   identity: Schema.optional(Schema.Struct({ name: Schema.String, purpose: Schema.String })),
   /** A routine the person set up, not a live message: answer only, or no_update when nothing needs them. */
   routine: Schema.optional(Schema.Boolean),
+  routineWork: Schema.optional(Schema.Literal(true)),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;

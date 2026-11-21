@@ -6,12 +6,14 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
-import type * as SqlClient from "effect/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
 import {
+  drainPendingDispatch,
   requestFor,
   waitForSpan,
   webhookTaskInput,
@@ -440,6 +442,20 @@ it.effect("a paused work trigger keeps its mode on older saves and needs a secre
         });
         const draft = { ...input, routineMode: "work" as const };
         const { task } = yield* service.upsert(draft, captured);
+        const freshId = ScheduledTaskId.make("fresh-work-trigger");
+        assert.include(
+          (yield* Effect.flip(service.upsert({ ...draft, id: freshId }))).message,
+          "person",
+        );
+        assert.include(
+          (yield* Effect.flip(service.upsert({ ...draft, id: freshId, enabled: true }, captured)))
+            .message,
+          "signing secret",
+        );
+        assert.include(
+          (yield* Effect.flip(service.rotateWebhookToken({ id: task.id }))).message,
+          "person",
+        );
         assert.propertyVal(task, "routineMode", "work");
         assert.strictEqual(task.webhook?.hasSecret, false);
         assert.include(
@@ -552,4 +568,78 @@ it.effect("a signed webhook hands off one fenced input and a replay cannot start
       }),
     {},
   ),
+);
+
+it.effect("a coalesced signed work delivery survives restart and hands off only one firing", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const secret = "coalesced-fixture-signing-secret";
+    const accepted = yield* withWebhookService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* registerBot(sql);
+          const { task } = yield* service.upsert(
+            yield* routineInput({
+              routineMode: "work",
+              prompt: "Check the event: {{body.value}}",
+              schedule: {
+                type: "webhook",
+                signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
+                dedupe: { coalesceKey: "{{body.group}}", coalesceWindowSeconds: 10 },
+              },
+            }),
+            {
+              memoryGrantCeiling: "none",
+              owner: {
+                principalId: owner.principalId,
+                sessionId: "fixture-session",
+                grantedScopes: ["orchestration:operate", "settings:write"],
+              },
+            },
+          );
+          const signed = (value: string) => {
+            const bodyText = JSON.stringify({ group: "test", value });
+            const body = new TextEncoder().encode(bodyText);
+            const signature = NodeCrypto.createHmac("sha256", secret).update(body).digest("hex");
+            return requestFor(task, {
+              bodyText,
+              body,
+              headers: { "content-type": "application/json", "x-test-signature": signature },
+            });
+          };
+          const first = yield* service.triggerWebhook(signed("first"));
+          if (first._tag !== "accepted")
+            return yield* Effect.die("Expected a pending webhook window");
+          const latest = signed("latest");
+          assert.deepInclude(yield* service.triggerWebhook(latest), { outcome: "coalesced" });
+          assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 0);
+          return { first, latest };
+        }),
+      { sql, workers: new Map() },
+    );
+    yield* TestClock.adjust("10 seconds");
+    const workers = new Map<string, Effect.Effect<void>>();
+    yield* withWebhookService(
+      ({ service, runs, launches }) =>
+        Effect.gen(function* () {
+          yield* drainPendingDispatch(workers);
+          const [link, ...others] = yield* sql<LinkRow>`SELECT firing_id, state, payload_json
+          FROM scheduled_task_channel_inputs`;
+          assert.isDefined(link);
+          assert.lengthOf(others, 0);
+          assert.include(link?.payload_json ?? "", "latest");
+          assert.include(link?.payload_json ?? "", accepted.first.deliveryId);
+          assert.strictEqual(
+            (yield* runs.deliveryReceipt(accepted.first.deliveryId))?.firingId,
+            link?.firing_id,
+          );
+          assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
+          assert.deepInclude(yield* service.triggerWebhook(accepted.latest), {
+            outcome: "duplicate",
+          });
+          assert.strictEqual(yield* Queue.size(launches), 0);
+        }),
+      { sql, workers },
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

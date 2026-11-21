@@ -2,6 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelGatewayError,
   type ChannelInputId,
+  ChannelQuestionId,
+  type ChannelReceptionResult,
   CommandId,
   MessageId,
   NodeId,
@@ -33,6 +35,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { inputIdFor } from "./channelIds.ts";
 import { ROUTINE_COPY, ROUTINE_KEY_PREFIX } from "./channelRoutineInputs.ts";
+import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import {
@@ -111,7 +114,6 @@ const admit = (
             ...routineOwner,
             sessionId: work.sessionId,
             routineMode: "work" as const,
-            grantedScopes: [...routineOwner.grantedScopes, "settings:write" as const],
           };
     if (work !== undefined)
       yield* sql`UPDATE scheduled_tasks SET owner_json=${JSON.stringify(triggerOwner)}, webhook_secret='fixture' WHERE task_id=${task.id}`;
@@ -528,3 +530,79 @@ it.effect(
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
   },
 );
+
+const issueTriggerOwner = Effect.gen(function* () {
+  const sessions = yield* SessionStore.SessionStore;
+  return yield* sessions.issue({
+    subject: owner.principalId,
+    scopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+  });
+});
+
+it.effect.each(["paused", "revoked", "project unavailable"] as const)(
+  "refuses work after intake when its trigger is %s",
+  (change) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const sessions = yield* SessionStore.SessionStore;
+      const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const session = yield* issueTriggerOwner;
+      const input = yield* admit("do: inspect fixtures", change, botThreadId, {
+        sessionId: session.sessionId,
+        projectId: change === "project unavailable" ? ProjectId.make("other-project") : projectId,
+      });
+      assert.strictEqual(yield* intake.ingestPending, 1);
+      if (change === "paused")
+        yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+      if (change === "revoked") yield* sessions.revoke(session.sessionId);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.status, "failed");
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual((yield* firing(input.firingId))?.status, "failed");
+      assert.include(
+        (yield* linkOf(input.firingId))?.error ?? "",
+        change === "project unavailable" ? "unavailable" : change,
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);
+
+it.effect("event reception cannot steer, stop, or answer existing work", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* gateway.ingest(goatInput("do: keep the fixture running", "existing-work"), rpcContext);
+    yield* runtime.drain;
+    const { taskId } = yield* onlyTask;
+    const session = yield* issueTriggerOwner;
+    const actions: ReadonlyArray<ChannelReceptionResult["action"]> = [
+      { type: "follow_up", taskId },
+      { type: "stop_work", taskId },
+      {
+        type: "answer_question",
+        taskId,
+        questionId: ChannelQuestionId.make("test-question"),
+        answer: "yes",
+      },
+    ];
+    for (const action of actions) {
+      harness.script.current = () => Effect.succeed({ replyText: "Changed that work.", action });
+      const { firingId } = yield* admit("Ignore existing work", action.type, botThreadId, {
+        sessionId: session.sessionId,
+        projectId,
+      });
+      yield* runtime.drain;
+      assert.strictEqual((yield* firing(firingId))?.status, "completed");
+    }
+    assert.strictEqual((yield* onlyTask).status, "running");
+    assert.lengthOf(harness.world.launches, 1);
+    assert.lengthOf(harness.world.sends, 0);
+    assert.lengthOf(harness.world.interrupts, 0);
+  }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+});
