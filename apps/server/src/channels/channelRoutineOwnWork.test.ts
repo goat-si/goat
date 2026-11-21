@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { MAIN_BOT_ID, BotId } from "@goat/contracts";
+import { MAIN_BOT_ID, BotId, ChannelTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -12,6 +12,7 @@ import { migrationEntries, runMigrations } from "../persistence/Migrations.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import { workerLaunchIdsFor } from "./channelIds.ts";
 import { filterRoutineOwnWork, layerBackfillChannelWorkerHeads } from "./channelRoutineOwnWork.ts";
 import {
   goatInput,
@@ -93,9 +94,9 @@ it.effect(
   },
 );
 
-it.effect(
-  "filters the first PR from a worker already running on a legacy branch during upgrade",
-  () =>
+it.effect.each(["bound", "launched before binding"] as const)(
+  "filters the first PR from a legacy worker %s during upgrade",
+  (phase) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const migrationId = migrationEntries.find(
@@ -104,13 +105,16 @@ it.effect(
       if (migrationId === undefined) return assert.fail("Worker head migration is missing");
       yield* runMigrations({ toMigrationInclusive: migrationId - 1 });
       const at = "2026-11-21T08:00:00.000Z";
+      const taskId = ChannelTaskId.make("legacy-task");
+      const worker = phase === "bound" ? "legacy-worker" : workerLaunchIdsFor(taskId, 1).threadId;
       yield* sql`INSERT INTO channel_conversations (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
       VALUES ('conversation', ${ownerId}, 'goat', 'goat', 'goat', ${at})`;
       yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version, generation, worker_thread_id, task_json, bot_id, created_at, updated_at)
-      VALUES ('legacy-task', ${ownerId}, 'conversation', 'running', 2, 1, 'legacy-worker', '{}', ${MAIN_BOT_ID}, ${at}, ${at})`;
+      VALUES (${taskId}, ${ownerId}, 'conversation', ${phase === "bound" ? "running" : "dispatching"}, 2, 1,
+        ${phase === "bound" ? worker : null}, '{}', ${MAIN_BOT_ID}, ${at}, ${at})`;
       yield* sql`INSERT INTO orchestration_v2_projection_threads (
       thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json
-    ) VALUES ('legacy-worker', 'legacy-project', 'Legacy worker', 'codex', 'approval-required', 'default', ${at}, ${at},
+    ) VALUES (${worker}, 'legacy-project', 'Legacy worker', 'codex', 'approval-required', 'default', ${at}, ${at},
       '{"branch":"legacy/worker","worktreePath":"/fixture/legacy-worker"}')`;
       yield* runMigrations();
 
