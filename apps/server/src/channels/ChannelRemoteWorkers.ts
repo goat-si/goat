@@ -2061,7 +2061,7 @@ const make = Effect.gen(function* () {
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
         (stored.task.status === "running" || stored.task.status === "waiting_input") &&
-        !channelWorkerObservationEquals(stored.task.observed, stamped)
+        !channelWorkerObservationEquals(stored.task.observed, stamped, true)
       ) {
         const card =
           stored.task.requester.originKind !== "mcp" &&

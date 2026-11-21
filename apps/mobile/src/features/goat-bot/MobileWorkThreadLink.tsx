@@ -9,6 +9,7 @@ export function MobileWorkThreadLink(props: {
   readonly link: { readonly text: string; readonly label: string };
   readonly disabled: boolean;
   readonly worker?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+  readonly fallbackPullRequests?: Parameters<typeof goatBotRowPullRequests>[0];
   /** The task screen mutes a closed link; Home's Show work keeps it underlined. */
   readonly mutedWhenDisabled?: boolean;
   readonly onPress: () => void;
@@ -16,16 +17,18 @@ export function MobileWorkThreadLink(props: {
   const shell = useThreadShell(
     props.worker ? scopeThreadRef(props.worker.environmentId, props.worker.threadId) : null,
   );
-  const prs = shell?.pullRequests?.length
-    ? goatBotRowPullRequests(botWorkerPullRequests(shell.pullRequests), 2)
-    : null;
+  const prs = goatBotRowPullRequests(
+    shell?.pullRequests?.length
+      ? botWorkerPullRequests(shell.pullRequests)
+      : (props.fallbackPullRequests ?? {}),
+    2,
+  );
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[
-        props.link.label,
-        ...(prs?.chips.map((chip) => chip.accessibleName) ?? []),
-      ].join(", ")}
+      accessibilityLabel={[props.link.label, ...prs.chips.map((chip) => chip.accessibleName)].join(
+        ", ",
+      )}
       accessibilityState={{ disabled: props.disabled }}
       disabled={props.disabled}
       onPress={props.onPress}
@@ -41,12 +44,25 @@ export function MobileWorkThreadLink(props: {
       >
         {props.link.text}
       </Text>
-      {prs?.chips.length ? (
-        <Text className="text-xs text-foreground-muted">
-          {prs.chips.map((chip) => chip.text).join(" · ")}
-          {prs.moreLabel ? ` · ${prs.moreLabel}` : ""}
-        </Text>
-      ) : null}
+      <MobileWorkPullRequests {...prs} />
     </Pressable>
+  );
+}
+
+export function MobileWorkPullRequests({
+  chips,
+  moreLabel,
+}: ReturnType<typeof goatBotRowPullRequests>) {
+  if (chips.length === 0) return null;
+  return (
+    <Text
+      className="text-xs text-foreground-muted"
+      accessibilityLabel={[...chips.map((chip) => chip.accessibleName), moreLabel]
+        .filter(Boolean)
+        .join(", ")}
+    >
+      {chips.map((chip) => chip.text).join(" · ")}
+      {moreLabel ? ` · ${moreLabel}` : ""}
+    </Text>
   );
 }

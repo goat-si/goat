@@ -46,10 +46,14 @@ import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
 import {
   botRowPullRequests,
+  joinRemoteLaunch,
   observedPullRequestSource,
+  remoteLaunchPullRequests,
+  remotePullRequestColumns,
   threadPullRequestColumns,
   threadPullRequestSource,
   type PullRequestSource,
+  type RemotePullRequestColumns,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
 import {
@@ -87,7 +91,7 @@ const snoozedCursorScope = (owner: Pick<ChannelConnectionOwner, "ownerId">, botI
   ownerId: owner.ownerId,
   botId: "snoozed:" + botId,
 });
-interface ChildRow extends ThreadPullRequestColumns {
+interface ChildRow extends ThreadPullRequestColumns, RemotePullRequestColumns {
   readonly key?: string;
   readonly value_json: string;
   readonly title: string | null;
@@ -228,7 +232,7 @@ const make = Effect.gen(function* () {
       ? []
       : launchLimit === undefined
         ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
-        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
+        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}, ${remotePullRequestColumns(sql)}
       FROM channel_runtime_state s
       JOIN json_each(${taskIds}) ids
         ON s.key >= ('child-work:' || ids.value || ':') AND s.key < ('child-work:' || ids.value || ';')
@@ -238,6 +242,7 @@ const make = Effect.gen(function* () {
         ON json_extract(s.value_json, '$.surface') = 'thread_launch'
         AND json_extract(s.value_json, '$.destination.host') IS NULL
         AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+      ${joinRemoteLaunch(sql)}
       ORDER BY s.key`.pipe(Effect.mapError(failed))
         : // History seeks each task's newest launches, one more to tell whether there are more.
           (yield* Effect.forEach(tasks, (task) =>
@@ -359,7 +364,7 @@ const make = Effect.gen(function* () {
           ...botRowPullRequests(threadSources, observedPullRequestSource(task)),
         });
       }
-      for (const { child, title, projectId, recordedKind } of children) {
+      for (const { child, title, projectId, recordedKind, pullRequestColumns } of children) {
         if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
         const destination = child.destination;
         // Work on another machine is listed by its record alone; one never launched ran nothing.
@@ -379,6 +384,7 @@ const make = Effect.gen(function* () {
               ? {}
               : { environmentId: destination.environmentId }),
             ...(destination.workKind === undefined ? {} : { workKind: destination.workKind }),
+            ...remoteLaunchPullRequests(pullRequestColumns),
           });
           continue;
         }
@@ -743,6 +749,7 @@ const make = Effect.gen(function* () {
                   ? task.status
                   : ("bound" as const),
               lastActivityAt: task.updatedAt,
+              ...botRowPullRequests([], observedPullRequestSource(task)),
             },
           ];
     const activity = yield* ledger.readTaskActivity({

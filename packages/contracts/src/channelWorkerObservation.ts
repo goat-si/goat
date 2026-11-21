@@ -88,10 +88,11 @@ export const EMPTY_CHANNEL_WORKER_OBSERVATION: ChannelWorkerObservation = {
   needsYou: [],
 };
 
-/** Whether two observations would show the same thing; equal ones are not written again. */
+/** Waits ignore link dates so older origins that cannot echo them can still wait. */
 export const channelWorkerObservationEquals = (
   left: ChannelWorkerObservation | undefined,
   right: ChannelWorkerObservation | undefined,
+  compareLinkedAt = false,
 ): boolean => {
   const a = left ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
   const b = right ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
@@ -131,6 +132,7 @@ export const channelWorkerObservationEquals = (
         item.repository === other.repository &&
         item.number === other.number &&
         item.url === other.url &&
+        (!compareLinkedAt || item.linkedAt === other.linkedAt) &&
         item.state === other.state &&
         item.watching === other.watching
       );

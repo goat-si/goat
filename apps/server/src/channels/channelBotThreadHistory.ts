@@ -11,7 +11,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import {
+  joinRemoteLaunch,
+  remotePullRequestColumns,
   threadPullRequestColumns,
+  type RemotePullRequestColumns,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
 
@@ -108,15 +111,17 @@ export const launchesStatement = (
       readonly title: string | null;
       readonly project_id: string | null;
       readonly work_kind: unknown;
-    } & ThreadPullRequestColumns
+    } & ThreadPullRequestColumns &
+      RemotePullRequestColumns
   >`SELECT s.key, s.value_json, p.title, p.project_id,
-      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
+      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}, ${remotePullRequestColumns(sql)}
     FROM channel_runtime_state s INDEXED BY channel_child_work_launches
     -- Only a local launch's thread is in this machine's projection.
     LEFT JOIN orchestration_v2_projection_threads p
       ON json_extract(s.value_json, '$.surface') = 'thread_launch'
       AND json_extract(s.value_json, '$.destination.host') IS NULL
       AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+    ${joinRemoteLaunch(sql)}
     WHERE json_extract(s.value_json, '$.taskId') = ${input.taskId} AND ${openableLaunch(sql)}
       AND json_extract(s.value_json, '$.ownerId') = ${input.ownerId}
       ${input.finished ? sql`AND json_extract(s.value_json, '$.state') IN ('completed', 'failed', 'cancelled')` : sql``}

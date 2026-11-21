@@ -392,3 +392,45 @@ it("a coding thread titled like its task keeps that title", async () => {
     .element(screen.getByRole("link", { name: "Restart the 3774 server" }))
     .toHaveAttribute("href", "/env-studio/coding-same");
 });
+
+it("shows each remote worker's own PR even when its thread is unavailable", async () => {
+  setup(["env-macbook"]);
+  const [paired] = remoteWork;
+  if (!paired) throw new Error("expected a paired worker");
+  await using screen = await render(
+    <GoatBotWorkDetails
+      environmentId={studio}
+      taskId={ChannelTaskId.make("task-1")}
+      rows={rows}
+      remoteWork={[
+        {
+          ...paired,
+          pullRequests: [{ repository: "goat-si/goat", number: 42, state: "open", watching: true }],
+        },
+        {
+          ...decodeRemoteWork({
+            childWorkId: "cw-unpaired",
+            taskId: "task-1",
+            callerThreadId: "channel-worker:task-1",
+            host: "builder",
+            state: "bound",
+            lastActivityAt: at,
+            threadId: "unpaired-thread",
+          }),
+          pullRequests: [
+            { repository: "goat-si/other", number: 73, state: "merged", watching: false },
+          ],
+        },
+      ]}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on macbookpro2" }))
+    .toBeVisible();
+  await expect.element(screen.getByText("Pull request goat-si/goat#42, open")).toBeInTheDocument();
+  await expect.element(screen.getByText("builder · Unavailable")).toBeVisible();
+  await expect
+    .element(screen.getByText("Pull request goat-si/other#73, merged"))
+    .toBeInTheDocument();
+  await expect.element(screen.getByRole("link", { name: /builder/ })).not.toBeInTheDocument();
+});

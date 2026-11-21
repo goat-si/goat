@@ -1,5 +1,6 @@
 import {
   CHANNEL_BOT_ROW_PULL_REQUESTS,
+  ChannelTaskPullRequest,
   PositiveInt,
   IsoDateTime,
   PullRequestState,
@@ -7,7 +8,6 @@ import {
   TrimmedNonEmptyString,
   type BotRowPullRequest,
   type ChannelTask,
-  type ChannelTaskPullRequest,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -97,6 +97,39 @@ export const threadPullRequestSource = (
       ),
     ),
   };
+};
+
+export interface RemotePullRequestColumns {
+  readonly remote_observation: string | null;
+  readonly remote_dispatch_state: string | null;
+}
+
+export const remotePullRequestColumns = (sql: SqlClient.SqlClient) =>
+  sql`d.observation AS remote_observation, d.state AS remote_dispatch_state`;
+
+export const joinRemoteLaunch = (sql: SqlClient.SqlClient) =>
+  sql`LEFT JOIN remote_dispatches d
+    ON json_extract(s.value_json, '$.surface') = 'ssh_thread_launch'
+    AND d.correlation_id = json_extract(s.value_json, '$.destination.correlationId')
+    AND d.origin_thread_id = json_extract(s.value_json, '$.callerThreadId')
+    AND d.host = json_extract(s.value_json, '$.destination.host')
+    AND d.remote_thread_id = json_extract(s.value_json, '$.destination.threadId')
+    AND d.kind = 'thread' AND d.reports_supported != 0`;
+
+const decodeRemotePullRequests = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ pullRequests: Schema.Array(ChannelTaskPullRequest) })),
+);
+
+export const remoteLaunchPullRequests = (columns: RemotePullRequestColumns) => {
+  if (columns.remote_observation === null) return {};
+  const observation = decodeRemotePullRequests(columns.remote_observation);
+  return Option.isNone(observation)
+    ? {}
+    : botRowPullRequests([], {
+        pullRequests: observation.value.pullRequests,
+        refreshed:
+          columns.remote_dispatch_state === "running" || columns.remote_dispatch_state === "idle",
+      });
 };
 
 /** The copy the ledger keeps of the worker's links, refreshed only while the task runs or waits. */

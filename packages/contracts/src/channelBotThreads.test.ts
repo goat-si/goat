@@ -6,7 +6,9 @@ import * as Queue from "effect/Queue";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
+  BotRemoteWork,
   BotWorkResult,
+  CHANNEL_BOT_ROW_PULL_REQUESTS,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
@@ -175,7 +177,7 @@ describe("bot thread contracts", () => {
           },
         },
         codingRows: [coding],
-        remoteWork: [remote],
+        remoteWork: [{ ...remote, pullRequests, pullRequestsOmitted: 3 }],
         launchesTruncated: false,
         partial: false,
       },
@@ -188,6 +190,33 @@ describe("bot thread contracts", () => {
       },
     ])
       expect(decode(encode(decode(result)))).toEqual(result);
+  });
+  it("keeps remote worker PR summaries optional and bounded across client versions", () => {
+    const remote = {
+      childWorkId: "child",
+      taskId: "task-1",
+      callerThreadId: "caller",
+      host: "box",
+      state: "bound",
+      lastActivityAt: at,
+    };
+    const decodeRemote = Schema.decodeUnknownSync(BotRemoteWork);
+    const decodeShipped = Schema.decodeUnknownSync(
+      BotRemoteWork.mapFields(
+        ({ pullRequests: _prs, pullRequestsOmitted: _omitted, ...fields }) => fields,
+      ),
+    );
+    expect(decodeRemote(remote)).toEqual(remote);
+    expect(decodeShipped({ ...remote, pullRequests, pullRequestsOmitted: 3 })).toEqual(remote);
+    expect(() =>
+      decodeRemote({
+        ...remote,
+        pullRequests: Array.from(
+          { length: CHANNEL_BOT_ROW_PULL_REQUESTS + 1 },
+          () => pullRequests[0],
+        ),
+      }),
+    ).toThrow();
   });
   it("rejects a NUL in a bot task search query", () => {
     const decode = Schema.decodeUnknownSync(ChannelSearchBotTasksInput);

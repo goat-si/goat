@@ -534,9 +534,8 @@ export const BotThreadRow = Schema.Union([
 ]);
 export type BotThreadRow = typeof BotThreadRow.Type;
 /**
- * A thread the bot launched on another machine over SSH. It is not a row: its host is this
- * machine's SSH alias, so only the destination's own environment id, once the launch was
- * acknowledged, can open it from a client.
+ * A worker on another machine over SSH. Its host is this machine's SSH alias, and opening the
+ * thread requires the destination's environment ID. The origin can report the worker's PRs.
  */
 export const BotRemoteWork = Schema.Struct({
   childWorkId: ChannelChildWorkId,
@@ -549,6 +548,7 @@ export const BotRemoteWork = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   environmentId: Schema.optional(EnvironmentId),
   workKind: Schema.optional(GoatBotWorkKind),
+  ...botRowPullRequestFields,
 });
 export type BotRemoteWork = typeof BotRemoteWork.Type;
 /** A history page's tasks, and the launched threads it lists per task, newest first. */

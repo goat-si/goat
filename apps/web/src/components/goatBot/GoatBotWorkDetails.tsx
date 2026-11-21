@@ -32,13 +32,18 @@ const workThreadName = (title: string | undefined) => title?.trim() || "Open wor
 function GoatBotWorkerLink({
   thread,
   label,
+  fallbackPullRequests,
   onHomeNavigate,
 }: {
   readonly thread: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
   readonly label: string;
+  readonly fallbackPullRequests?: BotRemoteWork;
   readonly onHomeNavigate?: ((event: React.MouseEvent) => void) | undefined;
 }) {
   const shell = useThreadShell(scopeThreadRef(thread.environmentId, thread.threadId));
+  const pullRequests = shell?.pullRequests?.length
+    ? botWorkerPullRequests(shell.pullRequests)
+    : fallbackPullRequests;
   return (
     <span className="max-w-full min-w-0">
       <Link
@@ -49,9 +54,7 @@ function GoatBotWorkerLink({
       >
         {label}
       </Link>
-      {shell?.pullRequests?.length ? (
-        <GoatBotPullRequestChips row={botWorkerPullRequests(shell.pullRequests)} />
-      ) : null}
+      {pullRequests && <GoatBotPullRequestChips row={pullRequests} />}
     </span>
   );
 }
@@ -81,13 +84,17 @@ function GoatBotRemoteWork({
   if (target.kind === "unavailable")
     return (
       <span className="rounded-full border border-border px-2 py-1">
-        {target.host} · {target.label}
+        <span>
+          {target.host} · {target.label}
+        </span>
+        <GoatBotPullRequestChips row={item} />
       </span>
     );
   return (
     <GoatBotWorkerLink
       thread={target.ref}
       label={`${workThreadName(shell?.title)} on ${target.host}`}
+      fallbackPullRequests={item}
       onHomeNavigate={onHomeNavigate}
     />
   );
