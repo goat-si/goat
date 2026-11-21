@@ -531,6 +531,7 @@ export interface BotProfileValues {
   readonly name: string;
   readonly avatar: string | null;
   readonly purpose: string;
+  readonly instructions?: string;
   /** A member's accent; null is the theme's neutral. Absent where the server cannot store one. */
   readonly color?: string | null;
 }
@@ -546,6 +547,7 @@ export function botProfileChanges(
     readonly name: string;
     readonly avatar: string;
     readonly purpose: string;
+    readonly instructions?: string;
     readonly color?: string | null;
   },
 ): Partial<BotProfileValues> {
@@ -560,6 +562,9 @@ export function botProfileChanges(
     ...(next.name === initial.name ? {} : { name: next.name }),
     ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
     ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
+    ...(draft.instructions === undefined || draft.instructions === (initial.instructions ?? "")
+      ? {}
+      : { instructions: draft.instructions }),
     ...(color === undefined || sameBotColor(color, initial.color) ? {} : { color }),
   };
 }

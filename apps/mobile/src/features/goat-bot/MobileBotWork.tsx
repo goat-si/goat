@@ -778,6 +778,8 @@ export function MobileBotWork(props: {
             connected={selected?.connected === true}
             supported={capabilities?.goatBotNotes === true}
             member={member !== null}
+            botId={member?.botId}
+            scoped={capabilities?.goatBotPrivateNotes === true}
             botName={botName}
             onDraft={
               props.onDraft

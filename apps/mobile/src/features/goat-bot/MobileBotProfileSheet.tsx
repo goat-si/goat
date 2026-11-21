@@ -28,6 +28,7 @@ export function MobileBotProfileSheet(props: {
   readonly extraChanged?: boolean;
   /** The server stores a member's colour; absent or false shows no swatches and sends none. */
   readonly colorEditable?: boolean | undefined;
+  readonly instructionsEditable?: boolean;
   /** Starts the name field from words typed elsewhere; changes still count against `initial`. */
   readonly draftName?: string | undefined;
   /** Why `canSubmit` is false, shown by Save while it is off for that reason. */
@@ -36,6 +37,7 @@ export function MobileBotProfileSheet(props: {
   const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [instructions, setInstructions] = useState(props.initial.instructions ?? "");
   const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +65,7 @@ export function MobileBotProfileSheet(props: {
       name,
       avatar,
       purpose,
+      ...(!create && props.instructionsEditable === true ? { instructions } : {}),
       // Without the swatches the form never carries a colour, so an older server gets no key.
       ...(props.colorEditable === true ? { color } : {}),
     });
@@ -204,6 +207,23 @@ export function MobileBotProfileSheet(props: {
               <Text accessibilityRole="alert" className="text-danger-foreground">
                 {error}
               </Text>
+            ) : null}
+            {!create && props.instructionsEditable === true ? (
+              <>
+                <Text className="text-foreground">Instructions</Text>
+                <TextInput
+                  accessibilityLabel="Instructions"
+                  value={instructions}
+                  maxLength={16 * 1024}
+                  editable={!busy}
+                  multiline
+                  numberOfLines={4}
+                  placeholder="What should this bot do every time?"
+                  placeholderTextColorClassName="accent-placeholder"
+                  onChangeText={setInstructions}
+                  className={INPUT}
+                />
+              </>
             ) : null}
           </ScrollView>
         </View>

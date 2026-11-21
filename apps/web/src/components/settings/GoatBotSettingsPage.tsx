@@ -78,6 +78,9 @@ function GoatBotProfileSection() {
           key={environment.environmentId}
           environmentId={environment.environmentId}
           phase={presentation.connection.phase}
+          instructionsEditable={
+            presentation.serverConfig?.environment.capabilities.goatBotInstructions === true
+          }
           holdBack={nextHold !== null}
           refusedLine={refusedLine}
           deniedLine={deniedLine}
@@ -90,12 +93,14 @@ function GoatBotProfileSection() {
 function GoatBotProfileRow({
   environmentId,
   phase,
+  instructionsEditable,
   holdBack,
   refusedLine,
   deniedLine,
 }: {
   readonly environmentId: EnvironmentId;
   readonly phase: EnvironmentConnectionPhase;
+  readonly instructionsEditable: boolean;
   /** After a refusal, until a read settles: the answer held at the refusal is not shown. */
   readonly holdBack: boolean;
   readonly refusedLine: string;
@@ -144,6 +149,7 @@ function GoatBotProfileRow({
       {editing !== null ? (
         <GoatBotProfileDialog
           initial={editing}
+          instructionsEditable={instructionsEditable}
           canSubmit={canEdit}
           unavailableReason={connected ? undefined : `${editing.name}'s computer isn't connected.`}
           onClose={() => setEditing(null)}

@@ -302,6 +302,9 @@ export function GoatBotMainMenu({
       {editing ? (
         <GoatBotProfileDialog
           initial={main}
+          instructionsEditable={
+            presentation?.serverConfig?.environment.capabilities.goatBotInstructions === true
+          }
           canSubmit={canEdit}
           onClose={() => setEditing(false)}
           onSubmit={async (changes) => {
