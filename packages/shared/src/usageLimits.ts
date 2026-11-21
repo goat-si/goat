@@ -463,8 +463,13 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
   for (const presentation of presentations.values()) {
     const environmentLabel = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
-      if (provider.usageLimits?.unavailable?.reason === "unsupported") continue;
-      const notice = provider.usageLimits ? limitsNotice(provider.usageLimits) : null;
+      const limits = provider.usageLimits;
+      if (
+        limits?.unavailable?.reason === "unsupported" &&
+        (!limits.unavailable.message || limits.externalUsage)
+      )
+        continue;
+      const notice = limits ? limitsNotice(limits) : null;
       const name = provider.displayName?.trim() || String(provider.driver);
       if (notice) notices.add(`${label(environmentLabel, name)}: ${notice}`);
     }
