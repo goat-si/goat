@@ -44,6 +44,7 @@ export function useMobileTaskScreen(input: {
   /** The bot's current-list read. */
   readonly list: {
     readonly data: unknown;
+    readonly error: string | null;
     readonly isPending: boolean;
     readonly refresh: () => void;
   };
@@ -81,7 +82,8 @@ export function useMobileTaskScreen(input: {
     botId: input.botId,
     taskId: input.taskId,
     supported: input.enabled && lookupSupported,
-    established: input.list.data !== null,
+    established:
+      input.list.data !== null || (input.needsApprovalObservation && input.list.error !== null),
     refreshing: input.list.isPending,
     holdsTask: input.holdsTask && !input.needsApprovalObservation,
     approvalRevision,

@@ -573,7 +573,7 @@ it("shows task details in the header when a card is available for a listed task"
   expect(container.textContent).toContain("Task summary");
 });
 
-it("opens the waiting worker and follows approval changes while its transcript chip is absent", async () => {
+it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", async (list) => {
   reset();
   state.readApprovalAtoms = true;
   state.lookupCapable = true;
@@ -590,7 +590,6 @@ it("opens the waiting worker and follows approval changes while its transcript c
     mainMessagesSinceQuiet: 0,
     worker,
   });
-  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
   const request = (requestId: string, threadId: ThreadId) => ({
     kind: "approval",
     since: at,
@@ -618,26 +617,36 @@ it("opens the waiting worker and follows approval changes while its transcript c
   );
   const onOpenThread = vi.fn();
   root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <WorkWithChip
-        visible
-        taskId={taskId}
-        onOpenTask={() => {}}
-        onOpenThread={onOpenThread}
-        renderTaskApprovals={(taskObservation) => (
-          <MobileBotApprovals
-            environmentId={environmentId}
-            threadId={ThreadId.make("bot")}
-            taskId={taskId}
-            chips={new Map()}
-            taskObservation={taskObservation}
-            onOpenThread={onOpenThread}
-          />
-        )}
-      />,
-    ),
+  const renderTask = () =>
+    act(async () =>
+      root?.render(
+        <WorkWithChip
+          visible
+          taskId={taskId}
+          onOpenTask={() => {}}
+          onOpenThread={onOpenThread}
+          renderTaskApprovals={(taskObservation) => (
+            <MobileBotApprovals
+              environmentId={environmentId}
+              threadId={ThreadId.make("bot")}
+              taskId={taskId}
+              chips={new Map()}
+              taskObservation={taskObservation}
+              onOpenThread={onOpenThread}
+            />
+          )}
+        />,
+      ),
+    );
+  await renderTask();
+  expect(state.lookup).not.toHaveBeenCalled();
+  Object.assign(
+    state.task,
+    list === "failed"
+      ? { isPending: false, error: "Unreadable task view" }
+      : { isPending: false, isSuccess: true, data: { rows: [row] } },
   );
+  await renderTask();
   expect(container.textContent).toContain("1 waiting");
   const link = container.querySelector<HTMLButtonElement>(
     '[aria-label="Open worker · Waiting worker"]',

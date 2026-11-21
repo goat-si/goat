@@ -39,7 +39,7 @@ export type TaskLookupFacts = {
   /** The server looks tasks up, the computer is connected, and this device may read. */
   readonly able: boolean;
   readonly permitted: boolean;
-  /** A current-list read has succeeded for this computer and bot. */
+  /** The current list has data, or its failure allows a lookup for approvals. */
   readonly established: boolean;
   /** A current-list read is in flight. */
   readonly refreshing: boolean;
