@@ -276,7 +276,15 @@ const trimRuntimeFonts = Effect.fn("desktopArtifact.trimRuntimeFonts")(function*
         message: "Cannot decompress SSH runtime",
       });
     }
-    yield* runArchiveCommand(input.tar, ["--delete", "-f", unpacked, ...input.archive.fontMembers]);
+    // macOS bsdtar's archives stop short of GNU's 10240-byte record, which breaks --delete.
+    yield* runArchiveCommand(input.tar, [
+      "--delete",
+      "-b",
+      "1",
+      "-f",
+      unpacked,
+      ...input.archive.fontMembers,
+    ]);
     yield* runArchiveCommand("gzip", ["-n", unpacked]);
     yield* fs.copyFile(unpacked + ".gz", input.destination);
   } else {
