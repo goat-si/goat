@@ -82,10 +82,22 @@ export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhook
     task.routineMode === "work"
       ? `${task.createdAt}:${task.bindingRevision ?? 0}:${renderedKey}`
       : renderedKey;
+  // Legacy bare keys can only belong to the original binding of the same trigger.
+  const matchesLegacy =
+    task.routineMode === "work" && (task.bindingRevision ?? 0) === 0
+      ? sql`OR (coalesce_key = ${renderedKey}
+          AND json_extract(task_json, '$.routineMode') = 'work'
+          AND json_type(task_json, '$.bindingRevision') IS NULL
+          AND json_extract(task_json, '$.createdAt') = ${task.createdAt}
+          AND json_extract(task_json, '$.projectId') = ${task.projectId}
+          AND json_extract(task_json, '$.threadId') = ${task.threadId})`
+      : sql``;
   const pending = yield* sql<{
     delivery_id: string;
   }>`SELECT delivery_id FROM scheduled_task_webhook_pending
-    WHERE task_id = ${task.id} AND coalesce_key = ${coalesceKey} AND state = 'pending' AND due_at > ${now}`;
+    WHERE task_id = ${task.id} AND state = 'pending' AND due_at > ${now}
+      AND (coalesce_key = ${coalesceKey} ${matchesLegacy})
+    ORDER BY due_at LIMIT 1`;
   const logCoalesced = pending.length > 0 ? yield* reserveCoalescedLog : true;
   if (pending.length === 0) {
     yield* checkCapacity;
