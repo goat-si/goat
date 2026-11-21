@@ -177,10 +177,14 @@ export const prepareTransition = (
   const transition = applyChannelTaskEvent(stored.task, event);
   if (!transition.ok) return { ok: false as const, reason: transition.reason };
   const next = options.amend === undefined ? transition.task : options.amend(transition.task);
+  const savedEvent = {
+    ...event,
+    statusAfter: next.status === stored.task.status ? null : next.status,
+  };
   const write: ChannelLedger.ChannelTaskEventWrite = {
     next,
     expectedVersion: stored.task.version,
-    event,
+    event: savedEvent,
     ...(options.narrate === undefined ? {} : { narrate: options.narrate }),
     ...(options.forward === undefined ? {} : { forward: options.forward }),
     ...(options.pendingAnswerMessageId === undefined
@@ -192,7 +196,7 @@ export const prepareTransition = (
     ...(bot === undefined ? [] : [chipDelivery(next, bot)]),
     ...(options.deliveries ?? []),
   ];
-  return { ok: true as const, write, deliveries, next, event };
+  return { ok: true as const, write, deliveries, next, event: savedEvent };
 };
 
 /**
@@ -247,6 +251,7 @@ export const makeCreatedTasks = (input: {
   const specs: ReadonlyArray<{
     readonly index: number;
     readonly title: ChannelTask["title"];
+    readonly doneMeans?: ChannelTask["doneMeans"];
     readonly instruction: string;
     readonly kind?: ChannelTask["kind"] | undefined;
     readonly projectId?: ChannelTask["projectId"] | undefined;
@@ -260,6 +265,9 @@ export const makeCreatedTasks = (input: {
             index: 0,
             title: input.action.title,
             instruction: input.action.instruction,
+            ...(input.action.type === "create_task" && input.action.doneMeans !== undefined
+              ? { doneMeans: input.action.doneMeans }
+              : {}),
             ...(input.action.type === "run_turn" ? { kind: "turn" as const } : {}),
             ...(input.action.type !== "create_task" || input.action.projectId === undefined
               ? {}
@@ -285,6 +293,7 @@ export const makeCreatedTasks = (input: {
       originInputId: input.inputId,
       requester: input.requester,
       title: spec.title,
+      ...(spec.doneMeans === undefined ? {} : { doneMeans: spec.doneMeans }),
       instruction: spec.instruction,
       status: "received",
       version: 1,
@@ -310,6 +319,7 @@ export const makeCreatedTasks = (input: {
           payload: {
             title: task.title,
             instruction: task.instruction,
+            ...(task.doneMeans === undefined ? {} : { doneMeans: task.doneMeans }),
             originInputId: input.inputId,
             ...(task.notesChangeRequested === undefined
               ? {}

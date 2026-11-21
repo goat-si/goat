@@ -871,9 +871,12 @@ const make = Effect.gen(function* () {
       }
       // In a GOAT Bot session only the task's newest result run may report for it; an earlier
       // run's delayed report, another task's, or a background command's notice is refused.
-      if (isGoatBotSessionThreadId(worker.threadId)) {
+      const sessionWorker = isGoatBotSessionThreadId(worker.threadId);
+      if (sessionWorker) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
+        if (input.doneMeans !== undefined && runId === undefined)
+          return yield* new ChannelGatewayError({ reason: "forbidden" });
         if (runId !== undefined) {
           const records = yield* threads
             .getThreadRecords(worker.threadId, ["runs", "messages"])
@@ -885,6 +888,11 @@ const make = Effect.gen(function* () {
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }
+      if (
+        input.doneMeans !== undefined &&
+        (!sessionWorker || stored.task.kind !== "turn" || input.status !== "running")
+      )
+        return yield* new ChannelGatewayError({ reason: "invalid_input" });
       if (yield* ledger.hasTaskEvent(input.eventId)) return;
       const eventId = input.eventId as ChannelTaskEventId;
       const task = stored.task;
@@ -901,6 +909,9 @@ const make = Effect.gen(function* () {
               payload: {
                 generation: task.generation,
                 summary: input.summary,
+                ...(task.doneMeans === undefined && input.doneMeans !== undefined
+                  ? { doneMeans: input.doneMeans }
+                  : {}),
                 ...(milestone === undefined ? {} : { milestone }),
               },
             },

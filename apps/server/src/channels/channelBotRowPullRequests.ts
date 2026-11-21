@@ -1,6 +1,8 @@
 import {
   CHANNEL_BOT_ROW_PULL_REQUESTS,
+  CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   PositiveInt,
+  IsoDateTime,
   PullRequestState,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
@@ -51,6 +53,7 @@ const decodeColumns = Schema.decodeUnknownOption(
             repository: TrimmedNonEmptyString,
             number: PositiveInt,
             url: TrimmedNonEmptyString,
+            linkedAt: Schema.optionalKey(IsoDateTime),
             source: ThreadPullRequestLinkSource,
             snapshot: Schema.NullOr(
               Schema.Struct({
@@ -69,6 +72,18 @@ const decodeColumns = Schema.decodeUnknownOption(
     ]),
   ),
 );
+
+export const taskActivityPullRequestLinks = (json: string) => {
+  const decoded = decodeColumns(json);
+  if (Option.isNone(decoded)) return [];
+  return (decoded.value[0] ?? [])
+    .toSorted((a, b) => (b.linkedAt ?? "").localeCompare(a.linkedAt ?? ""))
+    .filter((link) => link.linkedAt !== undefined && link.source !== "stack-dismissed")
+    .slice(0, CHANNEL_BOT_TASK_ACTIVITY_LIMIT)
+    .flatMap(({ repository, number, linkedAt }) =>
+      linkedAt === undefined ? [] : [{ repository, number, linkedAt }],
+    );
+};
 
 const pullRequestKey = (item: { readonly repository: string; readonly number: number }) =>
   item.repository + "#" + item.number;

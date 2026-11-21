@@ -10,7 +10,9 @@ import {
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
   type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
-  ChannelTaskView,
+  type ChannelTaskView,
+  type ChannelSnoozeBotTaskInput,
+  type ChannelUnsnoozeBotTaskInput,
   EnvironmentId,
   type ChannelListChildWorkInput,
   type ChannelListChildWorkResult,
@@ -43,6 +45,7 @@ import {
   observedPullRequestSource,
   threadPullRequestColumns,
   threadPullRequestSource,
+  taskActivityPullRequestLinks,
   type PullRequestSource,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
@@ -60,11 +63,12 @@ import {
   readMessageMark,
   taskRowUnread,
 } from "./channelTaskMessageMarks.ts";
+import { readBotTaskActivity } from "./channelBotTaskActivity.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
-const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
+const decodeView = TaskViews.decodeTaskView;
 const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
 const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -84,6 +88,14 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelUpdateTaskViewInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelTaskView, ChannelGatewayError>;
+    readonly snooze: (
+      input: ChannelSnoozeBotTaskInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelTaskView, ChannelGatewayError>;
+    readonly unsnooze: (
+      input: ChannelUnsnoozeBotTaskInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelTaskView, ChannelGatewayError>;
     readonly list: (
       owner: ChannelConnectionOwner,
       botId?: BotId,
@@ -97,6 +109,10 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelGetBotTaskInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<BotWorkResult, ChannelGatewayError>;
+    readonly readAgentTask: (
+      taskId: ChannelTask["taskId"],
+      ownerId: string,
+    ) => Effect.Effect<ChannelTask & Pick<BotWorkResult, "activity">, ChannelGatewayError>;
     readonly searchBotTasks: (
       input: ChannelSearchBotTasksInput,
       owner: ChannelConnectionOwner,
@@ -120,7 +136,7 @@ const make = Effect.gen(function* () {
   const warnPullRequests = makeMarkWarnings("GOAT Bot work row pull request");
   /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
-    owner: ChannelConnectionOwner,
+    owner: Pick<ChannelConnectionOwner, "ownerId">,
     environmentId: EnvironmentId,
     viewsByTask: ReadonlyMap<string, ChannelTaskView>,
     tasks: ReadonlyArray<ChannelTask>,
@@ -128,6 +144,8 @@ const make = Effect.gen(function* () {
       readonly threadsOnly?: ReadonlySet<string>;
       readonly launchLimit?: number;
       readonly unknownView?: boolean;
+      readonly skipLaunches?: boolean;
+      readonly activity?: boolean;
     },
   ) {
     const countInputs = encodeJson(
@@ -195,8 +213,9 @@ const make = Effect.gen(function* () {
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
     // cannot hide that a task has more launches than the page lists.
     const truncated = new Set<string>();
-    const childRows: ReadonlyArray<ChildRow> =
-      launchLimit === undefined
+    const childRows: ReadonlyArray<ChildRow> = options.skipLaunches
+      ? []
+      : launchLimit === undefined
         ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
         json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
       FROM channel_runtime_state s
@@ -305,6 +324,7 @@ const make = Effect.gen(function* () {
           task: {
             taskId: task.taskId,
             title: task.title,
+            ...(task.doneMeans === undefined ? {} : { doneMeans: task.doneMeans }),
             status: task.status,
             updatedAt: task.updatedAt,
             ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
@@ -312,7 +332,9 @@ const make = Effect.gen(function* () {
           },
           view,
           lastActivityAt: task.updatedAt,
-          unread: taskRowUnread(task.updatedAt, view.readThrough, mark),
+          unread:
+            view.snoozedUntil === undefined &&
+            taskRowUnread(task.updatedAt, view.readThrough, mark),
           mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
           // A worker on another machine is not a thread this machine's rows can open.
           ...(task.worker === undefined || task.worker.host !== undefined
@@ -367,7 +389,21 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork, launchesTruncated, skippedLaunches, unreadablePullRequests };
+    return {
+      rows,
+      remoteWork,
+      launchesTruncated,
+      skippedLaunches,
+      unreadablePullRequests,
+      activityChildren: options.activity ? children.map(({ child }) => child) : [],
+      activityPullRequests: options.activity
+        ? [...workerRows, ...childRows].flatMap((column) =>
+            column.pull_requests_json === null
+              ? []
+              : taskActivityPullRequestLinks(column.pull_requests_json),
+          )
+        : [],
+    };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
@@ -411,40 +447,96 @@ const make = Effect.gen(function* () {
         return view;
       }),
     ).pipe(Effect.mapError(failed));
-    const viewsByTask = new Map(decodedViews.map((view) => [view.taskId, view]));
+    const storedViews = new Map(decodedViews.map((view) => [view.taskId, view]));
     const pinned = encodeJson(
       decodedViews.filter((view) => view.pinnedAt !== null).map((view) => view.taskId),
+    );
+    const snoozes = encodeJson(
+      decodedViews.flatMap((view) =>
+        view.snoozedUntil === undefined || Date.parse(view.snoozedUntil) <= now
+          ? []
+          : [{ id: view.taskId, until: view.snoozedUntil, revision: view.snoozedStatusVersion }],
+      ),
     );
     const cutoffIso = DateTime.formatIso(DateTime.makeUnsafe(cutoff));
     const source = yield* sql<{
       readonly task_json: string;
-      readonly updated_at: string;
-      readonly task_id: string;
-    }>`SELECT t.task_json, t.updated_at, t.task_id FROM channel_tasks t
+      readonly status_version: number;
+    }>`WITH snoozes AS (
+      SELECT t.task_id
+      FROM json_each(${snoozes}) s
+      JOIN channel_tasks t ON t.task_id = json_extract(s.value, '$.id')
+        AND t.status_version = json_extract(s.value, '$.revision')
+      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
+      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
+        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
+    ), recent AS (
+      SELECT t.task_json, t.status_version, t.updated_at, t.task_id
+      FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
-        AND c.kind = 'goat'
+        AND c.kind = 'goat' AND t.task_id NOT IN (SELECT task_id FROM snoozes)
         AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
           AND (t.status NOT IN ('completed', 'failed', 'cancelled')
             OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
             OR t.task_id IN (SELECT value FROM json_each(${pinned}))))
-          -- The bot's own turn shows only while work it launched still runs; its reply is in the chat.
           OR (json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
             SELECT 1 FROM channel_runtime_state s
             WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
               AND json_extract(s.value_json, '$.generation') = t.generation
               AND json_extract(s.value_json, '$.state') IN ('launched', 'bound', 'unknown'))))
       ORDER BY (t.task_id IN (SELECT value FROM json_each(${pinned}))) DESC,
-        t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
-    const ordered = [...source].sort(
-      (a, b) =>
-        Buffer.compare(Buffer.from(b.updated_at), Buffer.from(a.updated_at)) ||
-        Buffer.compare(Buffer.from(b.task_id), Buffer.from(a.task_id)),
+        t.updated_at DESC, t.task_id DESC LIMIT 100
+    )
+    SELECT task_json, status_version
+    FROM recent ORDER BY updated_at DESC, task_id DESC`.pipe(Effect.mapError(failed));
+    const folded = yield* sql<{
+      readonly task_json: string;
+      readonly status_version: number;
+    }>`SELECT t.task_json, t.status_version FROM json_each(${snoozes}) s
+      JOIN channel_tasks t ON t.task_id = json_extract(s.value, '$.id')
+        AND t.status_version = json_extract(s.value, '$.revision')
+      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
+      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
+        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
+      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 50`.pipe(Effect.mapError(failed));
+    const decodeRows = (
+      rows: ReadonlyArray<{ readonly task_json: string; readonly status_version: number }>,
+    ) =>
+      Effect.try(() =>
+        rows.map((item) => {
+          const task = decodeTask(item.task_json);
+          const stored = storedViews.get(task.taskId);
+          return {
+            task,
+            view: stored && TaskViews.visibleTaskView(stored, item.status_version, now),
+          };
+        }),
+      ).pipe(Effect.mapError(failed));
+    const recent = yield* decodeRows(source);
+    const suspended = yield* decodeRows(folded);
+    const viewsByTask = new Map(
+      [...recent, ...suspended].flatMap(({ task, view }) =>
+        view === undefined ? [] : [[task.taskId, view] as const],
+      ),
     );
-    const tasks = yield* Effect.try(() => ordered.map((item) => decodeTask(item.task_json))).pipe(
-      Effect.mapError(failed),
+    const built = yield* rowsFor(
+      owner,
+      environmentId,
+      viewsByTask,
+      recent.map(({ task }) => task),
+      {},
     );
-    const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});
+    const snoozed = (yield* rowsFor(
+      owner,
+      environmentId,
+      viewsByTask,
+      suspended.map(({ task }) => task),
+      {
+        skipLaunches: true,
+      },
+    )).rows.filter((row) => row.kind === "task" && row.view.snoozedUntil !== undefined);
+    const nextSnoozeExpiry = snoozed[0]?.view.snoozedUntil;
     for (const threadId of built.unreadablePullRequests)
       yield* warnPullRequests(
         threadId,
@@ -453,6 +545,7 @@ const make = Effect.gen(function* () {
       );
     return {
       rows: built.rows,
+      ...(nextSnoozeExpiry === undefined ? {} : { snoozed, nextSnoozeExpiry }),
       mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
     };
@@ -469,12 +562,20 @@ const make = Effect.gen(function* () {
     const viewRows =
       keys.length === 0
         ? []
-        : yield* sql<{ readonly key: string; readonly value_json: string }>`SELECT key, value_json
-            FROM channel_runtime_state WHERE key IN ${sql.in(keys)}`.pipe(Effect.mapError(failed));
+        : yield* sql<{
+            readonly key: string;
+            readonly value_json: string;
+            readonly status_version: number;
+          }>`SELECT s.key, s.value_json, t.status_version
+            FROM channel_runtime_state s LEFT JOIN channel_tasks t
+              ON t.task_id = CASE WHEN json_valid(s.value_json) THEN json_extract(s.value_json, '$.taskId') END
+              AND t.owner_id = ${owner.ownerId}
+            WHERE s.key IN ${sql.in(keys)}`.pipe(Effect.mapError(failed));
     const viewsByTask = new Map<string, ChannelTaskView>();
     // An unreadable view, or one under another task's key, leaves its row with the empty view and
     // marks the page partial; the current list still fails closed on it.
     let skippedViews = 0;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
     for (const row of viewRows) {
       const view = yield* Effect.try(() => decodeView(row.value_json)).pipe(
         Effect.orElseSucceed(() => undefined),
@@ -483,7 +584,7 @@ const make = Effect.gen(function* () {
         skippedViews += 1;
         continue;
       }
-      viewsByTask.set(view.taskId, view);
+      viewsByTask.set(view.taskId, TaskViews.visibleTaskView(view, row.status_version, now));
     }
     const built = yield* rowsFor(owner, environmentId, viewsByTask, page.tasks, {
       threadsOnly: page.threadsOnly,
@@ -530,7 +631,11 @@ const make = Effect.gen(function* () {
     if (bot === undefined)
       return { rows: [], mainMessageCount: 0, ...(history === undefined ? {} : { history: {} }) };
     return yield* history === undefined
-      ? current(owner, botId, bot.bot.environmentId)
+      ? sql
+          .withTransaction(current(owner, botId, bot.bot.environmentId))
+          .pipe(
+            Effect.mapError((error) => (error instanceof ChannelGatewayError ? error : failed())),
+          )
       : historyPage(owner, botId, bot.bot.environmentId, history.cursor);
   });
   const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
@@ -539,19 +644,23 @@ const make = Effect.gen(function* () {
   ) {
     return yield* listChildWork(ledger, childWork, owner.ownerId, input);
   });
-  const getBotTask = Effect.fn("ChannelBotThreads.getBotTask")(function* (
+  const readBotTask = Effect.fn("ChannelBotThreads.getBotTask")(function* (
     input: ChannelGetBotTaskInput,
-    owner: ChannelConnectionOwner,
+    owner: Pick<ChannelConnectionOwner, "ownerId">,
+    goatOnly: boolean,
   ) {
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
     const rows = yield* sql<{
       readonly task_id: string;
       readonly conversation_id: string;
+      readonly status_version: number;
       readonly task_json: string;
-    }>`SELECT t.task_id, t.conversation_id, t.task_json FROM channel_tasks t
+    }>`SELECT t.task_id, t.conversation_id, t.task_json, t.status_version FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND (${goatOnly ? 1 : 0} = 0 OR c.kind = 'goat')`.pipe(
+      Effect.mapError(failed),
+    );
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
@@ -582,19 +691,24 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => undefined),
           );
     const known = view !== undefined && view.taskId === task.taskId;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
     const built = yield* rowsFor(
       owner,
       bot.bot.environmentId,
-      known ? new Map([[task.taskId, view]]) : new Map(),
+      known
+        ? new Map([[task.taskId, TaskViews.visibleTaskView(view, stored.status_version, now)]])
+        : new Map(),
       [task],
       {
         launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
         unknownView: !known,
+        activity: true,
       },
     );
     const summary = {
       taskId: task.taskId,
       ...cutBotWorkTitle(task.title),
+      ...(task.doneMeans === undefined ? {} : { doneMeans: task.doneMeans }),
       status: task.status,
       updatedAt: task.updatedAt,
       ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
@@ -606,7 +720,15 @@ const make = Effect.gen(function* () {
         : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } };
     const row = built.rows.find((item) => item.kind === "task");
     if (known && row === undefined) return yield* failed();
+    const activity = yield* readBotTaskActivity(sql, {
+      task,
+      environmentId: bot.bot.environmentId,
+      children: built.activityChildren,
+      links: built.activityPullRequests,
+      partial: built.skippedLaunches > 0 || built.launchesTruncated.length > 0,
+    });
     return {
+      activity,
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }
@@ -621,6 +743,28 @@ const make = Effect.gen(function* () {
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
     };
   });
+  const readAgentTask = Effect.fn("ChannelBotThreads.readAgentTask")(function* (
+    taskId: ChannelTask["taskId"],
+    ownerId: string,
+  ) {
+    yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
+    const stored = yield* ledger.getTask(taskId).pipe(Effect.mapError(failed));
+    if (stored?.ownerId !== ownerId) return yield* new ChannelGatewayError({ reason: "not_found" });
+    const activity = yield* readBotTask({ taskId, botId: stored.botId }, { ownerId }, false).pipe(
+      Effect.map((result) => result.activity),
+      Effect.catchIf(
+        (error) => error.reason === "not_found",
+        () =>
+          readBotTaskActivity(sql, {
+            task: stored.task,
+            children: [],
+            links: [],
+            partial: true,
+          }),
+      ),
+    );
+    return { ...stored.task, activity };
+  });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (
     input: ChannelSearchBotTasksInput,
     owner: ChannelConnectionOwner,
@@ -631,9 +775,12 @@ const make = Effect.gen(function* () {
   return ChannelBotThreads.of({
     list,
     update: views.update,
+    snooze: views.snooze,
+    unsnooze: views.snooze,
     listChildWork: listChildWorkFor,
     retry,
-    getBotTask,
+    getBotTask: (input, owner) => readBotTask(input, owner, true),
+    readAgentTask,
     searchBotTasks,
   });
 });
@@ -651,6 +798,10 @@ export const rpcHandlers = (
     service.listChildWork(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: (input: ChannelRetryTaskInput) =>
     service.retry(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask]: (input: ChannelSnoozeBotTaskInput) =>
+    service.snooze(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask]: (input: ChannelUnsnoozeBotTaskInput) =>
+    service.unsnooze(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: (input: ChannelGetBotTaskInput) =>
     service.getBotTask(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: (input: ChannelSearchBotTasksInput) =>

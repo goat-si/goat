@@ -1,10 +1,21 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelChildWorkId, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelChildWorkId,
+  ChannelQuestionId,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as TaskViews from "./channelTaskViews.ts";
@@ -55,6 +66,210 @@ const insertTask = (id: string, taskOwner: string, status: string, updatedAt: st
   });
 
 describe("ChannelBotThreads", () => {
+  it.effect("reads the bot's completion criterion and newest task activity with subjects", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1791763200000);
+      yield* setupBot;
+      const doneMeans = "The build passes and the fix has a pull request.";
+      harness.script.current = () =>
+        Effect.succeed({
+          replyText: "On it.",
+          action: {
+            type: "create_task",
+            title: "Repair build",
+            instruction: "Fix the build.",
+            doneMeans,
+          },
+        });
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const service = yield* BotThreads.ChannelBotThreads;
+      yield* gateway.ingest(goatInput("do: repair build", "done-means"), rpcContext);
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      assert.isDefined(task?.worker);
+      if (!task?.worker) return yield* Effect.die("Work did not start");
+      const read = () =>
+        service.getBotTask({ taskId: task.taskId, botId: BotId.make("main") }, owner);
+      const questionId = ChannelQuestionId.make("which-build");
+      const stored = (yield* ledger.getTask(task.taskId))!;
+      yield* TestClock.adjust("1 minute");
+      yield* commitTransition(ledger, stored, {
+        type: "task.worker.observed",
+        payload: {
+          generation: task.generation,
+          observed: {
+            pullRequests: [
+              {
+                repository: "example/build",
+                number: 12,
+                watching: false,
+                url: "https://github.com/example/build/pull/12",
+              },
+            ],
+            needsYou: [],
+          },
+        },
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: {
+            question: { questionId, text: "Which build?", askedAt: "2026-10-12T00:02:00.000Z" },
+          },
+        },
+        { actor: "agent" },
+      );
+      const result = yield* read();
+      assert.strictEqual(
+        result.task.state === "known" && result.task.row.task.doneMeans,
+        doneMeans,
+      );
+      const entries = result.activity?.entries ?? [];
+      assert.deepInclude(
+        entries.map(({ type }) => type),
+        "created",
+      );
+      assert.include(
+        entries.find((entry) => entry.type === "worker_started"),
+        {
+          environmentId: task.worker.environmentId,
+          threadId: task.worker.threadId,
+        },
+      );
+      assert.include(
+        entries.find((entry) => entry.type === "pr_linked"),
+        { repo: "example/build", number: 12 },
+      );
+      assert.include(entries[0], { type: "asked", requestId: questionId, actor: "bot" });
+      for (let index = 0; index < 26; index++) {
+        yield* TestClock.adjust("1 second");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId, answer: "Staging." },
+          },
+          { actor: "user" },
+        );
+        yield* TestClock.adjust("1 second");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: { questionId, text: "Which build?", askedAt: "2026-10-12T00:02:00.000Z" },
+            },
+          },
+          { actor: "agent" },
+        );
+      }
+      const latest = (yield* read()).activity?.entries ?? [];
+      assert.lengthOf(latest, 50);
+      assert.include(latest[0], { type: "asked", requestId: questionId });
+      assert.deepStrictEqual(
+        latest.map((entry) => entry.at),
+        latest
+          .map((entry) => entry.at)
+          .toSorted()
+          .reverse(),
+      );
+    }).pipe(
+      Effect.provide(
+        BotThreads.layer.pipe(
+          Layer.provideMerge(TaskViews.layer),
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
+  });
+
+  it.effect(
+    "moves snoozed work out of the current rows until expiry and never mutes an open ask",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(1791763200000);
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* gateway.ingest(goatInput("do: choose a project", "snoozed-ask"), rpcContext);
+        yield* runtime.drain;
+        const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        assert.strictEqual(task?.status, "waiting_input");
+        if (task === undefined) return yield* Effect.die("Work was not created");
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const before = yield* members.openAsks(owner);
+        assert.strictEqual(before.total, 1);
+        const target = { taskId: task.taskId, botId: BotId.make("main") };
+        const denied = yield* Effect.flip(
+          service.snooze(
+            { ...target, until: "2026-10-12T01:00:00.000Z" },
+            { ...owner, ownerId: "another-owner" },
+          ),
+        );
+        assert.strictEqual(denied.reason, "task_not_found");
+        const wrongBot = yield* Effect.flip(
+          service.snooze(
+            { ...target, botId: BotId.make("other"), until: "2026-10-12T01:00:00.000Z" },
+            owner,
+          ),
+        );
+        assert.strictEqual(wrongBot.reason, "task_not_found");
+        const seen = yield* watchTaskChanges(owner);
+        yield* service.snooze({ ...target, until: "2026-10-12T01:00:00.000Z" }, owner);
+        assert.strictEqual(yield* nextTaskChange(seen), 1);
+        const home = yield* service.list(owner);
+        assert.deepStrictEqual(home.rows, []);
+        assert.include(home.snoozed?.[0]?.view, {
+          taskId: task.taskId,
+          snoozedUntil: "2026-10-12T01:00:00.000Z",
+        });
+        assert.isFalse(home.snoozed?.[0]?.unread ?? true);
+        assert.deepStrictEqual(yield* members.openAsks(owner), before);
+        yield* service.unsnooze(target, owner);
+        assert.lengthOf((yield* service.list(owner)).rows, 1);
+        const activity = (yield* service.getBotTask(target, owner)).activity?.entries ?? [];
+        assert.deepStrictEqual(
+          activity
+            .filter((entry) => entry.type === "snoozed" || entry.type === "unsnoozed")
+            .map(({ type, actor }) => [type, actor]),
+          [
+            ["unsnoozed", "person"],
+            ["snoozed", "person"],
+          ],
+        );
+        yield* service.snooze({ ...target, until: "2026-10-12T01:00:00.000Z" }, owner);
+        yield* TestClock.adjust("1 hour");
+        assert.lengthOf((yield* service.list(owner)).rows, 1);
+        yield* service.snooze({ ...target, until: "2026-10-12T02:00:00.000Z" }, owner);
+        yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+          type: "task.failed",
+          payload: { generation: task.generation, reason: "Stopped before selecting a project." },
+        });
+        const after = yield* service.list(owner);
+        assert.lengthOf(after.rows, 1);
+        assert.lengthOf(after.snoozed ?? [], 0);
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    },
+  );
+
   it.effect(
     "keeps an old pinned task within the cap and restores the newest tasks on unpin",
     () => {
