@@ -111,9 +111,10 @@ export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun"
 ) {
   let current: string | undefined = runId;
   for (let hops = 0; current !== undefined && hops < 32; hops += 1) {
-    const run = records?.runs.find((candidate) => candidate.id === current);
+    const runIdAtHop: string = current;
+    const run = records?.runs.find((candidate) => candidate.id === runIdAtHop);
     const projected =
-      records === undefined ? yield* projectedRunLineage(sql, threadId, current) : undefined;
+      records === undefined ? yield* projectedRunLineage(sql, threadId, runIdAtHop) : undefined;
     const messageId = run?.userMessageId ?? projected?.messageId;
     if (messageId === undefined) return undefined;
     const intent = yield* sessionIntentFor(sql, threadId, messageId);
