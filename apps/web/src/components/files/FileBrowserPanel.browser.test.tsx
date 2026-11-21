@@ -32,7 +32,10 @@ vi.mock("./projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "rea
 vi.mock("~/state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.readFile }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/composerHandleContext", () => ({ useComposerHandleContext: () => null }));
-vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: state.copy }));
+vi.mock("~/hooks/useCopyToClipboard", () => ({
+  writeTextToClipboard: state.copy,
+  useCopyToClipboard: () => ({ copyToClipboard: state.copy, isCopied: false }),
+}));
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
 vi.mock("~/fileContextMenu", () => ({

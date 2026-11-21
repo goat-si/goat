@@ -205,6 +205,20 @@ function markdownPreview(truncated: boolean, contents = "- [ ] Keep the rest of 
   return filePreview("tasks.md");
 }
 
+it("copies the complete file and hides the action for truncated content", async () => {
+  using _setup = setup();
+  state.file = { relativePath: "notes.txt", contents: "hello", byteLength: 5, truncated: false };
+  await using screen = await render(filePreview("notes.txt"));
+  using copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  await screen.getByRole("button", { name: "Copy contents" }).click();
+  expect(copy).toHaveBeenCalledWith("hello");
+  state.file = { ...state.file, truncated: true };
+  await screen.rerender(filePreview("notes.txt"));
+  await expect
+    .element(screen.getByRole("button", { name: "Copy contents" }))
+    .not.toBeInTheDocument();
+});
+
 function documentPreview(workspaceMutationId: string, fileRevision: string) {
   state.file = null;
   state.assetUrl = {

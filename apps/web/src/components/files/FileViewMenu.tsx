@@ -1,4 +1,5 @@
 import { CopyIcon } from "~/components/solar";
+import { CheckIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProjectReadFileResult, ScopedThreadRef } from "@goat/contracts";
 import {
@@ -14,6 +15,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useFileContextMenu } from "~/fileContextMenu";
 import { copyFilePath, resolveFilePathCopyTargets } from "~/filePathCopy";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { isTextFieldFocused } from "~/lib/editableFocus";
 import { isMacPlatform } from "~/lib/utils";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -22,6 +24,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { copyFileContents, copyFileNames } from "./fileContentsCopy";
 import { sourceEditorContent } from "./sourceEditorContent";
 import { FileGoToLine } from "./FileGoToLine";
+import { FileSurfaceAction } from "./fileSurfaceChrome";
 import { copyFilePathsForCommand } from "./filePathCopyShortcut";
 import { FileShortcutsHelp } from "./FileShortcutsHelp";
 import { FILE_TREE_FOCUS_REQUEST } from "./fileTreeShortcuts";
@@ -79,6 +82,13 @@ export function FileViewMenu(props: {
   const fileContextMenu = useFileContextMenu(props.environmentId);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [goToLineOpen, setGoToLineOpen] = useState(false);
+  const copyableContents =
+    props.readResult && !props.readResult.truncated ? props.readResult.contents : "";
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: props.filePath,
+    onError: (error) =>
+      toastManager.add({ type: "error", title: "Could not copy file", description: error.message }),
+  });
   const view = () => triggerRef.current?.closest<HTMLElement>("[data-file-view]") ?? null;
   const focusView = () => {
     const element = view();
@@ -198,6 +208,14 @@ export function FileViewMenu(props: {
         />
       ) : null}
       <FileShortcutsHelp />
+      {copyableContents ? (
+        <FileSurfaceAction
+          label={isCopied ? "Copied" : "Copy contents"}
+          onPress={() => copyToClipboard(copyableContents, undefined)}
+        >
+          {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+        </FileSurfaceAction>
+      ) : null}
       <Menu>
         <Tooltip>
           <TooltipTrigger
