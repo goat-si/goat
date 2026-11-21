@@ -99,6 +99,7 @@ vi.mock("./openBotLibraryFile", () => ({
 // The thread state GOAT Bot's steps are read from: each thread's items, and when a reader holds or
 // lets go of one.
 const threadReads = vi.hoisted(() => ({
+  approvals: new Map<string, ReadonlyArray<unknown>>(),
   held: [] as string[],
   released: [] as string[],
   itemsAtom: null as
@@ -123,11 +124,14 @@ vi.mock("../../state/threads", async () => {
     ref.environmentId + "\u0000" + ref.threadId;
   return {
     // The visit write is the transport; a test that needs it stands in for useAtomCommand.
-    threadEnvironment: { visit: "visit" },
+    threadEnvironment: { visit: "visit", respondToApproval: "respond" },
+    childThreadApprovalsAtom: () => Atom.make([]),
     environmentThreadDetails: {
       quietVisibleTurnItemsAtom: (ref: { environmentId: string; threadId: string }) =>
         quiet(keyOf(ref)),
       historyAtom: () => whole,
+      pendingRequestsAtom: (ref: { threadId: string }) =>
+        Atom.make({ approvals: threadReads.approvals.get(ref.threadId) ?? [] }),
     },
   };
 });

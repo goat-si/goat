@@ -13,7 +13,7 @@ import Animated, { useAnimatedStyle, type DerivedValue } from "react-native-rean
 import { AppText } from "../../components/ui/AppText";
 import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { ChildApprovalContext } from "./ChildApprovalContext";
+import { ChildApprovalContext, type WaitingWorker } from "./ChildApprovalContext";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 
 function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
@@ -61,25 +61,30 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   );
 }
 
+const NO_APPROVALS = Atom.make<ReadonlyArray<ChildThreadApproval>>([]);
+
 export function ChildThreadApprovals(props: {
   readonly threadRef?: ScopedThreadRef | null;
-  readonly approvalsAtom?: Atom.Atom<ReadonlyArray<ChildThreadApproval>>;
+  readonly approvals?: ReadonlyArray<ChildThreadApproval>;
+  readonly workers?: ReadonlyArray<WaitingWorker>;
   readonly maxHeight?: DerivedValue<number>;
   readonly onOpenWorker?: (thread: ScopedThreadRef) => void;
 }) {
   const { maxHeight, onOpenWorker } = props;
-  const approvals = useAtomValue(
-    props.approvalsAtom ?? childThreadApprovalsAtom(props.threadRef ?? null),
+  const children = useAtomValue(
+    props.threadRef ? childThreadApprovalsAtom(props.threadRef) : NO_APPROVALS,
   );
+  const approvals = props.approvals ?? children;
   const heightStyle = useAnimatedStyle(() => ({
     maxHeight: maxHeight ? Math.min(320, maxHeight.value / 2) : 240,
   }));
-  if (approvals.length === 0) return null;
+  const workers = props.workers ?? approvals;
+  if (approvals.length === 0 && (!onOpenWorker || workers.length === 0)) return null;
   return (
     <Animated.View style={heightStyle} className="overflow-hidden">
       <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled style={{ flexShrink: 1 }}>
         {onOpenWorker ? (
-          <ChildApprovalContext approvals={approvals} onOpenWorker={onOpenWorker} />
+          <ChildApprovalContext approvals={workers} onOpenWorker={onOpenWorker} />
         ) : null}
         {approvals.map((entry) => (
           <ChildApproval
