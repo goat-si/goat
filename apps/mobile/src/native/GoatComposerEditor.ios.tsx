@@ -221,7 +221,7 @@ export function ComposerEditor({
                 ? `${token.instanceId}/${token.model}`
                 : token.type === "context"
                   ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
-                  : basename(token.value),
+                  : basename(token.value).normalize("NFC"),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
           iconUri: appIconUri ?? contextChipIconUri(icon),
           tintsIcon: appIconUri === undefined && icon.kind === "chip",
