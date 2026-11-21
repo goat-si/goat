@@ -382,9 +382,12 @@ it("shows the bot's criterion and activity, with snooze only on a server that su
   expect(text()).toContain("The release notes are reviewed.");
   await act(async () => button("Activity")?.click());
   expect(text()).toContain("Pull request linked · example/release#42");
-  expect(text()).toContain("Worker started · remote-worker on unpaired");
-  expect(text()).toContain("Worker finished · remote-worker on unpaired");
-  expect(threadLinks()).toEqual([["Work thread: Old report", "Open work thread"]]);
+  for (const action of ["started", "finished"]) {
+    const entry = [...container.querySelectorAll("span")].find(
+      (item) => item.textContent === `Worker ${action} · remote-worker on unpaired`,
+    );
+    expect(entry?.closest("a, button, [role='link']")).toBeNull();
+  }
   await act(async () => button("Snooze")?.click());
   await act(async () => button("1 hour")?.click());
   expect(change).toHaveBeenCalledWith(task.row.view, "hour");
