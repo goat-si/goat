@@ -84,7 +84,7 @@ export const channelNotesRevision = Effect.fn("channel.notesRevision")(function*
   return bytes === null ? null : NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 });
 
-export const readableNotesRevision = (notesPath: string) =>
+const readableNotesRevision = (notesPath: string) =>
   channelNotesRevision(notesPath).pipe(
     Effect.catch((cause) =>
       Effect.logWarning("GOAT Bot notes revision unavailable", { cause }).pipe(Effect.as(null)),
