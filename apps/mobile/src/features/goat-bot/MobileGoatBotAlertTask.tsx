@@ -19,7 +19,7 @@ import { useEnvironmentQuery } from "../../state/query";
 
 function useAlertTask(target: ChannelAttentionTarget) {
   const allowed = useAtomValue(
-    channelEnvironment.readAttentionTask.permissionAtom(target.environmentId),
+    channelEnvironment.listBotAttention.permissionAtom(target.environmentId),
   );
   return useEnvironmentQuery(
     allowed

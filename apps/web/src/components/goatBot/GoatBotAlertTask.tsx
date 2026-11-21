@@ -14,7 +14,7 @@ interface Target {
 }
 
 function useAlertTask({ environmentId, taskId, botId, requestId }: Target) {
-  const allowed = useAtomValue(channelEnvironment.readAttentionTask.permissionAtom(environmentId));
+  const allowed = useAtomValue(channelEnvironment.listBotAttention.permissionAtom(environmentId));
   return useEnvironmentQuery(
     allowed
       ? channelEnvironment.getTask({

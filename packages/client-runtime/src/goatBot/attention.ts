@@ -149,7 +149,7 @@ export async function readGoatBotAttentionTarget(
   );
   if (
     result._tag !== "Success" ||
-    !registry.get(channels.readAttentionTask.permissionAtom(target.environmentId))
+    !registry.get(channels.listBotAttention.permissionAtom(target.environmentId))
   )
     return null;
   return { task: result.value, requestId: currentAttentionRequest(result.value, target) };
