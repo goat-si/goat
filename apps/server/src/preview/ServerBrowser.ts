@@ -750,6 +750,7 @@ const make = Effect.gen(function* () {
         desktopViewportStale: true,
         desktopViewportChanges: 0,
         desktopResize: Promise.withResolvers<void>(),
+        desktopResizeUndrawn: false,
         loading: false,
         loadError: undefined,
         titleWatcher: makeBrowserTitleWatcher(cdp, () => {
