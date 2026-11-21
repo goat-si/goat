@@ -223,25 +223,35 @@ export const reconcileBoundBotHandoffAttention = Effect.fn(
   const worker = task.worker;
   if (worker === undefined || worker.host !== undefined || worker.runId === undefined) return;
   const { threadId, environmentId, runId } = worker;
-  const pending = yield* sql<{ handoff_id: string; created_at: string }>`
-      SELECT item.turn_item_id AS handoff_id,
-        json_extract(item.payload_json, '$.handoff.createdAt') AS created_at
-      FROM orchestration_v2_projection_turn_items item
-      WHERE item.thread_id = ${threadId} AND item.run_id = ${runId}
-        AND item.type IN ('human_handoff', 'secret_request') AND item.type = 'human_handoff'
-        AND item.status = 'waiting'
-        AND json_extract(item.payload_json, '$.handoff.kind') = 'approval'
-        AND json_extract(item.payload_json, '$.handoff.target.environmentId') = ${environmentId}
-        AND NOT EXISTS (SELECT 1 FROM channel_bot_attention a
-          WHERE a.event_id = 'handoff:' || item.turn_item_id)
-      ORDER BY item.ordinal
-    `;
-  if (pending.length === 0) return;
   if (isGoatBotSessionThreadId(threadId)) {
     const intent = yield* resolveSessionRun(sql, threadId, undefined, runId);
     if (intent?.task_id !== task.taskId || intent.task_generation !== task.generation) return;
   }
-  for (const { handoff_id, created_at } of pending) {
+  const cutoff = yield* expiryCutoff;
+  const approvals = yield* sql<{ handoff_id: string; created_at: string }>`
+    WITH openings AS (
+      SELECT json_extract(event.payload_json, '$.handoff.handoffId') AS handoff_id,
+        MIN(json_extract(event.payload_json, '$.handoff.createdAt')) AS created_at
+      FROM orchestration_events event
+      WHERE event.application_event_version = 2 AND event.aggregate_kind = 'thread'
+        AND event.stream_id = ${threadId}
+        AND json_extract(event.payload_json, '$.runId') = ${runId}
+        AND event.event_type = 'turn-item.updated'
+        AND json_extract(event.payload_json, '$.type') = 'human_handoff'
+        AND json_extract(event.payload_json, '$.handoff.kind') = 'approval'
+        AND json_extract(event.payload_json, '$.handoff.state') = 'pending'
+        AND json_extract(event.payload_json, '$.handoff.target.environmentId') = ${environmentId}
+      GROUP BY handoff_id
+      HAVING created_at > ${cutoff}
+      ORDER BY created_at DESC, handoff_id DESC
+      LIMIT ${EVENT_LIMIT}
+    )
+    SELECT handoff_id, created_at FROM openings
+    WHERE NOT EXISTS (SELECT 1 FROM channel_bot_attention a
+      WHERE a.event_id = 'handoff:' || openings.handoff_id)
+    ORDER BY created_at, handoff_id
+  `;
+  for (const { handoff_id, created_at } of approvals) {
     yield* writeLocalHandoffAttention(sql, {
       threadId,
       environmentId,
