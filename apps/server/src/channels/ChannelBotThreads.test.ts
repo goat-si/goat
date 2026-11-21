@@ -152,7 +152,7 @@ describe("ChannelBotThreads", () => {
           requestKey: "ssh-build",
           promptDigest: "release",
           state: "bound",
-          createdAt: time,
+          createdAt: old,
           updatedAt: time,
           destination: {
             correlationId: "ssh-build-dispatch",
@@ -263,6 +263,13 @@ describe("ChannelBotThreads", () => {
       assert.include((yield* read()).activity?.entries[0], {
         type: "worker_finished",
         threadId: ThreadId.make("launch-thread:0"),
+      });
+      yield* sql`UPDATE remote_dispatches SET updated_at = '2026-10-12T00:03:30.000Z'
+        WHERE correlation_id = 'ssh-build-dispatch'`;
+      assert.include((yield* read()).activity?.entries[0], {
+        type: "pr_linked",
+        repo: "example/remote-build",
+        number: 3,
       });
       yield* TestClock.adjust("2 minutes");
       for (let index = 0; index < 26; index++) {

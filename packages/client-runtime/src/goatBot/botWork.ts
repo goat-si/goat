@@ -30,6 +30,16 @@ export interface BotWorkTask {
   readonly truncated: boolean;
 }
 
+/** Keep the current list's workers when a by-id lookup adds its capped details. */
+export function mergeBotRemoteWorkers(
+  current: ReadonlyArray<BotRemoteWork>,
+  lookup: ReadonlyArray<BotRemoteWork>,
+) {
+  return [
+    ...new Map([...current, ...lookup].map((worker) => [worker.childWorkId, worker])).values(),
+  ];
+}
+
 export function groupBotWork(
   rows: ReadonlyArray<BotThreadRow>,
   groups: ReadonlyArray<ChannelChildWorkGroup>,

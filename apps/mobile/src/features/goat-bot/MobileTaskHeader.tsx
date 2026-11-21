@@ -1,5 +1,6 @@
 import {
   taskAttemptLabel,
+  mergeBotRemoteWorkers,
   type BotWorkTask,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
@@ -182,8 +183,12 @@ export function MobileTaskHeader(props: {
       ) : null}
       {task ? (
         <MobileTaskActions
-          task={lookup.state === "known" && lookup.result.activity ? lookup.task : task}
-          rows={result?.codingRows ?? props.rows}
+          task={
+            props.task !== undefined && result
+              ? { ...task, remote: mergeBotRemoteWorkers(task.remote, result.remoteWork) }
+              : task
+          }
+          rows={props.task === undefined ? (result?.codingRows ?? props.rows) : props.rows}
           taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}

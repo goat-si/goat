@@ -84,7 +84,7 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
  * finished. Counted states move only to counted ones. The terms are channel_child_work_launches'
  * own; INDEXED BY makes a mismatch fail instead of scanning every child record.
  */
-const openableLaunch = (sql: SqlClient.SqlClient) =>
+export const openableLaunch = (sql: SqlClient.SqlClient) =>
   sql`s.key >= 'child-work:' AND s.key < 'child-work;'
     AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
     AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL

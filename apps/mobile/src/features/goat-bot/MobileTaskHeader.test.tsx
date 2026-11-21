@@ -70,13 +70,14 @@ async function render(
   card: unknown = null,
   chips: ReadonlyMap<string, unknown> = new Map(),
   snooze?: Parameters<typeof MobileTaskHeader>[0]["screen"]["snooze"],
+  listed?: BotWorkTask,
 ) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(container);
   await act(async () =>
     root.render(
       <MobileTaskHeader
-        task={undefined}
+        task={listed}
         rows={[]}
         chips={chips as never}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {}, snooze }}
@@ -369,4 +370,30 @@ it("shows the bot's criterion and activity, with snooze only on a server that su
   await act(async () => button("1 hour")?.click());
   expect(change).toHaveBeenCalledWith(task.row.view, "hour");
   await act(async () => current.unmount());
+});
+
+it("keeps every listed worker when Activity arrives with capped worker details", async () => {
+  const linked = Array.from({ length: 21 }, (_, index) => ({
+    childWorkId: "worker-" + index,
+    taskId: row.task.taskId,
+    callerThreadId: "bot",
+    host: "worker-box",
+    state: "completed",
+    lastActivityAt: at,
+  })) as unknown as BotWorkResult["remoteWork"];
+  const task = { ...knownTask, remote: linked };
+  const lookup: MobileTaskLookup = {
+    state: "known",
+    task: { ...task, remote: linked.slice(1) },
+    result: result({ state: "known", row } as never, {
+      remoteWork: linked.slice(1),
+      launchesTruncated: true,
+      activity: { entries: [] },
+    }),
+  };
+  const root = await render(lookup, true, null, new Map(), undefined, task);
+  expect(
+    [...container.querySelectorAll("button")].filter((item) => item.textContent === "Remote work"),
+  ).toHaveLength(21);
+  await act(async () => root.unmount());
 });

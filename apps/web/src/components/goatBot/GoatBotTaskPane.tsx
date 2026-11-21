@@ -7,6 +7,7 @@ import {
   goatBotOpenQuestionPlaceholder,
   goatBotTaskWait,
   isRetryableTaskStatus,
+  mergeBotRemoteWorkers,
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
@@ -374,8 +375,10 @@ export function GoatBotTaskPane({
           <GoatBotWorkDetails
             environmentId={environmentId}
             taskId={taskId}
-            rows={lookup.value ? [task, ...lookup.value.codingRows] : rows}
-            remoteWork={lookup.value?.remoteWork ?? remoteWork}
+            rows={rows}
+            remoteWork={
+              lookup.value ? mergeBotRemoteWorkers(remoteWork, lookup.value.remoteWork) : remoteWork
+            }
           />
         </div>
       )}

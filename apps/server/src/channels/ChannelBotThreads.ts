@@ -486,7 +486,7 @@ const make = Effect.gen(function* () {
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
         AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
-      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 51`.pipe(Effect.mapError(failed));
+      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 50`.pipe(Effect.mapError(failed));
     const decodeRows = (
       rows: ReadonlyArray<{ readonly task_json: string; readonly status_version: number }>,
     ) =>
@@ -501,7 +501,7 @@ const make = Effect.gen(function* () {
         }),
       ).pipe(Effect.mapError(failed));
     const recent = yield* decodeRows(source);
-    const suspended = yield* decodeRows(folded.slice(0, 50));
+    const suspended = yield* decodeRows(folded);
     const viewsByTask = new Map(
       [...recent, ...suspended].flatMap(({ task, view }) =>
         view === undefined ? [] : [[task.taskId, view] as const],
@@ -535,7 +535,6 @@ const make = Effect.gen(function* () {
       );
     return {
       rows: built.rows,
-      ...(folded.length > 50 ? { snoozedTruncated: true } : {}),
       ...(nextSnoozeExpiry === undefined ? {} : { snoozed, nextSnoozeExpiry }),
       mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),

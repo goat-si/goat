@@ -76,7 +76,6 @@ export function GoatBotHomeWork({
   botName,
   rows,
   snoozed = NO_SNOOZED,
-  snoozedTruncated = false,
   supportsSnooze = false,
   remoteWork = NO_REMOTE,
   chips = NO_CHIPS,
@@ -102,7 +101,6 @@ export function GoatBotHomeWork({
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly snoozed?: ReadonlyArray<TaskRow> | undefined;
-  readonly snoozedTruncated?: boolean | undefined;
   readonly supportsSnooze?: boolean | undefined;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
   /** Each task's newest chip in the conversation, which says what its worker asks the person. */
@@ -141,7 +139,7 @@ export function GoatBotHomeWork({
   const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
   const [showSnoozed, setShowSnoozed] = useState(false);
-  const recentRows = withoutSnoozedBotTasks(rows, snoozed, snoozedTruncated);
+  const recentRows = withoutSnoozedBotTasks(rows, snoozed);
   const work = botHomeWork(recentRows, [], environmentId, remoteWork, chips);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
@@ -396,7 +394,6 @@ function WorkRow({
               { id: "work", label: expanded ? "Hide work" : "Show work" },
               { id: "open", label: "Open" },
               { id: "pin", label: "Pin", disabled: !canUpdate },
-              ...snoozeItems,
             ]
           : [
               { id: "work", label: expanded ? "Hide work" : "Show work" },

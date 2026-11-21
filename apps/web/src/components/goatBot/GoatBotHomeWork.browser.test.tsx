@@ -850,4 +850,9 @@ it("offers snoozed work in a closed fold instead of recent work", async () => {
   await screen.rerender(view([recent, snoozed], { snoozed: [] }));
   await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
   await expect.element(screen.getByText("Snoozed", { exact: true })).not.toBeInTheDocument();
+  const otherSnoozes = Array.from({ length: 50 }, (_, index) =>
+    taskRow("snoozed-" + index, "Another old task", "completed", "2026-11-09T01:00:00.000Z"),
+  );
+  await screen.rerender(view([recent, snoozed], { snoozed: otherSnoozes }));
+  await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
 });

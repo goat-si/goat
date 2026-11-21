@@ -2,7 +2,9 @@ import {
   CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   ChannelGatewayError,
   ChannelTaskEvent,
-  ChannelWorkerObservation,
+  IsoDateTime,
+  PositiveInt,
+  TrimmedNonEmptyString,
   ChannelChildWork,
   type ChannelTaskId,
   isChannelChildWorkTerminal,
@@ -19,7 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
-import { launchesStatement } from "./channelBotThreadHistory.ts";
+import { launchesStatement, openableLaunch } from "./channelBotThreadHistory.ts";
 import {
   threadPullRequestColumns,
   taskActivityPullRequestLinks,
@@ -31,10 +33,13 @@ const decodeChild = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelChil
 const decodeActivity = Schema.decodeUnknownOption(
   Schema.fromJsonString(ChannelBotTaskActivityEntry),
 );
-const decodeObservation = Schema.decodeUnknownOption(
-  Schema.fromJsonString(ChannelWorkerObservation),
+const decodeLink = Schema.decodeUnknownOption(
+  Schema.Struct({
+    repository: TrimmedNonEmptyString,
+    number: PositiveInt,
+    linkedAt: IsoDateTime,
+  }),
 );
-const encodeRefs = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const actorOf = { agent: "bot", user: "person", system: "goat" } as const;
 const limit = CHANNEL_BOT_TASK_ACTIVITY_LIMIT;
@@ -47,6 +52,49 @@ const legacyStatuses: Partial<Record<ChannelTaskEventType, ChannelTaskStatus>> =
   "task.moved": "received",
   "task.retry.requested": "received",
 };
+
+/** PR observations have their own timeline, independent of when a worker started or ended. */
+const readLaunchLinks = (sql: SqlClient.SqlClient, taskId: ChannelTaskId, ownerId: string) =>
+  sql`
+  WITH launches AS (
+    SELECT json_extract(s.value_json, '$.surface') AS surface,
+      json_extract(s.value_json, '$.destination.threadId') AS thread_id,
+      json_extract(s.value_json, '$.destination.host') AS host,
+      json_extract(s.value_json, '$.destination.correlationId') AS correlation_id,
+      json_extract(s.value_json, '$.callerThreadId') AS caller_id
+    FROM channel_runtime_state s INDEXED BY channel_child_work_launches
+    WHERE json_extract(s.value_json, '$.taskId') = ${taskId} AND ${openableLaunch(sql)}
+      AND json_extract(s.value_json, '$.ownerId') = ${ownerId}
+  ), links AS (
+    SELECT json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.repository') AS repository,
+      json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.number') AS number,
+      json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.linkedAt') AS at
+    FROM launches l
+    JOIN orchestration_v2_projection_threads p ON p.thread_id = l.thread_id
+    JOIN json_each(CASE WHEN json_valid(p.payload_json) THEN
+      CASE WHEN json_type(p.payload_json, '$.pullRequests') = 'array' THEN json_extract(p.payload_json, '$.pullRequests') END END) link
+    WHERE l.surface = 'thread_launch' AND l.host IS NULL
+      AND json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.source') != 'stack-dismissed'
+    UNION ALL
+    SELECT json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.repository'), json_extract(CASE WHEN link.type = 'object' THEN link.value END, '$.number'), d.updated_at
+    FROM launches l JOIN remote_dispatches d ON d.correlation_id = l.correlation_id
+      AND d.origin_thread_id = l.caller_id AND d.host = l.host AND d.remote_thread_id = l.thread_id
+    JOIN json_each(CASE WHEN json_valid(d.observation) THEN
+      CASE WHEN json_type(d.observation, '$.pullRequests') = 'array' THEN json_extract(d.observation, '$.pullRequests') END END) link
+    WHERE l.surface = 'ssh_thread_launch' AND d.reports_supported != 0
+  )
+  SELECT repository, number, MIN(at) AS linkedAt FROM links
+  WHERE typeof(repository) = 'text' AND typeof(number) = 'integer' AND number > 0 AND at IS NOT NULL
+  GROUP BY repository, number
+  ORDER BY linkedAt DESC, repository, number LIMIT ${limit}
+`.pipe(
+    Effect.map((rows) =>
+      rows.flatMap((row) => {
+        const link = decodeLink(row);
+        return Option.isSome(link) ? [link.value] : [];
+      }),
+    ),
+  );
 
 const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
   function* (
@@ -81,38 +129,11 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
           SELECT ${threadPullRequestColumns(sql)}
           FROM orchestration_v2_projection_threads p WHERE p.thread_id = ${worker.threadId}
         `;
-    const linkRows = [...workerLinks, ...launchRows].flatMap((row) =>
-      row.pull_requests_json === null ? [] : taskActivityPullRequestLinks(row.pull_requests_json),
-    );
-    const remoteRefs = children.flatMap(({ callerThreadId, destination }) =>
-      destination?.host === undefined ||
-      destination.threadId === undefined ||
-      destination.correlationId === undefined
-        ? []
-        : [{ callerThreadId, ...destination }],
-    );
-    const remote =
-      remoteRefs.length === 0
-        ? []
-        : yield* sql<{
-            readonly observation: string;
-            readonly updated_at: string;
-          }>`SELECT d.observation, d.updated_at FROM json_each(${encodeRefs(remoteRefs)}) ref
-      JOIN remote_dispatches d ON d.correlation_id = json_extract(ref.value, '$.correlationId')
-        AND d.origin_thread_id = json_extract(ref.value, '$.callerThreadId')
-        AND d.host = json_extract(ref.value, '$.host')
-        AND d.remote_thread_id = json_extract(ref.value, '$.threadId')
-      WHERE d.reports_supported != 0 AND d.observation IS NOT NULL`;
     const links = [
-      ...linkRows,
-      ...remote.flatMap(({ observation, updated_at }) => {
-        const stored = decodeObservation(observation);
-        return Option.isNone(stored)
-          ? []
-          : stored.value.pullRequests
-              .slice(0, limit)
-              .map((pr) => ({ ...pr, linkedAt: updated_at }));
-      }),
+      ...workerLinks.flatMap((row) =>
+        row.pull_requests_json === null ? [] : taskActivityPullRequestLinks(row.pull_requests_json),
+      ),
+      ...(yield* readLaunchLinks(sql, task.taskId, input.ownerId)),
     ];
     const rows = yield* sql<{
       readonly event_json: string;

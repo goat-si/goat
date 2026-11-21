@@ -677,7 +677,6 @@ export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
   snoozed: Schema.optionalKey(Schema.Array(BotTaskRow).check(Schema.isMaxLength(50))),
   nextSnoozeExpiry: Schema.optionalKey(IsoDateTime),
-  snoozedTruncated: Schema.optionalKey(Schema.Boolean),
   /** History pages carry 0: the bot's count belongs to the current list. */
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
