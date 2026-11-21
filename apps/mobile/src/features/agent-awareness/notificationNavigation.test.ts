@@ -134,6 +134,43 @@ describe("routeAgentNotificationResponseOnce", () => {
     expect(navigate).toHaveBeenCalledTimes(2);
   });
 
+  it("routes a cold bot tap and a warm stale tap through a fresh task read", async () => {
+    const handledResponseIds = new Set<string>();
+    const navigate = vi.fn();
+    const resolveBotTarget = vi
+      .fn()
+      .mockResolvedValueOnce("/bot?taskId=task&requestId=ask")
+      .mockResolvedValueOnce("/bot?taskId=task");
+    const response = responseWithData({
+      kind: "goat-bot-attention",
+      environmentId: "env",
+      botId: "main",
+      taskId: "task",
+      requestId: "ask",
+    }) as NotificationResponse;
+    const handle = (response: NotificationResponse) =>
+      routeAgentNotificationResponseOnce({
+        handledResponseIds,
+        response,
+        navigate,
+        resolveBotTarget,
+      });
+    await consumeLastAgentNotificationResponse({
+      getLastResponse: () => Promise.resolve(response),
+      clearLastResponse: () => Promise.resolve(),
+      handleResponse: handle,
+    });
+    await handle(response);
+    await handle(
+      responseWithData(
+        response.notification.request.content.data ?? {},
+        "notification-2",
+      ) as NotificationResponse,
+    );
+    expect(resolveBotTarget).toHaveBeenCalledTimes(2);
+    expect(navigate.mock.calls).toEqual([["/bot?taskId=task&requestId=ask"], ["/bot?taskId=task"]]);
+  });
+
   it("discards malformed destination ids without leaving the response pending", async () => {
     const response = responseWithData({
       environmentId: "env",
