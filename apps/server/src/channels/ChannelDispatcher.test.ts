@@ -25,6 +25,7 @@ import {
   type DispatchModeRefusal,
   DispatchModeLimit,
 } from "../orchestration-v2/DispatchModeLimit.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 
@@ -37,7 +38,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { LedgerCallHolds, trackPlacements } from "./testkit/dispatchRace.ts";
+import { dispatchBarrier, LedgerCallHolds, trackPlacements } from "./testkit/dispatchRace.ts";
 import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import { RemoteMachine, remoteScript } from "./testing/RemoteMachine.ts";
 import {
@@ -47,6 +48,7 @@ import {
   makeHarness,
   modelSelection,
   onlyTask,
+  owner,
   rpcContext,
   setupBot,
   slackContext,
@@ -389,6 +391,44 @@ it.effect.each([
     } else {
       assert.deepStrictEqual(ceilings, ["approval-required"]);
     }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses a local worker when Slack memory is revoked at launch", () => {
+  const harness = makeHarness({ realWorkerLaunch: true, workspaceRoot: import.meta.dirname });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const grantedScopes = [...owner.grantedScopes, "memory:read" as const];
+    yield* linkSlackUser("U1", { ...owner, grantedScopes });
+    const files = channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(files.dir, { recursive: true });
+    yield* fs.writeFileString(files.notes, "- 2026-03-01: Check with Indigo. (asked in x)\n");
+    const barrier = yield* dispatchBarrier;
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launch = launches.launch;
+    Object.assign(launches, {
+      launch: (input: ThreadLaunch.ThreadLaunchInput) =>
+        barrier.pause.pipe(Effect.andThen(Effect.suspend(() => launch(input)))),
+    });
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(
+      slackInput("do: inspect the build", "revoked-local-notes"),
+      { ...slackContext, grantedScopes },
+    );
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const dispatch = yield* Effect.forkScoped(runtime.drain);
+    yield* barrier.reached;
+    const brief = yield* (yield* ChannelLedger.ChannelLedger).latestTaskBrief(
+      (yield* onlyTask).taskId,
+    );
+    assert.strictEqual(brief?.context.notesPath, files.notes);
+    assert.include(brief?.deliveredText ?? "", files.notes);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    yield* barrier.release;
+    yield* Fiber.join(dispatch);
+    assert.lengthOf(harness.world.launches, 0);
+    assert.strictEqual((yield* onlyTask).status, "failed");
   }).pipe(Effect.provide(harness.layer));
 });
 

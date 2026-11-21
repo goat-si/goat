@@ -2,10 +2,17 @@ import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope } from "@goat/contracts";
 import { ChannelQuestionId, CommandId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -18,6 +25,7 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { ask, botModel, runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import { dispatchBarrier } from "./testkit/dispatchRace.ts";
 import {
   environmentId,
   goatInput,
@@ -132,6 +140,73 @@ const sendOf = (harness: ReturnType<typeof sessionHarness>, needle: string) => {
 };
 
 describe("GOAT Bot session runs after the first at the requester's memory ceiling", () => {
+  it.effect.each(["launch", "queue"] as const)(
+    "refuses a Slack default session %s when memory access is revoked at dispatch",
+    (boundary) => {
+      const harness = sessionHarness({
+        realWorkerLaunch: true,
+        botWorkspaceRoot: import.meta.dirname,
+      });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammateWithMemory(["memory:read"]);
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(files.notes, "- 2026-03-01: Check with Indigo. (asked in x)\n");
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const warm =
+          boundary === "queue"
+            ? (yield* dispatchNow("look: check with Indigo", "warm-notes")).worker
+            : undefined;
+        if (boundary === "queue") assert.isDefined(warm);
+        const task = yield* receiveFromTeammate(
+          "look: verify the Indigo checklist",
+          "revoked-session-notes",
+        );
+        const barrier = yield* dispatchBarrier;
+        if (boundary === "launch") {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          const launch = launches.launch;
+          Object.assign(launches, {
+            launch: (input: ThreadLaunch.ThreadLaunchInput) =>
+              barrier.pause.pipe(Effect.andThen(Effect.suspend(() => launch(input)))),
+          });
+        } else {
+          const send = threads.sendToThread;
+          Object.assign(threads, {
+            sendToThread: (input: ThreadManagement.ThreadManagementSendInput) =>
+              barrier.pause.pipe(Effect.andThen(Effect.suspend(() => send(input)))),
+          });
+        }
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const dispatch = yield* Effect.forkScoped(
+          dispatcher.dispatch(task.taskId, runtime.ownerToken),
+        );
+        yield* barrier.reached;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const brief = yield* ledger.latestTaskBrief(task.taskId);
+        assert.strictEqual(brief?.context.notesPath, files.notes);
+        assert.include(brief?.deliveredText ?? "", files.notes);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+        yield* barrier.release;
+        yield* Fiber.join(dispatch);
+        if (warm !== undefined) {
+          const { runs } = yield* threads.getThreadRecords(warm.threadId, ["runs"]);
+          assert.lengthOf(runs, 1);
+        } else {
+          assert.lengthOf(harness.world.launches, 0);
+        }
+        assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "failed");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect.each([
     { scopes: [], ceiling: undefined },
     { scopes: ["memory:read"], ceiling: "read" },
