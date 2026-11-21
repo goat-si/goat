@@ -147,7 +147,10 @@ it.effect.each([176, 177])(
       if (id === 177) yield* fenceWorkTriggerRollback();
       const sql = yield* SqlClient.SqlClient;
       const before = yield* history;
-      assert.deepStrictEqual(before.at(-1), migrationManifest.find(([entry]) => entry === id));
+      assert.deepStrictEqual(
+        before.at(-1),
+        migrationManifest.find(([entry]) => entry === id),
+      );
       assert.isTrue(yield* hasPendingMigrations());
 
       assert.deepStrictEqual(

@@ -15,8 +15,9 @@ import {
 } from "@goat/contracts/channel-bot-attention";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import type * as SqlClient from "effect/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { attentionEventIdFor } from "./channelIds.ts";
 import { waitingAsks } from "./channelWaitingTasks.ts";
 
@@ -27,23 +28,24 @@ const expiryCutoff = Effect.map(DateTime.now, (now) =>
   DateTime.formatIso(DateTime.subtract(now, { days: RETENTION_DAYS })),
 );
 
-export const startBotAttentionExpiry = Effect.fn("channel.startBotAttentionExpiry")(function* (
-  sql: SqlClient.SqlClient,
-) {
-  yield* Effect.gen(function* () {
-    const cutoff = yield* expiryCutoff;
-    yield* sql`DELETE FROM channel_bot_attention WHERE sequence IN (
-      SELECT sequence FROM channel_bot_attention WHERE occurred_at <= ${cutoff}
-      ORDER BY occurred_at, sequence LIMIT ${EVENT_LIMIT}
-    )`;
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Could not expire GOAT Bot attention events", { cause }),
-    ),
-    Effect.repeat(Schedule.spaced("15 minutes")),
-    Effect.forkScoped,
-  );
-});
+export const layerBotAttentionExpiry = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* Effect.gen(function* () {
+      const cutoff = yield* expiryCutoff;
+      yield* sql`DELETE FROM channel_bot_attention WHERE sequence IN (
+        SELECT sequence FROM channel_bot_attention WHERE occurred_at <= ${cutoff}
+        ORDER BY occurred_at, sequence LIMIT ${EVENT_LIMIT}
+      )`;
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not expire GOAT Bot attention events", { cause }),
+      ),
+      Effect.repeat(Schedule.spaced("15 minutes")),
+      Effect.forkScoped,
+    );
+  }),
+);
 
 interface Ask {
   readonly kind: "question" | "approval" | "sign_in";

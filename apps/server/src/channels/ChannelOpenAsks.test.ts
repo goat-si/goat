@@ -8,11 +8,13 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import { layerBotAttentionExpiry } from "./channelBotAttention.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -282,7 +284,7 @@ describe("open asks across bots", () => {
         yield* TestClock.adjust("8 days");
         assert.deepStrictEqual(yield* sql`SELECT sequence FROM channel_bot_attention`, []);
         assert.deepStrictEqual((yield* members.attentionFeed(owner, { cursor: 0 })).events, []);
-      }).pipe(Effect.provide(harness.layer));
+      }).pipe(Effect.provide(layerBotAttentionExpiry.pipe(Layer.provideMerge(harness.layer))));
     },
   );
 

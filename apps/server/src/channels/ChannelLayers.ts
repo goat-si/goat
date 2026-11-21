@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 
 import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
+import { layerBotAttentionExpiry } from "./channelBotAttention.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
@@ -157,4 +158,5 @@ const layerServicesWithSlack = makeLayerServicesWithSlack();
 export const layer = Layer.mergeAll(
   ChannelRuntime.layerBackground,
   ChannelBotRoutineEvents.layer,
+  layerBotAttentionExpiry,
 ).pipe(Layer.provideMerge(layerServicesWithSlack), Layer.provide(SlackSdk.layer));
