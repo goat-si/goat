@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limite atteinte, supprimez d’abord une vue",
   "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ.",
   "856812e7e1fc445e": "Appels d’outils dans le chat",
-  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent"
+  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent",
+  "2e2f3c6a94895504": "Rechercher dans la mémoire",
+  "701964090d7b3438": "Effacer la recherche",
+  "69f5bba063085343": "Impossible de charger la mémoire",
+  "1c79d42e902ff431": "Réessayer"
 }
