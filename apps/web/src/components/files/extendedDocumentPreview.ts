@@ -677,7 +677,9 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
         (!hidden() && (word === "par" || word === "line"))
       )
         html += "<br>";
-      else if (word === "cell") emit("\t", state.skip);
+      else if (!hidden() && (word === "sect" || word === "column")) {
+        if (html && !html.endsWith("<br>")) html += "<br>";
+      } else if (word === "cell") emit("\t", state.skip);
       else if (word === "tab") emit("\t");
       else if (word === "endash") emit("–");
       // oxlint-disable-next-line goat/no-em-dash-copy -- Preserve the RTF document's punctuation.

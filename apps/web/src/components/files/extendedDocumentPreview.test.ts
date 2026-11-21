@@ -27,6 +27,16 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("starts a new line at section and column breaks without duplicate breaks", () => {
+    expect(
+      html(
+        String.raw`{\rtf1\ansi\sectd\cols2\pard North\column South\page East\sect\sectd\pard West\par}`,
+      ),
+    ).toEqual(["<p>North<br>South</p>", "<p>East<br>West<br></p>"]);
+    expect(
+      html(String.raw`{\rtf1\ansi First\par\sect\sectd Second\par\column Third\page\sect Fourth}`),
+    ).toEqual(["<p>First<br>Second<br>Third</p>", "<p>Fourth</p>"]);
+  });
   it("hides tracked deletions while retaining replacement text", () => {
     expect(html(String.raw`{\rtf1 aaa{\deleted bbb}{\revised BBB}ccc}`)).toEqual([
       "<p>aaaBBBccc</p>",
