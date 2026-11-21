@@ -9,7 +9,18 @@ import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useOfflineBotSummary, type OfflineBotSummary } from "./useOfflineBotSummary";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-const asOf = (readAt: number) => `As of ${timeFormat.format(readAt)}`;
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function asOf(readAt: number): string {
+  const read = new Date(readAt);
+  const format = read.toDateString() === new Date().toDateString() ? timeFormat : dateTimeFormat;
+  return `As of ${format.format(read)}`;
+}
 
 export default function OfflineBotRoster(props: {
   readonly header?: ReactNode;
