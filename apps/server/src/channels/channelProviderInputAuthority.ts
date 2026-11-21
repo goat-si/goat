@@ -7,6 +7,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { isUnlinkedPrincipal, lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelWake from "./ChannelWake.ts";
 import { sessionIntentFor } from "./channelBotSessionRuns.ts";
 import { sessionMemoryCeiling } from "./channelDispatchAuthority.ts";
 import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
@@ -86,4 +87,5 @@ export class ChannelProviderInputAuthority extends Context.Service<
 
 export const layer = Layer.effect(ChannelProviderInputAuthority, makeProviderInputRefusal).pipe(
   Layer.provide(ChannelLedger.layer),
+  Layer.provide(ChannelWake.layer),
 );
