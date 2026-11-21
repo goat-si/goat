@@ -11,7 +11,10 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
+import * as EffectWorker from "../../orchestration-v2/EffectWorker.ts";
+import { nextTurnSelectionHarness } from "../../orchestration-v2/testkit/SteeringHarness.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as ChannelBotThreads from "../ChannelBotThreads.ts";
 import * as ChannelBotMembers from "../ChannelBotMembers.ts";
 import { channelBotFilesFor } from "../channelBotNotes.ts";
 import * as ChannelIdentityService from "../ChannelIdentityService.ts";
@@ -19,7 +22,14 @@ import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import { CHANNEL_COPY } from "../channelCopy.ts";
 import { inputIdFor } from "../channelIds.ts";
-import { defaultScript, makeHarness, owner, ownerId, setupBot } from "../testkit/ChannelHarness.ts";
+import {
+  defaultScript,
+  makeHarness,
+  modelSelection,
+  owner,
+  ownerId,
+  setupBot,
+} from "../testkit/ChannelHarness.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
 import * as SlackChannelSettingsLive from "./SlackChannelSettings.live.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
@@ -36,9 +46,9 @@ import { makeFakeSlackSdk, type FakeSlackSdk } from "./slackSdkFake.ts";
 const connectionId = "slack-1";
 const ROOT_TS = "1760000000.000100";
 
-const slackScenario = () => {
+const slackScenario = (options: Parameters<typeof makeHarness>[0] = {}) => {
   const sdk = makeFakeSlackSdk();
-  const harness = makeHarness({ fakeSlackTransport: false });
+  const harness = makeHarness({ ...options, fakeSlackTransport: false });
   const runtime = SlackChannelRuntime.layer.pipe(Layer.provide(sdk.layer));
   const layer = SlackChannelSettingsLive.layer.pipe(
     Layer.provide(sdk.layer),
@@ -127,7 +137,7 @@ describe("Slack runtime on the channel core", () => {
         yield* linkAlice(sdk);
         const first = yield* receive(
           sdk,
-          channelMention({ text: "<@U0BOT> do: check the build", ts: ROOT_TS }),
+          channelMention({ text: "<@U0BOT> Check the build", ts: ROOT_TS }),
           "EvNamedBound01",
         );
         assert.strictEqual(first?.botId, scout.botId);
@@ -214,13 +224,190 @@ describe("Slack runtime on the channel core", () => {
         );
         assert.strictEqual(rejected?.snapshot.state, "rejected");
         assert.isFalse(sdk.posted.some((post) => post.threadTs === root));
-        const notice = sdk.ephemeral.find((post) => post.threadTs === root);
+        assert.lengthOf(sdk.ephemeral, index + 1);
+        const notice = sdk.ephemeral[index];
+        assert.strictEqual(notice?.channel, "C0ALLOWED");
+        assert.isUndefined(notice?.threadTs);
         assert.strictEqual(notice?.userId, "U0ALICE");
         assert.include(notice?.text ?? "", "Reachable bots");
         for (const unavailable of ["Hidden", "Retired", "Scout"])
           assert.notInclude(notice?.text ?? "", unavailable);
       }
       assert.lengthOf((yield* tasks).tasks, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("routes Link as a name while the link code still works", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const link = yield* createBot("Link");
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const routed = yield* receive(
+        sdk,
+        directMessage({ text: "Link: check the build" }),
+        "EvNamedLink",
+      );
+      assert.strictEqual(routed?.botId, link.botId);
+      assert.strictEqual(routed?.message.text, "check the build");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("privately refuses an unmatched Do prefix", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const rejected = yield* receive(
+        sdk,
+        channelMention({ text: "<@U0BOT> Do: check the build" }),
+        "EvNamedDo",
+      );
+      assert.strictEqual(rejected?.snapshot.state, "rejected");
+      assert.strictEqual(sdk.ephemeral.at(-1)?.userId, "U0ALICE");
+      assert.lengthOf((yield* tasks).tasks, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "keeps notes out of the provider's default session for a Slack sender without memory access",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* nextTurnSelectionHarness("slack-default-notes");
+        const { sdk, layer } = slackScenario({
+          botWorkspace: true,
+          realWorkerLaunch: true,
+          workerAdapter: provider.adapter,
+          botWorkspaceRoot: provider.cwd,
+          settingsLayer: ServerSettings.layerTest({
+            goatBotModelSelection: modelSelection,
+            providerInstances: { codex: { driver: "codex", config: {}, enabled: true } },
+          }).pipe(Layer.orDie),
+        });
+        yield* Effect.gen(function* () {
+          yield* setupBot;
+          const scout = yield* createBot("Scout");
+          const fs = yield* FileSystem.FileSystem;
+          const files = channelBotFilesFor(
+            yield* Path.Path,
+            (yield* ServerConfig.ServerConfig).stateDir,
+          );
+          yield* fs.makeDirectory(files.dir, { recursive: true });
+          yield* fs.writeFileString(
+            files.notes,
+            "- 2026-03-01: The deploy phrase is cobalt. (asked in x)\n",
+          );
+          yield* connect(sdk, {
+            botBindings: [{ channelId: "C0ALLOWED", botId: scout.botId }],
+          });
+          yield* linkAlice(sdk);
+          const input = yield* receive(
+            sdk,
+            channelMention({ text: "<@U0BOT> What is the deploy phrase?" }),
+            "EvDefaultNotes",
+          );
+          const [task] = (yield* tasks).tasks;
+          assert.strictEqual(input?.botId, scout.botId);
+          assert.strictEqual(task?.kind, "turn");
+          yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+          assert.lengthOf(provider.started, 1);
+          const text = provider.started[0]?.message.text ?? "";
+          assert.include(text, "What is the deploy phrase?");
+          assert.notInclude(text, "cobalt");
+          assert.notInclude(text, "Indigo");
+          assert.notInclude(text, files.notes);
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect("omits the notes file from the local worker brief without memory access", () => {
+    const { sdk, harness, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createBot("Scout");
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const input = yield* receive(
+        sdk,
+        channelMention({ text: "<@U0BOT> Scout: do: check the build" }),
+        "EvWorkerNotes",
+      );
+      const [task] = (yield* tasks).tasks;
+      assert(task !== undefined);
+      assert.strictEqual(task.originInputId, input?.snapshot.inputId);
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      const text =
+        harness.world.launches.find((launch) => launch.initialMessage !== undefined)?.initialMessage
+          ?.text ?? "";
+      assert.include(text, "check the build");
+      assert.notInclude(text, files.notes);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("lists and opens a default Slack turn from its assigned member's Home", () => {
+    const { sdk, layer } = slackScenario({ botWorkspace: true });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const scout = yield* createBot("Scout");
+      const other = yield* createBot("Builder");
+      yield* connect(sdk, { botBindings: [{ channelId: "C0ALLOWED", botId: scout.botId }] });
+      yield* linkAlice(sdk);
+      const input = yield* receive(
+        sdk,
+        channelMention({ text: "<@U0BOT> Check the build" }),
+        "EvDefaultHome",
+      );
+      const [task] = (yield* tasks).tasks;
+      assert(task !== undefined);
+      assert.strictEqual(task.kind, "turn");
+      assert.strictEqual(task.originInputId, input?.snapshot.inputId);
+      const home = yield* ChannelBotThreads.ChannelBotThreads;
+      const taskIds = (rows: (typeof current)["rows"]) =>
+        rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : []));
+      const current = yield* home.list(owner, scout.botId);
+      assert.deepStrictEqual(taskIds(current.rows), [task.taskId]);
+      const history = yield* home.list(owner, scout.botId, {});
+      assert.deepStrictEqual(taskIds(history.rows), [task.taskId]);
+      const search = yield* home.searchBotTasks(
+        { botId: scout.botId, query: "Check the build" },
+        owner,
+      );
+      assert.deepStrictEqual(
+        search.tasks.map((row) => row.taskId),
+        [task.taskId],
+      );
+      const detail = yield* home.getBotTask({ botId: scout.botId, taskId: task.taskId }, owner);
+      assert.strictEqual(detail.task.state, "known");
+      if (detail.task.state === "known")
+        assert.strictEqual(detail.task.row.task.taskId, task.taskId);
+      assert.isEmpty((yield* home.list(owner, other.botId)).rows);
+      assert.strictEqual(
+        (yield* Effect.flip(home.getBotTask({ botId: other.botId, taskId: task.taskId }, owner)))
+          .reason,
+        "not_found",
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses to restore a deleted bot whose name is in use", () => {
+    const { layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const deleted = yield* createBot("Scout");
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      yield* members.remove({ botId: deleted.botId }, owner);
+      const current = yield* createBot("SCOUT");
+      const error = yield* Effect.flip(members.restore({ botId: deleted.botId }, owner));
+      assert.strictEqual(error.reason, "invalid_input");
+      assert.include(error.message, current.name);
+      yield* members.update({ botId: current.botId, name: "Navigator" }, owner);
+      const restored = yield* members.restore({ botId: deleted.botId }, owner);
+      assert.strictEqual(restored.state, "active");
     }).pipe(Effect.provide(layer));
   });
 
@@ -403,7 +590,10 @@ describe("Slack runtime on the channel core", () => {
       yield* linkAlice(sdk);
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       yield* runtime.drain;
-      const mention = channelMention({ text: "<@U0BOT> do: fix the login bug", ts: ROOT_TS });
+      const mention = channelMention({
+        text: "<@U0BOT> GOAT Bot: do: fix the login bug",
+        ts: ROOT_TS,
+      });
       const first = yield* emit(sdk, mention, "EvMention0001");
       const retry = yield* emit(sdk, mention, "EvMention0001");
       assert.equal(first.ackCount() + retry.ackCount(), 2);

@@ -141,18 +141,20 @@ export const assertBotNameAvailable = Effect.fn("ChannelBotProfiles.assertNameAv
   function* (sql: SqlClient.SqlClient, ownerId: string, name: string, except?: BotId) {
     const profiles = yield* readStoredBotProfiles(sql, ownerId);
     const normalized = normalizeBotName(name);
-    if (
-      (except !== MAIN_BOT_ID &&
-        !profiles.some((profile) => profile.role === "main") &&
-        normalized === normalizeBotName(DEFAULT_BOT_IDENTITY.name)) ||
-      profiles.some(
-        (profile) =>
-          profile.botId !== except &&
-          (profile.role === "main" || profile.state !== "deleted") &&
-          normalizeBotName(profile.name) === normalized,
-      )
-    )
-      return yield* new ChannelGatewayError({ reason: "invalid_input" });
+    const conflict = profiles.find(
+      (profile) =>
+        profile.botId !== except &&
+        (profile.role === "main" || profile.state !== "deleted") &&
+        normalizeBotName(profile.name) === normalized,
+    );
+    const implicitMain =
+      except !== MAIN_BOT_ID &&
+      !profiles.some((profile) => profile.role === "main") &&
+      normalized === normalizeBotName(DEFAULT_BOT_IDENTITY.name);
+    const conflictingBotName =
+      conflict?.name ?? (implicitMain ? DEFAULT_BOT_IDENTITY.name : undefined);
+    if (conflictingBotName !== undefined)
+      return yield* new ChannelGatewayError({ reason: "invalid_input", conflictingBotName });
   },
 );
 

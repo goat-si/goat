@@ -318,6 +318,7 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    readonly botWorkspaceRoot?: string;
     /**
      * Real directory as the work project's root. A .git inside it makes the dispatcher give the
      * task its own worktree; the default is a path that does not exist.
@@ -692,7 +693,7 @@ export function makeHarness(
           {
             id: scratchProjectId,
             title: "Scratch",
-            workspaceRoot: "/nonexistent/scratch",
+            workspaceRoot: options.botWorkspaceRoot ?? "/nonexistent/scratch",
             defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
@@ -766,15 +767,15 @@ export function makeHarness(
     }),
     ProviderRegistryMock.layer(),
     Layer.mock(ProjectService.ProjectService)({
-      getById: () =>
+      getById: (id) =>
         Effect.succeed(
-          Option.some({
-            ...shells[0]!,
+          Option.map(Option.fromUndefinedOr(shells.find((shell) => shell.id === id)), (shell) => ({
+            ...shell,
             repositoryIdentity: null,
             faviconPath: null,
             defaultThreadEnvMode: null,
             deletedAt: null,
-          }),
+          })),
         ),
     }),
   );
@@ -943,13 +944,13 @@ export const slackContext = {
 };
 
 /** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
-export const linkSlackUser = (user = "U1") =>
+export const linkSlackUser = (user = "U1", linkOwner = owner) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
     const { code } = yield* identities.createLink(
       { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
-      owner,
+      linkOwner,
     );
     yield* gateway.linkIdentity(
       {
@@ -965,7 +966,7 @@ export const linkSlackUser = (user = "U1") =>
           rootTs: "1",
         },
       },
-      slackContext,
+      { ...slackContext, grantedScopes: linkOwner.grantedScopes },
     );
   });
 

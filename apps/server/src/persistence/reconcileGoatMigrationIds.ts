@@ -304,6 +304,9 @@ export function memoryMigrationProblem<E>(
     history.flatMap((row) => {
       const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
+      // The draft Slack routing build wrote 179 before it had a reserved id.
+      if (row.name === "SlackConversationBot" && row.migration_id === 179 && currentId === 182)
+        return [0];
       const recordedId =
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
           ? firstBindId

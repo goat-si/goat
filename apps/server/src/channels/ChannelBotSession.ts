@@ -27,7 +27,6 @@ import { prependStandingInstructions } from "@goat/shared/standingInstructions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -55,7 +54,7 @@ import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { ChannelLaunchWakes, owesLaunched, ownResultRuns } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
 import {
   frozenSessionPrefix,
@@ -63,10 +62,11 @@ import {
   formatOpenWork,
   GOAT_BOT_SESSION_RULES,
   sessionContextRevision,
+  sessionTurnBrief,
 } from "./channelBotSessionBrief.ts";
 import * as Rotation from "./channelBotSessionRotation.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
-import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import { freezeChannelBrief } from "./channelBriefs.ts";
 import {
   answerForwardIdsFor,
   goatBotSessionSharingFor,
@@ -81,7 +81,7 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
-import { sessionFollowUpText, turnInstruction } from "./channelWorkerBrief.ts";
+import { sessionFollowUpText } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
   isSessionTask,
@@ -138,7 +138,6 @@ const make = Effect.gen(function* () {
   const childWorkStore = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const launched = { threads, sql, watch: (yield* ChannelLaunchWakes).watch };
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
   // One binding decision at a time keeps generations and the one-current-row rule simple.
@@ -554,24 +553,15 @@ const make = Effect.gen(function* () {
       initial.task,
       requester,
     );
-    const notes = yield* readChannelBotNotesSnapshot(botFiles, initial.task.instruction);
-    const message =
-      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled, notes?.matched) +
-      "\n\n" +
-      formatOpenWork(openWork);
+    const { notes, instruction, context } = yield* sessionTurnBrief(
+      initial.task,
+      requester,
+      botFiles,
+      settings.goatclaw.enabled,
+    );
+    const message = instruction + "\n\n" + formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
-    const notesRevision =
-      initial.task.briefVersion === undefined
-        ? yield* channelNotesRevision(botFiles.notes).pipe(
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-          )
-        : null;
-    const freeze = (text: string) =>
-      freezeChannelBrief(ledger, initial, owner, text, {
-        notesPath: botFiles.notes,
-        notesRevision,
-        skillsPath: botFiles.skills,
-      });
+    const freeze = (text: string) => freezeChannelBrief(ledger, initial, owner, text, context);
     if (row?.state === "active") {
       const usage = Rotation.latestTurnUsage(records);
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);

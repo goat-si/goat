@@ -403,6 +403,12 @@ const make = Effect.gen(function* () {
     change(owner, input.botId, (record, at) =>
       Effect.gen(function* () {
         if (record.state !== "deleted") return record;
+        yield* ChannelBotProfiles.assertBotNameAvailable(
+          sql,
+          owner.ownerId,
+          record.name,
+          record.botId,
+        ).pipe(Effect.mapError(failed));
         const counts = yield* memberCounts(owner.ownerId).pipe(Effect.mapError(failed));
         if (counts.active >= MEMBER_LIMIT) return yield* fail("bot_limit");
         return {

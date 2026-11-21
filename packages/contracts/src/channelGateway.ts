@@ -286,6 +286,7 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   "ChannelGatewayError",
   {
     reason: ChannelGatewayErrorReason,
+    conflictingBotName: Schema.optionalKey(BotProfile.fields.name),
     attachmentProblem: Schema.optionalKey(Schema.Literal("expired")),
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
@@ -300,7 +301,9 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   },
 ) {
   override get message(): string {
-    return CHANNEL_GATEWAY_FAILURE_MESSAGES[this.reason];
+    return this.conflictingBotName === undefined
+      ? CHANNEL_GATEWAY_FAILURE_MESSAGES[this.reason]
+      : `A bot named “${this.conflictingBotName}” is already active.`;
   }
 }
 

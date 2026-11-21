@@ -19,6 +19,14 @@ import {
 export const botWorkConversationFilter = (sql: SqlClient.SqlClient, botId: string) =>
   botId === MAIN_BOT_ID ? sql`c.kind = 'goat'` : sql`c.kind IN ('goat', 'slack')`;
 
+// Member Slack turns have their own work row because the conversation stays in Slack.
+export const botWorkTaskFilter = (sql: SqlClient.SqlClient, botId: string) => {
+  const work = sql`COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'`;
+  return botId === MAIN_BOT_ID
+    ? work
+    : sql`(${work} OR json_extract(t.task_json, '$.originAddress.kind') = 'slack')`;
+};
+
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 // [botTag, ownerTag, createdAt, taskId]
 const CursorBody = Schema.fromJsonString(
@@ -124,7 +132,7 @@ export const launchesStatement = (
 /**
  * A bot's tasks by creation, newest first, one row per task examined; created_at and task_id never
  * change, so a task keeps its place between pages. task_json is set only for a task history lists:
- * a turn joins once a launch has a thread, and never leaves. The row value makes the cursor one
+ * a chat turn joins once a launch has a thread, and never leaves. The row value makes the cursor one
  * range on the index's four columns, so a page costs the same anywhere inside a tie.
  */
 export const historyStatement = (
@@ -143,7 +151,7 @@ export const historyStatement = (
       WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c
         WHERE c.conversation_id = t.conversation_id AND c.owner_id = ${input.ownerId}
           AND ${botWorkConversationFilter(sql, input.botId)}) THEN NULL
-      WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' THEN t.task_json
+      WHEN ${botWorkTaskFilter(sql, input.botId)} THEN t.task_json
       WHEN EXISTS (SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
         -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.
         WHERE json_extract(s.value_json, '$.taskId') = +t.task_id AND ${openableLaunch(sql)})
@@ -204,9 +212,12 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
   return {
     tasks,
     skippedTasks,
-    // A turn's answer is in the chat; it is listed by the threads it launched.
     threadsOnly: new Set<ChannelTaskId>(
-      tasks.flatMap((task) => (task.kind === "turn" ? [task.taskId] : [])),
+      tasks.flatMap((task) =>
+        task.kind === "turn" && (scope.botId === MAIN_BOT_ID || task.originAddress.kind !== "slack")
+          ? [task.taskId]
+          : [],
+      ),
     ),
     ...(next === undefined || endedEarly ? {} : { nextCursor: next }),
     ...(endedEarly ? { endedEarly } : {}),

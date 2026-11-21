@@ -386,7 +386,6 @@ export function makeSlackChannelTransport(input: {
           const sent = yield* slackCall("chat.postEphemeral", () =>
             active.botApi.postEphemeral({
               channel: destination.channelId,
-              threadTs: destination.rootTs,
               userId: notice.userId,
               text,
             }),

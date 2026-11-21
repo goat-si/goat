@@ -7,9 +7,29 @@ import * as NodeCrypto from "node:crypto";
 
 import { canSeeTask } from "./channelBotRecall.ts";
 import type { ChannelRequester, ChannelTask } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
-import { PERSONAL_DATA_RULE } from "./channelWorkerBrief.ts";
+import { readChannelBotNotesSnapshot, type ChannelBotFiles } from "./channelBotNotes.ts";
+import { localNotesBriefContext } from "./channelBriefs.ts";
+import { PERSONAL_DATA_RULE, turnInstruction } from "./channelWorkerBrief.ts";
+import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+
+export const sessionTurnBrief = Effect.fn("ChannelBotSession.turnBrief")(function* (
+  task: ChannelTask,
+  requester: ChannelRequester,
+  files: ChannelBotFiles,
+  supervisor: boolean,
+) {
+  const allowed = canReadChannelBotNotes(requester);
+  const notes = allowed ? yield* readChannelBotNotesSnapshot(files, task.instruction) : undefined;
+  const context = yield* localNotesBriefContext(files, allowed, task.briefVersion);
+  return {
+    notes,
+    context,
+    instruction: turnInstruction(task, files, supervisor, notes?.matched, allowed),
+  };
+});
 
 export const SESSION_PREFIX_HEADINGS = [
   "Standing instructions",

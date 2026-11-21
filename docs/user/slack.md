@@ -3,9 +3,9 @@
 Mention the GOAT bot in a Slack channel or send it a direct message, and GOAT
 answers in that Slack thread, starts the work in its own coding thread, and
 posts the result back to the same thread. The conversation stays in Slack; the
-GOAT Bot shows the work and its final report. On web and desktop, choose **Bots**
-in the sidebar to find the main bot and its task threads. Slack and iMessage reach
-the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
+GOAT Bot shows the work and its final report. In GOAT, open **Bots** and choose
+the bot that answered to find its work. Slack can route to the main bot or
+a named bot. iMessage reaches the main bot.
 
 ## Set up
 
@@ -55,7 +55,7 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
 - Follow-ups stay with the bot that took the thread, even after a rename or
   binding change. Threads from before channel bindings stay with the main bot.
   If that member bot is deleted, restore it in GOAT or start a new Slack thread.
-  Slack sends unavailable or ambiguous bot names back privately.
+  Only the requester sees the reply when a bot name is unavailable or ambiguous.
 - Member replies include the bot's name. An app with the optional
   `chat:write.customize` scope can show it as the sender name.
   The same channel and account access rules apply to every bot.

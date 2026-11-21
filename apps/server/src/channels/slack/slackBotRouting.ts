@@ -73,19 +73,18 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
       : candidates.filter(
           (candidate) => normalizeBotName(candidate.name) === normalizeBotName(name),
         );
-  // Existing messages may start with "do: " as an instruction.
-  const named = name !== undefined && (normalizeBotName(name) !== "do" || matches.length > 0);
-  const chosen = named
-    ? matches.length === 1
-      ? matches[0]
-      : undefined
-    : candidates.find((candidate) => candidate.botId === bound);
+  const chosen =
+    name !== undefined
+      ? matches.length === 1
+        ? matches[0]
+        : undefined
+      : candidates.find((candidate) => candidate.botId === bound);
   if (
     chosen !== undefined &&
     chosen.hidden !== true &&
     (chosen.botId === main || (yield* readyMember(sql, ownerId, chosen.botId)))
   ) {
-    return { botId: chosen.botId, text: named ? (prefix?.[2] ?? text) : text };
+    return { botId: chosen.botId, text: prefix?.[2] ?? text };
   }
 
   const reachable: string[] = [];
@@ -104,9 +103,10 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
       if (reachable.length === MAX_REACHABLE_NAMES) break;
     }
   }
-  const reason = named
-    ? "That bot name is unavailable or ambiguous."
-    : "The bot bound to this channel is unavailable.";
+  const reason =
+    name !== undefined
+      ? "That bot name is unavailable or ambiguous."
+      : "The bot bound to this channel is unavailable.";
   return {
     notice:
       reachable.length === 0 ? reason : reason + " Reachable bots: " + reachable.join(", ") + ".",

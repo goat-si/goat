@@ -48,6 +48,7 @@ import {
 } from "./channelBotRowPullRequests.ts";
 import {
   botWorkConversationFilter,
+  botWorkTaskFilter,
   decodeHistoryCursor,
   launchesStatement,
   quietMessagesStatement,
@@ -425,12 +426,12 @@ const make = Effect.gen(function* () {
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
         AND ${botWorkConversationFilter(sql, botId)}
-        AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
+        AND ((${botWorkTaskFilter(sql, botId)}
           AND (t.status NOT IN ('completed', 'failed', 'cancelled')
             OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
             OR t.task_id IN (SELECT value FROM json_each(${pinned}))))
-          -- The bot's own turn shows only while work it launched still runs; its reply is in the chat.
-          OR (json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
+          -- A GOAT chat turn lists only while work it launched still runs.
+          OR (c.kind = 'goat' AND json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
             SELECT 1 FROM channel_runtime_state s
             WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
               AND json_extract(s.value_json, '$.generation') = t.generation
