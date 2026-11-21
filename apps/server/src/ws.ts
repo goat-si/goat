@@ -83,6 +83,7 @@ import {
   RpcClientId,
   ThreadId,
   WS_METHODS,
+  clientRpcRequiredScopes,
   SOURCE_CONTROL_MEDIA_ASSET,
   WsChannelRpcGroup,
   WsCoreRpcGroup,
@@ -434,15 +435,6 @@ export const makeMemoryImportHandlers = <E>(
   capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
 ) =>
   Effect.gen(function* () {
-    const permit = memorySessionPermit(liveScopes, capturedScopes, [
-      "memory:write",
-      "filesystem:read",
-    ]);
-    const comparePermit = memorySessionPermit(liveScopes, capturedScopes, [
-      "memory:read",
-      "memory:write",
-      "filesystem:read",
-    ]);
     const memory = yield* MemoryService.MemoryService;
     const runtime = yield* Effect.serviceOption(ProviderMemoryImportRuntime);
     return WsMemoryImportRpcGroup.middleware(RpcInstrumentation).of({
@@ -451,9 +443,11 @@ export const makeMemoryImportHandlers = <E>(
           ? memory
               .importProvider(
                 input,
-                input.action === "codexBaseline" || input.action === "compareCodex"
-                  ? comparePermit
-                  : permit,
+                memorySessionPermit(
+                  liveScopes,
+                  capturedScopes,
+                  clientRpcRequiredScopes(WS_METHODS.memoryImportProvider, input),
+                ),
               )
               .pipe(Effect.provideService(ProviderMemoryImportRuntime, runtime.value))
           : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" }))
