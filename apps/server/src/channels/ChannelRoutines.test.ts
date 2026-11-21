@@ -157,6 +157,10 @@ const admit = (
 const firing = (firingId: CommandId) =>
   Effect.flatMap(ScheduledTaskRuns.make(), (runs) => runs.readFiring(firingId));
 
+const providerStarts = (sql: SqlClient.SqlClient, threadId: ThreadId) =>
+  sql`SELECT 1 FROM orchestration_v2_effect_outbox
+    WHERE thread_id=${threadId} AND effect_type='provider-turn.start'`;
+
 const linkOf = (firingId: CommandId) =>
   Effect.flatMap(SqlClient.SqlClient, (sql) =>
     sql<{
@@ -639,11 +643,7 @@ it.effect.each(["paused during launch", "revoked during recovery"] as const)(
         }
         yield* Deferred.succeed(resume, undefined);
         const prepared = yield* preparationSettled(worker.threadId);
-        assert.lengthOf(
-          yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
-            WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
-          0,
-        );
+        assert.lengthOf(yield* providerStarts(sql, worker.threadId), 0);
         assert.strictEqual(prepared.runs[0]?.status, "failed");
         yield* runtime.drain;
         assert.strictEqual((yield* onlyTask).status, "failed");
@@ -695,11 +695,7 @@ it.effect.each(["paused", "revoked", "input missing", "settled generation"] as c
           yield* sql`UPDATE channel_tasks SET status='failed' WHERE task_id=${taskId}`;
         yield* Deferred.succeed(commit, undefined);
         const prepared = yield* preparationSettled(worker.threadId);
-        assert.lengthOf(
-          yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
-            WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
-          0,
-        );
+        assert.lengthOf(yield* providerStarts(sql, worker.threadId), 0);
         const reason = {
           paused: "paused",
           revoked: "revoked",
@@ -731,7 +727,6 @@ it.effect("workspace Retry cannot start a denied trigger after its firing settle
       yield* setupBot;
       const sql = yield* SqlClient.SqlClient;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
       const input = yield* admit("do: inspect fixtures", "workspace retry", botThreadId, {
         sessionId: (yield* issueTriggerOwner).sessionId,
         projectId,
@@ -741,13 +736,22 @@ it.effect("workspace Retry cannot start a denied trigger after its firing settle
       if (worker?.runId === undefined) return assert.fail("Expected a bound worker run");
       yield* Deferred.await(preparing);
       yield* sql`UPDATE scheduled_tasks SET enabled=0 WHERE task_id=${input.taskId}`;
+      const direct = yield* (yield* ThreadManagement.ThreadManagementService)
+        .dispatch({
+          type: "prepared-run.release",
+          commandId: CommandId.make("direct-prepared-release"),
+          threadId: worker.threadId,
+          runId: worker.runId,
+        })
+        .pipe(Effect.result);
+      assert.strictEqual(direct._tag, "Failure", "Direct release must check trigger authority");
       yield* Deferred.succeed(release, undefined);
       yield* preparationSettled(worker.threadId);
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).status, "failed");
       assert.strictEqual((yield* firing(input.firingId))?.status, "failed");
       yield* sql`UPDATE scheduled_tasks SET enabled=1 WHERE task_id=${input.taskId}`;
-      const retry = yield* launches
+      const retry = yield* (yield* ThreadLaunch.ThreadLaunchService)
         .retryPreparation({
           commandId: CommandId.make("retry-denied-trigger"),
           threadId: worker.threadId,
@@ -755,11 +759,7 @@ it.effect("workspace Retry cannot start a denied trigger after its firing settle
         })
         .pipe(Effect.result);
       assert.strictEqual(retry._tag, "Failure");
-      assert.lengthOf(
-        yield* sql`SELECT 1 FROM orchestration_v2_effect_outbox
-          WHERE thread_id=${worker.threadId} AND effect_type='provider-turn.start'`,
-        0,
-      );
+      assert.lengthOf(yield* providerStarts(sql, worker.threadId), 0);
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
   }),
 );
