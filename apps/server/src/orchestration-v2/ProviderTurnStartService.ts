@@ -277,6 +277,10 @@ export const layer: Layer.Layer<
         attempt,
         expectedStartStatus,
       });
+      const memoryRefusal =
+        !observeOnly && Option.isSome(providerInputRefusal)
+          ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
+          : undefined;
       const profileRefusal =
         !observeOnly &&
         attempt.reason === "initial" &&
@@ -288,13 +292,15 @@ export const layer: Layer.Layer<
           : undefined;
       const profileFailure = profileRefusal === undefined ? undefined : yield* profileRefusal;
       if (profileFailure !== undefined) {
+        const failure =
+          (memoryRefusal === undefined ? undefined : yield* memoryRefusal) ?? profileFailure;
         yield* settleRunBeforeStart({
           signal: "channel-session-profile",
           status: "failed",
           now: yield* DateTime.now,
           providerInstanceId: run.providerInstanceId,
           itemProviderThreadId: providerThread.id,
-          item: { type: "error", title: "GOAT Bot session profile check", failure: profileFailure },
+          item: { type: "error", title: "GOAT Bot queued turn", failure },
         });
         return;
       }
@@ -1369,10 +1375,6 @@ export const layer: Layer.Layer<
               (turn) =>
                 turn.providerThreadId === providerThread.id && turn.runAttemptId === attempt.id,
             )
-          : undefined;
-      const memoryRefusal =
-        !observeOnly && Option.isSome(providerInputRefusal)
-          ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
           : undefined;
       const inputRefusal =
         memoryRefusal !== undefined && profileRefusal !== undefined
