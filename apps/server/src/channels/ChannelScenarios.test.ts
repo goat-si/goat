@@ -1,3 +1,4 @@
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -1962,10 +1963,10 @@ describe("who may do what (scenario 4)", () => {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const receipt = yield* gateway.ingest(
-        goatInput("Always reply in Korean, remember that", "notes-1"),
-        memoryRpcContext,
-      );
+      const message = goatInput("Always reply in Korean, remember that", "notes-1");
+      const receipt = yield* gateway.ingest(message, memoryRpcContext);
+      yield* runtime.drain;
+      yield* confirmSharedNote(receipt.inputId, message, memoryRpcContext);
       yield* runtime.drain;
       yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), memoryRpcContext);
       yield* runtime.drain;
