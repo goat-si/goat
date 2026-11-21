@@ -872,9 +872,13 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         assert.isEmpty(yield* migrate);
         // The published build could already have a work trigger without the fence.
         yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
-        yield* sql`DELETE FROM effect_sql_migrations WHERE name='WorkTriggerAuthorityFence'`;
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
+        yield* sql`ALTER TABLE scheduled_task_webhook_deliveries DROP COLUMN firing_accepted`;
         assert.isUndefined(yield* checkOldBuild);
-        assert.deepStrictEqual(yield* migrate, [[177, "WorkTriggerAuthorityFence"]]);
+        assert.deepStrictEqual(yield* migrate, [
+          [177, "WorkTriggerAuthorityFence"],
+          [178, "WebhookDeliveryFiringEvidence"],
+        ]);
         assert.include(
           (yield* checkOldBuild)?.message ?? "",
           "would skip required schema migrations",

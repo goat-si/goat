@@ -343,6 +343,12 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
         ORDER BY requested_at DESC,firing_id DESC LIMIT 5)`;
   });
 
+  const markDeliveryFired = (deliveryId: string | null) =>
+    deliveryId === null
+      ? Effect.void
+      : sql`UPDATE scheduled_task_webhook_deliveries SET firing_accepted=1
+          WHERE delivery_id=${deliveryId} AND firing_accepted=0`.pipe(Effect.asVoid);
+
   const intakeBusy: ScheduledTaskRuns["Service"]["intakeBusy"] = Effect.fn(
     "ScheduledTaskRuns.intakeBusy",
   )(
@@ -568,6 +574,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           message: "Scheduled firing changed during observation.",
         });
       if (!changed) continue;
+      if (next.dispatchStatus === "accepted" && before.dispatchStatus !== "accepted")
+        yield* markDeliveryFired(row.webhook_delivery_id);
       const ended =
         run !== null &&
         next.dispatchStatus === "accepted" &&
@@ -716,6 +724,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             const json = yield* encode(next);
             yield* sql`UPDATE scheduled_task_runs SET thread_id=${next.threadId},run_id=NULL,dispatch_status=${next.dispatchStatus},
               status=${next.status},completed_at=${next.completedAt},snapshot_json=${json} WHERE firing_id=${row.firing_id}`;
+            if (input.outcome.type === "accepted")
+              yield* markDeliveryFired(row.webhook_delivery_id);
             const error = input.outcome.type === "failed" ? input.outcome.error : null;
             if (row.webhook_delivery_id !== null && error !== null)
               yield* sql`UPDATE scheduled_task_webhook_deliveries SET outcome='dispatch_failed', error=${error}

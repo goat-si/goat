@@ -29,7 +29,7 @@ export interface WebhookDeliveryRow {
   readonly missing_fields_json: string;
   readonly rendered_prompt: string | null;
   readonly pending_window: number;
-  readonly firing_accepted: number;
+  readonly has_accepted_firing: number;
   readonly error: string | null;
 }
 
@@ -37,8 +37,8 @@ export const deliveryEvidence = (sql: SqlClient.SqlClient) => sql`
   EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p
     WHERE p.delivery_id = d.delivery_id AND p.coalesce_key <> p.delivery_id
       AND p.state IN ('pending', 'dispatching')) AS pending_window,
-  EXISTS (SELECT 1 FROM scheduled_task_runs r
-    WHERE r.webhook_delivery_id = d.delivery_id AND r.dispatch_status = 'accepted') AS firing_accepted`;
+  (d.firing_accepted = 1 OR EXISTS (SELECT 1 FROM scheduled_task_runs r
+    WHERE r.webhook_delivery_id = d.delivery_id AND r.dispatch_status = 'accepted')) AS has_accepted_firing`;
 
 export const deliveryHeaders = (row: WebhookDeliveryRow): Readonly<Record<string, string>> =>
   Option.getOrElse(decodeHeadersJson(row.headers_json), () => ({}));
@@ -53,7 +53,7 @@ export const decodeDeliverySummary = (row: WebhookDeliveryRow) => ({
   outcome: row.outcome as ScheduledTaskWebhookDeliveryOutcome,
   signatureVerified: row.signature_verified === 1,
   pendingWindow: row.outcome === "accepted" && row.pending_window === 1,
-  firingAccepted: row.firing_accepted === 1,
+  firingAccepted: row.has_accepted_firing === 1,
   missingFields: Option.getOrElse(decodeMissingFieldsJson(row.missing_fields_json), () => []),
   error: row.error,
 });
