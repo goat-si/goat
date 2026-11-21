@@ -2,11 +2,12 @@ import {
   CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   ChannelGatewayError,
   ChannelTaskEvent,
+  ChannelChildWork,
+  type ChannelTaskId,
   isChannelChildWorkTerminal,
   isGoatBotSessionThreadId,
   type ChannelBotTaskActivity,
   type ChannelBotTaskActivityEntry,
-  type ChannelChildWork,
   type ChannelTask,
   type ChannelTaskEventType,
   type ChannelTaskStatus,
@@ -14,8 +15,18 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
+import { launchesStatement } from "./channelBotThreadHistory.ts";
+import {
+  threadPullRequestColumns,
+  taskActivityPullRequestLinks,
+  type ThreadPullRequestColumns,
+} from "./channelBotRowPullRequests.ts";
+import type { ChannelLedgerError } from "./channelLedgerError.ts";
+
+const decodeChild = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelChildWork));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const actorOf = { agent: "bot", user: "person", system: "goat" } as const;
 const limit = CHANNEL_BOT_TASK_ACTIVITY_LIMIT;
@@ -29,22 +40,37 @@ const legacyStatuses: Partial<Record<ChannelTaskEventType, ChannelTaskStatus>> =
   "task.retry.requested": "received",
 };
 
-export const readBotTaskActivity = Effect.fn("ChannelBotThreads.readActivity")(
+const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
   function* (
     sql: SqlClient.SqlClient,
     input: {
       readonly task: ChannelTask;
-      readonly environmentId?: EnvironmentId;
-      readonly children: ReadonlyArray<ChannelChildWork>;
-      readonly links: ReadonlyArray<{
-        readonly repository: string;
-        readonly number: number;
-        readonly linkedAt: string;
-      }>;
-      readonly partial: boolean;
+      readonly ownerId: string;
+      readonly environmentId: EnvironmentId;
     },
   ) {
-    const { task, children, links } = input;
+    const { task } = input;
+    const launches = yield* launchesStatement(sql, {
+      taskId: task.taskId,
+      ownerId: input.ownerId,
+      limit: limit + 1,
+    });
+    const launchRows = launches.slice(0, limit);
+    const children = launchRows.flatMap((row) => {
+      const child = decodeChild(row.value_json);
+      return Option.isSome(child) ? [child.value] : [];
+    });
+    const worker = task.worker;
+    const workerLinks =
+      worker === undefined || worker.host !== undefined || isGoatBotSessionThreadId(worker.threadId)
+        ? []
+        : yield* sql<ThreadPullRequestColumns>`
+          SELECT ${threadPullRequestColumns(sql)}
+          FROM orchestration_v2_projection_threads p WHERE p.thread_id = ${worker.threadId}
+        `;
+    const links = [...workerLinks, ...launchRows].flatMap((row) =>
+      row.pull_requests_json === null ? [] : taskActivityPullRequestLinks(row.pull_requests_json),
+    );
     const rows = yield* sql<{ readonly event_json: string; readonly worker_json: string | null }>`
     SELECT e.event_json, CASE WHEN e.type IN ('task.completed', 'task.failed', 'task.cancelled', 'task.moved') THEN (
       SELECT w.event_json FROM channel_task_events w
@@ -80,7 +106,7 @@ export const readBotTaskActivity = Effect.fn("ChannelBotThreads.readActivity")(
     ORDER BY task_version DESC LIMIT 1
   `;
     const entries: ChannelBotTaskActivityEntry[] = [];
-    let incomplete = input.partial;
+    let incomplete = launches.length > limit || children.length < launchRows.length;
     for (const row of rows) {
       const decoded = yield* Effect.try(() => ({
         event: decodeEvent(row.event_json),
@@ -139,9 +165,7 @@ export const readBotTaskActivity = Effect.fn("ChannelBotThreads.readActivity")(
       const {
         threadId,
         host,
-        environmentId = host === undefined
-          ? (input.environmentId ?? task.worker?.environmentId)
-          : undefined,
+        environmentId = host === undefined ? input.environmentId : undefined,
       } = child.destination ?? {};
       if (
         threadId === undefined ||
@@ -176,7 +200,7 @@ export const readBotTaskActivity = Effect.fn("ChannelBotThreads.readActivity")(
         linkedAt: lastObservation?.occurred_at ?? task.updatedAt,
       })),
     ]) {
-      const key = JSON.stringify([repository, number]);
+      const key = repository + "#" + number;
       if (linked.has(key)) continue;
       linked.add(key);
       entries.push({
@@ -197,3 +221,25 @@ export const readBotTaskActivity = Effect.fn("ChannelBotThreads.readActivity")(
   },
   Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
 );
+
+export function makeTaskHistoryReads(
+  sql: SqlClient.SqlClient,
+  toLedgerError: (detail: string) => (cause: unknown) => ChannelLedgerError,
+) {
+  return {
+    /** Most recently frozen brief, including earlier generations for version allocation. */
+    latestTaskBrief: Effect.fn("ChannelLedger.latestTaskBrief")(
+      function* (taskId: ChannelTaskId) {
+        const [row] = yield* sql<{ readonly event_json: string }>`
+        SELECT event_json FROM channel_task_events
+        WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
+        ORDER BY sequence DESC LIMIT 1
+      `;
+        const event = row === undefined ? undefined : decodeEvent(row.event_json);
+        return event?.type === "task.brief.frozen" ? event.payload.brief : undefined;
+      },
+      Effect.mapError(toLedgerError("latestTaskBrief")),
+    ),
+    readTaskActivity: readBotTaskActivity.bind(undefined, sql),
+  };
+}

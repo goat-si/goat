@@ -12,7 +12,6 @@ import * as ChannelBotHome from "../../../channels/ChannelBotHome.ts";
 import * as ChannelBotProfiles from "../../../channels/ChannelBotProfiles.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
-import * as ChannelBotThreads from "../../../channels/ChannelBotThreads.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
@@ -201,14 +200,19 @@ export const layer = McpToolAccess.toLayer(
       ),
       channel_task_get: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
-          const work = yield* ChannelBotThreads.ChannelBotThreads;
-          return yield* work
-            .readAgentTask(input.taskId, yield* ownerIdOf)
-            .pipe(
-              Effect.mapError((error) =>
-                error.reason === "not_found" ? notFound() : failureFor(error),
-              ),
-            );
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const ownerId = yield* ownerIdOf;
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const stored = yield* ledger.getTask(input.taskId).pipe(Effect.mapError(failureFor));
+          if (stored === undefined || stored.ownerId !== ownerId) return yield* notFound();
+          const activity = yield* ledger
+            .readTaskActivity({
+              task: stored.task,
+              ownerId,
+              environmentId: scope.environmentId,
+            })
+            .pipe(Effect.mapError(failureFor));
+          return { ...stored.task, activity };
         }),
       ),
       channel_task_list: McpToolAccess.reads((input) =>

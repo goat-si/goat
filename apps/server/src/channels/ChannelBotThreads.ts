@@ -45,7 +45,6 @@ import {
   observedPullRequestSource,
   threadPullRequestColumns,
   threadPullRequestSource,
-  taskActivityPullRequestLinks,
   type PullRequestSource,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
@@ -63,7 +62,6 @@ import {
   readMessageMark,
   taskRowUnread,
 } from "./channelTaskMessageMarks.ts";
-import { readBotTaskActivity } from "./channelBotTaskActivity.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
@@ -72,6 +70,7 @@ const decodeView = TaskViews.decodeTaskView;
 const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
 const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const isGatewayError = Schema.is(ChannelGatewayError);
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 interface ChildRow extends ThreadPullRequestColumns {
   readonly key?: string;
@@ -109,10 +108,6 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelGetBotTaskInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<BotWorkResult, ChannelGatewayError>;
-    readonly readAgentTask: (
-      taskId: ChannelTask["taskId"],
-      ownerId: string,
-    ) => Effect.Effect<ChannelTask & Pick<BotWorkResult, "activity">, ChannelGatewayError>;
     readonly searchBotTasks: (
       input: ChannelSearchBotTasksInput,
       owner: ChannelConnectionOwner,
@@ -145,7 +140,6 @@ const make = Effect.gen(function* () {
       readonly launchLimit?: number;
       readonly unknownView?: boolean;
       readonly skipLaunches?: boolean;
-      readonly activity?: boolean;
     },
   ) {
     const countInputs = encodeJson(
@@ -395,14 +389,6 @@ const make = Effect.gen(function* () {
       launchesTruncated,
       skippedLaunches,
       unreadablePullRequests,
-      activityChildren: options.activity ? children.map(({ child }) => child) : [],
-      activityPullRequests: options.activity
-        ? [...workerRows, ...childRows].flatMap((column) =>
-            column.pull_requests_json === null
-              ? []
-              : taskActivityPullRequestLinks(column.pull_requests_json),
-          )
-        : [],
     };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
@@ -535,7 +521,10 @@ const make = Effect.gen(function* () {
       {
         skipLaunches: true,
       },
-    )).rows.filter((row) => row.kind === "task" && row.view.snoozedUntil !== undefined);
+    )).rows.filter(
+      (row): row is Extract<BotThreadRow, { kind: "task" }> =>
+        row.kind === "task" && row.view.snoozedUntil !== undefined,
+    );
     const nextSnoozeExpiry = snoozed[0]?.view.snoozedUntil;
     for (const threadId of built.unreadablePullRequests)
       yield* warnPullRequests(
@@ -633,9 +622,7 @@ const make = Effect.gen(function* () {
     return yield* history === undefined
       ? sql
           .withTransaction(current(owner, botId, bot.bot.environmentId))
-          .pipe(
-            Effect.mapError((error) => (error instanceof ChannelGatewayError ? error : failed())),
-          )
+          .pipe(Effect.mapError((error) => (isGatewayError(error) ? error : failed())))
       : historyPage(owner, botId, bot.bot.environmentId, history.cursor);
   });
   const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
@@ -644,10 +631,9 @@ const make = Effect.gen(function* () {
   ) {
     return yield* listChildWork(ledger, childWork, owner.ownerId, input);
   });
-  const readBotTask = Effect.fn("ChannelBotThreads.getBotTask")(function* (
+  const getBotTask = Effect.fn("ChannelBotThreads.getBotTask")(function* (
     input: ChannelGetBotTaskInput,
     owner: Pick<ChannelConnectionOwner, "ownerId">,
-    goatOnly: boolean,
   ) {
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
     const rows = yield* sql<{
@@ -658,9 +644,7 @@ const make = Effect.gen(function* () {
     }>`SELECT t.task_id, t.conversation_id, t.task_json, t.status_version FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
-        AND c.owner_id = ${owner.ownerId} AND (${goatOnly ? 1 : 0} = 0 OR c.kind = 'goat')`.pipe(
-      Effect.mapError(failed),
-    );
+        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
@@ -702,7 +686,6 @@ const make = Effect.gen(function* () {
       {
         launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
         unknownView: !known,
-        activity: true,
       },
     );
     const summary = {
@@ -720,12 +703,10 @@ const make = Effect.gen(function* () {
         : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } };
     const row = built.rows.find((item) => item.kind === "task");
     if (known && row === undefined) return yield* failed();
-    const activity = yield* readBotTaskActivity(sql, {
+    const activity = yield* ledger.readTaskActivity({
       task,
+      ownerId: owner.ownerId,
       environmentId: bot.bot.environmentId,
-      children: built.activityChildren,
-      links: built.activityPullRequests,
-      partial: built.skippedLaunches > 0 || built.launchesTruncated.length > 0,
     });
     return {
       activity,
@@ -743,28 +724,6 @@ const make = Effect.gen(function* () {
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
     };
   });
-  const readAgentTask = Effect.fn("ChannelBotThreads.readAgentTask")(function* (
-    taskId: ChannelTask["taskId"],
-    ownerId: string,
-  ) {
-    yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
-    const stored = yield* ledger.getTask(taskId).pipe(Effect.mapError(failed));
-    if (stored?.ownerId !== ownerId) return yield* new ChannelGatewayError({ reason: "not_found" });
-    const activity = yield* readBotTask({ taskId, botId: stored.botId }, { ownerId }, false).pipe(
-      Effect.map((result) => result.activity),
-      Effect.catchIf(
-        (error) => error.reason === "not_found",
-        () =>
-          readBotTaskActivity(sql, {
-            task: stored.task,
-            children: [],
-            links: [],
-            partial: true,
-          }),
-      ),
-    );
-    return { ...stored.task, activity };
-  });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (
     input: ChannelSearchBotTasksInput,
     owner: ChannelConnectionOwner,
@@ -779,8 +738,7 @@ const make = Effect.gen(function* () {
     unsnooze: views.snooze,
     listChildWork: listChildWorkFor,
     retry,
-    getBotTask: (input, owner) => readBotTask(input, owner, true),
-    readAgentTask,
+    getBotTask,
     searchBotTasks,
   });
 });
