@@ -48,7 +48,7 @@ import {
   questionIdFor,
   workerLaunchIdsFor,
 } from "./channelIds.ts";
-import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
+import { channelRunFailure, failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
@@ -713,6 +713,8 @@ const make = Effect.gen(function* () {
         );
         return true;
       }
+      const failure = yield* channelRunFailure(threads, current, session);
+      if (failure === undefined) return latest !== stored;
       yield* commitTransition(
         ledger,
         latest,
@@ -720,8 +722,7 @@ const make = Effect.gen(function* () {
           type: "task.failed",
           payload: {
             generation: task.generation,
-            reason: current.status,
-            summary: "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
+            ...failure,
           },
         },
         { owner, narrate: true, completionHold: null },

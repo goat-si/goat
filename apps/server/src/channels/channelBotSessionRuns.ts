@@ -55,7 +55,7 @@ type Records = {
 };
 
 /** The intent row a message was recorded under, if GOAT sent it into a session. */
-const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
+export const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
   sql<SessionIntent>`
     SELECT * FROM channel_bot_session_runs WHERE thread_id = ${threadId} AND message_id = ${messageId}
   `.pipe(Effect.map((rows) => rows[0]));

@@ -20,6 +20,8 @@ export {
   type ProviderTurnStartServiceV2Shape,
 } from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
+import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import { makeProviderInputRefusal } from "../channels/channelProviderInputAuthority.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
@@ -61,6 +63,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -120,6 +123,7 @@ export const layer: Layer.Layer<
   | RunExecutionService.RunExecutionServiceV2
   | RuntimePolicy.RuntimePolicyV2
   | TurnItemPositionStore.TurnItemPositionStoreV2
+  | SqlClient.SqlClient
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -145,6 +149,7 @@ export const layer: Layer.Layer<
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
     const explainOpenFailure = yield* openFailureExplainer;
     const makeRunControls = makeProviderRunControls(projectionStore, idAllocator);
+    const providerInputRefusal = yield* makeProviderInputRefusal;
     const makeRefreshMemoryContext = yield* makeMemoryRefreshFactory;
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -1377,6 +1382,15 @@ export const layer: Layer.Layer<
             sameNativeThread &&
             !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
+        ...(!observeOnly
+          ? {
+              providerInputRefusal: providerInputRefusal(
+                run.threadId,
+                providerMessage.id,
+                run.memoryGrantCeiling,
+              ),
+            }
+          : {}),
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
@@ -1468,4 +1482,4 @@ export const layer: Layer.Layer<
       ),
     });
   }),
-);
+).pipe(Layer.provide(ChannelLedger.layer));
