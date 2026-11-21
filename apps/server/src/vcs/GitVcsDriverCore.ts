@@ -4,6 +4,8 @@ import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
+import type { GitRepositoryPaths, GitRefsSnapshot } from "./gitRepositoryTypes.ts";
+import { recoverBranchRename } from "./renameBranchRecovery.ts";
 import { branchBaseConfigKey, legacyBranchBaseConfigKey } from "./gitBranchBaseKeys.ts";
 import {
   PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES,
@@ -195,20 +197,6 @@ const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
 const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
 
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
-
-interface GitRepositoryPaths {
-  readonly gitCommonDir: string;
-  readonly worktreeRoot: string | null;
-  readonly isAtRepositoryRoot: boolean | undefined;
-  readonly currentBranch: string | null;
-}
-
-interface GitRefsSnapshot {
-  readonly defaultBranch: string | null;
-  readonly localBranches: ReadonlyArray<VcsRef>;
-  readonly remoteBranches: ReadonlyArray<VcsRef>;
-  readonly hasPrimaryRemote: boolean;
-}
 
 interface ExecuteGitOptions {
   stdin?: string | undefined;
@@ -4985,6 +4973,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             timeoutMs: 10_000,
             fallbackErrorDetail: "git branch rename failed",
           },
+        ).pipe(
+          Effect.catch((error) =>
+            recoverBranchRename(
+              error,
+              branchExists(input.cwd, input.oldBranch),
+              branchExists(input.cwd, targetBranch),
+            ),
+          ),
         );
 
         return { branch: targetBranch };
