@@ -3,6 +3,7 @@ import {
   type ChannelRequester,
   type MessageId,
   type OrchestrationV2Run,
+  type RuntimeMode,
 } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Context from "effect/Context";
@@ -22,6 +23,11 @@ import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 export const CHANNEL_PERMISSION_CHANGED = "permission_changed";
 export const CHANNEL_PERMISSION_CHANGED_MESSAGE =
   "The requester’s permission to start this work changed.";
+
+export class ProviderInputRuntimeMode extends Context.Service<
+  ProviderInputRuntimeMode,
+  RuntimeMode
+>()("goat/channels/ProviderInputRuntimeMode") {}
 
 const permissionChanged = makeProviderFailure({
   class: "permission_error",
@@ -66,11 +72,11 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       if (requester.originKind !== "slack" || originAddress.kind !== "slack") return undefined;
       if (task.generation !== intent.task_generation) return permissionChanged;
       const current = yield* currentRequester(requester, originAddress.connectionId);
-      const mode = task.target?.runtimeMode;
+      const mode = yield* ProviderInputRuntimeMode;
       if (
         current === undefined ||
         !current.grantedScopes.includes("orchestration:operate") ||
-        (mode !== undefined && lowerRuntimeMode(mode, current.runtimeModeCeiling) !== mode) ||
+        lowerRuntimeMode(mode, current.runtimeModeCeiling) !== mode ||
         MEMORY_GRANT_RANK[sessionMemoryCeiling(current, task.target)] <
           MEMORY_GRANT_RANK[memoryGrantCeiling ?? "none"]
       )
@@ -92,7 +98,11 @@ const makeProviderInputRefusal = Effect.gen(function* () {
         if (snapshot === undefined) return permissionChanged;
         const connectionId = sender?.connectionId ?? input?.message.connectionId;
         const live = yield* currentRequester(snapshot, connectionId);
-        if (live === undefined || !mayDirect(live, connectionId, { ...task, requester: current }))
+        if (
+          live === undefined ||
+          lowerRuntimeMode(mode, live.runtimeModeCeiling) !== mode ||
+          !mayDirect(live, connectionId, { ...task, requester: current })
+        )
           return permissionChanged;
       }
       return undefined;

@@ -1383,10 +1383,14 @@ export const layer: Layer.Layer<
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         ...(!observeOnly && Option.isSome(providerInputRefusal)
           ? {
-              providerInputRefusal: providerInputRefusal.value(
-                run.threadId,
-                providerMessage.id,
-                run.memoryGrantCeiling,
+              providerInputRefusal: Effect.provideService(
+                providerInputRefusal.value(
+                  run.threadId,
+                  providerMessage.id,
+                  run.memoryGrantCeiling,
+                ),
+                ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                resolvedRuntimePolicy.runtimeMode,
               ),
             }
           : {}),
