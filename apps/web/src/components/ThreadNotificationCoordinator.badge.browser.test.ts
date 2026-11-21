@@ -3,12 +3,12 @@ import type { AnyRouter } from "@tanstack/react-router";
 import type { ChannelAttentionFeedResult } from "@goat/contracts/channel-bot-attention";
 import { createElement, useEffect } from "react";
 import * as Option from "effect/Option";
-import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 import { fakeTimers, render, stubGlobal } from "../../test/render";
 import {
+  approvalDecisionFeed,
   attentionEnvironment,
   attentionEvent,
   cursorKey,
@@ -846,15 +846,17 @@ function MountedCoordinators({
 }
 
 it.each([
-  ["handoff only", "needs_you", "one", "channel-worker:abc", ["Scout needs approval"]],
-  ["handoff only", "off", "one", "channel-worker:abc", []],
-  ["older SSH destination", "needs_you", "two", "mcp:worker", ["Scout has a question"]],
-  ["older SSH destination", "off", "two", "mcp:worker", []],
-  ["SSH handoff only", "needs_you", "two", "mcp:worker", ["Scout needs approval"]],
-  ["SSH handoff only", "off", "two", "mcp:worker", []],
+  ["handoff only", "needs_you", "one", "channel-worker:abc", ["Scout needs approval"], "online"],
+  ["handoff only", "off", "one", "channel-worker:abc", [], "online"],
+  ["older SSH destination", "needs_you", "two", "mcp:worker", ["Scout has a question"], "online"],
+  ["older SSH destination", "off", "two", "mcp:worker", [], "online"],
+  ["SSH handoff only", "needs_you", "two", "mcp:worker", ["Scout needs approval"], "online"],
+  ["SSH handoff only", "off", "two", "mcp:worker", [], "online"],
+  ["disconnected SSH handoff only", "off", "two", "remote-channel-worker:abc", [], "absent"],
+  ["failed lookup, SSH handoff only", "off", "two", "remote-channel-worker:abc", [], "failed"],
 ] as const)(
   "%s routes only through bot alerts in %s mode",
-  async (scenario, mode, destination, id, titles) => {
+  async (scenario, mode, destination, id, titles, origin) => {
     await using app = setup();
     using _storage = stubAttentionStorage();
     app.registry.set(supported, true);
@@ -871,8 +873,11 @@ it.each([
       router: false,
     });
     await vi.waitFor(() => expect(state.feed).toHaveBeenCalled());
-    state.feed.mockImplementation(async (_registry, target) =>
-      AsyncResult.success(
+    state.feed.mockImplementation(async (_registry, target) => {
+      if (origin === "failed" && target.input.worker !== undefined) {
+        return AsyncResult.fail(new Error("Origin unavailable"));
+      }
+      return AsyncResult.success(
         target.input.worker === undefined
           ? {
               cursor: 1,
@@ -894,25 +899,20 @@ it.each([
                 target.input.worker.environmentId === destination &&
                 target.input.worker.threadId === id,
             },
-      ),
-    );
-    if (handoff) {
-      app.registry.set(decisionAtom(destination), {
-        handoffs: [
-          {
-            handoff: {
-              handoffId: "approval",
-              requestedBy: { threadId: id },
-              title: "Private approval",
-              createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
-            },
-            threadTitle: worker.title,
-            ...(destination === "one" ? { botAttentionOwned: true } : {}),
-          },
-        ],
-      });
+      );
+    });
+    if (origin === "absent") {
+      app.registry.set(revisions, AsyncResult.success({ value: 1 }));
+      await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
+      app.setEnvironmentIds([destination]);
     }
-    if (destination === "two") {
+    if (handoff) {
+      app.registry.set(
+        decisionAtom(destination),
+        approvalDecisionFeed(worker, destination === "one"),
+      );
+    }
+    if (destination === "two" && origin !== "absent") {
       app.registry.set(revisions, AsyncResult.success({ value: 1 }));
       if (!handoff) state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
     }
@@ -920,7 +920,7 @@ it.each([
     expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
       titles.map((title) => [title, undefined]),
     );
-    if (destination === "two") {
+    if (destination === "two" && origin === "online") {
       await vi.waitFor(() =>
         expect(state.feed).toHaveBeenCalledWith(app.registry, {
           environmentId: "one",

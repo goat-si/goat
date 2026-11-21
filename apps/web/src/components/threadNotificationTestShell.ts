@@ -119,6 +119,26 @@ export const attentionEvent = {
   botName: "Scout",
 } as const;
 
+export function approvalDecisionFeed(
+  worker: { id: string; title: string },
+  botAttentionOwned: boolean,
+) {
+  return {
+    handoffs: [
+      {
+        handoff: {
+          handoffId: "approval",
+          requestedBy: { threadId: worker.id },
+          title: "Private approval",
+          createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
+        },
+        threadTitle: worker.title,
+        ...(botAttentionOwned ? { botAttentionOwned: true } : {}),
+      },
+    ],
+  };
+}
+
 export function stubAttentionStorage() {
   const storage = new Map([[cursorKey, "0"]]);
   return stubGlobal("localStorage", {
