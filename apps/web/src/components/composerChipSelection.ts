@@ -1,3 +1,4 @@
+import { markAsCompositionReplace } from "../composer-undo-grouping";
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
@@ -21,6 +22,15 @@ export const ComposerChipSelectionExtension = Extension.create({
         },
         props: {
           decorations: (state) => ChipSelectionPluginKey.getState(state),
+          handleDOMEvents: {
+            // Chrome skips deleting a range bounded by a non-selectable chip during IME input.
+            compositionstart: (view) => {
+              if (ChipSelectionPluginKey.getState(view.state)?.find().length) {
+                view.dispatch(markAsCompositionReplace(view.state.tr.deleteSelection()));
+              }
+              return false;
+            },
+          },
         },
       }),
     ];
