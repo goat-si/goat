@@ -5,6 +5,7 @@ import type {
   BotId,
   BotWorkResult,
   ChannelChildWorkGroup,
+  ChannelTaskChip,
   ChannelTaskId,
   EnvironmentId,
 } from "@goat/contracts";
@@ -17,6 +18,10 @@ import { channelEnvironment } from "../../state/channels";
 const NO_PERMISSION = Atom.make(false);
 
 type Unavailable = Extract<BotWorkResult["task"], { readonly state: "unavailable" }>;
+
+export type MobileTaskApprovalObservation = Pick<ChannelTaskChip, "taskId" | "title" | "worker"> & {
+  readonly observed: Pick<NonNullable<ChannelTaskChip["observed"]>, "needsYou">;
+};
 
 /** What a task's own screen knows about a task its bot's current list does not hold. */
 export type MobileTaskLookup =
@@ -100,7 +105,7 @@ export function useMobileBotTaskLookup(input: {
   readonly holdsTask: boolean;
   /** Child work read for this task, for its subagents. */
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
-}): { readonly lookup: MobileTaskLookup; readonly invalidate: () => void } {
+}) {
   const { environmentId, botId, taskId } = input;
   const able = input.supported && environmentId !== null && taskId !== null;
   const permitted = useAtomValue(
@@ -210,5 +215,18 @@ export function useMobileBotTaskLookup(input: {
     return task === undefined ? { state: "missing" } : { state: "known", task, result };
   };
   const invalidate = () => setStaleKey(key);
-  return { lookup: present(), invalidate };
+  const result =
+    decision.view === "answer" && saved?.key === key && "value" in saved ? saved.value : null;
+  const observation = result?.approvalObservation;
+  const summary = result?.task.state === "known" ? result.task.row.task : result?.task.task;
+  const approvalTask: MobileTaskApprovalObservation | undefined =
+    observation && summary && observation.needsYou.length > 0
+      ? {
+          taskId: summary.taskId,
+          title: summary.title,
+          worker: observation.worker,
+          observed: observation,
+        }
+      : undefined;
+  return { lookup: present(), approvalTask, invalidate };
 }

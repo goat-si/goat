@@ -22,12 +22,14 @@ import type { WaitingWorker } from "../threads/ChildApprovalContext";
 import { ChildThreadApprovals } from "../threads/ChildThreadApprovals";
 import { goatBotComputerConnectedNow } from "./goatBotComputerLink";
 import type { MobileTaskChips } from "./mobileBotTaskStatus";
+import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
 
 export interface MobileBotApprovalProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly taskId: ChannelTaskId | undefined;
   readonly chips: MobileTaskChips;
+  readonly taskObservation?: MobileTaskApprovalObservation | undefined;
   readonly onOpenThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
 }
 
@@ -50,7 +52,7 @@ function verifiedHostEnvironments(
 }
 
 export default function MobileBotApprovals(props: MobileBotApprovalProps) {
-  const { environmentId, threadId, taskId, chips } = props;
+  const { environmentId, threadId, taskId, chips, taskObservation } = props;
   const requests = useMemo(
     () =>
       Atom.make((get) => {
@@ -81,7 +83,7 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
           }
           return hostEnvironments.get(host) ?? null;
         };
-        for (const chip of chips.values()) {
+        for (const chip of taskObservation === undefined ? chips.values() : [taskObservation]) {
           if (taskId !== undefined && chip.taskId !== taskId) continue;
           const worker = chip.worker;
           for (const need of chip.observed?.needsYou ?? []) {
@@ -169,7 +171,7 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
         }
         return { approvals, workers: [...workers.values()] };
       }),
-    [environmentId, threadId, taskId, chips],
+    [environmentId, threadId, taskId, chips, taskObservation],
   );
   const { approvals, workers } = useAtomValue(requests);
   return (

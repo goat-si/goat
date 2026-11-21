@@ -101,6 +101,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { MobileBotApprovalSlot } from "./MobileBotApprovals";
 import { MobileBotWork } from "./MobileBotWork";
+import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
 import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
@@ -327,7 +328,6 @@ export function GoatBotScreen(props: {
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
-  const { approvalCards: ApprovalCards } = props;
   const member = props.member ?? null;
   const conversation = member
     ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
@@ -647,6 +647,19 @@ export function GoatBotScreen(props: {
       ),
     [session.rows, session.streamingReplyIds],
   );
+  const ApprovalCards = props.visible && session.homeConnected ? props.approvalCards : undefined;
+  const { historyEnvironmentId, threadId } = session;
+  const renderApprovals = (taskObservation?: MobileTaskApprovalObservation) =>
+    ApprovalCards && historyEnvironmentId && threadId ? (
+      <ApprovalCards
+        environmentId={historyEnvironmentId}
+        threadId={threadId}
+        taskId={taskId}
+        chips={session.taskChips}
+        taskObservation={taskObservation}
+        onOpenThread={onSelectThread}
+      />
+    ) : null;
   return (
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
@@ -723,6 +736,7 @@ export function GoatBotScreen(props: {
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
             taskChips={session.taskChips}
+            renderTaskApprovals={taskId && ApprovalCards ? renderApprovals : undefined}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
             taskTitle={props.taskTitle}
@@ -887,19 +901,7 @@ export function GoatBotScreen(props: {
           className="gap-2 border-t border-border px-4 pt-2"
           style={composerPaddingStyle}
         >
-          {ApprovalCards &&
-          props.visible &&
-          session.homeConnected &&
-          session.historyEnvironmentId &&
-          session.threadId ? (
-            <ApprovalCards
-              environmentId={session.historyEnvironmentId}
-              threadId={session.threadId}
-              taskId={taskId}
-              chips={session.taskChips}
-              onOpenThread={onSelectThread}
-            />
-          ) : null}
+          {(taskId === undefined || session.taskChips.has(taskId)) && renderApprovals()}
           <GoatBotAttachmentStrip
             environmentId={session.historyEnvironmentId}
             attachments={attachments}

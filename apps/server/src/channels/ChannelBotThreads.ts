@@ -8,6 +8,7 @@ import {
   type BotRemoteWork,
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
+  CHANNEL_BOT_TASK_APPROVAL_LIMIT,
   type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
   ChannelTaskView,
@@ -606,6 +607,10 @@ const make = Effect.gen(function* () {
         : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } };
     const row = built.rows.find((item) => item.kind === "task");
     if (known && row === undefined) return yield* failed();
+    const needsYou = (task.observed?.needsYou ?? [])
+      .filter((need) => need.kind === "approval")
+      .slice(0, CHANNEL_BOT_TASK_APPROVAL_LIMIT);
+    const assigned = task.worker;
     return {
       task:
         known && row?.kind === "task"
@@ -619,6 +624,18 @@ const make = Effect.gen(function* () {
       remoteWork: built.remoteWork,
       launchesTruncated: built.launchesTruncated.length > 0,
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
+      approvalObservation: {
+        needsYou,
+        ...(assigned === undefined
+          ? {}
+          : {
+              worker: {
+                environmentId: assigned.environmentId,
+                threadId: assigned.threadId,
+                ...(assigned.host === undefined ? {} : { host: assigned.host }),
+              },
+            }),
+      },
     };
   });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (

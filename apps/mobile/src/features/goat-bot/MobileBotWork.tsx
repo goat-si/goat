@@ -49,6 +49,7 @@ import { useAfterSheetGone } from "./useAfterSheetGone";
 import { MobileBotTaskSearch } from "./MobileBotTaskSearch";
 import { MobileBotHomeChip } from "./MobileBotHomeChip";
 import { useMobileTaskScreen } from "./useMobileTaskScreen";
+import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
 import { MobileBotRoutines } from "./MobileBotRoutines";
@@ -133,6 +134,9 @@ export function MobileBotWork(props: {
   readonly workRevision?: string | null | undefined;
   /** The newest chip of each task in the conversation: what its worker asks of the person. */
   readonly taskChips?: MobileTaskChips | undefined;
+  readonly renderTaskApprovals?:
+    | ((observation: MobileTaskApprovalObservation) => ReactNode)
+    | undefined;
   /** What the home opens on, from an event line; seq changes on every request. */
   readonly focus?: (MobileBotHomeFocus & { readonly seq: number }) | null | undefined;
 }) {
@@ -216,6 +220,10 @@ export function MobileBotWork(props: {
   );
   const botId = member?.botId ?? BotId.make("main");
   const older = !task && listData !== null && (offline || threads.successResult !== null);
+  const renderTaskApprovals =
+    props.visible && props.taskId !== undefined && !chips.has(props.taskId)
+      ? props.renderTaskApprovals
+      : undefined;
   const actions = useMobileTaskScreen({
     environmentId,
     owner: workOwner,
@@ -225,6 +233,7 @@ export function MobileBotWork(props: {
     lookupSupported: capabilities?.goatBotTaskLookupSearch === true,
     list: threads,
     holdsTask: task !== undefined,
+    needsApprovalObservation: renderTaskApprovals !== undefined,
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
@@ -852,7 +861,7 @@ export function MobileBotWork(props: {
       ) : props.sheetOnly ? null : Platform.OS === "android" ? (
         <MobileBotHomeChip botName={botName} face={props.chipFace} onOpen={() => setOpen(true)} />
       ) : null}
-      {/* Open Home on an older task's screen opens this bot's Home right here, as one more sheet. */}
+      {actions.approvalTask && renderTaskApprovals?.(actions.approvalTask)}
       {olderHome ? (
         <MobileBotWork
           {...props}

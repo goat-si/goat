@@ -39,16 +39,17 @@ export function useMobileTaskScreen(input: {
   };
   /** The last successful current list holds the task. */
   readonly holdsTask: boolean;
+  readonly needsApprovalObservation?: boolean;
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
 }) {
-  const { lookup, invalidate } = useMobileBotTaskLookup({
+  const { lookup, approvalTask, invalidate } = useMobileBotTaskLookup({
     environmentId: input.environmentId,
     botId: input.botId,
     taskId: input.taskId,
     supported: input.enabled && input.lookupSupported,
     established: input.list.data !== null,
     refreshing: input.list.isPending,
-    holdsTask: input.holdsTask,
+    holdsTask: input.holdsTask && !input.needsApprovalObservation,
     childGroups: input.childGroups,
   });
   const permitted = useAtomValue(
@@ -72,7 +73,8 @@ export function useMobileTaskScreen(input: {
   };
   const canUpdate = permitted && input.enabled;
   return {
-    lookup,
+    lookup: input.holdsTask ? { state: "off" as const } : lookup,
+    approvalTask,
     /** This device may change task views here; the read mark's own gate as well. */
     permitted,
     canUpdate,

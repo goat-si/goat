@@ -6,7 +6,8 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { appAtomRegistry } from "../../state/atom-registry";
 
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -139,6 +140,7 @@ const state = vi.hoisted(() => ({
   // A server that looks tasks up by id and searches their titles.
   lookupCapable: false,
   lookup: vi.fn(),
+  readApprovalAtoms: false,
   update: vi.fn(),
 }));
 
@@ -147,6 +149,7 @@ vi.mock("react-native-reanimated", () => {
   const chain = { duration: () => chain, reduceMotion: () => chain };
   return {
     default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
+    useAnimatedStyle: (style: () => unknown) => style(),
     FadeIn: chain,
     ReduceMotion: { System: "system" },
   };
@@ -167,7 +170,25 @@ vi.mock("../../state/entities", () => ({
   useEnvironmentServerConfig: () => null,
 }));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: Atom.Atom<unknown>) =>
+    state.readApprovalAtoms && Atom.isAtom(atom) ? appAtomRegistry.get(atom) : true,
+}));
+vi.mock("../../state/presentation", () => ({
+  environmentPresentations: {
+    presentationAtom: () => Atom.make({ connection: { phase: "connected" } }),
+  },
+}));
+vi.mock("../../state/session", () => ({
+  useEnvironmentScope: () => true,
+  sessionHasScope: () => true,
+  readEnvironmentScope: () => true,
+  environmentSession: { sessionStateAtom: () => Atom.make(null) },
+}));
+vi.mock("../../state/threads", () => ({
+  environmentThreadShells: { threadShellAtom: () => Atom.make({ title: "Waiting worker" }) },
+  environmentThreadDetails: { pendingRequestsAtom: () => Atom.make(null) },
+}));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: ({
@@ -192,7 +213,10 @@ vi.mock("../../native/StackHeader", () => ({
       </button>
     )),
 }));
-vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../../state/atom-registry", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  return { appAtomRegistry: AtomRegistry.make() };
+});
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
@@ -292,6 +316,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+import MobileBotApprovals from "./MobileBotApprovals";
 import { GoatBotChipFace } from "./GoatBotFace";
 
 // The chat's header chip opens the home; this stands in for it.
@@ -325,6 +350,7 @@ function reset() {
   state.retry.mockReset();
   state.lookupCapable = false;
   state.lookup.mockReset();
+  state.readApprovalAtoms = false;
   state.update.mockReset();
 }
 async function render(
@@ -537,6 +563,70 @@ it("shows task details in the header when a card is available for a listed task"
   expect(container.textContent).not.toContain("Task summary");
   await render(ChannelTaskId.make("task"), <span>Task summary</span>);
   expect(container.textContent).toContain("Task summary");
+});
+
+it("opens a reachable waiting worker from task detail after the transcript chip ages out", async () => {
+  reset();
+  state.readApprovalAtoms = true;
+  state.lookupCapable = true;
+  const taskId = ChannelTaskId.make("task");
+  const environmentId = EnvironmentId.make("env");
+  const at = "2026-11-04T10:00:00.000Z";
+  const worker = { environmentId, threadId: ThreadId.make("worker") };
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId, title: "Review", status: "running", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+    worker,
+  });
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  state.lookup.mockResolvedValue(
+    AsyncResult.success({
+      task: { state: "known", row },
+      approvalObservation: {
+        worker,
+        needsYou: [
+          { kind: "approval", since: at, approval: { requestId: "request", threadId: "worker" } },
+        ],
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    }),
+  );
+  const onOpenThread = vi.fn();
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <WorkWithChip
+        visible
+        taskId={taskId}
+        onOpenTask={() => {}}
+        onOpenThread={onOpenThread}
+        renderTaskApprovals={(taskObservation) => (
+          <MobileBotApprovals
+            environmentId={environmentId}
+            threadId={ThreadId.make("bot")}
+            taskId={taskId}
+            chips={new Map()}
+            taskObservation={taskObservation}
+            onOpenThread={onOpenThread}
+          />
+        )}
+      />,
+    ),
+  );
+  expect(container.textContent).toContain("1 waiting");
+  const link = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open worker · Waiting worker"]',
+  );
+  expect(link).not.toBeNull();
+  await act(async () => link?.click());
+  expect(onOpenThread).toHaveBeenCalledWith({ environmentId, id: worker.threadId });
 });
 
 it("names a task the server no longer lists from its conversation card, as older work", async () => {

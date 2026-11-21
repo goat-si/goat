@@ -175,23 +175,6 @@ vi.mock("../cloud/connectOnboarding", () => ({
   requestConnectOnboarding: () => {},
 }));
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
-vi.mock("./MobileBotList", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./MobileBotList")>();
-  const { default: OfflineBotRoster } = await import("./OfflineBotRoster");
-  return {
-    MobileBotList: ({ visible }: { visible: boolean }) =>
-      fixture.width > 400 ? (
-        <actual.MobileBotList visible={visible} />
-      ) : (
-        <OfflineBotRoster
-          environmentId={null}
-          visible={visible}
-          computer={null}
-          openBot={() => undefined}
-        />
-      ),
-  };
-});
 vi.mock("./MobileBotRosterView", () => ({ MobileHomeSegments: () => null }));
 vi.mock("./MobileBotEditSheet", () => ({ MobileBotEditSheet: () => null }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
