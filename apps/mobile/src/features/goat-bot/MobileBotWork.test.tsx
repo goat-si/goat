@@ -214,6 +214,7 @@ vi.mock("../../state/channels", () => ({
 }));
 vi.mock("../../state/server", () => ({
   serverEnvironment: {
+    botTriggerSettingsPermissionAtom: () => "permission",
     scheduledTasksLive: () => "routines",
     setScheduledTaskEnabled: {
       label: "set enabled",
@@ -606,17 +607,24 @@ const routine = (id: string, lastRunStatus: string) => ({
   lastRunError: lastRunStatus === "failed" ? "Provider exited with code 1" : null,
 });
 
-it("offers Run now only for a routine whose last run failed, one run per tap", async () => {
+it("runs a healthy or paused timer on demand and gives webhook routines delivery guidance", async () => {
   reset();
+  const timer = { ...routine("fine", "succeeded"), enabled: false };
+  const trigger = {
+    ...routine("hook", "failed"),
+    title: "PR delivery",
+    schedule: { type: "webhook" },
+    routineMode: "work",
+  };
   Object.assign(state.routines, {
     isPending: false,
     isSuccess: true,
-    data: { tasks: [routine("failed", "failed"), routine("fine", "succeeded")] },
+    data: { tasks: [timer, trigger] },
   });
-  state.runNow.mockResolvedValue(AsyncResult.success({ task: routine("failed", "failed") }));
+  state.runNow.mockResolvedValue(AsyncResult.success({ task: timer }));
   await render();
   await press("Work");
-  // Routines sit on Home with machines and work.
+  expect(container.textContent).toContain("Signed deliveries to the webhook URL start work");
   const runButtons = [...container.querySelectorAll("button")].filter(
     (button) => button.textContent === "Run now",
   );
@@ -625,7 +633,7 @@ it("offers Run now only for a routine whose last run failed, one run per tap", a
   expect(state.runNow).toHaveBeenCalledOnce();
   expect(state.runNow).toHaveBeenCalledWith(expect.anything(), {
     environmentId: "env",
-    input: { id: "failed" },
+    input: { id: "fine" },
   });
 });
 
