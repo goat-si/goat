@@ -1,6 +1,9 @@
 import {
   BotId,
   ChannelTaskId,
+  ChannelConversationId,
+  ChannelBindingId,
+  ChannelInputId,
   EnvironmentId,
   pendingDecisionId,
   RuntimeRequestId,
@@ -119,12 +122,35 @@ const workerRequest = {
   threadId: ThreadId.make("remote-child"),
   requestId: RuntimeRequestId.make("approval:42"),
 } satisfies ChannelAttentionRequest;
-const localTask = {
+const date = "2026-11-21T00:00:00Z";
+const localTask: ChannelTask = {
+  taskId: ChannelTaskId.make("task"),
+  conversationId: ChannelConversationId.make("conversation"),
+  originBindingId: ChannelBindingId.make("binding"),
+  originInputId: ChannelInputId.make("input"),
+  originAddress: { kind: "goat", environmentId, threadId: ThreadId.make("bot") },
+  requester: {
+    ownerId: "owner",
+    principalId: "person",
+    displayName: "Person",
+    originKind: "goat",
+    runtimeModeCeiling: "full-access",
+    grantedScopes: ["orchestration:read"],
+  },
+  title: "Task",
+  instruction: "Review",
+  status: "running",
+  version: 2,
   generation: 1,
   openQuestions: [],
-  worker: { environmentId, threadId: ThreadId.make("local-worker") },
-  observed: { needsYou: [{ kind: "approval", approval: workerRequest }] },
-} as ChannelTask;
+  worker: { environmentId, threadId: ThreadId.make("local-worker"), generation: 1 },
+  observed: {
+    pullRequests: [],
+    needsYou: [{ kind: "approval", approval: workerRequest, since: date }],
+  },
+  createdAt: date,
+  updatedAt: date,
+};
 const item = {
   id: pendingDecisionId(workerRequest.threadId, workerRequest.requestId),
   status: "open",

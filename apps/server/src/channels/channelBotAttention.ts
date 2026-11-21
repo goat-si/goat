@@ -131,6 +131,7 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
   yield* pruneOwner(sql, ownerId);
 });
 
+// Preview rows stored plain IDs in this column and remain readable after the upgrade.
 const requestJson = Schema.fromJsonString(ChannelAttentionRequest);
 const encodeRequest = Schema.encodeSync(requestJson);
 const decodeRequest = Schema.decodeUnknownOption(requestJson);

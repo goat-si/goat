@@ -304,7 +304,7 @@ export const isOpenBotAttentionDecision = (item: DecisionItem, request: ChannelA
   item.pending?.threadId === request.threadId &&
   item.pending.requestId === request.requestId;
 
-export async function readBotAttentionRuntimeDecision(
+async function readBotAttentionRuntimeDecision(
   registry: AtomRegistry.AtomRegistry,
   decisionRpc: Pick<DecisionRpc, "getDecision">,
   environmentId: EnvironmentId,
