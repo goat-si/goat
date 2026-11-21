@@ -192,6 +192,18 @@ function legacyBotAttentionId<E>(
     : undefined;
 }
 
+export function normalizeBotAttentionPreview<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const previewId = legacyBotAttentionId(entries, history);
+  return {
+    previewId,
+    history:
+      previewId === undefined ? history : history.filter((row) => row.migration_id !== previewId),
+  };
+}
+
 /** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
 export const goatMigrationIdsMove = <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
@@ -496,16 +508,13 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   yield* assertMemoryMigrationsCompatible(entries);
   const history = yield* readHistory;
   if (history === undefined) return [];
-  const legacyAttention = legacyBotAttentionId(entries, history);
+  const normalized = normalizeBotAttentionPreview(entries, history);
   // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
-  if (legacyAttention !== undefined) {
-    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${legacyAttention}
+  if (normalized.previewId !== undefined) {
+    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${normalized.previewId}
       AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
   }
-  const plan = plannedGoatLedger(
-    entries,
-    history.filter((row) => row.migration_id !== legacyAttention),
-  );
+  const plan = plannedGoatLedger(entries, normalized.history);
   if (plan === undefined) return [];
   if (plan instanceof Migrator.MigrationError) return yield* plan;
   const { moved, goatRows, insertions } = plan;

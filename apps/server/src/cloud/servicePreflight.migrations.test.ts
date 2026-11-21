@@ -73,6 +73,17 @@ it.layer(NodeServices.layer)("service preflight migration history", (it) => {
     }),
   );
 
+  it.effect.each([176, 177])("accepts the bot attention preview recorded at %s", (id) =>
+    Effect.gen(function* () {
+      const preview = [
+        ...migrationManifest.filter(([migrationId]) => migrationId < id),
+        [id, "ChannelBotAttention"],
+      ] as const;
+      const result = yield* preflight(preview);
+      assert.equal(result.status, "ready", reason(result));
+    }),
+  );
+
   it.effect("blocks a database a newer build wrote, naming its migrations", () =>
     Effect.gen(function* () {
       const result = yield* preflight([...migrationManifest, [100_000, "FutureMigration"]]);

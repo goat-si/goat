@@ -10,6 +10,7 @@ import {
   canonicalMigrationName,
   displacedUpstreamMigrations,
   memoryMigrationProblem,
+  normalizeBotAttentionPreview,
   plannedGoatLedger,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
@@ -98,7 +99,10 @@ export function migrationLedgerProblem(
     history.map((row) => ({ id: row.migration_id, name: row.name })),
   );
   if (preview === null) return incompatible("an unexpected V2 preview history.");
-  const reconciled = preview.map((row) => ({ migration_id: row.id, name: row.name }));
+  const { history: reconciled } = normalizeBotAttentionPreview(
+    entries,
+    preview.map((row) => ({ migration_id: row.id, name: row.name })),
+  );
   const plan = plannedGoatLedger(entries, reconciled);
   if (plan instanceof Migrator.MigrationError) return incompatible(plan.message);
   const moved = plan?.moved ?? reconciled;
