@@ -1,6 +1,6 @@
 import {
   CHANNEL_ANSWERED_QUESTIONS_KEPT,
-  ChannelTaskStatus,
+  type ChannelTaskStatus,
   type ChannelTask,
   type ChannelTaskEvent,
 } from "@goat/contracts";
@@ -47,8 +47,6 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.retry.requested": ["completed", "failed", "cancelled"],
   "task.worker.observed": ["running", "waiting_input", "completed", "failed", "cancelled"],
   "task.moved": ["dispatching", "running", "waiting_input"],
-  "task.view.snoozed": ChannelTaskStatus.literals,
-  "task.view.unsnoozed": ChannelTaskStatus.literals,
   "task.notes_change_requested": ["received", "dispatching", "running", "waiting_input"],
 };
 
@@ -105,9 +103,6 @@ export function applyChannelTaskEvent(
   if (!allowedFrom[event.type].includes(task.status)) {
     return reject(`${event.type} is not allowed while the task is ${task.status}.`);
   }
-  // View actions share the event ledger and its ordering without moving task activity or status.
-  if (event.type === "task.view.snoozed" || event.type === "task.view.unsnoozed")
-    return { ok: true, task: { ...task, version: event.taskVersion } };
   const proposalRule = skillProposalRule(task, event);
   if (proposalRule !== undefined) return reject(proposalRule);
   if (event.type === "task.retry.requested" || event.type === "task.moved") {

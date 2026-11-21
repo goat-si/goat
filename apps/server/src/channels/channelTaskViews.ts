@@ -1,4 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- View events need a durable id independent of task versions.
+import * as NodeCrypto from "node:crypto";
 import {
+  ChannelBotTaskActivityEntry,
   ChannelGatewayError,
   NonNegativeInt,
   type ChannelSnoozeBotTaskInput,
@@ -16,7 +19,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { prepareTransition } from "./channelTaskWrites.ts";
 
 const isGatewayError = Schema.is(ChannelGatewayError);
 const StoredView = Schema.Struct({
@@ -26,6 +28,7 @@ const StoredView = Schema.Struct({
 type StoredView = typeof StoredView.Type;
 export const decodeTaskView = Schema.decodeUnknownSync(Schema.fromJsonString(StoredView));
 const encode = Schema.encodeSync(Schema.fromJsonString(StoredView));
+const encodeActivity = Schema.encodeSync(Schema.fromJsonString(ChannelBotTaskActivityEntry));
 
 export const visibleTaskView = (
   { snoozedStatusVersion, snoozedUntil, ...view }: StoredView,
@@ -160,18 +163,6 @@ const make = Effect.gen(function* () {
           const view = yield* read(input.taskId, owner.ownerId);
           const visible = visibleTaskView(view, task.status_version, nowMs);
           if (visible.snoozedUntil === until) return { view: visible, changed: false };
-          const snapshot = yield* ledger.getTask(input.taskId);
-          if (snapshot === undefined) return yield* persistenceFailed();
-          const prepared = prepareTransition(
-            snapshot,
-            until === undefined
-              ? { type: "task.view.unsnoozed", payload: {} }
-              : { type: "task.view.snoozed", payload: { until } },
-            now,
-            undefined,
-            { actor: "user" },
-          );
-          if (!prepared.ok) return yield* persistenceFailed();
           const { snoozedUntil: _previous, ...rest } = visible;
           const stored =
             until === undefined
@@ -184,7 +175,16 @@ const make = Effect.gen(function* () {
           yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
         VALUES (${taskViewKey(owner.ownerId, input.taskId)}, ${encode(stored)}, ${now})
         ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`;
-          yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: [] });
+          const id = "view:" + NodeCrypto.randomUUID();
+          const entry: ChannelBotTaskActivityEntry =
+            until === undefined
+              ? { id, type: "unsnoozed", actor: "person", at: now }
+              : { id, type: "snoozed", actor: "person", at: now, until };
+          // View actions share the ledger's sequence while leaving the worker's task version alone.
+          yield* sql`INSERT INTO channel_task_events (event_id, task_id, task_version, type, event_json, occurred_at)
+            SELECT ${id}, ${input.taskId}, COALESCE(MIN(task_version), 0) - 1,
+              ${"task.view." + entry.type}, ${encodeActivity(entry)}, ${now}
+            FROM channel_task_events WHERE task_id = ${input.taskId} AND task_version < 0`;
           return { view: visibleTaskView(stored, task.status_version, nowMs), changed: true };
         }),
       )

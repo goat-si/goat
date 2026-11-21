@@ -306,8 +306,6 @@ export const ChannelTaskEventType = Schema.Literals([
   "task.retry.requested",
   "task.worker.observed",
   "task.moved",
-  "task.view.snoozed",
-  "task.view.unsnoozed",
   "task.notes_change_requested",
 ]);
 export type ChannelTaskEventType = typeof ChannelTaskEventType.Type;
@@ -359,8 +357,6 @@ export type ChannelAnswerProjectChoice = typeof ChannelAnswerProjectChoice.Type;
 
 /** Task history with optional dispatcher resolution metadata on answers. */
 export const ChannelTaskEvent = Schema.Union([
-  taskEvent("task.view.snoozed", { until: IsoDateTime }),
-  taskEvent("task.view.unsnoozed", {}),
   taskEvent("task.created", {
     title: TrimmedNonEmptyString,
     doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),

@@ -94,7 +94,12 @@ const openableLaunch = (sql: SqlClient.SqlClient) =>
 /** A task's newest openable launches, read from their index; one more tells whether there are more. */
 export const launchesStatement = (
   sql: SqlClient.SqlClient,
-  input: { readonly ownerId: string; readonly taskId: string; readonly limit: number },
+  input: {
+    readonly ownerId: string;
+    readonly taskId: string;
+    readonly limit: number;
+    readonly finished?: boolean;
+  },
 ) =>
   sql<
     {
@@ -114,7 +119,8 @@ export const launchesStatement = (
       AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
     WHERE json_extract(s.value_json, '$.taskId') = ${input.taskId} AND ${openableLaunch(sql)}
       AND json_extract(s.value_json, '$.ownerId') = ${input.ownerId}
-    ORDER BY json_extract(s.value_json, '$.createdAt') DESC, s.key DESC
+      ${input.finished ? sql`AND json_extract(s.value_json, '$.state') IN ('completed', 'failed', 'cancelled')` : sql``}
+    ORDER BY ${input.finished ? sql`json_extract(s.value_json, '$.updatedAt')` : sql`json_extract(s.value_json, '$.createdAt')`} DESC, s.key DESC
     LIMIT ${input.limit}`;
 
 /**

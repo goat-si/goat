@@ -20,15 +20,27 @@ export function botTaskSnoozeUntil(choice: string, now: Date): string | undefine
     : resolveSnoozePreset(presets[preset.id], now)?.snoozedUntil;
 }
 
-/** History can still hold a former current row after the server moves it to Snoozed. */
+/** Apply the latest fold to history, whose task views may predate a snooze or wake. */
 export function withoutSnoozedBotTasks(
   rows: ReadonlyArray<BotThreadRow>,
   snoozed: ReadonlyArray<Extract<BotThreadRow, { kind: "task" }>>,
+  truncated: boolean,
 ) {
-  const snoozedIds = new Set(snoozed.map((row) => row.task.taskId));
-  return rows.filter(
-    (row) =>
-      !snoozedIds.has(row.kind === "task" ? row.task.taskId : row.taskId) &&
-      (row.kind !== "task" || row.view.snoozedUntil === undefined),
-  );
+  const hidden = new Set(snoozed.map((row) => row.task.taskId));
+  const cutoff = snoozed.at(-1)?.view.snoozedUntil;
+  const wake = new Set<string>();
+  for (const row of rows) {
+    if (row.kind !== "task" || row.view.snoozedUntil === undefined) continue;
+    const id = row.task.taskId;
+    // An incomplete fold may have omitted this historical snooze.
+    if (truncated && (cutoff === undefined || row.view.snoozedUntil >= cutoff)) hidden.add(id);
+    else if (!hidden.has(id)) wake.add(id);
+  }
+  return rows.flatMap<BotThreadRow>((row) => {
+    const id = row.kind === "task" ? row.task.taskId : row.taskId;
+    if (hidden.has(id)) return [];
+    if (row.kind !== "task" || !wake.has(id)) return [row];
+    const { snoozedUntil: _expired, ...view } = row.view;
+    return [{ ...row, view }];
+  });
 }

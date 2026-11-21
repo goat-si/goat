@@ -847,7 +847,7 @@ it("offers snoozed work in a closed fold instead of recent work", async () => {
     .not.toBeInTheDocument();
   await userEvent.click(screen.getByText("Snoozed", { exact: true }));
   await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
-  await screen.rerender(view([recent, folded], { snoozed: [] }));
+  await screen.rerender(view([recent, snoozed], { snoozed: [] }));
   await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
   await expect.element(screen.getByText("Snoozed", { exact: true })).not.toBeInTheDocument();
 });

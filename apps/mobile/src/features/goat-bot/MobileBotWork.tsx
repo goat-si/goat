@@ -192,7 +192,9 @@ export function MobileBotWork(props: {
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
   const snoozed = listData?.snoozed ?? [];
-  const homeRows = props.taskId ? rows : withoutSnoozedBotTasks(history.rows, snoozed);
+  const homeRows = props.taskId
+    ? rows
+    : withoutSnoozedBotTasks(history.rows, snoozed, listData?.snoozedTruncated === true);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);

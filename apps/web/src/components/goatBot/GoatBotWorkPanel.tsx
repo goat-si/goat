@@ -357,6 +357,7 @@ export function GoatBotWorkPanel({
                 botName={botName}
                 rows={rows}
                 snoozed={current.snoozed}
+                snoozedTruncated={current.snoozedTruncated}
                 supportsSnooze={current.supportsSnooze}
                 remoteWork={remoteWork}
                 chips={current.chips}

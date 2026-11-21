@@ -2,12 +2,13 @@ import {
   CHANNEL_BOT_TASK_ACTIVITY_LIMIT,
   ChannelGatewayError,
   ChannelTaskEvent,
+  ChannelWorkerObservation,
   ChannelChildWork,
   type ChannelTaskId,
   isChannelChildWorkTerminal,
   isGoatBotSessionThreadId,
   type ChannelBotTaskActivity,
-  type ChannelBotTaskActivityEntry,
+  ChannelBotTaskActivityEntry,
   type ChannelTask,
   type ChannelTaskEventType,
   type ChannelTaskStatus,
@@ -27,6 +28,13 @@ import {
 import type { ChannelLedgerError } from "./channelLedgerError.ts";
 
 const decodeChild = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelChildWork));
+const decodeActivity = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ChannelBotTaskActivityEntry),
+);
+const decodeObservation = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ChannelWorkerObservation),
+);
+const encodeRefs = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const actorOf = { agent: "bot", user: "person", system: "goat" } as const;
 const limit = CHANNEL_BOT_TASK_ACTIVITY_LIMIT;
@@ -50,12 +58,17 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
     },
   ) {
     const { task } = input;
-    const launches = yield* launchesStatement(sql, {
-      taskId: task.taskId,
-      ownerId: input.ownerId,
-      limit: limit + 1,
-    });
-    const launchRows = launches.slice(0, limit);
+    const launchInput = { taskId: task.taskId, ownerId: input.ownerId, limit: limit + 1 };
+    const launches = yield* launchesStatement(sql, launchInput);
+    const finishes =
+      launches.length <= limit
+        ? []
+        : yield* launchesStatement(sql, { ...launchInput, finished: true });
+    const launchRows = [
+      ...new Map(
+        [...launches.slice(0, limit), ...finishes.slice(0, limit)].map((row) => [row.key, row]),
+      ).values(),
+    ];
     const children = launchRows.flatMap((row) => {
       const child = decodeChild(row.value_json);
       return Option.isSome(child) ? [child.value] : [];
@@ -68,11 +81,45 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
           SELECT ${threadPullRequestColumns(sql)}
           FROM orchestration_v2_projection_threads p WHERE p.thread_id = ${worker.threadId}
         `;
-    const links = [...workerLinks, ...launchRows].flatMap((row) =>
+    const linkRows = [...workerLinks, ...launchRows].flatMap((row) =>
       row.pull_requests_json === null ? [] : taskActivityPullRequestLinks(row.pull_requests_json),
     );
-    const rows = yield* sql<{ readonly event_json: string; readonly worker_json: string | null }>`
-    SELECT e.event_json, CASE WHEN e.type IN ('task.completed', 'task.failed', 'task.cancelled', 'task.moved') THEN (
+    const remoteRefs = children.flatMap(({ callerThreadId, destination }) =>
+      destination?.host === undefined ||
+      destination.threadId === undefined ||
+      destination.correlationId === undefined
+        ? []
+        : [{ callerThreadId, ...destination }],
+    );
+    const remote =
+      remoteRefs.length === 0
+        ? []
+        : yield* sql<{
+            readonly observation: string;
+            readonly updated_at: string;
+          }>`SELECT d.observation, d.updated_at FROM json_each(${encodeRefs(remoteRefs)}) ref
+      JOIN remote_dispatches d ON d.correlation_id = json_extract(ref.value, '$.correlationId')
+        AND d.origin_thread_id = json_extract(ref.value, '$.callerThreadId')
+        AND d.host = json_extract(ref.value, '$.host')
+        AND d.remote_thread_id = json_extract(ref.value, '$.threadId')
+      WHERE d.reports_supported != 0 AND d.observation IS NOT NULL`;
+    const links = [
+      ...linkRows,
+      ...remote.flatMap(({ observation, updated_at }) => {
+        const stored = decodeObservation(observation);
+        return Option.isNone(stored)
+          ? []
+          : stored.value.pullRequests
+              .slice(0, limit)
+              .map((pr) => ({ ...pr, linkedAt: updated_at }));
+      }),
+    ];
+    const rows = yield* sql<{
+      readonly event_json: string;
+      readonly type: string;
+      readonly worker_json: string | null;
+    }>`
+    SELECT e.type, e.event_json, CASE WHEN e.type IN ('task.completed', 'task.failed', 'task.cancelled', 'task.moved') THEN (
       SELECT w.event_json FROM channel_task_events w
       WHERE w.task_id = e.task_id AND w.task_version < e.task_version AND w.type = 'task.worker.bound'
         AND NOT EXISTS (
@@ -88,7 +135,7 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
       'task.question.answered', 'task.completed', 'task.failed', 'task.cancelled',
       'task.moved', 'task.retry.requested', 'task.view.snoozed', 'task.view.unsnoozed'
     )
-    ORDER BY e.task_version DESC LIMIT ${limit}
+    ORDER BY e.occurred_at DESC, e.sequence DESC LIMIT ${limit}
   `;
     const [coverage] = yield* sql<{ readonly updated_at: string }>`
     SELECT updated_at FROM channel_runtime_state WHERE key = 'bot-task-activity-since'
@@ -108,6 +155,12 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
     const entries: ChannelBotTaskActivityEntry[] = [];
     let incomplete = launches.length > limit || children.length < launchRows.length;
     for (const row of rows) {
+      if (row.type === "task.view.snoozed" || row.type === "task.view.unsnoozed") {
+        const entry = decodeActivity(row.event_json);
+        if (Option.isSome(entry)) entries.push(entry.value);
+        else incomplete = true;
+        continue;
+      }
       const decoded = yield* Effect.try(() => ({
         event: decodeEvent(row.event_json),
         bound: row.worker_json === null ? undefined : decodeEvent(row.worker_json),
@@ -128,12 +181,6 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
             entries.push({ ...meta, type: "worker_started", environmentId, threadId });
           break;
         }
-        case "task.view.snoozed":
-          entries.push({ ...meta, type: "snoozed", until: event.payload.until });
-          break;
-        case "task.view.unsnoozed":
-          entries.push({ ...meta, type: "unsnoozed" });
-          break;
         case "task.question.opened":
           entries.push({ ...meta, type: "asked", requestId: event.payload.question.questionId });
           break;

@@ -2,6 +2,7 @@ import {
   BotId,
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelChildWork,
+  ChannelChildWorkId,
   ChannelGatewayError,
   ChannelTask,
   ChannelConversationId,
@@ -485,7 +486,7 @@ const make = Effect.gen(function* () {
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
         AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
-      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 50`.pipe(Effect.mapError(failed));
+      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 51`.pipe(Effect.mapError(failed));
     const decodeRows = (
       rows: ReadonlyArray<{ readonly task_json: string; readonly status_version: number }>,
     ) =>
@@ -500,7 +501,7 @@ const make = Effect.gen(function* () {
         }),
       ).pipe(Effect.mapError(failed));
     const recent = yield* decodeRows(source);
-    const suspended = yield* decodeRows(folded);
+    const suspended = yield* decodeRows(folded.slice(0, 50));
     const viewsByTask = new Map(
       [...recent, ...suspended].flatMap(({ task, view }) =>
         view === undefined ? [] : [[task.taskId, view] as const],
@@ -534,6 +535,7 @@ const make = Effect.gen(function* () {
       );
     return {
       rows: built.rows,
+      ...(folded.length > 50 ? { snoozedTruncated: true } : {}),
       ...(nextSnoozeExpiry === undefined ? {} : { snoozed, nextSnoozeExpiry }),
       mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
@@ -703,6 +705,29 @@ const make = Effect.gen(function* () {
         : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } };
     const row = built.rows.find((item) => item.kind === "task");
     if (known && row === undefined) return yield* failed();
+    const assigned = task.worker;
+    const remotePrimary =
+      assigned?.host === undefined
+        ? []
+        : [
+            {
+              childWorkId: ChannelChildWorkId.make(
+                "assigned:" + task.taskId + ":" + task.generation,
+              ),
+              taskId: task.taskId,
+              callerThreadId: bot.bot.threadId,
+              host: assigned.host,
+              environmentId: assigned.environmentId,
+              threadId: assigned.threadId,
+              state:
+                task.status === "completed" ||
+                task.status === "failed" ||
+                task.status === "cancelled"
+                  ? task.status
+                  : ("bound" as const),
+              lastActivityAt: task.updatedAt,
+            },
+          ];
     const activity = yield* ledger.readTaskActivity({
       task,
       ownerId: owner.ownerId,
@@ -719,7 +744,7 @@ const make = Effect.gen(function* () {
           ? [{ ...item, ...(item.title === undefined ? {} : cutBotWorkTitle(item.title)) }]
           : [],
       ),
-      remoteWork: built.remoteWork,
+      remoteWork: [...remotePrimary, ...built.remoteWork],
       launchesTruncated: built.launchesTruncated.length > 0,
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
     };
