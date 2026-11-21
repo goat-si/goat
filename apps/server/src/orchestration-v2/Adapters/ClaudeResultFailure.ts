@@ -1,3 +1,4 @@
+import { claudeTruncate } from "./ClaudeUnicode.ts";
 import type { ClaudeScopedLimitNames } from "../../provider/claudeUsageLimits.ts";
 import * as Schema from "effect/Schema";
 import type {
@@ -150,7 +151,7 @@ export function providerFailureFromResult(
     message.subtype === "success" &&
     message.terminal_reason === "api_error" &&
     message.result.trim().startsWith("API Error:")
-      ? makeProviderFailure({ message: message.result }).message.slice(0, 500)
+      ? claudeTruncate(makeProviderFailure({ message: message.result }).message, 500)
       : undefined;
   const structuredError = isOverloadedResult(message)
     ? "Claude API is overloaded (529). Try again shortly."

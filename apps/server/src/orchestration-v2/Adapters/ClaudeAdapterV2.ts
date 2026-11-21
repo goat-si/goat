@@ -98,7 +98,7 @@ import {
   providerRequestKindFromClaudeTool,
   summarizeClaudeToolRequest,
   toolNameFromClaudeToolResult,
-  WEB_FETCH_SNIPPET_MAX_CHARS,
+  claudeWebFetchSnippet,
   webSearchPatternsFromClaudeTool,
   webSearchResultsFromClaudeOutput,
 } from "./ClaudeToolFrames.ts";
@@ -3638,7 +3638,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                               results: [
                                 {
                                   ...(webFetchUrl === undefined ? {} : { url: webFetchUrl }),
-                                  snippet: outputText.slice(0, WEB_FETCH_SNIPPET_MAX_CHARS),
+                                  snippet: claudeWebFetchSnippet(outputText),
                                 },
                               ],
                             }

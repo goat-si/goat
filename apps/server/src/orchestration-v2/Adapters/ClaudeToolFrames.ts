@@ -1,3 +1,4 @@
+import { claudeTruncate } from "./ClaudeUnicode.ts";
 import { isClaudeOpaqueBackgroundTaskType } from "./ClaudeBackgroundTasks.ts";
 import {
   type SDKAssistantMessage,
@@ -443,6 +444,7 @@ function isClaudeSubagentAsyncLaunchAck(output: ClaudeNativeToolOutput): boolean
 }
 
 const WEB_FETCH_SNIPPET_MAX_CHARS = 8_000;
+const claudeWebFetchSnippet = (text: string) => claudeTruncate(text, WEB_FETCH_SNIPPET_MAX_CHARS);
 
 function webSearchPatternsFromClaudeTool(input: {
   readonly toolInput: ClaudeNativeToolInput;
@@ -477,16 +479,16 @@ function webSearchResultsFromClaudeOutput(
 function summarizeClaudeToolRequest(toolName: string, input: ClaudeNativeToolInput): string {
   const command = firstStringInputField(input, ["command", "cmd", "script"]);
   if (command !== undefined) {
-    return `${toolName}: ${command.slice(0, 400)}`;
+    return `${toolName}: ${claudeTruncate(command, 400)}`;
   }
   const path = firstStringInputField(input, ["file_path", "path", "filename", "fileName"]);
   if (path !== undefined) {
-    return `${toolName}: ${path.slice(0, 400)}`;
+    return `${toolName}: ${claudeTruncate(path, 400)}`;
   }
   const serialized = jsonStringifyForTool(claudeNativeToolInputValue(input));
   return serialized.length <= 400
     ? `${toolName}: ${serialized}`
-    : `${toolName}: ${serialized.slice(0, 397)}...`;
+    : `${toolName}: ${claudeTruncate(serialized, 397)}...`;
 }
 
 function outputFromClaudeToolResult(
@@ -709,7 +711,7 @@ export {
   CLAUDE_SCHEDULED_WAKEUP_TASK,
   EMPTY_CLAUDE_NATIVE_TOOL_INPUT,
   NO_CLAUDE_NATIVE_TOOL_OUTPUT,
-  WEB_FETCH_SNIPPET_MAX_CHARS,
+  claudeWebFetchSnippet,
   classifyClaudeNativeTool,
   claudeCommandOutputText,
   claudeFileChangeArtifacts,
