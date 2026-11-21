@@ -16,6 +16,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { render } from "../../../test/render";
 
 type Snapshot = {
   items: readonly DecisionItem[];
@@ -454,21 +455,31 @@ it("a remote approval target never chooses a request with the same id on another
   const requested = approval("same", secondary, "second");
   const otherHost = approval("same", primary, "second");
   const otherThread = approval("same", secondary, "first");
-  await mount([otherHost, otherThread, requested]);
-  await act(async () => {
-    await router.navigate({
-      to: "/decisions",
-      search: { ...requested.ref, requestId: requested.request.requestId },
-    });
+  write([otherHost, otherThread, requested]);
+  const targetedRouter = makeRouter();
+  await targetedRouter.navigate({
+    to: "/decisions",
+    search: { ...requested.ref, requestId: requested.request.requestId },
   });
-  await click("Approve");
+  // Use the router that recognizes the Decisions search parameters.
+  await using screen = await render(
+    <RegistryContext.Provider value={state.registry!}>
+      <TooltipProvider>
+        <RouterProvider router={targetedRouter} />
+      </TooltipProvider>
+    </RegistryContext.Provider>,
+    { router: false },
+  );
+  await screen.getByRole("button", { name: "Approve", exact: true }).click();
   expect(state.approval).toHaveBeenCalledExactlyOnceWith({
     environmentId: secondary,
     input: { threadId: "second", requestId: "same", decision: "accept" },
   });
   await act(async () => write([otherHost, otherThread]));
-  expect(container.textContent).toContain("This request is no longer pending");
-  expect(container.querySelector("button[aria-label=Approve]")).toBeNull();
+  await expect.element(screen.getByText(/This request is no longer pending/)).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Approve", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 function durable(recommended: string | null): Extract<DecisionItem, { kind: "decision" }> {

@@ -1,5 +1,5 @@
 import { useContext, useEffect } from "react";
-import { botRosterGroups } from "@goat/client-runtime/goatBot";
+import { botRosterGroups, decodeBotAttentionRequest } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useGlobalAgentStore } from "../globalAgentStore";
@@ -66,6 +66,8 @@ function GoatBotRouteSession() {
     attentionEnvironment,
     attentionRequest,
     attentionDetail,
+    attentionNative,
+    attentionGeneration,
   } = Route.useSearch();
   const roster = useBotRoster();
   // A bot this client just created opens from the create's answer, even when the list read after
@@ -110,6 +112,7 @@ function GoatBotRouteSession() {
     task &&
     attentionEnvironment &&
     (attentionDetail === "external" ||
+      attentionNative !== undefined ||
       bot?.environmentId !== attentionEnvironment ||
       !session.supportsTaskThreads)
   )
@@ -119,6 +122,8 @@ function GoatBotRouteSession() {
         taskId={task}
         botId={botId}
         requestId={attentionRequest}
+        request={decodeBotAttentionRequest(attentionNative)}
+        generation={attentionGeneration}
       />
     );
   if (memberUnknown && !memberResolving) return <GoatBotMemberMissing />;

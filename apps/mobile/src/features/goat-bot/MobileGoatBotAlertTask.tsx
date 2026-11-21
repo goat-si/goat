@@ -1,9 +1,22 @@
-import { useAtomValue } from "@effect/atom-react";
-import { botAttentionDecisionTarget, botAttentionRequest } from "@goat/client-runtime/goatBot";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import {
+  answerBotAttentionApproval,
+  botAttentionDecisionInput,
+  botAttentionRemoteApproval,
+  isOpenBotAttentionDecision,
+  botAttentionDecisionTarget,
+  botAttentionRequest,
+} from "@goat/client-runtime/goatBot";
 import type { ChannelTask } from "@goat/contracts";
-import type { ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
+import type {
+  ChannelAttentionRequest,
+  ChannelAttentionTarget,
+} from "@goat/contracts/channel-bot-attention";
 import { useLinkTo } from "@react-navigation/native";
 import { View } from "react-native";
+import { useContext, useState } from "react";
+import { serverEnvironment } from "../../state/server";
+import { Button } from "../../components/ui/Button";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { channelEnvironment } from "../../state/channels";
@@ -35,6 +48,13 @@ function Request({
   readonly target: ChannelAttentionTarget;
 }) {
   const linkTo = useLinkTo();
+  const native = target.request;
+  if (native !== undefined) {
+    const isRemoteApproval =
+      (target.generation === undefined || task.generation === target.generation) &&
+      botAttentionRemoteApproval(task, native);
+    return isRemoteApproval ? <RemoteApproval target={target} request={native} /> : null;
+  }
   const request = botAttentionRequest(task, target.requestId);
   if (request === null) return null;
   if (request.kind === "question" || request.kind === "answered")
@@ -54,6 +74,72 @@ function Request({
       ) : (
         <Text>The worker’s computer is unavailable.</Text>
       )}
+    </View>
+  );
+}
+
+function RemoteApproval({
+  target,
+  request,
+}: {
+  readonly target: ChannelAttentionTarget;
+  readonly request: ChannelAttentionRequest;
+}) {
+  const registry = useContext(RegistryContext);
+  const allowed = useAtomValue(
+    serverEnvironment.answerDecision.permissionAtom(target.environmentId),
+  );
+  const query = useEnvironmentQuery(
+    serverEnvironment.decisionItem({
+      environmentId: target.environmentId,
+      input: botAttentionDecisionInput(request),
+    }),
+  );
+  const item = query.successResult?.value;
+  const destination = item?.from.environmentId;
+  const pending =
+    item?.pending?.approval !== undefined && isOpenBotAttentionDecision(item, request);
+  const [status, setStatus] = useState<"idle" | "saving" | "answered" | "unavailable">("idle");
+  const respond = async (decision: "accept" | "decline") => {
+    if (!pending || destination === undefined || !allowed) return;
+    setStatus("saving");
+    const accepted = await answerBotAttentionApproval(
+      registry,
+      channelEnvironment,
+      serverEnvironment,
+      target,
+      decision,
+      destination,
+    );
+    setStatus(accepted ? "answered" : "unavailable");
+  };
+  return (
+    <View className="gap-2">
+      <Text>Approval needed on {request.host}.</Text>
+      {pending ? <Text>{item.context}</Text> : null}
+      {!pending && status !== "answered" ? (
+        <Text>{query.isPending ? "Checking approval…" : "This approval is unavailable."}</Text>
+      ) : null}
+      {status === "answered" ? (
+        <Text accessibilityRole="alert">Response sent.</Text>
+      ) : (
+        <View className="flex-row gap-2">
+          <Button
+            label="Approve"
+            disabled={!pending || destination === undefined || !allowed || status === "saving"}
+            onPress={() => void respond("accept")}
+          />
+          <Button
+            label="Decline"
+            tone="secondary"
+            disabled={!pending || destination === undefined || !allowed || status === "saving"}
+            onPress={() => void respond("decline")}
+          />
+        </View>
+      )}
+      {status === "unavailable" ? (
+        <Text accessibilityRole="alert">This approval could not be answered.</Text>
+      ) : null}
     </View>
   );
 }

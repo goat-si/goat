@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { BotId, ChannelTaskId, EnvironmentId, MAIN_BOT_ID } from "@goat/contracts";
-import { goatBotName } from "@goat/client-runtime/goatBot";
+import { decodeBotAttentionRequest, goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
@@ -27,6 +27,8 @@ export function GoatBotRouteScreen({
   botId?: string;
   taskTitle?: string;
   attentionRequest?: string;
+  attentionNative?: string;
+  attentionGeneration?: string;
   attentionEnvironment?: string;
   attentionDetail?: "external";
 }>) {
@@ -108,10 +110,13 @@ export function GoatBotRouteScreen({
   ]);
   const attentionEnvironment = route.params?.attentionEnvironment;
   const attentionRequest = route.params?.attentionRequest;
+  const request = decodeBotAttentionRequest(route.params?.attentionNative);
+  const generation = Number(route.params?.attentionGeneration);
   if (
     taskId !== undefined &&
     attentionEnvironment !== undefined &&
     (route.params?.attentionDetail === "external" ||
+      request !== undefined ||
       attentionEnvironment !== (member?.environmentId ?? environmentId) ||
       (botId !== undefined && member === null))
   ) {
@@ -122,6 +127,8 @@ export function GoatBotRouteScreen({
           botId: BotId.make(botId ?? MAIN_BOT_ID),
           taskId: ChannelTaskId.make(taskId),
           ...(attentionRequest === undefined ? {} : { requestId: attentionRequest }),
+          ...(request === undefined ? {} : { request }),
+          ...(Number.isSafeInteger(generation) && generation >= 0 ? { generation } : {}),
         }}
       />
     );

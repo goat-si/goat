@@ -5,18 +5,23 @@ import {
   type ChannelTask,
   type ChannelTaskEvent,
   type EnvironmentId,
+  type OrchestrationV2StoredEvent,
+  RuntimeRequestId,
 } from "@goat/contracts";
 import {
   type ChannelAttentionEvent,
   type ChannelAttentionFeedInput,
   type ChannelAttentionFeedResult,
   type ChannelAttentionKind,
+  ChannelAttentionRequest,
   type GoatBotAlerts,
 } from "@goat/contracts/channel-bot-attention";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { attentionEventIdFor } from "./channelIds.ts";
 import { waitingAsks } from "./channelWaitingTasks.ts";
@@ -50,6 +55,7 @@ export const layerBotAttentionExpiry = Layer.effectDiscard(
 interface Ask {
   readonly kind: "question" | "approval" | "sign_in";
   readonly requestId?: string;
+  readonly request?: ChannelAttentionRequest;
   readonly identity: string;
 }
 
@@ -70,6 +76,7 @@ const asksFor = (task: ChannelTask): ReadonlyArray<Ask> =>
           {
             kind: ask.kind === "approval" ? "approval" : "question",
             requestId: ask.ref.requestId,
+            request: { kind: "runtime", ...ask.ref },
             identity: JSON.stringify([ask.ref.host ?? null, ask.ref.threadId, ask.ref.requestId]),
           },
         ];
@@ -99,7 +106,12 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
 ) {
   const { before, next, event, ownerId, botId } = input;
   const prior = new Set(asksFor(before).map((ask) => ask.kind + ":" + ask.identity));
-  const added: ReadonlyArray<{ kind: ChannelAttentionKind; identity: string; requestId?: string }> =
+  const added: ReadonlyArray<{
+    kind: ChannelAttentionKind;
+    identity: string;
+    requestId?: string;
+    request?: ChannelAttentionRequest;
+  }> =
     event.type === "task.completed" || event.type === "task.failed"
       ? [{ kind: event.type === "task.completed" ? "finished" : "failed", identity: "" }]
       : asksFor(next).filter((ask) => !prior.has(ask.kind + ":" + ask.identity));
@@ -113,9 +125,20 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
     yield* sql`INSERT INTO channel_bot_attention
       (owner_id, bot_id, task_id, event_id, kind, request_id, generation, occurred_at)
       VALUES (${ownerId}, ${botId}, ${next.taskId}, ${eventId}, ${entry.kind},
-        ${entry.requestId ?? null}, ${next.generation}, ${event.occurredAt})
+        ${entry.request === undefined ? (entry.requestId ?? null) : encodeRequest(entry.request)}, ${next.generation}, ${event.occurredAt})
       ON CONFLICT(event_id) DO NOTHING`;
   }
+  yield* pruneOwner(sql, ownerId);
+});
+
+const requestJson = Schema.fromJsonString(ChannelAttentionRequest);
+const encodeRequest = Schema.encodeSync(requestJson);
+const decodeRequest = Schema.decodeUnknownOption(requestJson);
+
+const pruneOwner = Effect.fn("channel.pruneBotAttention")(function* (
+  sql: SqlClient.SqlClient,
+  ownerId: string,
+) {
   const cutoff = yield* expiryCutoff;
   yield* sql`DELETE FROM channel_bot_attention WHERE owner_id = ${ownerId} AND (
     occurred_at <= ${cutoff} OR sequence < COALESCE((
@@ -123,6 +146,36 @@ export const recordBotAttention = Effect.fn("channel.recordBotAttention")(functi
       ORDER BY sequence DESC LIMIT 1 OFFSET ${EVENT_LIMIT - 1}
     ), 0)
   )`;
+});
+
+export const recordBotHandoffAttention = Effect.fn("channel.recordBotHandoffAttention")(function* (
+  sql: SqlClient.SqlClient,
+  events: ReadonlyArray<OrchestrationV2StoredEvent>,
+) {
+  for (const { event } of events) {
+    if (event.type !== "turn-item.updated" || event.payload.type !== "human_handoff") continue;
+    const { handoff, threadId } = event.payload;
+    if (handoff.kind !== "approval" || handoff.state !== "pending") continue;
+    const request = encodeRequest({
+      kind: "handoff",
+      threadId,
+      requestId: RuntimeRequestId.make(handoff.handoffId),
+    });
+    const inserted = yield* sql<{ owner_id: string }>`INSERT INTO channel_bot_attention
+      (owner_id, bot_id, task_id, event_id, kind, request_id, generation, occurred_at)
+      SELECT task.owner_id, task.bot_id, task.task_id, ${"handoff:" + handoff.handoffId}, 'approval',
+        ${request}, task.generation, ${DateTime.formatIso(handoff.createdAt)}
+      FROM channel_tasks AS task
+      WHERE task.worker_thread_id = ${threadId}
+        AND task.status IN ('running', 'waiting_input')
+        AND json_extract(task.task_json, '$.worker.environmentId') = ${handoff.target.environmentId}
+        AND json_extract(task.task_json, '$.worker.host') IS NULL
+      ORDER BY task.updated_at DESC, task.task_id
+      LIMIT 1
+      ON CONFLICT(event_id) DO NOTHING
+      RETURNING owner_id`;
+    for (const { owner_id } of inserted) yield* pruneOwner(sql, owner_id);
+  }
 });
 
 export const readBotAttention = Effect.fn("channel.readBotAttention")(function* <E>(
@@ -136,7 +189,22 @@ export const readBotAttention = Effect.fn("channel.readBotAttention")(function* 
   },
 ) {
   const { ownerId, environmentId, resolveName, mode } = input;
-  const cursor = input.request.cursor;
+  const { cursor, worker } = input.request;
+  if (worker !== undefined) {
+    const rows = yield* sql`SELECT 1 FROM channel_tasks
+      WHERE worker_thread_id = ${worker.threadId}
+        AND owner_id = ${ownerId}
+        AND json_extract(task_json, '$.worker.environmentId') = ${worker.environmentId}
+        AND json_extract(task_json, '$.worker.host') IS NOT NULL
+      LIMIT 1`;
+    return {
+      cursor: 0,
+      hasMore: false,
+      mode,
+      events: [],
+      ownsWorker: rows.length > 0,
+    } satisfies ChannelAttentionFeedResult;
+  }
   if (cursor === undefined) {
     const rows = yield* sql<{ sequence: number }>`SELECT COALESCE(MAX(sequence), 0) AS sequence
       FROM channel_bot_attention WHERE owner_id = ${ownerId}`;
@@ -169,6 +237,9 @@ export const readBotAttention = Effect.fn("channel.readBotAttention")(function* 
   const events = page.flatMap((row): ReadonlyArray<ChannelAttentionEvent> => {
     const botName = names.get(row.bot_id);
     if (botName === undefined) return [];
+    const request =
+      row.request_id === null ? undefined : Option.getOrUndefined(decodeRequest(row.request_id));
+    const requestId = request?.requestId ?? row.request_id;
     return [
       {
         eventId: row.event_id,
@@ -178,7 +249,8 @@ export const readBotAttention = Effect.fn("channel.readBotAttention")(function* 
         botId: row.bot_id,
         botName,
         taskId: row.task_id,
-        ...(row.request_id === null ? {} : { requestId: row.request_id }),
+        ...(requestId === null ? {} : { requestId }),
+        ...(request === undefined ? {} : { request }),
         generation: row.generation,
         occurredAt: row.occurred_at,
       },

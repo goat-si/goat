@@ -1,12 +1,26 @@
-import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelTaskId,
+  EnvironmentId,
+  pendingDecisionId,
+  RuntimeRequestId,
+  ThreadId,
+  type ChannelTask,
+  type DecisionItem,
+} from "@goat/contracts";
 import type {
   ChannelAttentionEvent,
   ChannelAttentionFeedResult,
+  ChannelAttentionRequest,
 } from "@goat/contracts/channel-bot-attention";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import type { createChannelEnvironmentAtoms } from "../state/channels.ts";
-import { watchGoatBotAttention } from "./attention.ts";
+import {
+  answerBotAttentionApproval,
+  resolveBotAttentionDecision,
+  watchGoatBotAttention,
+} from "./attention.ts";
 
 const environmentId = EnvironmentId.make("attention-env");
 const event = (sequence: number): ChannelAttentionEvent => ({
@@ -94,6 +108,126 @@ it("serializes replacement readers through presentation and preserves the newer 
     finishFirst.resolve();
     stop();
     stopReplacement();
+    registry.dispose();
+  }
+});
+
+const workerEnvironment = EnvironmentId.make("worker");
+const workerRequest = {
+  kind: "runtime",
+  host: "box",
+  threadId: ThreadId.make("remote-child"),
+  requestId: RuntimeRequestId.make("approval:42"),
+} satisfies ChannelAttentionRequest;
+const localTask = {
+  generation: 1,
+  openQuestions: [],
+  worker: { environmentId, threadId: ThreadId.make("local-worker") },
+  observed: { needsYou: [{ kind: "approval", approval: workerRequest }] },
+} as ChannelTask;
+const item = {
+  id: pendingDecisionId(workerRequest.threadId, workerRequest.requestId),
+  status: "open",
+  from: { environmentId: workerEnvironment, host: workerRequest.host },
+  pending: {
+    threadId: workerRequest.threadId,
+    requestId: workerRequest.requestId,
+    approval: { kind: "command" },
+  },
+} as DecisionItem;
+
+it.each(["paired", "unpaired", "cleared"] as const)(
+  "checks the destination before routing a local worker's remote child request (%s)",
+  async (state) => {
+    const registry = AtomRegistry.make();
+    try {
+      const run = vi
+        .fn()
+        .mockResolvedValueOnce(AsyncResult.success(item))
+        .mockResolvedValueOnce(
+          AsyncResult.success({
+            ...item,
+            from: { environmentId: workerEnvironment },
+            status: state === "cleared" ? "answered" : "open",
+          }),
+        );
+      const services = {
+        decisions: { getDecision: { run } },
+        orchestration: {},
+        connected: () => state !== "unpaired",
+      } as unknown as Parameters<typeof resolveBotAttentionDecision>[1];
+      expect(
+        await resolveBotAttentionDecision(
+          registry,
+          services,
+          environmentId,
+          localTask,
+          workerRequest,
+        ),
+      ).toEqual(
+        state === "paired"
+          ? {
+              environmentId: workerEnvironment,
+              threadId: workerRequest.threadId,
+              requestId: workerRequest.requestId,
+            }
+          : null,
+      );
+      expect(run).toHaveBeenNthCalledWith(1, registry, {
+        environmentId,
+        input: { id: item.id, host: workerRequest.host },
+      });
+      expect(run).toHaveBeenCalledTimes(state === "unpaired" ? 1 : 2);
+    } finally {
+      registry.dispose();
+    }
+  },
+);
+
+it("answers a current approval through its origin and refuses a host whose identity changed", async () => {
+  const registry = AtomRegistry.make();
+  try {
+    const allowed = Atom.make(true);
+    const target = { ...event(1), request: workerRequest };
+    const channels = {
+      listBotAttention: { permissionAtom: () => allowed },
+      readAttentionTask: { run: async () => AsyncResult.success(localTask) },
+    } as unknown as Parameters<typeof answerBotAttentionApproval>[1];
+    const answer = vi.fn().mockResolvedValue(AsyncResult.success(item));
+    const decisions = {
+      getDecision: { run: async () => AsyncResult.success(item) },
+      answerDecision: { run: answer },
+    } as unknown as Parameters<typeof answerBotAttentionApproval>[2];
+    expect(
+      await answerBotAttentionApproval(
+        registry,
+        channels,
+        decisions,
+        target,
+        "accept",
+        EnvironmentId.make("other"),
+      ),
+    ).toBe(false);
+    expect(
+      await answerBotAttentionApproval(
+        registry,
+        channels,
+        decisions,
+        target,
+        "accept",
+        workerEnvironment,
+      ),
+    ).toBe(true);
+    expect(answer).toHaveBeenCalledExactlyOnceWith(registry, {
+      environmentId,
+      input: {
+        id: item.id,
+        host: workerRequest.host,
+        decision: "accept",
+        reason: "Approved in GOAT Bot.",
+      },
+    });
+  } finally {
     registry.dispose();
   }
 });

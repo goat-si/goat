@@ -1,5 +1,6 @@
 import {
   type DecisionFeed,
+  type DecisionGetInput,
   type DecisionListInput,
   type EnvironmentId,
   WS_METHODS,
@@ -11,6 +12,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   createEnvironmentQueryAtomFamily,
   createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 
@@ -55,7 +57,15 @@ export function createDecisionEnvironmentAtoms<R, E>(
     }).pipe(Atom.withLabel(`environment-data:decision:feed-value:${environmentId}`)),
   );
 
+  const decisionGet = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:decision:item",
+    tag: WS_METHODS.decisionGet,
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  });
   return {
+    decisionItem: (target: { environmentId: EnvironmentId; input: DecisionGetInput }) =>
+      decisionGet(target),
     decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
       decisionItems({ environmentId: target.environmentId, input: target }),
     decisionFeed,

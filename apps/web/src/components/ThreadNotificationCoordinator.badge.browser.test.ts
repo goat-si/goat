@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { ChannelAttentionFeedResult } from "@goat/contracts/channel-bot-attention";
 import { createElement, useEffect } from "react";

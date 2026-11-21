@@ -1,5 +1,6 @@
 import { EnvironmentId } from "@goat/contracts";
 import * as SqlClient from "effect/sql/SqlClient";
+import { openApprovalHandoffs } from "../goatclaw/openApprovalHandoffs.ts";
 import { readBotAttention } from "../channels/channelBotAttention.ts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,7 @@ it.effect("a person's approval covers exactly the change it was asked for, until
           })
           .pipe(Effect.match({ onFailure: (error) => error.message, onSuccess: () => "approved" }));
       expect(yield* check({})).toContain("still open");
+      expect((yield* openApprovalHandoffs()).handoffs[0]?.botAttentionOwned).toBeUndefined();
       yield* handoffs.respond(
         { threadId, handoffId: summary.handoffId, action: "completed" },
         person,
@@ -98,6 +100,9 @@ it.effect.each(["needs_you", "off"] as const)(
           });
         const page = yield* read("owner");
         expect(page.mode).toBe(mode);
+        expect((yield* openApprovalHandoffs()).handoffs).toMatchObject([
+          { handoff: { handoffId: handoff.handoffId }, botAttentionOwned: true },
+        ]);
         expect(page.events).toMatchObject([
           {
             kind: "approval",

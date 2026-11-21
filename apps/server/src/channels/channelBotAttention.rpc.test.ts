@@ -5,6 +5,7 @@ import {
   BotId,
   ChannelAnsweredQuestion,
   ChannelGetTaskInput,
+  ChannelInboundMessage,
   ChannelTask,
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
@@ -14,6 +15,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
@@ -39,7 +41,6 @@ const attentionRpcs = WsChannelRpcGroup.omit(
 const oldGetTask = Rpc.make(getTask, {
   payload: Schema.Struct({
     taskId: ChannelGetTaskInput.fields.taskId,
-    botId: ChannelGetTaskInput.fields.botId,
   }),
   success: ChannelTask.mapFields((fields) => ({
     ...fields,
@@ -72,7 +73,7 @@ const task = Schema.decodeSync(ChannelTask)({
   version: 2,
   generation: 1,
   openQuestions: [],
-  answeredQuestions: [{ questionId: "ask", answerText: "West" }],
+  answeredQuestions: [{ questionId: "ask", inputId: "answer" }],
   createdAt: date,
   updatedAt: date,
 });
@@ -91,7 +92,37 @@ const connect = Effect.fnUntraced(function* <Rpcs extends Rpc.Any>(
   return yield* RpcClient.make(rpcs).pipe(Effect.provideService(RpcClient.Protocol, protocol));
 });
 
-const setup = Effect.fnUntraced(function* (legacy: boolean) {
+const decodeInbound = Schema.decodeSync(ChannelInboundMessage);
+
+const setup = Effect.fnUntraced(function* (legacy: boolean, answerOwner = task.requester.ownerId) {
+  const sql = yield* SqlClient.SqlClient;
+  const message = decodeInbound({
+    kind: "goat",
+    connectionId: "goat",
+    conversationKey: "conversation",
+    externalMessageId: "answer",
+    idempotencyKey: "answer",
+    actor: {},
+    replyAddress: task.originAddress,
+    text: "West",
+    attachments: [],
+    receivedAt: date,
+    intent: "answer",
+    taskId: task.taskId,
+    questionId: "ask",
+  });
+  yield* sql`INSERT INTO channel_conversations
+    (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
+    VALUES ('conversation', ${answerOwner}, 'goat', 'goat', 'conversation', ${date})`;
+  yield* sql`INSERT INTO channel_bindings
+    (binding_id, conversation_id, connection_id, reply_address_json, last_activity_at)
+    VALUES ('binding', 'conversation', 'goat', ${JSON.stringify(message.replyAddress)}, ${date})`;
+  yield* sql`INSERT INTO channel_inbox
+    (input_id, owner_id, kind, connection_id, idempotency_key, content_hash, conversation_id,
+      binding_id, message_json, state, accepted_at)
+    VALUES ('answer', ${answerOwner}, 'goat', 'goat', 'answer', 'hash', 'conversation',
+      'binding', ${JSON.stringify(message)}, 'replied', ${date})`;
+  const sourceLedger = yield* ChannelLedger.ChannelLedger.pipe(Effect.provide(ChannelLedger.layer));
   const runtime = yield* Runtime.open();
   let reads = 0;
   const routes = HubRpcSocket.layer((session) =>
@@ -99,6 +130,7 @@ const setup = Effect.fnUntraced(function* (legacy: boolean) {
       const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
       const owner = ownerFromSession(environmentId, session);
       const ledger = Layer.mock(ChannelLedger.ChannelLedger)({
+        getInput: sourceLedger.getInput,
         getTask: () =>
           Effect.sync(() => {
             reads += 1;
@@ -188,7 +220,7 @@ it.effect(
       const client = yield* connect(attentionRpcs, allowed.url);
       expect((yield* client[listBotAttention]({})).cursor).toBe(7);
       expect((yield* client[getTask](target)).answeredQuestions).toEqual([
-        { questionId: "ask", answerText: "West" },
+        { questionId: "ask", inputId: "answer", answerText: "West" },
       ]);
       yield* server.revoke(allowed.id);
       expect(yield* Effect.flip(client[getTask](target))).toMatchObject({ _tag: "RpcClientError" });
@@ -206,7 +238,7 @@ it.effect("an older task-only client can read a task from a feed-capable server"
     const legacy = yield* connect(oldRpcs, issued.url);
     expect(yield* legacy[getTask]({ taskId: task.taskId })).toEqual({
       ...task,
-      answeredQuestions: [{ questionId: "ask" }],
+      answeredQuestions: [{ questionId: "ask", inputId: "answer" }],
     });
     expect(server.reads()).toBe(1);
   }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
@@ -219,11 +251,24 @@ it.effect("the new task reader works against an older server without a feed RPC"
     const client = yield* connect(attentionRpcs, issued.url);
     expect(yield* client[getTask](target)).toEqual({
       ...task,
-      answeredQuestions: [{ questionId: "ask" }],
+      answeredQuestions: [{ questionId: "ask", inputId: "answer" }],
     });
     expect(server.reads()).toBe(1);
     const unsupported = yield* Effect.exit(client[listBotAttention]({}));
     expect(unsupported._tag).toBe("Failure");
     expect(server.reads()).toBe(1);
   }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
+);
+
+it.effect(
+  "an authenticated owner cannot read answer text from another owner's persisted input",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* setup(false, "other-owner");
+      const issued = yield* server.issue(true);
+      const client = yield* connect(attentionRpcs, issued.url);
+      expect((yield* client[getTask](target)).answeredQuestions).toEqual([
+        { questionId: "ask", inputId: "answer" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
 );

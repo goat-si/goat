@@ -1,3 +1,4 @@
+import { decodeBotAttentionRequest } from "@goat/client-runtime/goatBot";
 import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
@@ -12,12 +13,23 @@ export function validateBotTaskSearch(search: Record<string, unknown>): {
   taskTitle?: string;
   attentionEnvironment?: EnvironmentId;
   attentionRequest?: string;
+  attentionNative?: string;
+  attentionGeneration?: number;
   attentionDetail?: "external";
 } {
   return {
     ...(isChannelTaskId(search.task) ? { task: search.task } : {}),
     ...(isEnvironmentId(search.attentionEnvironment) && isChannelTaskId(search.task)
       ? { attentionEnvironment: search.attentionEnvironment }
+      : {}),
+    ...(typeof search.attentionNative === "string" &&
+    decodeBotAttentionRequest(search.attentionNative)
+      ? { attentionNative: search.attentionNative }
+      : {}),
+    ...(typeof search.attentionGeneration === "number" &&
+    Number.isSafeInteger(search.attentionGeneration) &&
+    search.attentionGeneration >= 0
+      ? { attentionGeneration: search.attentionGeneration }
       : {}),
     ...(search.attentionDetail === "external" ? { attentionDetail: "external" } : {}),
     ...(typeof search.attentionRequest === "string" && search.attentionRequest.length <= 1024

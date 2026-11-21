@@ -1,3 +1,6 @@
+import { resolveBotAttentionDecision } from "@goat/client-runtime/goatBot";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { serverEnvironment } from "../../state/server";
 import { RegistryContext } from "@effect/atom-react";
 import { MAIN_BOT_ID } from "@goat/contracts";
 import { type ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
@@ -102,7 +105,25 @@ export function useAgentNotificationNavigation(
       });
       tap.abort();
       if (!connected || lifetime.signal.aborted) return null;
-      const href = await resolveMobileBotAttentionLink(registry, channelEnvironment, target);
+      const href = await resolveMobileBotAttentionLink(
+        registry,
+        channelEnvironment,
+        target,
+        (request, task) =>
+          resolveBotAttentionDecision(
+            registry,
+            {
+              decisions: serverEnvironment,
+              orchestration: orchestrationEnvironment,
+              connected: (id) =>
+                registry.get(environmentPresentations.presentationAtom(id))?.connection.phase ===
+                "connected",
+            },
+            target.environmentId,
+            task,
+            request,
+          ),
+      );
       return currentTap !== tap || lifetime.signal.aborted ? null : href;
     };
     const handleResponse = (response: Notifications.NotificationResponse) =>

@@ -196,13 +196,14 @@ describe("routeAgentNotificationResponseOnce", () => {
               },
             }),
         });
-        expect(resolveDecision).toHaveBeenCalledWith(
-          expect.objectContaining({
+        expect(resolveDecision).toHaveBeenCalledExactlyOnceWith(
+          {
             kind: "runtime",
             host: "box",
             threadId: "subagent/one",
             requestId: "command:7/8",
-          }),
+          },
+          task,
         );
         expect(state.routes.at(-1)).toMatchObject(
           available

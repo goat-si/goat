@@ -16,6 +16,7 @@ import {
   NodeId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import { recordBotHandoffAttention } from "../channels/channelBotAttention.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -237,6 +238,7 @@ const layerBase: Layer.Layer<
               updated_at = excluded.updated_at
           `;
         }
+        yield* recordBotHandoffAttention(sql, storedEvents);
         // Read lineage here, on the connection this transaction holds; see makeRunOutcomeRecorder.
         return {
           runs: yield* runOutcomes.prepare(storedEvents),

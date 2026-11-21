@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelQuestionId,
+  EnvironmentId,
   NodeId,
   type OrchestrationV2RuntimeRequest,
   RuntimeRequestId,
@@ -165,6 +166,32 @@ describe("open asks across bots", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "publishes an existing SSH worker binding only to its owner and exact destination",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        yield* linkSlackUser();
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const task = yield* startWaiting(harness, "do: which repo?", "Ev-legacy-ssh-binding");
+        const sql = yield* SqlClient.SqlClient;
+        const destination = EnvironmentId.make("old-ssh-destination");
+        const worker = { environmentId: destination, threadId: task.worker!.threadId };
+        assert.isFalse((yield* members.attentionFeed(owner, { worker })).ownsWorker);
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json,
+        '$.worker.environmentId', ${destination}, '$.worker.host', 'box')
+        WHERE task_id = ${task.taskId}`;
+        assert.isTrue((yield* members.attentionFeed(owner, { worker })).ownsWorker);
+        assert.isFalse((yield* members.attentionFeed(stranger, { worker })).ownsWorker);
+        assert.isFalse(
+          (yield* members.attentionFeed(owner, {
+            worker: { ...worker, environmentId: EnvironmentId.make("another-destination") },
+          })).ownsWorker,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("does not repeat a pending approval when the worker is observed again", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -183,6 +210,11 @@ describe("open asks across bots", () => {
         page.events.map(({ kind, requestId }) => [kind, requestId]),
         [["approval", pending.id]],
       );
+      assert.deepStrictEqual(page.events[0]?.request, {
+        kind: "runtime",
+        threadId: task.worker!.threadId,
+        requestId: pending.id,
+      });
     }).pipe(Effect.provide(harness.layer));
   });
 

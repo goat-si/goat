@@ -11,6 +11,7 @@ import { AppState, Platform } from "react-native";
 import { Atom, AsyncResult, type AtomRegistry } from "effect/reactivity";
 
 import { secureStore } from "../../persistence/namespaced-secure-store";
+import { serverEnvironment } from "../../state/server";
 import { channelEnvironment } from "../../state/channels";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { connectedEnvironmentIdsAtom, environmentPresentations } from "../../state/presentation";
@@ -39,6 +40,7 @@ export function startMobileBotAttention(
           ? watchGoatBotAttention({
               registry,
               channels: channelEnvironment,
+              handoffFeed: serverEnvironment.decisionFeed(environmentId),
               environmentId,
               onError: (cause) => console.warn("GOAT Bot could not deliver an alert", cause),
               readCursor: async () => {
@@ -63,6 +65,7 @@ export function startMobileBotAttention(
                   taskId: event.taskId,
                   botId: event.botId,
                   generation: event.generation,
+                  ...(event.request === undefined ? {} : { request: event.request }),
                   ...(event.requestId === undefined ? {} : { requestId: event.requestId }),
                 };
                 const identifier = `${environmentId}:${event.eventId}`;

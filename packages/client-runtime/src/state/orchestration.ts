@@ -63,6 +63,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     idleTtlMs: 5 * 60_000,
   });
   return {
+    readTurnItem: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:read-turn-item",
+      tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+    }),
     threadTranscript: createEnvironmentCommand(runtime, {
       label: "environment-data:orchestration:thread-transcript",
       execute: Effect.fn("orchestration.execute")(function* (input: {
