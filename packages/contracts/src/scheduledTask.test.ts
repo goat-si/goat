@@ -329,6 +329,18 @@ describe("scheduled run outcomes", () => {
     const { recentRuns: _recent, ...shipped } = decoded ?? {};
     expect(decodeShippedList(wire).tasks).toEqual([shipped]);
   });
+  it("adds provenance without preventing either version from reading the routine", () => {
+    const oldWire = JSON.stringify({ tasks: [routine], timeZone: "Asia/Seoul" });
+    expect(decodeList(oldWire).tasks[0]?.recentRuns).toEqual(routine.recentRuns);
+    const newer = {
+      ...routine,
+      recentRunsIncomplete: true,
+      recentRuns: [run(1, { origin: "event", taskThreadId: "work" })],
+    };
+    const newWire = JSON.stringify({ tasks: [newer], timeZone: "Asia/Seoul" });
+    expect(decodeList(newWire).tasks[0]).toMatchObject(newer);
+    expect(decodeShippedList(newWire).tasks[0]?.id).toBe(routine.id);
+  });
   it("a recentRuns that is not an array drops the history and keeps the routine", () => {
     const [decoded] = decodeList(
       JSON.stringify({ tasks: [{ ...routine, recentRuns: { firingId: "firing" } }] }),

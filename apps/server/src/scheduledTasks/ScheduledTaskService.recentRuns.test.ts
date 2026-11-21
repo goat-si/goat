@@ -124,12 +124,12 @@ it.effect("a GOAT Bot routine lists its newest seven runs, newest first, with wh
         const firingId = yield* fire(fixture, routine);
         if (index === 5) {
           yield* refuse(fixture, firingId);
-          expected.unshift([firingId, "failed", undefined, false, true]);
+          expected.unshift([firingId, "failed", undefined, false, true, "manual"]);
           continue;
         }
         const inputId = yield* accept(fixture, firingId);
         yield* answer(fixture, firingId, inputId, index % 2 === 0);
-        expected.unshift([firingId, "completed", inputId, index % 2 === 0, false]);
+        expected.unshift([firingId, "completed", inputId, index % 2 === 0, false, "manual"]);
       }
       const listed = yield* fixture.service.list();
       assert.deepStrictEqual(
@@ -139,6 +139,7 @@ it.effect("a GOAT Bot routine lists its newest seven runs, newest first, with wh
           run.conversation?.inputId,
           run.quiet === true,
           run.dispatchFailed === true,
+          Reflect.get(run, "origin"),
         ]),
         expected.slice(0, SCHEDULED_TASK_RECENT_RUNS),
       );
@@ -226,6 +227,12 @@ it.effect("a run that cannot be read is left out, and the rest of the list stays
         firings.unshift(firingId);
       }
       yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = '{' WHERE firing_id = ${firings[1]}`;
+      const listed = yield* fixture.service.list();
+      assert.propertyVal(
+        listed.tasks.find((task) => task.id === routine.id),
+        "recentRunsIncomplete",
+        true,
+      );
       assert.deepStrictEqual(
         historyOf(yield* fixture.service.list(), routine.id)?.map((run) => run.firingId),
         [firings[0], firings[2]],

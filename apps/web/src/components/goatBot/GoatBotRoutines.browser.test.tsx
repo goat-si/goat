@@ -1,5 +1,6 @@
 import type { BotRoutineSource } from "@goat/client-runtime/scheduledTasks";
 import {
+  AuthOrchestrationOperateScope,
   ChannelInputId,
   CommandId,
   EnvironmentAuthorizationError,
@@ -18,6 +19,7 @@ import { render } from "../../../test/render";
 const mocks = vi.hoisted(() => ({ upsert: vi.fn(), setEnabled: vi.fn(), runNow: vi.fn() }));
 // Each run's input read: every key asked for, in render order, and what a key's read answers.
 const reads = vi.hoisted(() => ({
+  canReadDeliveries: true,
   keys: [] as Array<string | null>,
   answers: new Map<string, { data: unknown; error: string | null }>(),
   timestampFormat: "24-hour" as "locale" | "12-hour" | "24-hour",
@@ -34,7 +36,8 @@ vi.mock("~/state/entities", () => ({
 }));
 vi.mock("~/state/session", async (original) => ({
   ...(await original<typeof import("~/state/session")>()),
-  useEnvironmentScope: () => true,
+  useEnvironmentScope: (_environment: string, scope: string) =>
+    scope !== AuthOrchestrationOperateScope || reads.canReadDeliveries,
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
@@ -42,6 +45,7 @@ vi.mock("~/state/environments", async (original) => ({
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
+    scheduledTaskWebhookDeliveries: () => "deliveries",
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
     runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: mocks.runNow },
@@ -93,6 +97,7 @@ function setup() {
   mocks.upsert.mockReset();
   mocks.setEnabled.mockReset();
   mocks.runNow.mockReset();
+  reads.canReadDeliveries = true;
   reads.keys = [];
   reads.answers = new Map();
   reads.timestampFormat = "24-hour";
@@ -357,6 +362,39 @@ async function readRun(name: string) {
   expect(document.activeElement).toBe(dot(name).element());
   return said;
 }
+
+it("shows an unreadable history distinctly from an empty or legacy history", async () => {
+  setup();
+  const unavailable = { ...routine("Unavailable", []), recentRunsIncomplete: true };
+  await using screen = await render(
+    routines([unavailable, routine("Empty", []), routine("Legacy", undefined)]),
+  );
+  await expect.element(screen.getByText("Couldn't read runs")).toBeVisible();
+  expect(screen.getByText("Couldn't read runs").all()).toHaveLength(1);
+});
+
+it("denied and revoked delivery access keep the request log closed", async () => {
+  setup();
+  reads.canReadDeliveries = false;
+  const trigger = routine("Review trigger", [], {
+    routineMode: "work",
+    schedule: { type: "webhook" },
+    webhook: { path: "/fixture", url: null, hasSecret: false },
+  });
+  await using screen = await render(routines([trigger]));
+  const deliveries = screen.getByRole("button", { name: "Deliveries", exact: true });
+  await expect.element(deliveries).not.toBeInTheDocument();
+  expect(readKeys()).not.toContain("deliveries");
+  reads.canReadDeliveries = true;
+  reads.answers.set("deliveries", { data: { deliveries: [] }, error: null });
+  await screen.rerender(routines([trigger]));
+  await userEvent.click(deliveries);
+  await expect.element(screen.getByText("No requests yet.")).toBeVisible();
+  reads.canReadDeliveries = false;
+  await screen.rerender(routines([trigger]));
+  await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
+  await expect.element(deliveries).not.toBeInTheDocument();
+});
 
 it("a routine's recent runs are one toolbar stop whose dots name each run in the Timestamp format's hours", async () => {
   setup();
