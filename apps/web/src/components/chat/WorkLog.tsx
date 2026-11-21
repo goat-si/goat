@@ -1,6 +1,7 @@
 import {
   createContext,
   use,
+  useId,
   useLayoutEffect,
   useRef,
   type ComponentProps,
@@ -51,13 +52,20 @@ type RowContent = {
   wrapLabel?: boolean;
 };
 
-function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
+const focusRingClassName =
+  "rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70";
+
+type LineProps = Omit<ComponentProps<"div">, "className" | "style" | "children">;
+
+function WorkLogLine({ icon, label, trailing, wrapLabel, ...lineProps }: RowContent & LineProps) {
   return (
     <div
+      {...lineProps}
       className={cn(
         "flex min-h-6 min-w-0 gap-1.5 text-work-log",
         // A wrapped label keeps its icon beside the first line.
         wrapLabel ? "items-start" : "items-center",
+        lineProps.role === "button" && focusRingClassName,
       )}
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-px">
@@ -82,15 +90,13 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
   );
 }
 
-const interactionClassName =
-  "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70";
-
-function useRowClassName(interactive: boolean) {
+function useRowClassName(interactive: boolean, focusable = interactive) {
   const grouped = use(GroupedRows);
   return cn(
     "group/timeline-row relative w-full min-w-0 rounded-md px-0.5 text-left transition-colors",
     grouped ? "py-0" : "py-0.5",
-    interactive && interactionClassName,
+    interactive && "cursor-pointer",
+    focusable && focusRingClassName,
   );
 }
 
@@ -127,16 +133,25 @@ export function WorkLogButton({
   );
 }
 
-/** Div disclosure permits selectable detail and nested actions. */
+type RowProps = Omit<ComponentProps<"div">, "className" | "style"> & {
+  toggle?: LineProps | undefined;
+};
+
+/**
+ * Div disclosure permits selectable detail and nested actions. `toggle` goes on
+ * the header line only: assistive tech hides a button's children.
+ */
 export function WorkLogRow({
   icon,
   label,
   trailing,
   wrapLabel = false,
+  toggle,
   children,
   ...rowProps
-}: RowContent & Omit<ComponentProps<"div">, "className" | "style">) {
-  const className = useRowClassName(rowProps.onClick !== undefined);
+}: RowContent & RowProps) {
+  const className = useRowClassName(rowProps.onClick !== undefined, false);
+  const detailsId = useId();
   return (
     <div
       {...rowProps}
@@ -144,13 +159,25 @@ export function WorkLogRow({
       onClick={
         rowProps.onClick
           ? (event) => {
-              if (!isSelectionClick(event)) rowProps.onClick?.(event);
+              const header = event.currentTarget.firstElementChild;
+              const boundary =
+                header instanceof HTMLElement && header.contains(event.target as Node)
+                  ? header
+                  : event.currentTarget;
+              if (!isSelectionClick(event, boundary)) rowProps.onClick?.(event);
             }
           : undefined
       }
     >
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
-      {children}
+      <WorkLogLine
+        aria-controls={toggle ? detailsId : undefined}
+        {...toggle}
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+      />
+      {toggle ? <div id={detailsId}>{children}</div> : children}
     </div>
   );
 }
