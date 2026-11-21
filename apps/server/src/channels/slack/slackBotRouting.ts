@@ -9,11 +9,10 @@ import {
   readStoredBotProfiles,
 } from "../ChannelBotProfiles.ts";
 import { memberBotKey } from "../channelBotLedger.ts";
+import { slackBotAddresses } from "./slackBotAddress.ts";
 
 const main = BotId.make(MAIN_BOT_ID);
 const MAX_REACHABLE_NAMES = 12;
-
-const explicitName = (text: string) => /^([^:\r\n]{1,64}):[ \t]+(\S[\s\S]*)$/u.exec(text);
 
 const readyMember = (sql: SqlClient.SqlClient, ownerId: string, botId: BotId) =>
   sql<{ readonly ready: number }>`
@@ -54,9 +53,8 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
   }
 
   const bound = slackRouting?.boundBotId ?? main;
-  const prefix = slackRouting?.allowName === true ? explicitName(text) : null;
-  const name = prefix?.[1]?.trim();
-  if (name === undefined && bound === main) return { botId: main, text };
+  const prefixes = slackRouting?.allowName === true ? [...slackBotAddresses(text)] : [];
+  if (prefixes.length === 0 && bound === main) return { botId: main, text };
 
   const stored = yield* readStoredBotProfiles(sql, ownerId);
   const mainName =
@@ -67,24 +65,23 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
       profile.role === "member" && profile.state !== "deleted" ? [profile] : [],
     ),
   ];
-  const matches =
-    name === undefined
-      ? []
-      : candidates.filter(
-          (candidate) => normalizeBotName(candidate.name) === normalizeBotName(name),
-        );
-  const chosen =
-    name !== undefined
-      ? matches.length === 1
-        ? matches[0]
-        : undefined
-      : candidates.find((candidate) => candidate.botId === bound);
+  let chosen =
+    prefixes.length === 0 ? candidates.find((candidate) => candidate.botId === bound) : undefined;
+  let bodyStart = 0;
+  for (const prefix of prefixes) {
+    const name = normalizeBotName(prefix.name);
+    const matches = candidates.filter((candidate) => normalizeBotName(candidate.name) === name);
+    if (matches.length === 0) continue;
+    chosen = matches.length === 1 ? matches[0] : undefined;
+    bodyStart = prefix.bodyStart;
+    break;
+  }
   if (
     chosen !== undefined &&
     chosen.hidden !== true &&
     (chosen.botId === main || (yield* readyMember(sql, ownerId, chosen.botId)))
   ) {
-    return { botId: chosen.botId, text: prefix?.[2] ?? text };
+    return { botId: chosen.botId, text: text.slice(bodyStart) };
   }
 
   const reachable: string[] = [];
@@ -104,7 +101,7 @@ export const routeSlackInput = Effect.fn("ChannelLedger.routeSlackInput")(functi
     }
   }
   const reason =
-    name !== undefined
+    prefixes.length > 0
       ? "That bot name is unavailable or ambiguous."
       : "The bot bound to this channel is unavailable.";
   return {

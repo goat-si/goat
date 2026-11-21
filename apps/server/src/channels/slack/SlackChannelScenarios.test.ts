@@ -306,7 +306,7 @@ describe("Slack runtime on the channel core", () => {
       );
       assert.strictEqual(routed?.botId, scout.botId);
       assert.strictEqual(routed?.message.text, "Check the build");
-      assert.strictEqual(routed?.snapshot.state, "accepted");
+      assert.strictEqual(routed?.snapshot.state, "replied");
     }).pipe(Effect.provide(layer));
   });
 

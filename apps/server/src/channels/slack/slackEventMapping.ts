@@ -22,6 +22,7 @@ import type {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { slackBotAddresses } from "./slackBotAddress.ts";
 import { isSlackChoiceActionId, stripBotMention } from "./slackMessageFormatting.ts";
 
 /** Team, channel and user IDs. */
@@ -145,6 +146,7 @@ const ignored = (reason: SlackIgnoredReason): SlackEventClassification => ({
 
 const LINK_COMMAND = /^link(?:\s+(\S+))?\s*$/i;
 const LINK_PREFIX = /^link\b(?![ \t]*:)/i;
+const LINK_CODE_PREFIX = /^link\s+[0-9]{6}(?=\s|$)/i;
 
 /** Bounds on reading a message's rich text; the payload is the sender's to shape. */
 const RICH_TEXT_MAX_NODES = 2000;
@@ -293,7 +295,10 @@ export function classifySlackEvent(
     text: messageText,
   });
 
-  if (LINK_PREFIX.test(text)) {
+  if (
+    LINK_PREFIX.test(text) &&
+    (LINK_CODE_PREFIX.test(text) || slackBotAddresses(text).next().done === true)
+  ) {
     if (surface === "mention") {
       return { _tag: "link_notice", event: classified(""), notice: "link_help" };
     }
