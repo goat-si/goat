@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- fixture signs the original byte body with HMAC.
+import * as NodeCrypto from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelGatewayError,
@@ -24,6 +26,12 @@ import * as TestClock from "effect/testing/TestClock";
 import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import {
+  requestFor,
+  waitForSpan,
+  webhookTaskInput,
+  withWebhookService,
+} from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { readRecentRuns } from "../scheduledTasks/scheduledTaskRecentRuns.ts";
 import {
@@ -606,3 +614,103 @@ it.effect("event reception cannot steer, stop, or answer existing work", () => {
     assert.lengthOf(harness.world.interrupts, 0);
   }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
 });
+
+it.effect.each(["complete", "revoke before dispatch"] as const)(
+  "settles one signed webhook firing and ignores replays when asked to %s",
+  (mode) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const sessions = yield* SessionStore.SessionStore;
+      const session = yield* issueTriggerOwner;
+      const intake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* withWebhookService(
+        ({ service, runs }) =>
+          Effect.gen(function* () {
+            const secret = "event-worker-signature-fixture";
+            const { task: trigger } = yield* service.upsert(
+              yield* webhookTaskInput({
+                id: "signed-work-trigger",
+                routineMode: "work",
+                threadId: botThreadId,
+                projectId,
+                prompt: "do: inspect {{body.action}}",
+                schedule: {
+                  type: "webhook",
+                  signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
+                },
+              }),
+              {
+                memoryGrantCeiling: "none",
+                owner: {
+                  principalId: owner.principalId,
+                  sessionId: session.sessionId,
+                  grantedScopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+                },
+              },
+            );
+            const bodyText = '{"action":"fixture change"}';
+            const body = new TextEncoder().encode(bodyText);
+            const signed = requestFor(trigger, {
+              bodyText,
+              body,
+              headers: {
+                "content-type": "application/json",
+                "x-test-signature": NodeCrypto.createHmac("sha256", secret)
+                  .update(body)
+                  .digest("hex"),
+              },
+            });
+            const delivery = yield* waitForSpan(
+              service.triggerWebhook(signed),
+              "ScheduledTaskService.runWebhookDelivery",
+            );
+            if (delivery._tag !== "accepted") return assert.fail("Expected a signed delivery");
+            assert.strictEqual(yield* intake.ingestPending, 1);
+            if (mode === "revoke before dispatch") yield* sessions.revoke(session.sessionId);
+            yield* runtime.drain;
+            const work = yield* onlyTask.pipe(
+              Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+            );
+            if (mode === "complete") {
+              if (work.worker === undefined) return assert.fail("The bot did not launch a worker");
+              assert.strictEqual(work.projectId, projectId);
+              assert.strictEqual(
+                (yield* runs.deliveryReceipt(delivery.deliveryId))?.status,
+                "running",
+              );
+              harness.world.setStatus(
+                work.worker.threadId,
+                1,
+                "completed",
+                "Inspected the fixture change.",
+              );
+              yield* runtime.drain;
+            } else {
+              assert.lengthOf(harness.world.launches, 0);
+              assert.include(work.resultSummary ?? "", "revoked");
+              const { deliveries } = yield* service.listWebhookDeliveries({ id: trigger.id });
+              const [refused] = deliveries;
+              if (refused === undefined) return assert.fail("Expected the refused delivery");
+              assert.strictEqual(refused.outcome, "dispatch_failed");
+              assert.strictEqual(refused.error, work.resultSummary ?? null);
+            }
+            const terminal = yield* runs.deliveryReceipt(delivery.deliveryId);
+            assert.strictEqual(terminal?.status, mode === "complete" ? "completed" : "failed");
+            assert.isNotNull(terminal?.completedAt);
+            assert.deepInclude(yield* service.triggerWebhook(signed), { outcome: "duplicate" });
+            yield* runtime.drain;
+            assert.lengthOf(yield* sql`SELECT 1 FROM channel_inbox`, 1);
+            assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
+            assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_runs`, 1);
+            assert.lengthOf(harness.world.launches, mode === "complete" ? 1 : 0);
+            assert.deepStrictEqual(yield* runs.deliveryReceipt(delivery.deliveryId), terminal);
+          }),
+        { sql },
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);

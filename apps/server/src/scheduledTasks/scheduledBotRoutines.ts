@@ -13,7 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { fenceWorkTriggerRollback } from "../persistence/reconcileGoatMigrationIds.ts";
 import { filterRoutineOwnWork } from "../channels/channelRoutineOwnWork.ts";
+import type { PendingWebhookTask } from "./webhookDedupe.ts";
+import { WebhookDeliverySkipped } from "./webhookTriggerTypes.ts";
 import type { WebhookRequest } from "./webhookTemplate.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { taskError } from "./scheduledTaskError.ts";
@@ -25,6 +28,7 @@ export const RoutineOwner = Schema.Struct({
   grantedScopes: Schema.Array(AuthEnvironmentScope),
   sessionId: Schema.optional(Schema.String),
   routineMode: Schema.optional(Schema.Literal("work")),
+  bindingRevision: Schema.optional(Schema.Int),
 });
 export type RoutineOwner = typeof RoutineOwner.Type;
 
@@ -50,6 +54,9 @@ const encodePayload = Schema.encodeSync(PayloadJson);
 /** The stored owner that binds a routine to GOAT Bot for good; none when absent or unreadable. */
 export const routineOwnerOf = (ownerJson: string | null | undefined) =>
   Option.flatMap(Option.fromNullishOr(ownerJson), decodeOwner);
+
+export const routineBindingRevision = (ownerJson: string | null | undefined) =>
+  Option.getOrUndefined(routineOwnerOf(ownerJson))?.bindingRevision;
 
 export const BOT_ROUTINE_NEEDS_OWNER =
   "Set this routine up again from GOAT Bot or Settings: it has no person to run as.";
@@ -154,18 +161,47 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       ),
     );
 
+  const binding = Effect.fn("ScheduledBotRoutines.binding")(function* (taskId: ScheduledTaskId) {
+    const [row] = yield* sql<{
+      readonly owner_json: string | null;
+      readonly project_id: string;
+      readonly thread_id: string | null;
+    }>`SELECT owner_json, project_id, thread_id FROM scheduled_tasks WHERE task_id = ${taskId}`;
+    return row === undefined
+      ? undefined
+      : { ...row, revision: routineBindingRevision(row.owner_json) };
+  });
+
   /** The task row and its owner commit together, so a crash never leaves a bot routine unowned. */
   const saveWithOwner = <A>(
     save: Effect.Effect<A, ScheduledTaskError>,
-    taskId: ScheduledTaskId,
+    task: ScheduledTask,
     owner: RoutineOwner | null,
   ) =>
-    sql.withTransaction(save.pipe(Effect.andThen(saveOwner(taskId, owner)))).pipe(
-      Effect.catchTags({
-        SqlError: (cause) =>
-          Effect.fail(taskError("Could not save the routine.", { taskId, cause })),
-      }),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const previous = owner?.routineMode === "work" ? yield* binding(task.id) : undefined;
+          const revision =
+            previous?.project_id === task.projectId && previous.thread_id === task.threadId
+              ? (previous.revision ?? 0)
+              : (previous?.revision ?? 0) + 1;
+          const result = yield* save;
+          if (owner?.routineMode === "work")
+            yield* fenceWorkTriggerRollback().pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          yield* saveOwner(
+            task.id,
+            owner?.routineMode === "work" ? { ...owner, bindingRevision: revision } : owner,
+          );
+          return result;
+        }),
+      )
+      .pipe(
+        Effect.catchTags({
+          SqlError: (cause) =>
+            Effect.fail(taskError("Could not save the routine.", { taskId: task.id, cause })),
+        }),
+      );
 
   /**
    * none: an ordinary task; unowned: a bot routine that cannot run; linkable: the channel path.
@@ -235,7 +271,7 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
     return rows.length > 0;
   });
   const verifyAdmission = Effect.fn("ScheduledBotRoutines.verifyAdmission")(function* (
-    task: ScheduledTask,
+    task: PendingWebhookTask,
     deliveryId: string | undefined,
     routine: Effect.Success<ReturnType<typeof kind>>,
   ) {
@@ -245,6 +281,15 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       routine.owner.routineMode !== "work"
     )
       return yield* taskError("A bot work trigger needs a verified webhook.", { taskId: task.id });
+    const current = yield* binding(task.id);
+    if (
+      current?.revision !== task.bindingRevision ||
+      current?.project_id !== task.projectId ||
+      current?.thread_id !== task.threadId
+    )
+      return yield* new WebhookDeliverySkipped({
+        reason: "The task was replaced before this delivery ran.",
+      });
     const rows = yield* sql`SELECT 1 FROM scheduled_task_webhook_deliveries
       WHERE task_id = ${task.id} AND delivery_id = ${deliveryId} AND signature_verified = 1`;
     if (rows.length !== 1)

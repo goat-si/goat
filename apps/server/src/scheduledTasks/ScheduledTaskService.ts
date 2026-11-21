@@ -39,7 +39,6 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -70,6 +69,7 @@ import {
   acceptWebhookDedupe,
   decodePendingRequest,
   decodePendingTask,
+  type PendingWebhookTask,
   encodePendingTask,
   dedupeError,
   releaseWebhookReplay,
@@ -80,6 +80,7 @@ import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerificatio
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
+  routineBindingRevision,
   ROUTINE_MESSAGE_PREFIX,
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
@@ -143,19 +144,16 @@ export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<
   },
 ) {}
 
-class WebhookDeliverySkipped extends Data.TaggedError("WebhookDeliverySkipped")<{
-  readonly reason: string;
-}> {}
-
 interface RateWindow {
   readonly accepted: ReadonlyArray<{ readonly at: number }>;
   readonly rejectedLogged: boolean;
 }
 
-import type {
-  WebhookDeliveryOutcome,
-  WebhookTriggerRequest,
-  WebhookTriggerResult,
+import {
+  WebhookDeliverySkipped,
+  type WebhookDeliveryOutcome,
+  type WebhookTriggerRequest,
+  type WebhookTriggerResult,
 } from "./webhookTriggerTypes.ts";
 export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResult };
 
@@ -558,14 +556,14 @@ export const layer = Layer.effect(
     );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
-      task: ScheduledTask,
+      task: PendingWebhookTask,
       trigger: "scheduled" | "manual" | "webhook",
       webhook?: {
         readonly deliveryId: string;
         readonly prompt: string;
         readonly dispatched: Ref.Ref<"accepted" | "failed" | "unknown">;
         /** Set once this attempt's receipt admission commits; launch can only follow it. */
-        readonly admitted: Ref.Ref<boolean>;
+        readonly admitted: Ref.Ref<boolean | "deferred">;
       },
     ) {
       const run = Effect.uninterruptibleMask((restore) =>
@@ -641,7 +639,7 @@ export const layer = Layer.effect(
           );
           const admission = Effect.gen(function* () {
             if (active.routineMode === "work")
-              yield* botRoutines.verifyAdmission(active, webhook?.deliveryId, routine);
+              yield* botRoutines.verifyAdmission(task, webhook?.deliveryId, routine);
             const claim = yield* scheduledRuns.begin({
               task: active,
               firingId: commandId,
@@ -665,7 +663,9 @@ export const layer = Layer.effect(
           const claim = yield* webhook === undefined && routine.type !== "linkable"
             ? admission
             : sql.withTransaction(admission);
-          if (webhook !== undefined) yield* Ref.set(webhook.admitted, true);
+          if (webhook !== undefined)
+            yield* Ref.set(webhook.admitted, claim.deferred ? "deferred" : true);
+          if (claim.deferred) return { task: active, threadId: null, firing: null };
           yield* notifyChanged;
           if (routine.type === "linkable")
             return {
@@ -1089,7 +1089,7 @@ export const layer = Layer.effect(
         runCount: existingTask?.runCount ?? 0,
       };
       const save = saveTask(task, input.requireExisting === true, webhook);
-      yield* botRoutines.saveWithOwner(save, id, owner);
+      yield* botRoutines.saveWithOwner(save, task, owner);
       return { task: (yield* findTask(id)) ?? task };
     });
 
@@ -1578,7 +1578,7 @@ export const layer = Layer.effect(
     });
 
     const runWebhookDelivery = Effect.fn("ScheduledTaskService.runWebhookDelivery")(function* (
-      task: ScheduledTask,
+      task: PendingWebhookTask,
       deliveryId: string,
       prompt: string,
     ) {
@@ -1588,13 +1588,14 @@ export const layer = Layer.effect(
           Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
         ]);
       const dispatched = yield* Ref.make<"accepted" | "failed" | "unknown">("unknown");
-      const admitted = yield* Ref.make(false);
+      const admitted = yield* Ref.make<boolean | "deferred">(false);
       return yield* runTask(task, "webhook", { deliveryId, prompt, dispatched, admitted }).pipe(
         Effect.flatMap(({ firing }) =>
           Effect.gen(function* () {
+            if ((yield* Ref.get(admitted)) === "deferred") return false;
             if (task.routineMode === "work" && (yield* botRoutines.handedOff(deliveryId))) {
               yield* cleanupDelivery(deliveryId);
-              return;
+              return true;
             }
             const status =
               firing?.dispatchStatus ?? (yield* scheduledRuns.deliveryDispatch(deliveryId));
@@ -1606,19 +1607,26 @@ export const layer = Layer.effect(
             } else
               yield* Effect.logWarning("Webhook dispatch outcome is unknown", { taskId: task.id });
             yield* cleanupDelivery(deliveryId);
+            return true;
           }),
         ),
         Effect.catchTags({
           WebhookDeliverySkipped: (skipped) =>
             Effect.gen(function* () {
               const proof = yield* scheduledRuns.deliveryDispatch(deliveryId);
-              if (proof === "accepted") return;
-              yield* runOutcome("skipped");
-              yield* markDeliveryFailed(deliveryId, skipped.reason);
-              yield* releaseFailedDelivery(deliveryId);
+              if (proof !== "accepted") {
+                yield* runOutcome("skipped");
+                yield* sql.withTransaction(
+                  Effect.gen(function* () {
+                    yield* markDeliveryFailed(deliveryId, skipped.reason);
+                    yield* releaseFailedDelivery(deliveryId);
+                    yield* sql`DELETE FROM scheduled_task_webhook_pending WHERE delivery_id = ${deliveryId}`;
+                  }),
+                );
+              }
+              return true;
             }),
         }),
-        Effect.as(true),
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             yield* Effect.logWarning("Webhook dispatch failed", { taskId: task.id, cause });
@@ -1723,7 +1731,9 @@ export const layer = Layer.effect(
       ) {
         return yield* notFound;
       }
-      const task = yield* decodeRow(row);
+      const decoded = yield* decodeRow(row);
+      const revision = routineBindingRevision(row.owner_json);
+      const task = revision === undefined ? decoded : { ...decoded, bindingRevision: revision };
       yield* Effect.annotateCurrentSpan({ "scheduled_task.id": task.id });
       const schedule = task.schedule;
       if (schedule.type !== "webhook") return yield* notFound;

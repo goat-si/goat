@@ -1,11 +1,13 @@
-import type {
-  BotId,
-  ChannelDispatchTarget,
-  ChannelTask,
+import {
   ChannelTaskId,
-  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  type BotId,
+  type ChannelDispatchTarget,
+  type ChannelTask,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  type RepositoryIdentity,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -20,6 +22,17 @@ import { ChannelLedgerError } from "./channelLedgerError.ts";
 
 const githubRepository = (value: unknown) =>
   typeof value === "string" && /^[\w.-]+\/[\w.-]+$/.test(value) ? value.toLowerCase() : undefined;
+
+const githubRepositoryOf = (identity: RepositoryIdentity | null | undefined) => {
+  if (identity == null) return undefined;
+  const checkout = RepositoryIdentityResolver.ownRepositoryIdentity(identity) ?? identity;
+  return (
+    githubRepository(checkout.canonicalKey.match(/^github\.com\/(.+)$/i)?.[1]) ??
+    (checkout.provider === "github" && checkout.owner !== undefined && checkout.name !== undefined
+      ? githubRepository(checkout.owner + "/" + checkout.name)
+      : undefined)
+  );
+};
 
 export const recordChannelLaunchHead = Effect.fn("channel.recordLaunchHead")(function* (input: {
   readonly taskId: ChannelTaskId;
@@ -43,6 +56,47 @@ export const recordChannelLaunchHead = Effect.fn("channel.recordLaunchHead")(fun
     ),
   );
 });
+
+const backfillChannelWorkerHeads = Effect.fn("channel.backfillWorkerHeads")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const identities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  let after = "";
+  while (true) {
+    const rows = yield* sql<{
+      readonly task_id: string;
+      readonly generation: number;
+      readonly branch: string;
+      readonly workspace: string;
+    }>`
+      WITH workers AS (
+        SELECT t.task_id, t.generation, json_extract(s.payload_json, '$.branch') AS branch,
+          COALESCE(json_extract(s.payload_json, '$.worktreePath'), p.workspace_root) AS workspace
+        FROM channel_tasks t
+        JOIN orchestration_v2_projection_threads s ON s.thread_id = t.worker_thread_id
+        LEFT JOIN projection_projects p ON p.project_id = s.project_id
+        WHERE t.status NOT IN ('completed', 'failed', 'cancelled') AND s.deleted_at IS NULL
+          AND t.task_id > ${after}
+          AND NOT EXISTS (
+            SELECT 1 FROM channel_worker_launch_heads h WHERE h.task_id = t.task_id AND h.generation = t.generation
+          )
+      )
+      SELECT task_id, generation, branch, workspace FROM workers
+      WHERE branch <> '' AND workspace <> '' ORDER BY task_id LIMIT 64`;
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      after = row.task_id;
+      const identity = yield* identities.resolve(row.workspace);
+      yield* recordChannelLaunchHead({
+        taskId: ChannelTaskId.make(row.task_id),
+        generation: row.generation,
+        branch: row.branch,
+        repository: githubRepositoryOf(identity),
+      });
+    }
+  }
+});
+
+export const layerBackfillChannelWorkerHeads = Layer.effectDiscard(backfillChannelWorkerHeads());
 
 const PullRequestIdentity = Schema.Struct({ repository: Schema.String, number: Schema.Int });
 type PullRequestIdentity = typeof PullRequestIdentity.Type;
@@ -192,11 +246,7 @@ export const prepareChannelWorkerWorkspace = Effect.fn("channel.prepareWorkerWor
     type: "worktree" as const,
     baseRef: target.workspaceStrategy.baseRef ?? "HEAD",
   };
-  const repository =
-    githubRepository(identity?.canonicalKey.match(/^github\.com\/(.+)$/i)?.[1]) ??
-    (identity?.provider === "github" && identity.owner !== undefined && identity.name !== undefined
-      ? identity.owner + "/" + identity.name
-      : undefined);
+  const repository = githubRepositoryOf(identity);
   if (repository === undefined && task.routineWork !== true) return workspace;
   const branch = remoteBranchFor(task.taskId, task.generation);
   yield* recordHead({ taskId: task.taskId, generation: task.generation, branch, repository });

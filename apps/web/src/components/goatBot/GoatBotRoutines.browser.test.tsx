@@ -36,12 +36,16 @@ vi.mock("~/state/session", async (original) => ({
   ...(await original<typeof import("~/state/session")>()),
   useEnvironmentScope: () => true,
 }));
-vi.mock("../settings/WebhookEndpointField", () => ({ WebhookEndpointField: () => null }));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironmentHttpBaseUrl: () => "http://localhost:8309",
+}));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
     runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: mocks.runNow },
+    rotateScheduledTaskWebhookToken: { permissionAtom: () => Atom.make(true) },
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -657,9 +661,11 @@ it("a long reply with no chat row is fully reachable in the popover", async () =
 
 it("creates a pull-request trigger with a project and required signature and lists it as a webhook", async () => {
   setup();
+  const endpoint = "/api/hooks/fixture-trigger/fixture-token";
   const workTrigger: BotRoutineSource = {
     ...savedCheckIn,
     title: "Pull request opened",
+    webhook: { path: endpoint, url: null, hasSecret: true },
     routineMode: "work",
     schedule: {
       type: "webhook",
@@ -704,4 +710,8 @@ it("creates a pull-request trigger with a project and required signature and lis
     />,
   );
   await expect.element(screen.getByText("On webhook · Listening")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Reveal webhook URL" }));
+  await expect
+    .element(screen.getByRole("textbox", { name: "Webhook URL" }))
+    .toHaveValue(`http://localhost:8309${endpoint}`);
 });
