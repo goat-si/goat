@@ -79,6 +79,25 @@ describe("channel reception note request conversion", () => {
     });
   });
 
+  it("keeps a valid completion criterion on work and discards an overlong one", () => {
+    const work = {
+      action: "create_task",
+      title: "Fix CI",
+      instruction: "Rerun the suite.",
+    } as const;
+    expect(convert({ ...work, doneMeans: "  The CI suite passes.  " }).action).toEqual({
+      type: work.action,
+      title: work.title,
+      instruction: work.instruction,
+      doneMeans: "The CI suite passes.",
+    });
+    expect(convert({ ...work, doneMeans: "x".repeat(281) }).action).toEqual({
+      type: work.action,
+      title: work.title,
+      instruction: work.instruction,
+    });
+  });
+
   it("puts a trimmed notesChangeRequested on work that edits notes and omits empty strings", () => {
     expect(
       convert({
@@ -90,10 +109,11 @@ describe("channel reception note request conversion", () => {
           {
             title: "  Fix CI  ",
             instruction: "  Re-run and fix failing suite.  ",
+            doneMeans: " The CI suite passes. ",
             projectId: " project-2 ",
             host: " mini ",
           },
-          { title: "  ", instruction: "ignored", projectId: "", host: "" },
+          { title: "  ", instruction: "ignored", doneMeans: "", projectId: "", host: "" },
         ],
       }),
     ).toEqual({
@@ -107,6 +127,7 @@ describe("channel reception note request conversion", () => {
           {
             title: "Fix CI",
             instruction: "Re-run and fix failing suite.",
+            doneMeans: "The CI suite passes.",
             projectId: "project-2",
             host: "mini",
           },
@@ -465,6 +486,7 @@ describe("channel reception turns", () => {
         {
           title: " Clean logs ",
           instruction: " Rotate logs. ",
+          doneMeans: "",
           projectId: " project-1 ",
           host: "",
         },
