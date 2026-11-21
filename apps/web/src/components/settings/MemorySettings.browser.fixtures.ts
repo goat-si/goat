@@ -14,6 +14,61 @@ import {
 import * as Schema from "effect/Schema";
 import { act } from "react";
 
+export async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(() => {
+    const setValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")?.set;
+    if (!setValue) throw new Error("Expected a text field value setter");
+    setValue.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+export async function checkQuarantineSearch(
+  container: HTMLElement,
+  click: (label: string) => Promise<void>,
+  queries: Map<string, unknown>,
+  requests: readonly { label: string; input: unknown }[],
+  supportedScreen: Parameters<typeof exerciseMemoryMove>[0]["supportedScreen"],
+) {
+  queries.set("list", Option.some({ items: [], nextCursor: null }));
+  queries.set("search", Option.some({ items: [activeItem], nextCursor: "search-next" }));
+  await supportedScreen(false);
+  const quarantine = () => {
+    const toggle = container.querySelector<HTMLElement>(
+      '[role="switch"][aria-label="Include quarantined memories"]',
+    );
+    if (!toggle) throw new Error("Expected the quarantine filter");
+    return toggle;
+  };
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]');
+  if (!input) throw new Error("Expected the search field");
+
+  await enterText(input, "fixture");
+  expect(quarantine().getAttribute("aria-disabled")).not.toBe("true");
+  await act(async () => quarantine().click());
+  expect(quarantine().getAttribute("aria-checked")).toBe("true");
+  await click("Search");
+  await click("Next page");
+
+  expect(quarantine().getAttribute("aria-disabled")).toBe("true");
+  expect(container.textContent).toContain("Clear search to review quarantined memories.");
+  const firstPage = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "First page",
+  );
+  expect(firstPage?.disabled).toBe(false);
+  await act(async () => quarantine().click());
+  expect(firstPage?.disabled).toBe(false);
+  expect(requests.filter(({ label }) => label === "search").at(-1)).toMatchObject({
+    input: { cursor: "search-next", query: "fixture" },
+  });
+
+  await click("Clear search");
+  expect(quarantine().getAttribute("aria-disabled")).not.toBe("true");
+  expect(quarantine().getAttribute("aria-checked")).toBe("true");
+  expect(requests.filter(({ label }) => label === "list").at(-1)).toMatchObject({
+    input: { includeQuarantined: true },
+  });
+}
+
 export async function checkVirtualizedMemorySelection(
   container: HTMLElement,
   click: (label: string) => Promise<void>,
