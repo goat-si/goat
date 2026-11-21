@@ -21,6 +21,10 @@ import {
   type ChannelUpdateBotInput,
   MAIN_BOT_ID,
 } from "@goat/contracts";
+import {
+  type ChannelAttentionFeedInput,
+  type ChannelAttentionFeedResult,
+} from "@goat/contracts/channel-bot-attention";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -45,6 +49,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
 import { memberBotLaunchIdsFor, memberBotStepCommandIdFor } from "./channelIds.ts";
+import { readBotAttention } from "./channelBotAttention.ts";
 import { listOpenAsks } from "./channelOpenAsks.ts";
 import {
   MAX_TASK_CHANGE_STREAMS_PER_CONNECTION,
@@ -89,6 +94,10 @@ export class ChannelBotMembers extends Context.Service<
       owner: Owner,
       limit?: number,
     ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
+    readonly attentionFeed: (
+      owner: Owner,
+      input: ChannelAttentionFeedInput,
+    ) => Effect.Effect<ChannelAttentionFeedResult, ChannelGatewayError>;
     /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
     readonly taskChanges: (owner: Owner) => Stream.Stream<number, ChannelGatewayError>;
   }
@@ -441,6 +450,25 @@ const make = Effect.gen(function* () {
     });
   }, Effect.mapError(failed));
 
+  const attentionFeed: ChannelBotMembers["Service"]["attentionFeed"] = Effect.fn(
+    "ChannelBotMembers.attentionFeed",
+  )(function* (owner: Owner, request: ChannelAttentionFeedInput) {
+    const settings = yield* serverSettings.getSettings;
+    const environmentId = yield* environment.getEnvironmentId;
+    const bots = yield* profiles.list(owner);
+    const names = new Map<BotId, string>([
+      [MAIN_BOT_ID, ChannelBotProfiles.DEFAULT_BOT_IDENTITY.name],
+    ]);
+    for (const bot of bots) names.set(bot.botId, bot.name);
+    return yield* readBotAttention(sql, {
+      ownerId: owner.ownerId,
+      environmentId,
+      mode: settings.goatBotAlerts,
+      names,
+      request,
+    });
+  }, Effect.mapError(failed));
+
   /** A rename or a new purpose leaves a line in that bot's conversation once it is saved. */
   const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
     profileEdits.withPermits(1)(
@@ -460,6 +488,7 @@ const make = Effect.gen(function* () {
 
   return ChannelBotMembers.of({
     openAsks,
+    attentionFeed,
     taskChanges: (owner) => ledger.taskChangeRevisions(owner.ownerId),
     create,
     setHidden,
@@ -477,6 +506,8 @@ export const layer = Layer.effect(ChannelBotMembers, make);
 export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
+    [CHANNEL_GATEWAY_WS_METHODS.listBotAttention]: (input: ChannelAttentionFeedInput) =>
+      service.attentionFeed(owner, input),
     [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: (input: ChannelListOpenAsksInput) =>
       service.openAsks(owner, input.limit),
     [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>

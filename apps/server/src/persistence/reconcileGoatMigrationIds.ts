@@ -23,6 +23,8 @@ const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
+const LEGACY_BOT_ATTENTION_ID = 176;
+const BOT_ATTENTION_MIGRATION_NAME = "ChannelBotAttention";
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -117,6 +119,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
+  BOT_ATTENTION_MIGRATION_NAME,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -164,6 +167,25 @@ function legacyFirstBindId<E>(
       (row) => row.migration_id === LEGACY_FIRST_BIND_ID && row.name === FIRST_BIND_MIGRATION_NAME,
     )
     ? current[0]
+    : undefined;
+}
+
+function findWorkerLaunchHeadsInsertion<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const tail = history.filter((row) => row.migration_id >= LEGACY_BOT_ATTENTION_ID);
+  if (
+    tail.length !== 1 ||
+    tail[0]?.migration_id !== LEGACY_BOT_ATTENTION_ID ||
+    tail[0]?.name !== BOT_ATTENTION_MIGRATION_NAME
+  ) {
+    return undefined;
+  }
+  const heads = entries.find(([, name]) => name === "ChannelWorkerLaunchHeads");
+  return heads !== undefined &&
+    entries.some(([id, name]) => name === BOT_ATTENTION_MIGRATION_NAME && id === heads[0] + 1)
+    ? heads
     : undefined;
 }
 
@@ -298,6 +320,7 @@ export function memoryMigrationProblem<E>(
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
+  const workerHeads = findWorkerLaunchHeadsInsertion(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
@@ -307,7 +330,8 @@ export function memoryMigrationProblem<E>(
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
           ? firstBindId
           : row.migration_id +
-            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
+            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0) +
+            (workerHeads !== undefined && row.name === BOT_ATTENTION_MIGRATION_NAME ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
     }),
   );
@@ -432,12 +456,15 @@ export const plannedGoatLedger = <E>(
   }
   const penMember = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
-  const insertions =
-    firstBindId !== undefined
+  const workerHeads = findWorkerLaunchHeadsInsertion(entries, history);
+  const insertions = [
+    ...(firstBindId !== undefined
       ? entries.filter(([id]) => id >= LEGACY_FIRST_BIND_ID && id < firstBindId)
       : penMember === undefined
         ? []
-        : [penMember];
+        : [penMember]),
+    ...(workerHeads === undefined ? [] : [workerHeads]),
+  ];
   const moved = [
     ...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)),
     ...goatRows,

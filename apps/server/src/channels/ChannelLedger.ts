@@ -8,6 +8,7 @@ import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
+import { writeChannelTaskEvent } from "./channelTaskEventCommit.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
 /**
@@ -798,52 +799,7 @@ const make = Effect.gen(function* () {
       Effect.map((rows) => (rows[0] === undefined ? undefined : inboxSnapshot(rows[0]))),
     );
 
-  const writeTaskEvent = (write: ChannelTaskEventWrite) =>
-    Effect.gen(function* () {
-      const { next, event } = write;
-      const pendingAnswer =
-        write.pendingAnswerMessageId === undefined
-          ? sql`pending_answer_message_id`
-          : sql`${write.pendingAnswerMessageId}`;
-      const hold =
-        write.completionHold === undefined ? sql`completion_hold` : sql`${write.completionHold}`;
-      // A message may have moved updated_at past this write's clock; task activity never goes back.
-      const activeAt = sql`CASE WHEN julianday(updated_at) > julianday(${next.updatedAt})
-        THEN updated_at ELSE ${next.updatedAt} END`;
-      const updated = yield* sql<{ readonly task_id: string }>`
-        UPDATE channel_tasks SET
-          status = ${next.status},
-          version = ${next.version},
-          generation = ${next.generation},
-          worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = json_set(${encodeTask(next)}, '$.updatedAt', ${activeAt}),
-          newest_ask_at = ${newestAskAt(next)},
-          updated_at = ${activeAt},
-          pending_answer_message_id = ${pendingAnswer},
-          completion_hold = ${hold}
-        WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
-        RETURNING task_id
-      `;
-      if (updated.length === 0) {
-        return yield* new ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "Task " + next.taskId + " is not at version " + write.expectedVersion + ".",
-        });
-      }
-      const inserted = yield* sql<{ readonly sequence: number }>`
-        INSERT INTO channel_task_events (
-          event_id, task_id, task_version, type, event_json, occurred_at,
-          narration_state, forward_state
-        ) VALUES (
-          ${event.eventId}, ${event.taskId}, ${event.taskVersion}, ${event.type},
-          ${encodeEvent(event)}, ${event.occurredAt},
-          ${write.narrate === true ? "pending" : "none"},
-          ${write.forward === true ? "pending" : "none"}
-        )
-        RETURNING sequence
-      `;
-      return inserted[0]?.sequence ?? 0;
-    });
+  const writeTaskEvent = (write: ChannelTaskEventWrite) => writeChannelTaskEvent(sql, write);
 
   // A task belongs to the bot of the input that created it; no input of this owner, no task.
   const insertTask = (task: ChannelTask, ownerId: string, event: ChannelTaskEvent) =>

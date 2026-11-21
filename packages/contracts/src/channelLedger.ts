@@ -168,6 +168,7 @@ export type ChannelOpenQuestion = typeof ChannelOpenQuestion.Type;
 export const ChannelAnsweredQuestion = Schema.Struct({
   questionId: ChannelQuestionId,
   inputId: Schema.optional(ChannelInputId),
+  answerText: Schema.optionalKey(Schema.String),
 });
 export type ChannelAnsweredQuestion = typeof ChannelAnsweredQuestion.Type;
 /** The newest answers a task keeps; an older one's pick shows as a plain message. */
