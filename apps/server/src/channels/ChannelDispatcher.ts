@@ -58,7 +58,7 @@ import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
 import { identitySection } from "./channelBotSessionBrief.ts";
-import { channelBotFilesFor, mayReadBotNotes, recallChannelBotNotes } from "./channelBotNotes.ts";
+import { channelBotFilesFor, recallChannelBotNotes } from "./channelBotNotes.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
@@ -420,7 +420,7 @@ const make = Effect.gen(function* () {
       const requester = yield* dispatchGrant(initial.task);
       if (requester === undefined) return yield* refuseDispatch(initial, owner);
       const botFiles = filesFor(initial.botId);
-      const mayRead = initial.task.routineWork !== true && mayReadBotNotes(requester);
+      const mayRead = initial.task.routineWork !== true && canReadChannelBotNotes(requester);
       const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
       const notes = yield* recallChannelBotNotes(botFiles, initial.task.instruction, mayRead).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),

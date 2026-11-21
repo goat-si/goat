@@ -1,3 +1,4 @@
+import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 /** Dispatches and tracks channel workers on linked machines. */
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";
@@ -52,7 +53,6 @@ import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { mayReadBotNotes } from "./channelBotNotes.ts";
 import { makeRemoteBotBrief } from "./channelRemoteBotBrief.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import {
@@ -1393,7 +1393,7 @@ const make = Effect.gen(function* () {
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       Effect.mapError(() => new Superseded()),
       Effect.flatMap((who) =>
-        who !== undefined && mayReadBotNotes(who) ? Effect.void : Effect.fail(new Superseded()),
+        who !== undefined && canReadChannelBotNotes(who) ? Effect.void : Effect.fail(new Superseded()),
       ),
     );
 

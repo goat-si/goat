@@ -3,6 +3,10 @@ import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
 import { ChannelQuestionId, CommandId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as Stream from "effect/Stream";
 
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
@@ -707,13 +711,23 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         yield* linkTeammate;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const note = "Do the release checklist on Tuesdays.";
+        yield* appendChannelBotNote(fs, files, note, "2026-11-21T00:00:00Z", "fixture");
         // The claim recorded memory reads; the teammate's link grants none now.
         const stored = yield* claimedFromTeammate("m1", "read");
         const session = yield* ChannelBotSession.ChannelBotSession;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
         assert.lengthOf(harness.world.launches, 1);
-        assert.isUndefined(harness.world.launches[0]!.initialMessage?.memoryGrantCeiling);
+        const initial = harness.world.launches[0]?.initialMessage;
+        assert.isUndefined(initial?.memoryGrantCeiling);
+        assert.notInclude(initial?.text ?? "", note);
+        assert.notInclude(initial?.text ?? "", files.notes);
       }).pipe(Effect.provide(harness.layer));
     },
   );

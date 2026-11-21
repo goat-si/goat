@@ -74,7 +74,6 @@ import {
   listChannelBotSkills,
   quotedFromInput,
   recallChannelBotNotes,
-  mayReadBotNotes,
 } from "./channelBotNotes.ts";
 import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
 import { sharedBotNoteReply } from "./channelSharedBotNote.ts";
@@ -216,7 +215,7 @@ const make = Effect.gen(function* () {
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
   const filesFor = (botId: BotId) => channelBotFilesFor(path, serverConfig.stateDir, botId);
   const notesFor = (botId: BotId, viewer: ChannelRequester, query: string) =>
-    recallChannelBotNotes(filesFor(botId), query, mayReadBotNotes(viewer)).pipe(
+    recallChannelBotNotes(filesFor(botId), query, canReadChannelBotNotes(viewer)).pipe(
       Effect.map((notes) => (notes === undefined ? "" : channelBotNotesSection(notes))),
     );
   const botNotes = yield* ChannelBotNoteWriter;

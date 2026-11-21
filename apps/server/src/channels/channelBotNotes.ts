@@ -104,9 +104,6 @@ export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
     notes === undefined ? "" : channelBotNotesSection(notes),
   );
 
-export const mayReadBotNotes = (who: ChannelRequester) =>
-  who.originKind !== "mcp" && who.grantedScopes.includes("memory:read");
-
 export const recallChannelBotNotes = Effect.fn("channelBotNotes.recall")(function* (
   files: ChannelBotFiles,
   query: string,
