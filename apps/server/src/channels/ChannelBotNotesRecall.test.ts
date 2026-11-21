@@ -4,23 +4,32 @@ import * as NotesTail from "./channelBotNotesTail.ts";
 import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { buildChannelReceptionPrompt } from "@goat/provider-core/server/channelReceptionPrompt";
 import { assert, describe, it } from "@effect/vitest";
 import { BotId, ChannelTaskId, goatBotForgetNoteMessage, type ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import type { ProviderInstance } from "@goat/provider-core/server/driver";
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 
 import * as ServerConfig from "../config.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelLayers from "./ChannelLayers.ts";
 import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -60,6 +69,7 @@ import {
   linkSlackUser,
   makeHarness,
   memoryRpcContext,
+  modelSelection,
   rpcContext,
   environmentId,
   owner,
@@ -141,6 +151,51 @@ describe("scoped note reads", () => {
         const snapshot = yield* recallChannelBotNotes(own, "staging gate", true);
         assert.include(snapshot?.standing ?? "", fact);
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "keeps a member's own notes in the rendered prompt when shared notes fill the budget",
+    () => {
+      const harness = makeHarness();
+      const prompts: string[] = [];
+      harness.script.current = (input) => {
+        if (input.mode === "input") prompts.push(buildChannelReceptionPrompt(input).prompt);
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const scout = yield* (yield* ChannelBotMembers.ChannelBotMembers).create(
+          {
+            clientRequestId: "prompt-budget-scout",
+            name: "Scout",
+            avatar: null,
+            purpose: "",
+            defaultModelSelection: null,
+          },
+          owner,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const state = (yield* ServerConfig.ServerConfig).stateDir;
+        const own = channelBotFilesFor(path, state, scout.botId);
+        const shared = channelBotFilesFor(path, state);
+        const privateFact = "Scout rollout uses Juniper.";
+        const sharedFact = "Every rollout must check CI.";
+        const sharedLines = [...filler(8_850), line(sharedFact, "shared-ci")].join("\n");
+        assert.isBelow(sharedLines.length, NOTES_SECTION_CHARS);
+        yield* fs.makeDirectory(own.dir, { recursive: true });
+        yield* fs.writeFileString(own.notes, line(privateFact, "scout-ci") + "\n");
+        yield* fs.writeFileString(shared.notes, sharedLines + "\n");
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          { ...goatInput("How is rollout done?", "reception-note-budget"), botId: scout.botId },
+          memoryRpcContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.lengthOf(prompts, 1);
+        assert.include(prompts[0], sharedFact);
+        assert.include(prompts[0], privateFact);
+      }).pipe(Effect.provide(harness.layer));
+    },
   );
 });
 
@@ -386,6 +441,86 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
       ),
     );
   });
+
+  it.effect("rechecks the requester after reception waits for a provider installation update", () =>
+    Effect.gen(function* () {
+      const gate = yield* ProviderInstallationGate.ProviderInstallationGate;
+      const update = yield* dispatchBarrier;
+      const waiting = yield* Deferred.make<void>();
+      const { instanceId } = modelSelection;
+      const prompts: string[] = [];
+      const generate: NonNullable<
+        ProviderInstance["textGeneration"]["generateChannelReception"]
+      > = ({ input }) => {
+        if (input.mode === "input") prompts.push(buildChannelReceptionPrompt(input).prompt);
+        return defaultScript(input);
+      };
+      const instance = {
+        instanceId,
+        textGeneration: { ...noMemoryGeneration, generateChannelReception: generate },
+      } as unknown as ProviderInstance;
+      const liveTextGeneration = TextGeneration.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+              getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
+            }),
+            ServerSettings.layerTest(),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({}),
+            Layer.succeed(ProviderInstallationGate.ProviderInstallationGate, {
+              ...gate,
+              execute: (id, work) =>
+                gate.execute(id, work).pipe(
+                  Effect.forkChild({ startImmediately: true }),
+                  Effect.tap(() => Deferred.succeed(waiting, undefined)),
+                  Effect.flatMap(Fiber.join),
+                ),
+            }),
+          ),
+        ),
+      );
+      const harness = makeHarness({
+        channelsLayer: ChannelLayers.layerServices.pipe(Layer.provide(liveTextGeneration)),
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const fact = "Staging uses synthetic Juniper.";
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(files.notes, line(fact, "installation-wait") + "\n");
+        const sessions = yield* SessionStore.SessionStore;
+        const { sessionId } = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const updating = yield* Effect.forkScoped(gate.update([instanceId], update.pause));
+        yield* update.reached;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          goatInput("How is staging set up?", "installation-wait"),
+          { ...memoryRpcContext, authSessionId: sessionId },
+        );
+        const reception = yield* Effect.forkScoped((yield* ChannelRuntime.ChannelRuntime).drain);
+        yield* Deferred.await(waiting);
+        assert.lengthOf(prompts, 0);
+        yield* sessions.revoke(sessionId);
+        yield* update.release;
+        yield* Fiber.join(updating);
+        yield* Fiber.join(reception);
+        assert.lengthOf(prompts, 1);
+        assert.notInclude(prompts[0], fact);
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(ProviderInstallationGate.layer)),
+  );
 
   it.effect(
     "strips shared notes from the second reception pass after Slack memory is revoked",

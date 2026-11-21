@@ -135,4 +135,40 @@ describe("what a worker on another machine is told", () => {
       assert.notInclude(message, files.notes);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("freezes the readable shared snapshot when a member's private scope fails", () => {
+    const { launch, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const grantedScopes = [...owner.grantedScopes, "memory:read" as const];
+      yield* linkSlackUser("U1", { ...owner, grantedScopes });
+      const scout = yield* (yield* ChannelBotMembers.ChannelBotMembers).create(
+        {
+          clientRequestId: "remote-scout-unreadable",
+          name: "Scout",
+          avatar: null,
+          purpose: "",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = (yield* ServerConfig.ServerConfig).stateDir;
+      const own = channelBotFilesFor(path, stateDir, scout.botId);
+      const shared = channelBotFilesFor(path, stateDir);
+      const note = "- 2026-10-17: Use Juniper for the rollout. (asked in x)\n";
+      yield* fs.makeDirectory(own.notes, { recursive: true });
+      yield* fs.writeFileString(shared.notes, note);
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput("Scout: do@mac-studio: check rollout", "scout-remote-unreadable"),
+        { ...slackContext, grantedScopes, slackRouting: { allowName: true } },
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.include((yield* launch).message ?? "", note.trimEnd());
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const brief = yield* ledger.latestTaskBrief((yield* onlyTask).taskId);
+      assert.strictEqual(brief?.context.notesRevision, sha256(note));
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
