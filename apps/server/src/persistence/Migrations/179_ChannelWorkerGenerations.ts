@@ -1,4 +1,5 @@
 import type { ChannelTaskId } from "@goat/contracts";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { workerLaunchIdsFor } from "../../channels/channelIds.ts";
@@ -31,11 +32,10 @@ export default Effect.gen(function* () {
       SELECT task_id, generation FROM channel_tasks
       WHERE task_id > ${after} AND (worker_thread_id IS NOT NULL OR status = 'dispatching')
       ORDER BY task_id LIMIT 256`;
-    const last = tasks.at(-1);
-    if (last === undefined) break;
-    after = last.task_id;
+    if (!Arr.isReadonlyArrayNonEmpty(tasks)) break;
+    after = Arr.lastNonEmpty(tasks).task_id;
     yield* sql`INSERT INTO channel_worker_generations ${sql.insert(
-      tasks.map(({ task_id, generation }) => ({
+      Arr.map(tasks, ({ task_id, generation }) => ({
         worker_thread_id: workerLaunchIdsFor(task_id, generation).threadId,
         task_id,
         generation,
