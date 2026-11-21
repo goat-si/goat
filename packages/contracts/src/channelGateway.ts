@@ -31,7 +31,13 @@ import {
   ChannelTaskEventId,
   ChannelTaskId,
 } from "./channelCommon.ts";
-import { ChannelBotRef, ChannelTask, ChannelTaskChip, ChannelTaskStatus } from "./channelLedger.ts";
+import {
+  ChannelBotRef,
+  ChannelTask,
+  ChannelTaskChip,
+  ChannelTaskDoneMeans,
+  ChannelTaskStatus,
+} from "./channelLedger.ts";
 import { ChannelSkillProposal } from "./channelSkillProposal.ts";
 import { ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
@@ -175,6 +181,12 @@ export const ChannelTaskReportInput = Schema.Struct({
   generation: PositiveInt,
   status: Schema.Literals(["running", "waiting_input", "completed", "failed"]),
   summary: TrimmedNonEmptyString,
+  doneMeans: Schema.optionalKey(
+    ChannelTaskDoneMeans.annotate({
+      description:
+        "On the first running report from a GOAT Bot session, a one-sentence completion criterion for the work it is starting.",
+    }),
+  ),
   milestone: Schema.optional(Schema.Boolean),
   question: Schema.optional(TrimmedNonEmptyString),
   /** Only on a completed report; see ChannelSkillProposal. */
@@ -442,6 +454,7 @@ export const ChannelTaskView = Schema.Struct({
   pinnedAt: Schema.NullOr(IsoDateTime),
   doneAt: Schema.NullOr(IsoDateTime),
   readThrough: Schema.NullOr(IsoDateTime),
+  snoozedUntil: Schema.optionalKey(IsoDateTime),
 });
 export type ChannelTaskView = typeof ChannelTaskView.Type;
 
@@ -452,6 +465,14 @@ export const ChannelUpdateTaskViewInput = Schema.Struct({
   readThrough: Schema.optional(IsoDateTime),
 });
 export type ChannelUpdateTaskViewInput = typeof ChannelUpdateTaskViewInput.Type;
+
+export const ChannelUnsnoozeBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, botId: BotId });
+export type ChannelUnsnoozeBotTaskInput = typeof ChannelUnsnoozeBotTaskInput.Type;
+export const ChannelSnoozeBotTaskInput = Schema.Struct({
+  ...ChannelUnsnoozeBotTaskInput.fields,
+  until: IsoDateTime,
+});
+export type ChannelSnoozeBotTaskInput = typeof ChannelSnoozeBotTaskInput.Type;
 
 /** Shipped clients reject a longer list, so listing more needs a new key. */
 export const CHANNEL_BOT_ROW_PULL_REQUESTS = 5;
@@ -478,6 +499,7 @@ export const BotThreadRow = Schema.Union([
     kind: Schema.Literal("task"),
     task: Schema.Struct({
       taskId: ChannelTaskId,
+      doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
       title: TrimmedNonEmptyString,
       status: ChannelTaskStatus,
       updatedAt: IsoDateTime,
@@ -528,6 +550,7 @@ export type BotRemoteWork = typeof BotRemoteWork.Type;
 export const BotTaskSummary = Schema.Struct({
   taskId: ChannelTaskId,
   title: TrimmedNonEmptyString,
+  doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   titleTruncated: Schema.optionalKey(Schema.Boolean),
   status: ChannelTaskStatus,
   updatedAt: IsoDateTime,
@@ -555,6 +578,38 @@ export const BotCodingRow = Schema.Struct({
   lastActivityAt: IsoDateTime,
   workKind: Schema.optional(GoatBotWorkKind),
 });
+export const CHANNEL_BOT_TASK_ACTIVITY_LIMIT = 50;
+const activityFields = {
+  id: TrimmedNonEmptyString,
+  actor: Schema.Literals(["bot", "person", "goat"]),
+  at: IsoDateTime,
+};
+const workerFields = { environmentId: EnvironmentId, threadId: ThreadId };
+const questionFields = { requestId: TrimmedNonEmptyString };
+const activityEntry = <const Type extends string, Fields extends Schema.Struct.Fields>(
+  type: Type,
+  fields: Fields,
+) => Schema.Struct({ type: Schema.Literal(type), ...activityFields, ...fields });
+
+export const ChannelBotTaskActivityEntry = Schema.Union([
+  activityEntry("created", {}),
+  activityEntry("status", { status: ChannelTaskStatus }),
+  activityEntry("worker_started", workerFields),
+  activityEntry("worker_finished", workerFields),
+  activityEntry("pr_linked", { repo: TrimmedNonEmptyString, number: PositiveInt }),
+  activityEntry("asked", questionFields),
+  activityEntry("answered", questionFields),
+  activityEntry("snoozed", { until: IsoDateTime }),
+  activityEntry("unsnoozed", {}),
+]);
+export type ChannelBotTaskActivityEntry = typeof ChannelBotTaskActivityEntry.Type;
+export const ChannelBotTaskActivity = Schema.Struct({
+  entries: Schema.Array(ChannelBotTaskActivityEntry).check(
+    Schema.isMaxLength(CHANNEL_BOT_TASK_ACTIVITY_LIMIT),
+  ),
+  incompleteBefore: Schema.optionalKey(IsoDateTime),
+});
+
 export const BotWorkResult = Schema.Struct({
   task: Schema.Union([
     Schema.Struct({ state: Schema.Literal("known"), row: BotTaskRow }),
@@ -566,6 +621,7 @@ export const BotWorkResult = Schema.Struct({
   ]),
   codingRows: Schema.Array(BotCodingRow),
   remoteWork: Schema.Array(BotRemoteWork),
+  activity: Schema.optionalKey(ChannelBotTaskActivity),
   launchesTruncated: Schema.Boolean,
   partial: Schema.Boolean,
 });
@@ -619,6 +675,8 @@ export const ChannelListBotThreadsInput = Schema.Struct({
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
+  snoozed: Schema.optionalKey(Schema.Array(BotTaskRow).check(Schema.isMaxLength(50))),
+  nextSnoozeExpiry: Schema.optionalKey(IsoDateTime),
   /** History pages carry 0: the bot's count belongs to the current list. */
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
@@ -782,6 +840,8 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   readBotArtifact: "channel.readBotArtifact",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
+  snoozeBotTask: "channel.bot_task_snooze",
+  unsnoozeBotTask: "channel.bot_task_unsnooze",
   retryTask: "channel.retryTask",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
