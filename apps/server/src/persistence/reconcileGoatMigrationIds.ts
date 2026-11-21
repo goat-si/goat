@@ -511,14 +511,28 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   const history = yield* readHistory;
   if (history === undefined) return [];
   const normalized = normalizeBotAttentionPreview(entries, history);
-  // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
+  const plan = plannedGoatLedger(entries, normalized.history);
+  if (plan instanceof Migrator.MigrationError) return yield* plan;
   if (normalized.previewId !== undefined) {
+    const moved = plan?.moved ?? normalized.history;
+    const final = [
+      ...moved,
+      ...displacedUpstreamMigrations(entries, moved).map(([id, name]) => ({
+        migration_id: id,
+        name,
+      })),
+    ];
+    const skipped = skippedV2Migrations(
+      entries,
+      final,
+      Math.max(0, ...final.map((row) => row.migration_id)),
+    );
+    if (skipped !== undefined) return yield* skipped;
+    // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
     yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${normalized.previewId}
       AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
   }
-  const plan = plannedGoatLedger(entries, normalized.history);
   if (plan === undefined) return [];
-  if (plan instanceof Migrator.MigrationError) return yield* plan;
   const { moved, goatRows, insertions } = plan;
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {
