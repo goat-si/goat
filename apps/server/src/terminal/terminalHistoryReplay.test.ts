@@ -203,3 +203,11 @@ it("ends a swallowed DCS at a C1 code point whose surrogate pair is split across
   expect(history.visible).toBe("before\u001b@\ufffdafter\n");
   expect(history.pending).toBe("");
 });
+
+it("removes terminated OSC palette queries while retaining setters and interrupted queries", () => {
+  const input =
+    "\u001b]4;1;red;2;?\u0007\u001b]0;t\u001b]\n4;1;?;;2;?;3\u0018\u001b]4;3;?\u001b]0;x\u0007";
+  expect(sanitizeTerminalHistoryChunk("", input).visibleText).toBe(
+    "\u001b]4;1;red;2;?\u0007\u001b]0;t\u001b\\\u001b]4;3;?\u001b]0;x\u0007",
+  );
+});
