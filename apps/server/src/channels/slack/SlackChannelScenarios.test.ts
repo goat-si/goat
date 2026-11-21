@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   BotId,
   type ChannelReceptionInput,
+  ProviderTurnId,
   ProviderDriverKind,
   type RuntimeMode,
 } from "@goat/contracts";
@@ -11,12 +12,15 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as EffectWorker from "../../orchestration-v2/EffectWorker.ts";
+import * as EventSink from "../../orchestration-v2/EventSink.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import { nextTurnSelectionHarness } from "../../orchestration-v2/testkit/SteeringHarness.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelBotThreads from "../ChannelBotThreads.ts";
@@ -69,6 +73,7 @@ const connect = (
   options: {
     readonly botBindings?: ReadonlyArray<{ readonly channelId: string; readonly botId: BotId }>;
     readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
+    readonly owner?: typeof owner;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -97,12 +102,12 @@ const emit = (sdk: FakeSlackSdk, event: Record<string, unknown>, eventId: string
   return Effect.promise(() => envelope.acked).pipe(Effect.as(envelope));
 };
 
-const linkAlice = (sdk: FakeSlackSdk) =>
+const linkAlice = (sdk: FakeSlackSdk, linkOwner = owner) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const { code } = yield* identities.createLink(
       { connectionId, runtimeModeCeiling: "auto-accept-edits" },
-      owner,
+      linkOwner,
     );
     yield* emit(sdk, directMessage({ text: `link ${code}` }), "EvLinkAlice01");
   });
@@ -259,6 +264,52 @@ describe("Slack runtime on the channel core", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("pins the longest matching name and consumes its complete prefix", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createBot("Ops");
+      const east = yield* createBot("Ops: East");
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const routed = yield* receive(
+        sdk,
+        channelMention({ text: "<@U0BOT> oPS: eAST: Check the build" }),
+        "EvLongestName",
+      );
+      assert.strictEqual(routed?.botId, east.botId);
+      assert.strictEqual(routed?.message.text, "Check the build");
+      const followup = yield* receive(
+        sdk,
+        channelMention({
+          text: "<@U0BOT> Check the logs",
+          ts: "1760000000.000101",
+          thread_ts: ROOT_TS,
+        }),
+        "EvLongestNameFollowup",
+      );
+      assert.strictEqual(followup?.botId, east.botId);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("routes Link Scout by name after linking Alice with a real code", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const scout = yield* createBot("Link Scout");
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const routed = yield* receive(
+        sdk,
+        directMessage({ text: "Link Scout: Check the build" }),
+        "EvNamedLinkScout",
+      );
+      assert.strictEqual(routed?.botId, scout.botId);
+      assert.strictEqual(routed?.message.text, "Check the build");
+      assert.strictEqual(routed?.snapshot.state, "accepted");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("privately refuses an unmatched Do prefix", () => {
     const { sdk, layer } = slackScenario();
     return Effect.gen(function* () {
@@ -343,6 +394,127 @@ describe("Slack runtime on the channel core", () => {
           assert.notInclude(text, files.notes);
         }).pipe(Effect.provide(layer));
       }),
+  );
+
+  it.effect("refuses a queued Slack turn when its sender loses the memory grant", () =>
+    Effect.gen(function* () {
+      const provider = yield* nextTurnSelectionHarness("slack-queued-notes");
+      const { sdk, layer } = slackScenario({
+        botWorkspace: true,
+        realWorkerLaunch: true,
+        workerAdapter: provider.adapter,
+        botWorkspaceRoot: provider.cwd,
+        settingsLayer: ServerSettings.layerTest({
+          goatBotModelSelection: modelSelection,
+          providerInstances: {
+            [modelSelection.instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              config: {},
+              enabled: true,
+            },
+          },
+        }).pipe(Layer.orDie),
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(
+          files.notes,
+          "- 2026-02-01: The deploy phrase is cobalt. (asked in x)\n",
+        );
+        const memoryOwner = { ...owner, grantedScopes: [...owner.grantedScopes, "memory:read"] };
+        yield* connect(sdk, { owner: memoryOwner });
+        yield* linkAlice(sdk, memoryOwner);
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        yield* receive(
+          sdk,
+          channelMention({ text: "<@U0BOT> Check the deployment" }),
+          "EvBusySession",
+        );
+        yield* worker.drain();
+        const [first] = provider.started;
+        assert(first !== undefined);
+        assert.include(first.message.text, "cobalt");
+        yield* TestClock.adjust("55 seconds");
+        yield* (yield* ChannelRuntime.ChannelRuntime).expireOverdue;
+        const request = yield* receive(
+          sdk,
+          channelMention({
+            text: "<@U0BOT> Check the deploy phrase",
+            ts: "1760000000.000101",
+            thread_ts: ROOT_TS,
+          }),
+          "EvQueuedNotes",
+        );
+        const task = (yield* tasks).tasks.find(
+          (task) => task.originInputId === request?.snapshot.inputId,
+        );
+        assert(task?.worker?.runId !== undefined);
+        const { threadId, runId } = task.worker;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual(
+          (yield* ledger.latestTaskBrief(task.taskId))?.context.notesPath,
+          files.notes,
+        );
+        const queued = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs.find(
+          (run) => run.id === runId,
+        );
+        assert.strictEqual(queued?.status, "queued");
+        assert.lengthOf(provider.started, 1);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:operate"]'
+          WHERE connection_id = ${connectionId} AND external_actor_id = 'U0ALICE'`;
+        const afterSequence = yield* eventSink.latestSequence({ threadId });
+        yield* Queue.offer(provider.events, {
+          type: "turn.terminal",
+          driver: ProviderDriverKind.make("codex"),
+          providerThreadId: first.providerThread.id,
+          providerTurnId: ProviderTurnId.make(`provider-turn:${first.attemptId}`),
+          runOrdinal: first.runOrdinal,
+          status: "interrupted",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* eventSink.stream({ threadId, afterSequence, eventType: "run.updated" }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event.type === "run.updated" &&
+              event.payload.id === runId &&
+              event.payload.status === "starting",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        yield* worker.drain();
+        assert.lengthOf(provider.started, 1);
+        const stopped = yield* orchestrator.getThreadRecords(threadId, ["runs", "turnItems"], {
+          turnItemRunIds: [runId],
+        });
+        assert.strictEqual(stopped.runs.find((run) => run.id === runId)?.status, "failed");
+        assert.isTrue(
+          stopped.turnItems.some(
+            (item) => item.type === "error" && item.failure.code === "permission_changed",
+          ),
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "failed");
+        const failures = yield* sql<{ readonly reason: string }>`
+          SELECT json_extract(event_json, '$.payload.reason') AS reason FROM channel_task_events
+          WHERE task_id = ${task.taskId} AND type = 'task.failed'
+        `;
+        assert.deepStrictEqual(
+          failures.map(({ reason }) => reason),
+          ["permission_changed"],
+        );
+      }).pipe(Effect.provide(layer));
+    }),
   );
 
   it.effect("omits the notes file from the local worker brief without memory access", () => {
