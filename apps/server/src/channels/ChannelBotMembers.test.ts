@@ -270,6 +270,24 @@ describe("two bots", () => {
     },
   );
 
+  it.effect("refuses creating or renaming a bot to an active name regardless of case", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createMember("scout", { name: "Scout" });
+      assert.strictEqual(
+        yield* refusal(createMember("duplicate", { name: "sCoUt" })),
+        "invalid_input",
+      );
+      const builder = yield* createMember("builder", { name: "Builder" });
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      assert.strictEqual(
+        yield* refusal(members.update({ botId: builder.botId, name: "SCOUT" }, owner)),
+        "invalid_input",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("a new member greets the person first in its own chat, once", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
