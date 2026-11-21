@@ -340,12 +340,17 @@ function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | 
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {
-  if (root) await act(async () => root?.unmount());
-  root = undefined;
-  container.remove();
+  try {
+    if (root) await act(async () => root?.unmount());
+  } finally {
+    root = undefined;
+    container.remove();
+    vi.unstubAllGlobals();
+  }
 });
 
 function reset() {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.connected = true;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
