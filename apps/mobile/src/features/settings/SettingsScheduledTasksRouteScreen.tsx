@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
+import { AuthOrchestrationOperateScope, ScheduledTaskNotificationPolicy } from "@goat/contracts";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
 import { ScheduledTaskContextSections } from "./ScheduledTaskContextSections";
 import { ScheduledTaskNotificationPolicySection } from "./ScheduledTaskNotificationPolicySection";
@@ -7,7 +7,6 @@ import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-tas
 import { scheduledMemoryAccess } from "./scheduledTaskPresentation";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { readEnvironmentScope } from "../../state/session";
 import type {
   EnvironmentId,
@@ -754,6 +753,7 @@ function TaskForm({
                   display={Platform.OS === "ios" ? "spinner" : "default"}
                   onDismiss={() => setTimePickerOpen(false)}
                   onValueChange={(_, selected) => {
+                    if (Platform.OS === "android") setTimePickerOpen(false);
                     const timeOfDay = `${String(selected.getHours()).padStart(2, "0")}:${String(selected.getMinutes()).padStart(2, "0")}`;
                     setDraft({ ...draft, schedule: { ...draft.schedule, timeOfDay } });
                   }}
