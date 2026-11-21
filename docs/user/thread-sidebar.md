@@ -13,6 +13,8 @@ Its workspace starts from the project's configured default, which falls back to
 **Local**. Starting a new thread also resets an empty draft's workspace selection.
 A draft with text or attachments stays saved with its selection. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
+While the sidebar is filtered to one project, the sidebar's **New thread** button
+starts the thread in that project instead of asking which project to use.
 
 On mobile, when you pick a project that is on more than one machine, the thread
 starts on a connected one if any is connected. **Settings → Thread behavior → Use last

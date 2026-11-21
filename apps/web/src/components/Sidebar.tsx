@@ -1,3 +1,4 @@
+import { createSidebarNewThreadHandler } from "./sidebar/scopedNewThread";
 import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
@@ -111,7 +112,6 @@ import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -2724,22 +2724,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
 
-  // Shift+click keeps the current-project action.
-  const handleNewThreadClick = (event?: ReactMouseEvent) => {
-    if (isMobile) setOpenMobile(false);
-    if (event?.shiftKey) {
-      void startNewThreadFromContext({
-        activeDraftThread: newThreadContext.activeDraftThread,
-        activeThread: newThreadContext.activeThread ?? undefined,
-        defaultProjectRef: newThreadContext.defaultProjectRef,
-        handleNewThread,
-      }).then((started) => {
-        if (!started) openCommandPalette({ open: "new-thread-in" });
-      });
-      return;
-    }
-    void startChatNew();
-  };
+  const handleNewThreadClick = createSidebarNewThreadHandler({
+    context: newThreadContext,
+    groups: scopedProjectGroups,
+    isMobile,
+    closeMobile: () => setOpenMobile(false),
+    startChatNew,
+  });
 
   // The button mirrors chat.new; chat.newLocal keeps the contextual action.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
