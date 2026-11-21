@@ -55,6 +55,7 @@ export type HomeHistory = {
   readonly loadMore: () => void;
 };
 
+const NO_SNOOZED: ReadonlyArray<TaskRow> = [];
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
 const NO_CHIPS: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = new Map();
 
@@ -74,7 +75,7 @@ export function GoatBotHomeWork({
   environmentId,
   botName,
   rows,
-  snoozed,
+  snoozed = NO_SNOOZED,
   supportsSnooze = false,
   remoteWork = NO_REMOTE,
   chips = NO_CHIPS,
@@ -137,15 +138,9 @@ export function GoatBotHomeWork({
   );
   const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
-  const snoozedRows = snoozed ?? [];
-  const work = botHomeWork(
-    withoutSnoozedBotTasks(rows, snoozedRows),
-    [],
-    environmentId,
-    remoteWork,
-    chips,
-  );
   const [showSnoozed, setShowSnoozed] = useState(false);
+  const recentRows = withoutSnoozedBotTasks(rows, snoozed);
+  const work = botHomeWork(recentRows, [], environmentId, remoteWork, chips);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
@@ -244,7 +239,7 @@ export function GoatBotHomeWork({
           <GoatBotCardSkeleton rows={3} />
         </>
       )}
-      {loaded && !failed && empty && snoozedRows.length === 0 && (
+      {loaded && !failed && empty && snoozed.length === 0 && (
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
           <p className="text-muted-foreground">
@@ -257,7 +252,7 @@ export function GoatBotHomeWork({
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {snoozedRows.length > 0 && (
+      {snoozed.length > 0 && (
         <>
           <GoatBotShowMoreRow
             expanded={showSnoozed}
@@ -265,7 +260,7 @@ export function GoatBotHomeWork({
             onToggle={() => setShowSnoozed((value) => !value)}
           />
           {showSnoozed &&
-            snoozedRows.map((snoozed) =>
+            snoozed.map((snoozed) =>
               row(
                 { row: snoozed, threads: [], subagents: [], remote: [], truncated: false },
                 "snoozed",
