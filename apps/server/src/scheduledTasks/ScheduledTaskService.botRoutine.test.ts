@@ -9,8 +9,7 @@ import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { migrationEntries, runMigrations } from "../persistence/Migrations.ts";
-import { skippedV2Migrations } from "../persistence/reconcileGoatMigrationIds.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
@@ -21,6 +20,7 @@ import {
   webhookTaskInput,
   withWebhookService,
 } from "./ScheduledRunFixture.testkit.ts";
+import { checkRollbackPredecessor } from "./rollbackPredecessorMigrations.testkit.ts";
 
 const botThread = "goat-bot-thread";
 const owner = { principalId: "person", grantedScopes: ["orchestration:read" as const] };
@@ -842,18 +842,7 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
-        const checkOldBuild = (through: 176 | 177) =>
-          Effect.gen(function* () {
-            const history = yield* sql<{
-              migration_id: number;
-              name: string;
-            }>`SELECT migration_id, name FROM effect_sql_migrations`;
-            return skippedV2Migrations(
-              migrationEntries.filter(([id]) => id <= through),
-              history,
-              Math.max(...history.map((row) => row.migration_id)),
-            );
-          });
+        const checkOldBuild = (through: 176 | 177) => checkRollbackPredecessor(sql, through);
         assert.isUndefined(yield* checkOldBuild(176));
         assert.isUndefined(yield* checkOldBuild(177));
         yield* registerBot(sql);
@@ -902,36 +891,34 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
   ),
 );
 
-it.effect("a second rollback to #3797 refuses work-trigger state written during the first", () =>
-  withWebhookService(({ sql }) =>
-    Effect.gen(function* () {
-      const oldManifest = migrationEntries.filter(([id]) => id <= 177);
-      const checkOldBuild = Effect.gen(function* () {
-        const history = yield* sql<{
-          readonly migration_id: number;
-          readonly name: string;
-        }>`SELECT migration_id, name FROM effect_sql_migrations`;
-        return skippedV2Migrations(
-          oldManifest,
-          history,
-          Math.max(...history.map((row) => row.migration_id)),
-        );
-      });
-      assert.isUndefined(yield* checkOldBuild);
-      // The older writer fences a work routine on write. Its input can outlive deletion of the routine.
-      yield* sql`UPDATE effect_sql_migrations SET name = 'ChannelLedgerRequiresWorkTriggerAuthority'
+it.effect(
+  "both predecessors refuse a second rollback after the older writer adds work triggers",
+  () =>
+    withWebhookService(({ sql }) =>
+      Effect.gen(function* () {
+        assert.isUndefined(yield* checkRollbackPredecessor(sql, 176));
+        assert.isUndefined(yield* checkRollbackPredecessor(sql, 177));
+        // The older writer fences a work routine on write. Its input can outlive deletion of the routine.
+        yield* sql`UPDATE effect_sql_migrations SET name = 'ChannelLedgerRequiresWorkTriggerAuthority'
         WHERE name = 'ChannelLedger'`;
-      yield* sql`INSERT INTO scheduled_task_channel_inputs
+        yield* sql`INSERT INTO scheduled_task_channel_inputs
         (firing_id, task_id, input_id, payload_json, state, created_at)
         VALUES ('rollback-firing', 'rollback-routine', 'rollback-input',
           '{"routineMode":"work"}', 'settled', '2026-11-21T00:00:00Z')`;
-      const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
-      assert.isEmpty(yield* migrate);
-      assert.include(
-        (yield* checkOldBuild)?.message ?? "",
-        "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
-      );
-      assert.isEmpty(yield* migrate);
-    }),
-  ),
+        assert.include(
+          (yield* checkRollbackPredecessor(sql, 176))?.message ?? "",
+          "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkTriggerAuthority)",
+        );
+        assert.isUndefined(yield* checkRollbackPredecessor(sql, 177));
+        const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        assert.isEmpty(yield* migrate);
+        for (const through of [176, 177] as const) {
+          assert.include(
+            (yield* checkRollbackPredecessor(sql, through))?.message ?? "",
+            "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
+          );
+        }
+        assert.isEmpty(yield* migrate);
+      }),
+    ),
 );
