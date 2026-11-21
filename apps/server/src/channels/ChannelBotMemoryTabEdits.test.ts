@@ -113,6 +113,7 @@ describe("Memory tab requests to change or forget a note", () => {
       yield* writeNotes(original);
       yield* send(goatBotForgetNoteMessage(fridays, "private"), "main-private-forget");
       assert.strictEqual(yield* readNotes, original);
+      assert.include(yield* replies, "This bot has no private notes.");
       assert.isEmpty(asked);
     }).pipe(Effect.provide(layer));
   });

@@ -638,6 +638,15 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         if (option === undefined) return;
 
         yield* ask(scout.sessionThreadId, option, "confirm-note");
+        const legacyEdit = yield* ask(
+          scout.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote),
+          "legacy-unscoped-edit",
+        );
+        assert.include(
+          (yield* ledger.getInput(legacyEdit.inputId))?.decision?.replyText ?? "",
+          "Choose This bot or All bots",
+        );
         yield* ask(scout.sessionThreadId, "scout authorized", "ask-scout");
         yield* ask(review.sessionThreadId, "review authorized", "ask-review");
         yield* ask(botThreadId, "main authorized", "ask-main");

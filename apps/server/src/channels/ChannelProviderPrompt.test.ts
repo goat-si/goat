@@ -1,4 +1,4 @@
-import { EventId } from "@goat/contracts";
+import { BotId, EventId, type RunId, type ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
@@ -25,12 +25,14 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { ask, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
   environmentId,
   makeHarness,
   memoryRpcContext,
+  owner,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
@@ -48,6 +50,31 @@ const layerMcpRead = layerOrchestratorService.pipe(
     ),
   ),
 );
+
+const finishRecordedRun = Effect.fn("channelTest.finishRecordedRun")(function* (
+  threadId: ThreadId,
+  runId: RunId,
+) {
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const active = (yield* threads.getThreadRecords(threadId, ["runs"])).runs.find(
+    (run) => run.id === runId,
+  );
+  if (active?.status !== "running") return yield* Effect.die("The provider run was not active");
+  const now = yield* DateTime.now;
+  yield* (yield* EventSink.EventSinkV2).write({
+    events: [
+      {
+        id: EventId.make("event:previous-turn-settled:" + runId),
+        type: "run.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        providerInstanceId: active.providerInstanceId,
+        payload: { ...active, status: "completed", completedAt: now },
+      },
+    ],
+  });
+});
 
 describe("GOAT Bot thread transcripts", () => {
   it.effect.each(["worker", "session"] as const)(
@@ -169,24 +196,7 @@ describe("GOAT Bot thread transcripts", () => {
         assert.strictEqual((yield* readRun)?.status, "queued");
         yield* sessions.revoke(queuedSender.sessionId);
 
-        const active = (yield* threads.getThreadRecords(threadId, ["runs"])).runs.find(
-          (run) => run.id === firstRun,
-        );
-        if (active?.status !== "running") return yield* Effect.die("The first run was not active");
-        const now = yield* DateTime.now;
-        yield* (yield* EventSink.EventSinkV2).write({
-          events: [
-            {
-              id: EventId.make("event:previous-turn-settled"),
-              type: "run.updated",
-              threadId,
-              runId: active.id,
-              occurredAt: now,
-              providerInstanceId: active.providerInstanceId,
-              payload: { ...active, status: "completed", completedAt: now },
-            },
-          ],
-        });
+        yield* finishRecordedRun(threadId, firstRun);
         yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
         assert.strictEqual((yield* readRun)?.status, "starting");
         yield* starts.start({ threadId, runId: queued });
@@ -199,6 +209,47 @@ describe("GOAT Bot thread transcripts", () => {
           ),
         ),
       );
+    }),
+  );
+  it.effect("rotates real warm runs after saving and clearing bot instructions", () =>
+    Effect.gen(function* () {
+      const provider = yield* nextTurnSelectionHarness("channel-instructions-rotation");
+      const harness = sessionHarness({
+        realWorkerLaunch: true,
+        botWorkspaceRoot: provider.cwd,
+        workerAdapter: provider.adapter,
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+        const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+        const update = (instructions: string) =>
+          profiles.update({ botId: BotId.make("main"), instructions }, owner);
+        const run = Effect.fn("channelTest.runInstructions")(function* (sequence: number) {
+          const task = yield* ask("look: check release " + sequence, "instructions-" + sequence);
+          const threadId = task.worker?.threadId;
+          const runId = task.worker?.runId;
+          if (threadId === undefined || runId === undefined)
+            return yield* Effect.die("The warm session did not start");
+          yield* starts.start({ threadId, runId });
+          const input = provider.started.find((turn) => turn.runId === runId)?.message.text;
+          if (input === undefined)
+            return yield* Effect.die("The provider did not receive the turn");
+          yield* finishRecordedRun(threadId, runId);
+          return { threadId, input };
+        });
+
+        const first = yield* run(1);
+        const instruction = "Check the release checklist before reporting.";
+        yield* update(instruction);
+        const edited = yield* run(2);
+        assert.notStrictEqual(edited.threadId, first.threadId);
+        assert.include(edited.input, instruction);
+        yield* update("");
+        const cleared = yield* run(3);
+        assert.notStrictEqual(cleared.threadId, edited.threadId);
+        assert.notInclude(cleared.input, instruction);
+      }).pipe(Effect.provide(harness.layer));
     }),
   );
 });

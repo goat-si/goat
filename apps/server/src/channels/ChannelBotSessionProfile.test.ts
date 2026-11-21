@@ -118,36 +118,6 @@ describe("GOAT Bot sessions and the bot's profile", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("saving and clearing instructions each rotate the warm session", () => {
-    const harness = sessionHarness();
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const initial = yield* ask("look: check build one", "instructions-before");
-      const first = initial.worker?.threadId;
-      if (first === undefined) return yield* Effect.die("The initial session did not start");
-      harness.world.setStatus(first, 1, "completed", "Done.");
-      yield* settle;
-
-      const instruction = "Read the release checklist before reporting.";
-      yield* rename({ instructions: instruction });
-      const saved = yield* ask("look: check build two", "instructions-saved");
-      const second = saved.worker?.threadId;
-      if (second === undefined) return yield* Effect.die("The edited session did not start");
-      assert.notStrictEqual(second, first);
-      assert.strictEqual(yield* sessionState(first), "retired");
-      assert.include(yield* launchedText(harness, 1), instruction);
-      harness.world.setStatus(second, 1, "completed", "Done.");
-      yield* settle;
-
-      yield* rename({ instructions: "" });
-      const cleared = yield* ask("look: check build three", "instructions-cleared");
-      assert.isDefined(cleared.worker);
-      assert.notStrictEqual(cleared.worker?.threadId, second);
-      assert.strictEqual(yield* sessionState(second), "retired");
-      assert.notInclude(yield* launchedText(harness, 2), instruction);
-    }).pipe(Effect.provide(harness.layer));
-  });
-
   it.effect("waits for a busy session before a rename replaces it, leaving its work alone", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
