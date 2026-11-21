@@ -54,6 +54,7 @@ import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import { makeRemoteBotBrief } from "./channelRemoteWorkerBrief.ts";
+import { remoteWorkerLaunchPrompt } from "./channelWorkerBrief.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import {
   answerForwardIdsFor,
@@ -1669,7 +1670,7 @@ const make = Effect.gen(function* () {
                     }
                   : { type: "cwd" },
             title: task.title,
-            message: frozen.brief.deliveredText,
+            ...remoteWorkerLaunchPrompt(task, frozen.brief.deliveredText),
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.

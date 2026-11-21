@@ -64,7 +64,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
-import { readChannelProviderBrief } from "../channels/channelProviderBrief.ts";
+import {
+  appendRemoteWorkerNotes,
+  readChannelProviderBrief,
+} from "../channels/channelProviderBrief.ts";
 import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
@@ -752,6 +755,10 @@ export const layer: Layer.Layer<
             globalSkillsDir,
             project: Effect.succeed(projection.thread.projectId),
           });
+      const providerText =
+        observeOnly || nativeResume
+          ? userText
+          : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
       const goalDriver = hasNativeGoals(session);
       const goalCommand = goalDriver && parseGoalCommand(turnMessage) !== null;
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
@@ -1437,7 +1444,7 @@ export const layer: Layer.Layer<
         loadUnsettledWork: runControls.loadUnsettledWork,
         message: {
           messageId: message.id,
-          text: userText,
+          text: providerText,
           attachments: retryHandoff.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,

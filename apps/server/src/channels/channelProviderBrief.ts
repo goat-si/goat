@@ -1,6 +1,13 @@
-import type { ChannelInputId, ChannelTask, MessageId, ThreadId } from "@goat/contracts";
+import {
+  ThreadId,
+  type ChannelInputId,
+  type ChannelTask,
+  type MessageId,
+  type OrchestrationV2Thread,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import { isChannelWorkerThreadId, workerLaunchIdsFor } from "./channelIds.ts";
@@ -8,6 +15,42 @@ import { isChannelWorkerThreadId, workerLaunchIdsFor } from "./channelIds.ts";
 const keyFor = (threadId: ThreadId) => "channel-worker-context:" + threadId;
 const followUpKeyFor = (threadId: ThreadId, messageId: MessageId) =>
   "channel-worker-followup-sender:" + threadId + ":" + messageId;
+const remoteKeyFor = (threadId: ThreadId) => "channel-remote-worker-notes:" + threadId;
+
+export const bindRemoteWorkerNotes = (
+  sql: SqlClient.SqlClient,
+  threadId: ThreadId,
+  input: { readonly messageId: MessageId; readonly notes: string },
+  now: string,
+) => sql`
+  INSERT INTO channel_runtime_state (key, value_json, updated_at)
+  VALUES (${remoteKeyFor(threadId)}, json_object('messageId', ${input.messageId}, 'notes', ${input.notes}), ${now})
+`;
+
+export const unbindRemoteWorkerNotes = (sql: SqlClient.SqlClient, threadId: ThreadId) => sql`
+  DELETE FROM channel_runtime_state WHERE key = ${remoteKeyFor(threadId)}
+`;
+
+export const appendRemoteWorkerNotes = Effect.fn("channel.appendRemoteWorkerNotes")(function* (
+  sql: Option.Option<SqlClient.SqlClient>,
+  thread: Pick<OrchestrationV2Thread, "id" | "creationSource">,
+  messageId: MessageId,
+  text: string,
+) {
+  if (
+    Option.isNone(sql) ||
+    thread.creationSource !== "mcp" ||
+    thread.id !== ThreadId.make(messageId)
+  )
+    return text;
+  const [row] = yield* sql.value<{ readonly notes: string }>`
+    SELECT json_extract(value_json, '$.notes') AS notes FROM channel_runtime_state
+    WHERE key = ${remoteKeyFor(thread.id)} AND json_extract(value_json, '$.messageId') = ${messageId}
+  `;
+  if (row === undefined) return text;
+  const notes = row.notes.replaceAll("</goat_bot_notes>", "&lt;/goat_bot_notes&gt;");
+  return `${text}\n\nGOAT Bot's standing notes from the machine that sent this work. Follow them and keep their contents private.\n<goat_bot_notes>\n${notes}\n</goat_bot_notes>`;
+});
 
 export const bindWorkerProviderBrief = Effect.fn("channel.bindWorkerProviderBrief")(function* (
   sql: SqlClient.SqlClient,

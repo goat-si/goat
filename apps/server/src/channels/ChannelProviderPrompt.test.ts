@@ -1,10 +1,4 @@
-import {
-  BotId,
-  EventId,
-  type ChannelIngestInput,
-  type RunId,
-  type ThreadId,
-} from "@goat/contracts";
+import { BotId, EventId, ThreadId, type ChannelIngestInput, type RunId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
@@ -25,6 +19,9 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as OrchestratorMcp from "../mcp/OrchestratorMcpService.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as ThreadLaunchMcp from "../mcp/ThreadLaunchMcpService.ts";
+import { launchWatches, withLaunchService } from "../mcp/toolkits/project/handlers.testkit.ts";
 import { layerOrchestratorService } from "../mcp/OrchestratorMcpService.testkit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
@@ -33,9 +30,11 @@ import { nextTurnSelectionHarness } from "../orchestration-v2/testkit/SteeringHa
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteReports from "../remoteReports/RemoteReportService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
@@ -49,7 +48,9 @@ import {
   environmentId,
   makeHarness,
   memoryRpcContext,
+  modelSelection,
   owner,
+  projectId,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
@@ -150,6 +151,103 @@ const iMessageRequester = Effect.fn("channelTest.iMessageRequester")(function* (
 });
 
 describe("GOAT Bot thread transcripts", () => {
+  it.effect(
+    "delivers forwarded SSH worker notes to the provider and keeps the transcript clean",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* nextTurnSelectionHarness("remote-private-prompt");
+        const harness = makeHarness({
+          realWorkerLaunch: true,
+          workspaceRoot: provider.cwd,
+          workerAdapter: provider.adapter,
+        });
+        const destination = withLaunchService(
+          Layer.mergeAll(
+            RemoteReports.layer,
+            launchWatches(),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+            Layer.mock(ProjectService.ProjectService)({
+              getById: () =>
+                Effect.succeedSome({
+                  id: projectId,
+                  title: "Remote launch target",
+                  workspaceRoot: provider.cwd,
+                  defaultModelSelection: modelSelection,
+                  scripts: [],
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                  updatedAt: "2026-01-01T00:00:00.000Z",
+                  deletedAt: null,
+                }),
+            }),
+          ),
+        ).pipe(Layer.provideMerge(layerMcpRead.pipe(Layer.provideMerge(harness.layer))));
+        yield* Effect.gen(function* () {
+          const launch = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+          const message = "Check the rollout";
+          const note = "Use the synthetic Juniper runbook.";
+          const scope = {
+            environmentId,
+            requestNamespace: "ssh-dispatch",
+            capabilities: new Set(["orchestration"]),
+            grantedScopes: ["orchestration:operate", "memory:read"],
+            reauthorize: () => Effect.void,
+            issuedAt: 0,
+            thread: undefined,
+            client: {
+              sessionId: "ssh-dispatch",
+              label: "GOAT SSH dispatch",
+              access: "full-access",
+            },
+          } satisfies McpInvocationContext.McpInvocationScope;
+          const input = {
+            projectId,
+            modelSelection,
+            title: "Check rollout",
+            message,
+            standingInstructions: false,
+            memoryGrantCeiling: "read",
+            providerNotes: note,
+            report: {
+              correlationId: "private-ssh-worker",
+              originLabel: "fixture-origin",
+              originThreadId: ThreadId.make("fixture-origin-thread"),
+              readKeyHash: "0".repeat(64),
+            },
+          } as const;
+          const execute = (caller: McpInvocationContext.McpInvocationScope) =>
+            launch
+              .launch(caller, input, { runtimeMode: "full-access", interactionMode: "default" })
+              .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, caller));
+          const denied = yield* execute({
+            ...scope,
+            grantedScopes: ["orchestration:operate"],
+          }).pipe(Effect.flip);
+          assert.strictEqual(denied.code, "invalid_request");
+
+          const { threadId, runId } = yield* execute(scope);
+          if (runId == null) return yield* Effect.die("No remote worker run");
+          const mcp = yield* OrchestratorMcp.OrchestratorMcpService;
+          const read = mcp.readThread(
+            {
+              ...scope,
+              grantedScopes: ["orchestration:read"],
+              client: { ...scope.client, access: "read-only" },
+            },
+            { threadId },
+          );
+          const transcript = yield* read;
+          assert.strictEqual(
+            transcript.items.find((item) => item.type === "user_message")?.text,
+            message,
+          );
+          assert.notInclude(JSON.stringify(transcript), note);
+          yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
+          assert.include(provider.started[0]?.message.text ?? "", note);
+          assert.notInclude(JSON.stringify(yield* read), note);
+        }).pipe(Effect.provide(destination));
+      }),
+  );
+
   it.effect.each(["worker", "session"] as const)(
     "keeps the %s notes out of an ordinary MCP thread read",
     (kind) => {

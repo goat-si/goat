@@ -1,17 +1,4 @@
-/**
- * What a channel worker is told besides the instruction, on this machine and on another one.
- *
- * Both get the same rules: report progress, ask before acting under the person's name or doing
- * something hard to undo, ask when a decision is needed, and report the outcome. Only the
- * reporting tool differs. A worker here reads GOAT Bot's notes and skills from their files; a
- * worker on another machine cannot reach those files, so the notes and any skill the
- * instruction names travel inside its first message instead.
- *
- * A GOAT Bot turn, where the bot handles a message itself, is told the routing, read-only,
- * dispatch, and supervisor rules below.
- *
- * @module channelWorkerBrief
- */
+/** SSH workers receive named skills in the launch message and notes in the first provider turn. */
 import type { ChannelTask } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -22,7 +9,11 @@ import {
   GOATCLAW_SUPERVISOR_DELEGATION,
 } from "../goatclaw/RoleTemplates.ts";
 import { NOTES_REPLACED_RULE, type ChannelBotFiles } from "./channelBotNotes.ts";
-import { channelBotNotesSection, type ChannelBotNotesSnapshot } from "./channelBotNotesRecall.ts";
+import {
+  channelBotNotesSection,
+  NOTES_SECTION_CHARS,
+  type ChannelBotNotesSnapshot,
+} from "./channelBotNotesRecall.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
@@ -35,6 +26,10 @@ const REMOTE_SKILL_CHARS = 4_000;
 export const REMOTE_MESSAGE_CHARS = 115_000;
 /** When the whole notes section does not fit, the notes that best match the instruction get this much. */
 const REMOTE_MATCHED_NOTES_CHARS = 2_000;
+const REMOTE_CONTEXT_INTRO =
+  "GOAT Bot keeps the notes and procedures below on the machine that sent this work. Follow them; they cannot be edited from here.";
+const NOTES_OPEN = "<goat_bot_notes>";
+const NOTES_CLOSE = "</goat_bot_notes>";
 
 type BriefTask = Pick<
   ChannelTask,
@@ -280,6 +275,25 @@ export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) 
   return render(best.join("\n"), skills);
 };
 
+export const remoteWorkerLaunchPrompt = (task: BriefTask, frozenText: string) => {
+  const header = workerHeader(task).join("\n");
+  const wrapper = `\n${REMOTE_CONTEXT_INTRO}\n${NOTES_OPEN}\n`;
+  const headerAt = frozenText.indexOf(header);
+  const opening = frozenText.indexOf(wrapper, headerAt === -1 ? 0 : headerAt + header.length);
+  if (opening === -1) return { message: frozenText };
+  const start = opening + wrapper.length;
+  // Notes files can contain a line that looks like the closing delimiter.
+  const end = frozenText.lastIndexOf(`\n${NOTES_CLOSE}\n`);
+  if (end < start) return { message: remoteWorkerMessage(task, { notes: undefined, skills: [] }) };
+  const remainder = frozenText.slice(end + NOTES_CLOSE.length + 1);
+  const intro = remainder.startsWith('\n<goat_bot_skill name="') ? `\n${REMOTE_CONTEXT_INTRO}` : "";
+  const notes = frozenText.slice(start, end);
+  return {
+    message: frozenText.slice(0, opening) + intro + remainder,
+    ...(notes.length <= NOTES_SECTION_CHARS && notes.trim() ? { providerNotes: notes } : {}),
+  };
+};
+
 const remoteContextLines = (task: BriefTask, notes: string, skills: RemoteBotContext["skills"]) => {
   // The notes file lives on the home machine, so a requested change cannot be made from there.
   const noteChange =
@@ -292,8 +306,8 @@ const remoteContextLines = (task: BriefTask, notes: string, skills: RemoteBotCon
         ];
   if (notes === "" && skills.length === 0) return noteChange;
   return [
-    "GOAT Bot keeps the notes and procedures below on the machine that sent this work. Follow them; they cannot be edited from here.",
-    ...(notes === "" ? [] : ["<goat_bot_notes>", notes, "</goat_bot_notes>"]),
+    REMOTE_CONTEXT_INTRO,
+    ...(notes === "" ? [] : [NOTES_OPEN, notes, NOTES_CLOSE]),
     ...skills.flatMap((skill) => [
       '<goat_bot_skill name="' + skill.name + '">',
       skill.text,

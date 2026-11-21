@@ -98,7 +98,12 @@ it.effect(
       const properties = (launch?.inputSchema as { readonly properties?: object } | undefined)
         ?.properties;
       expect(Object.keys(properties ?? {})).toEqual(
-        expect.arrayContaining(["memoryGrantCeiling", "report", "standingInstructions"]),
+        expect.arrayContaining([
+          "memoryGrantCeiling",
+          "report",
+          "providerNotes",
+          "standingInstructions",
+        ]),
       );
       // A client that keeps the full listing still learns which listing agents get.
       expect((yield* http.listResultMeta("client"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe("core");
