@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vite-plus/test";
+import JSZip from "jszip";
 
-import { openNotebook, openRtf } from "./extendedDocumentPreview";
+import { openDocument, openNotebook, openRtf } from "./extendedDocumentPreview";
+
+it("renders built ODT indexes without their source templates", async () => {
+  const names = [
+    "table-of-content",
+    "illustration-index",
+    "table-index",
+    "object-index",
+    "user-index",
+    "alphabetical-index",
+    "bibliography",
+  ];
+  const indexes = names
+    .map(
+      (name) =>
+        `<text:${name}><text:${name}-source><text:index-title-template>Index</text:index-title-template><text:${name}-entry-template><text:index-entry-span>: </text:index-entry-span></text:${name}-entry-template></text:${name}-source><text:index-body><text:index-title><text:p>Index</text:p></text:index-title><text:p>Field notes: 1</text:p></text:index-body></text:${name}>`,
+    )
+    .join("");
+  const archive = new JSZip().file(
+    "content.xml",
+    `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text>${indexes}</office:text></office:body></office:document-content>`,
+  );
+  const result = await openDocument(archive, "odt");
+  if (result.type !== "document") throw new Error("Expected document");
+  expect(result.pages[0]?.html).toBe("<p>Index</p><p>Field notes: 1</p>".repeat(names.length));
+});
 
 it("removes terminal colors from saved notebook text outputs", () => {
   const bytes = new TextEncoder().encode(
