@@ -42,6 +42,9 @@ export function mobileBotTaskListItems(props: {
   /** Home is shown and the app active: rows' times follow the clock only then. */
   readonly ticking: boolean;
   readonly showAllFinished: boolean;
+  readonly snoozed?: ReadonlyArray<TaskRow>;
+  readonly showSnoozed?: boolean;
+  readonly onToggleSnoozed?: () => void;
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
   readonly onToggleExpanded: (id: ChannelTaskId) => void;
@@ -73,8 +76,12 @@ export function mobileBotTaskListItems(props: {
     (row): row is Extract<BotThreadRow, { kind: "coding" }> =>
       row.kind === "coding" && !listed.has(String(row.taskId)),
   );
-  const earlier = props.chatTasks.filter((card) => !listed.has(card.key));
-  if (listed.size + others.length + earlier.length === 0) {
+  const snoozed = props.snoozed ?? [];
+  const snoozedIds = new Set(snoozed.map((row) => String(row.task.taskId)));
+  const earlier = props.chatTasks.filter(
+    (card) => !listed.has(card.key) && !snoozedIds.has(card.key),
+  );
+  if (listed.size + others.length + earlier.length + snoozed.length === 0) {
     return props.failed
       ? []
       : [
@@ -187,6 +194,37 @@ export function mobileBotTaskListItems(props: {
         });
       if (props.expanded.has(row.task.taskId)) items.push(...props.details(row.task.taskId));
     }
+  }
+  if (snoozed.length > 0) {
+    items.push({
+      key: "tasks-snoozed",
+      render: () => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: props.showSnoozed }}
+          onPress={props.onToggleSnoozed}
+          className="min-h-[44px] justify-center"
+        >
+          <Text className="font-semibold text-foreground">Snoozed</Text>
+        </Pressable>
+      ),
+    });
+    if (props.showSnoozed)
+      for (const row of snoozed)
+        items.push({
+          key: JSON.stringify(["snoozed", row.task.taskId]),
+          render: () => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !openable }}
+              disabled={!openable}
+              onPress={() => props.onOpenTask(row.task.taskId, row.task.title)}
+              className="min-h-[44px] justify-center"
+            >
+              <Text className="text-foreground">{row.task.title}</Text>
+            </Pressable>
+          ),
+        });
   }
   items.push(...historyTail(props, props.work.finished.length));
   if (others.length > 0) items.push(label("section:other", "Other threads"));

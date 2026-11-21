@@ -8,6 +8,7 @@ type Props = Record<string, unknown> & { children?: ReactNode };
 const spoken = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
+  ScrollView: (props: Props) => <div>{props.children}</div>,
   View: (props: Props) => <div>{props.children}</div>,
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (
@@ -18,6 +19,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => <span>chat card</span> }));
 vi.mock("./MobileTaskRetry", () => ({ MobileTaskRetry: () => <button>Retry</button> }));
 vi.mock("./MobileBotRemoteWork", () => ({
@@ -67,6 +69,7 @@ async function render(
   enabled = true,
   card: unknown = null,
   chips: ReadonlyMap<string, unknown> = new Map(),
+  snooze?: Parameters<typeof MobileTaskHeader>[0]["screen"]["snooze"],
 ) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(container);
@@ -76,7 +79,7 @@ async function render(
         task={undefined}
         rows={[]}
         chips={chips as never}
-        screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
+        screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {}, snooze }}
         title="Old report"
         botName="GOAT Bot"
         environmentId={"env" as never}
@@ -323,4 +326,47 @@ it("an unavailable looked-up task names its coding threads the same way (#3307)"
     ["GOAT thread: Open work thread", "Open work thread"],
   ]);
   await act(async () => root.unmount());
+});
+
+it("shows the bot's criterion and activity, with snooze only on a server that supports it", async () => {
+  const task = {
+    ...knownTask,
+    row: {
+      ...knownTask.row,
+      task: { ...knownTask.row.task, doneMeans: "The release notes are reviewed." },
+    },
+  };
+  const lookup = {
+    state: "known",
+    task,
+    result: result(
+      { state: "known", row: task.row },
+      {
+        activity: {
+          entries: [
+            {
+              id: "linked:42",
+              type: "pr_linked",
+              actor: "goat",
+              at,
+              repo: "example/release",
+              number: 42,
+            },
+          ],
+        },
+      },
+    ),
+  } as const satisfies MobileTaskLookup;
+  const old = await render(lookup);
+  expect(button("Snooze")).toBeUndefined();
+  await act(async () => old.unmount());
+  const change = vi.fn(async () => {});
+  const current = await render(lookup, true, null, new Map(), { enabled: () => true, change });
+  expect(text()).toContain("The release notes are reviewed.");
+  await act(async () => button("Activity")?.click());
+  expect(text()).toContain("Pull request linked · example/release#42");
+  await act(async () => button("Snooze")?.click());
+  await act(async () => button("1 hour")?.click());
+  expect(change).toHaveBeenCalledWith(task.row.view, "hour");
+  await act(async () => current.unmount());
 });

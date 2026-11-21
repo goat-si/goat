@@ -1,0 +1,34 @@
+import type { BotThreadRow, SnoozePresetSetting } from "@goat/contracts";
+import { resolveSnoozePreset } from "../state/threadSettled.ts";
+
+const presets = {
+  hour: { kind: "after", minutes: 60 },
+  tomorrow: { kind: "at", day: "tomorrow", time: "09:00" },
+  week: { kind: "at", day: "monday", time: "09:00" },
+} as const satisfies Record<string, SnoozePresetSetting>;
+
+export const BOT_TASK_SNOOZE_CHOICES = [
+  { id: "hour", label: "1 hour" },
+  { id: "tomorrow", label: "Tomorrow" },
+  { id: "week", label: "Next week" },
+] as const;
+
+export function botTaskSnoozeUntil(choice: string, now: Date): string | undefined {
+  const preset = BOT_TASK_SNOOZE_CHOICES.find(({ id }) => id === choice);
+  return preset === undefined
+    ? undefined
+    : resolveSnoozePreset(presets[preset.id], now)?.snoozedUntil;
+}
+
+/** History can still hold a former current row after the server moves it to Snoozed. */
+export function withoutSnoozedBotTasks(
+  rows: ReadonlyArray<BotThreadRow>,
+  snoozed: ReadonlyArray<Extract<BotThreadRow, { kind: "task" }>>,
+) {
+  const snoozedIds = new Set(snoozed.map((row) => row.task.taskId));
+  return rows.filter(
+    (row) =>
+      !snoozedIds.has(row.kind === "task" ? row.task.taskId : row.taskId) &&
+      (row.kind !== "task" || row.view.snoozedUntil === undefined),
+  );
+}

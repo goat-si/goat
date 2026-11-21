@@ -83,6 +83,14 @@ opens it in full. A task's menu pins it, marks it done or marks it read.
 A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
 open its thread to see where it stands.
 
+Open the task in full to see **Done means**, the bot's completion criterion, and **Activity**.
+Activity lists the latest status changes, worker launches, linked PRs, and questions. Each worker
+opens in its own thread.
+
+Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
+**Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
+ends or the task changes status. Questions and approvals still appear in **Needs you**.
+
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
 the first five appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,

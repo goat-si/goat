@@ -16,7 +16,11 @@ import "~/index.css";
 
 const state = vi.hoisted(() => ({
   noRows: false,
+  doneMeans: undefined as string | undefined,
   lookupSupported: false,
+  supportsSnooze: false,
+  snooze: vi.fn(async () => ({ _tag: "Success" })),
+  unsnooze: vi.fn(async () => ({ _tag: "Success" })),
   lookup: vi.fn(),
   showMenu: vi.fn(),
   send: vi.fn(() => true),
@@ -74,13 +78,21 @@ vi.mock("~/localApi", async (original) => ({
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     getBotTask: { permissionAtom: () => null },
+    snoozeBotTask: { permissionAtom: () => null },
+    unsnoozeBotTask: { permissionAtom: () => null },
     updateTaskView: { permissionAtom: () => null },
     retryTask: { permissionAtom: () => null },
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
-    command === channelEnvironment.getBotTask ? state.lookup : state.update,
+    command === channelEnvironment.getBotTask
+      ? state.lookup
+      : command === channelEnvironment.snoozeBotTask
+        ? state.snooze
+        : command === channelEnvironment.unsnoozeBotTask
+          ? state.unsnooze
+          : state.update,
 }));
 vi.mock("~/state/entities", async (original) => ({
   ...(await original<typeof import("~/state/entities")>()),
@@ -155,6 +167,7 @@ vi.mock("./useBotRoster", () => ({
               task: {
                 taskId: "task-1",
                 title: bot === null ? "Review work" : "Find sources",
+                ...(state.doneMeans === undefined ? {} : { doneMeans: state.doneMeans }),
                 status: state.row.status,
                 updatedAt: "2026-11-04T10:00:00.000Z",
                 ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
@@ -166,6 +179,7 @@ vi.mock("./useBotRoster", () => ({
             }),
           ],
       remoteWork: [],
+      supportsSnooze: state.supportsSnooze,
       loaded: true,
       failed: false,
       chips: state.chips,
@@ -922,3 +936,36 @@ it.each([
     expect(state.send).not.toHaveBeenCalled();
   },
 );
+
+it("shows the bot's completion criterion below the task title", async () => {
+  state.doneMeans = "The release build passes and the documentation is published.";
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      state.doneMeans = undefined;
+    },
+  };
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Done means", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText(state.doneMeans)).toBeVisible();
+});
+
+it("offers hour snooze only when the task's server supports it", async () => {
+  state.supportsSnooze = false;
+  state.snooze.mockClear();
+  state.showMenu.mockResolvedValueOnce("hour");
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      state.supportsSnooze = false;
+    },
+  };
+  await using screen = await render(<Pane onClose={() => {}} />);
+  expect(screen.getByRole("button", { name: "Snooze" }).query()).toBeNull();
+  expect(state.snooze).not.toHaveBeenCalled();
+  state.supportsSnooze = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Snooze" }));
+  expect(state.snooze).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { taskId: "task-1", botId: "main", until: expect.any(String) },
+  });
+});

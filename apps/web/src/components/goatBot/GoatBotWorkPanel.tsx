@@ -219,7 +219,7 @@ export function GoatBotWorkPanel({
   const peeked =
     peek === null
       ? undefined
-      : rows.find(
+      : [...rows, ...(current.snoozed ?? [])].find(
           (row): row is Extract<BotThreadRow, { kind: "task" }> =>
             row.kind === "task" && row.task.taskId === peek.taskId,
         );
@@ -243,6 +243,7 @@ export function GoatBotWorkPanel({
         <GoatBotWorkPeek
           taskId={peek.taskId}
           title={peeked?.task.title ?? peek.title}
+          doneMeans={peeked?.task.doneMeans}
           statusLabel={
             peeked === undefined
               ? ""
@@ -355,6 +356,8 @@ export function GoatBotWorkPanel({
                 threadId={threadId}
                 botName={botName}
                 rows={rows}
+                snoozed={current.snoozed}
+                supportsSnooze={current.supportsSnooze}
                 remoteWork={remoteWork}
                 chips={current.chips}
                 loaded={loaded}
