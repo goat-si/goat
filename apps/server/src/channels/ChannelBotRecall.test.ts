@@ -1,3 +1,4 @@
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type AuthEnvironmentScope,
@@ -313,10 +314,10 @@ describe("GOAT Bot reads its memory and work before answering", () => {
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(
-        goatInput("remember deploys happen on Fridays", "m1"),
-        memoryRpcContext,
-      );
+      const message = goatInput("remember deploys happen on Fridays", "m1");
+      const request = yield* gateway.ingest(message, memoryRpcContext);
+      yield* runtime.drain;
+      yield* confirmSharedNote(request.inputId, message, memoryRpcContext);
       yield* runtime.drain;
       yield* gateway.ingest(goatInput("do: fix the build", "m2"), memoryRpcContext);
       yield* runtime.drain;
@@ -427,7 +428,10 @@ describe("GOAT Bot reads its memory and work before answering", () => {
         goatInput('the score dropped to 61% "lighthouse"\nsecond line', "c1"),
         memoryRpcContext,
       );
-      yield* gateway.ingest(goatInput("remember staging rotates monthly", "c2"), memoryRpcContext);
+      const message = goatInput("remember staging rotates monthly", "c2");
+      const request = yield* gateway.ingest(message, memoryRpcContext);
+      yield* runtime.drain;
+      yield* confirmSharedNote(request.inputId, message, memoryRpcContext);
       yield* runtime.drain;
       yield* gateway.ingest(goatInput("when did I mention that score?", "c3"), memoryRpcContext);
       yield* runtime.drain;
