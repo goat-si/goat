@@ -181,6 +181,42 @@ const exportRow = Effect.gen(function* () {
 });
 
 describe("channel task export enrichment", () => {
+  it.effect("keeps notes-bearing worker prompts out of MCP task export", () => {
+    const note = "Scout staging uses Juniper.";
+    const instruction = "Inspect the build.";
+    const row = {
+      ...base,
+      brief: {
+        version: 1,
+        generation: 1,
+        intent: instruction,
+        instruction,
+        deliveredText: instruction + "\n<goat_bot_notes>\n" + note + "\n</goat_bot_notes>",
+        scopeIn: null,
+        scopeOut: null,
+        criteria: null,
+        verification: null,
+        context: { notesPath: "/sandbox/scout/memory.md", notesRevision: "a".repeat(64) },
+        target: {
+          environmentId:
+            base.originAddress.kind === "goat" ? base.originAddress.environmentId : environmentId,
+          provider: modelSelection.instanceId,
+          model: modelSelection.model,
+        },
+        frozenAt: "2026-10-17T01:00:00.000Z",
+      },
+    };
+    const { layer } = fixture({ row });
+    return Effect.gen(function* () {
+      const service = yield* ChannelTaskExport.ChannelTaskExport;
+      const page = yield* service.exportTasks(range);
+      assert.notInclude(page.jsonl, note);
+      assert.notInclude(page.jsonl, "/sandbox/scout/memory.md");
+      assert.include(page.jsonl, instruction);
+      assert.include(page.jsonl, "a".repeat(64));
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "counts direct and relayed human answers, excludes agents, non-answers, late answers and channel forwarding",
     () => {
