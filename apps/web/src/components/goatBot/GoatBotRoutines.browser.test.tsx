@@ -365,7 +365,10 @@ async function readRun(name: string) {
 
 it("shows an unreadable history distinctly from an empty or legacy history", async () => {
   setup();
-  const unavailable = { ...routine("Unavailable", []), recentRunsIncomplete: true };
+  const unavailable: BotRoutineSource = {
+    ...routine("Unavailable", []),
+    recentRunsIncomplete: true,
+  };
   await using screen = await render(
     routines([unavailable, routine("Empty", []), routine("Legacy", undefined)]),
   );
@@ -378,7 +381,7 @@ it("denied and revoked delivery access keep the request log closed", async () =>
   reads.canReadDeliveries = false;
   const trigger = routine("Review trigger", [], {
     routineMode: "work",
-    schedule: { type: "webhook" },
+    schedule: { type: "webhook", signature: null },
     webhook: { path: "/fixture", url: null, hasSecret: false },
   });
   await using screen = await render(routines([trigger]));
@@ -394,6 +397,18 @@ it("denied and revoked delivery access keep the request log closed", async () =>
   await screen.rerender(routines([trigger]));
   await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
   await expect.element(deliveries).not.toBeInTheDocument();
+});
+
+it("names the event and links the task created by the delivery", async () => {
+  setup();
+  answer("event-input", { taskIds: ["fixture-task"], reply: { text: "Started review." } });
+  const event = { ...finished(9, "completed", "event-input"), origin: "event" as const };
+  await using screen = await render(routines([routine("Review", [event])]));
+  await userEvent.click(dot("Run on Nov 14, 09:00, completed, Event"));
+  await expect.element(screen.getByRole("dialog")).toMatchTextContent("Event");
+  await expect
+    .element(screen.getByRole("link", { name: "Open task" }))
+    .toHaveAttribute("href", "/bot?task=fixture-task");
 });
 
 it("a routine's recent runs are one toolbar stop whose dots name each run in the Timestamp format's hours", async () => {

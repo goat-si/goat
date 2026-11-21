@@ -395,7 +395,7 @@ it.effect(
       Effect.gen(function* () {
         const routine = yield* saveRoutine(fixture);
         const at = yield* now;
-        const admit = (key: string) =>
+        const admit = (key: string, triggerKind: "scheduled" | "webhook") =>
           Effect.gen(function* () {
             const current = (yield* fixture.service.list()).tasks.find(
               (task) => task.id === routine.id,
@@ -406,17 +406,23 @@ it.effect(
               firingId,
               messageId: MessageId.make(`scheduled-task-routine:${routine.id}:${key}`),
               requestedAt: at,
-              triggerKind: "manual",
-              webhookDeliveryId: null,
+              triggerKind,
+              webhookDeliveryId: triggerKind === "webhook" ? "fixture-delivery" : null,
             });
             yield* refuse(fixture, firingId);
             return firingId;
           });
-        const admittedFirst = yield* admit("b");
-        const admittedSecond = yield* admit("a");
+        const admittedFirst = yield* admit("b", "webhook");
+        const admittedSecond = yield* admit("a", "scheduled");
         assert.deepStrictEqual(
-          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => run.firingId),
-          [admittedFirst, admittedSecond],
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.origin,
+          ]),
+          [
+            [admittedFirst, "event"],
+            [admittedSecond, "schedule"],
+          ],
         );
       }),
     ),
@@ -489,6 +495,7 @@ it.effect(
         // A routine with no runs carries an empty history; an omitted one carries no key at all.
         assert.deepStrictEqual(task(noRunsFirst)?.recentRuns, []);
         assert.notProperty(task(noRunsLast), "recentRuns");
+        assert.propertyVal(task(noRunsLast), "recentRunsIncomplete", true);
 
         // The routines that carry history are a prefix of the list; the rest carry no key.
         const lengths = fullRoutines.map((routine) => task(routine)?.recentRuns?.length);

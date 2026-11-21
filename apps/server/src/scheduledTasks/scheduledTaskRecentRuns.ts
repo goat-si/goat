@@ -20,6 +20,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 interface RecentRunRow {
   readonly task_id: string;
+  readonly trigger_kind: string;
   readonly snapshot_json: string | null;
   readonly input_id: string | null;
   readonly quiet: number | null;
@@ -83,13 +84,24 @@ const encodeChosen = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
 );
 
+const originByTrigger = new Map<string, NonNullable<ScheduledTaskRecentRun["origin"]>>([
+  ["scheduled", "schedule"],
+  ["manual", "manual"],
+  ["webhook", "event"],
+]);
+
 function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
   if (row.snapshot_json === null) return undefined;
   const snapshot = decodeSnapshot(row.snapshot_json);
   if (Option.isNone(snapshot)) return undefined;
   const run = snapshot.value;
   const inputId = Option.filter(decodeInputId(row.input_id), (id) => PLAIN_INPUT_ID.test(id));
+  const origin = originByTrigger.get(row.trigger_kind);
   return {
+    ...(origin === undefined ? {} : { origin }),
+    ...(run.dispatchStatus === "accepted" && run.threadId !== null && Option.isNone(inputId)
+      ? { taskThreadId: run.threadId }
+      : {}),
     firingId: run.firingId,
     status: run.status,
     requestedAt: run.requestedAt,
@@ -117,7 +129,9 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
   const rows = yield* sql<RecentRunRow>`
     WITH chosen(task_id, created_at) AS (
       SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(${chosen}))
-    SELECT c.task_id,
+    SELECT c.task_id, CASE r.trigger_kind
+      WHEN 'scheduled' THEN 'scheduled' WHEN 'manual' THEN 'manual'
+      WHEN 'webhook' THEN 'webhook' ELSE '' END AS trigger_kind,
       CASE WHEN octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0)
         <= ${MAX_STORED_RUN_BYTES} THEN r.snapshot_json END AS snapshot_json,
       CASE WHEN octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0)
@@ -137,6 +151,7 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
       CASE WHEN octet_length(l.input_id) <= ${MAX_STORED_RUN_BYTES} THEN l.input_id END
     ORDER BY c.task_id, r.requested_at DESC, r.firing_id DESC`;
   const byTask = new Map<string, Array<ScheduledTaskRecentRun>>();
+  const unreadable = new Set<string>();
   const oversized = new Set<string>();
   for (const row of rows) {
     if (row.oversized === 1) {
@@ -145,6 +160,7 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
     }
     const run = recentRun(row);
     if (run === undefined) {
+      unreadable.add(row.task_id);
       yield* Effect.logWarning("Skipped a routine run that could not be read", {
         taskId: row.task_id,
       });
@@ -153,13 +169,12 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
     byTask.set(row.task_id, [...(byTask.get(row.task_id) ?? []), run]);
   }
   for (const taskId of oversized) byTask.delete(taskId);
-  return { byTask, oversized };
+  return { byTask, oversized, unreadable };
 });
 
 /**
  * Gives up to 50 GOAT Bot routines, in list order, their recent runs, stopping before the history
- * passes its byte budget; later routines get no key, and every task does when the read fails. A
- * routine with an id over MAX_ROUTINE_ID_BYTES or an oversized stored run is skipped.
+ * passes its byte budget. Mark skipped routines and those with unreadable snapshots as incomplete.
  */
 export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(function* (
   sql: SqlClient.SqlClient,
@@ -170,7 +185,7 @@ export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(functi
     .slice(0, SCHEDULED_TASK_RECENT_RUN_ROUTINES);
   // Bounds every id the query is given and returns: an id over the cap never reaches it.
   const chosen = routines.filter(readable);
-  if (chosen.length === 0) return tasks;
+  if (routines.length === 0) return tasks;
   const byTask = yield* readRecentRuns(sql, chosen).pipe(
     Effect.asSome,
     Effect.catch((cause) =>
@@ -179,13 +194,12 @@ export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(functi
       ),
     ),
   );
-  if (Option.isNone(byTask)) return tasks;
-  const { byTask: runsByTask, oversized } = byTask.value;
+  const history = Option.getOrUndefined(byTask);
   const carried = new Map<string, ReadonlyArray<ScheduledTaskRecentRun>>();
   let budget = SCHEDULED_TASK_RECENT_RUN_BYTES;
   for (const task of chosen) {
-    if (oversized.has(task.id)) continue;
-    const runs = runsByTask.get(task.id) ?? [];
+    if (history === undefined || history.oversized.has(task.id)) continue;
+    const runs = history.byTask.get(task.id) ?? [];
     const bytes = historyBytes(runs);
     if (bytes > budget) break;
     budget -= bytes;
@@ -193,6 +207,12 @@ export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(functi
   }
   return tasks.map((task) => {
     const recentRuns = carried.get(task.id);
-    return recentRuns === undefined ? task : { ...task, recentRuns };
+    if (task.goatBotRoutine !== true) return task;
+    if (recentRuns === undefined) return { ...task, recentRunsIncomplete: true as const };
+    return {
+      ...task,
+      recentRuns,
+      ...(history?.unreadable.has(task.id) ? { recentRunsIncomplete: true as const } : {}),
+    };
   });
 });

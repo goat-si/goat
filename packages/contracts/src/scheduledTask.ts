@@ -301,6 +301,7 @@ export const ScheduledTask = Schema.Struct({
       even one replaced since. Absent for other tasks and from older servers. */
   goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
   /** Newest first, at most SCHEDULED_TASK_RECENT_RUNS. GOAT Bot routines only; absent from older servers. */
+  recentRunsIncomplete: ForwardCompatibleOptional(Schema.Literal(true)),
   recentRuns: ForwardCompatibleOptional(ForwardCompatibleArray(ScheduledTaskRecentRun)),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
