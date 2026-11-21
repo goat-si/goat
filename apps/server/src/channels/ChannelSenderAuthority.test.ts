@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope, ChannelReceptionInput, ChannelTaskId } from "@goat/contracts";
 import { ChannelQuestionId } from "@goat/contracts";
+import * as Layer from "effect/Layer";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -19,6 +23,8 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
   defaultScript,
+  goatInput,
+  memoryRpcContext,
   makeHarness,
   owner,
   setupBot,
@@ -162,6 +168,65 @@ it.effect("a Slack follow-up after revocation cannot reuse a warm session holdin
     assert.isFalse(harness.world.sends.some((send) => send.text.includes("check again")));
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect(
+  "checks the same principal's follow-up session before sending into notes-bearing work",
+  () => {
+    const { harness, opening } = harnesses.session();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* appendChannelBotNote(
+        yield* FileSystem.FileSystem,
+        files,
+        "Use Juniper for staging.",
+        "2026-11-21T00:00:00Z",
+        "fixture",
+      );
+      const sessions = yield* SessionStore.SessionStore;
+      const issue = sessions.issue({
+        subject: memoryRpcContext.principalId,
+        scopes: memoryRpcContext.grantedScopes,
+      });
+      const opener = yield* issue;
+      const follower = yield* issue;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* runtime.drain;
+      const first = yield* gateway.ingest(goatInput(opening, "app-opener"), {
+        ...memoryRpcContext,
+        authSessionId: opener.sessionId,
+      });
+      yield* reception.receive(first.inputId, runtime.ownerToken);
+      const taskId = taskIdFor(first.inputId, 0);
+      yield* dispatcher.dispatch(taskId, runtime.ownerToken);
+      assert.isDefined((yield* ledger.latestTaskBrief(taskId))?.context.notesPath);
+      const text = "check the staging report again";
+      const next = yield* gateway.ingest(goatInput("more:" + taskId + " " + text, "app-follower"), {
+        ...memoryRpcContext,
+        authSessionId: follower.sessionId,
+      });
+      yield* reception.receive(next.inputId, runtime.ownerToken);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      yield* sessions.revoke(follower.sessionId);
+      yield* forwardAll;
+      assert.isFalse(harness.world.sends.some((send) => send.text.includes(text)));
+      assert.lengthOf(yield* notices(taskId), 1);
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+        ),
+      ),
+    );
+  },
+);
 
 describe.each(["session", "local"] as const)("a %s worker's delivery from someone else", (kind) => {
   it.effect("drops a follow-up whose sender lost access after it was accepted", () => {

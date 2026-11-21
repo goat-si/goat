@@ -1,3 +1,5 @@
+import { vi } from "vitest";
+import * as NotesTail from "./channelBotNotesTail.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect API.
 import * as NodeChildProcess from "node:child_process";
 
@@ -330,6 +332,60 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
       );
     },
   );
+
+  it.effect("rechecks the app session after its note snapshot and before first generation", () => {
+    const harness = makeHarness();
+    const prompts: Array<string | undefined> = [];
+    harness.script.current = (input) => {
+      if (input.mode === "input") prompts.push(input.notes);
+      return defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const note = line("Use Juniper for staging.", "post-read-revoke");
+      yield* fs.writeFileString(files.notes, NOTES_HEADER + note + "\n");
+      const sessions = yield* SessionStore.SessionStore;
+      const { sessionId } = yield* sessions.issue({
+        subject: memoryRpcContext.principalId,
+        scopes: memoryRpcContext.grantedScopes,
+      });
+      const read = NotesTail.readChannelBotNotesTail;
+      let readNote = false;
+      using _tail = vi
+        .spyOn(NotesTail, "readChannelBotNotesTail")
+        .mockImplementation((path, bytes, hooks) =>
+          read(path, bytes, hooks).pipe(
+            Effect.tap((snapshot) =>
+              path === files.notes && snapshot !== null
+                ? Effect.sync(() => {
+                    readNote = new TextDecoder().decode(snapshot.bytes).includes(note);
+                  }).pipe(Effect.andThen(sessions.revoke(sessionId)), Effect.orDie)
+                : Effect.void,
+            ),
+          ),
+        );
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("How is staging set up?", "app-revoked-after-read"), {
+        ...memoryRpcContext,
+        authSessionId: sessionId,
+      });
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.isTrue(readNote);
+      assert.deepStrictEqual(prompts, [undefined]);
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+        ),
+      ),
+    );
+  });
 
   it.effect(
     "strips shared notes from the second reception pass after Slack memory is revoked",
