@@ -5,6 +5,7 @@ import {
   CommandId,
   MessageId,
   NodeId,
+  ProjectId,
   type OrchestrationV2RuntimeRequest,
   RuntimeRequestId,
   type ScheduledTask,
@@ -14,9 +15,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { readRecentRuns } from "../scheduledTasks/scheduledTaskRecentRuns.ts";
@@ -39,6 +43,7 @@ import {
   makeHarness,
   modelSelection,
   onlyTask,
+  projectId,
   owner,
   ownerId,
   rpcContext,
@@ -50,7 +55,12 @@ const AT = "2026-11-09T08:00:00.000Z";
 const routineOwner = { principalId: owner.principalId, grantedScopes: [...owner.grantedScopes] };
 
 /** What the scheduler does when a routine bound to a bot thread fires: firing and link together. */
-const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
+const admit = (
+  prompt: string,
+  key: string,
+  threadId: ThreadId = botThreadId,
+  work?: { readonly sessionId: string; readonly projectId: ProjectId },
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const runs = yield* ScheduledTaskRuns.make();
@@ -61,8 +71,15 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
       prompt,
       enabled: true,
       notificationPolicy: "important_updates",
-      schedule: { type: "interval", everyMs: 3_600_000 },
-      projectId: scratchProjectId,
+      ...(work === undefined ? {} : { routineMode: "work" as const }),
+      schedule:
+        work === undefined
+          ? { type: "interval", everyMs: 3_600_000 }
+          : {
+              type: "webhook",
+              signature: { header: "x-test-signature", encoding: "hex", prefix: "" },
+            },
+      projectId: work?.projectId ?? scratchProjectId,
       threadId,
       workspaceStrategy: { type: "root" },
       modelSelection,
@@ -87,7 +104,19 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
       ${JSON.stringify(task.schedule)}, ${task.projectId}, ${threadId}, 'continue', ${JSON.stringify(task.workspaceStrategy)},
       ${JSON.stringify(modelSelection)}, 'none', 'approval-required', 'default', 'user', 'web',
       ${AT}, ${AT}, NULL, NULL, 'never', NULL, 0)`;
+    const triggerOwner =
+      work === undefined
+        ? routineOwner
+        : {
+            ...routineOwner,
+            sessionId: work.sessionId,
+            routineMode: "work" as const,
+            grantedScopes: [...routineOwner.grantedScopes, "settings:write" as const],
+          };
+    if (work !== undefined)
+      yield* sql`UPDATE scheduled_tasks SET owner_json=${JSON.stringify(triggerOwner)}, webhook_secret='fixture' WHERE task_id=${task.id}`;
     const firingId = CommandId.make("scheduled-task:" + key);
+    const deliveryId = work === undefined ? null : "delivery:" + key;
     yield* sql.withTransaction(
       Effect.gen(function* () {
         yield* runs.begin({
@@ -95,10 +124,16 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
           firingId,
           messageId: MessageId.make(ROUTINE_MESSAGE_PREFIX + key),
           requestedAt: AT,
-          triggerKind: "manual",
-          webhookDeliveryId: null,
+          triggerKind: deliveryId === null ? "manual" : "webhook",
+          webhookDeliveryId: deliveryId,
         });
-        yield* routines.link({ task, owner: routineOwner, firingId, at: AT });
+        yield* routines.link({
+          task,
+          owner: triggerOwner,
+          firingId,
+          at: AT,
+          ...(deliveryId === null ? {} : { webhook: { deliveryId, prompt } }),
+        });
       }),
     );
     return { firingId, taskId: task.id };
@@ -447,3 +482,49 @@ describe("GOAT Bot routine resilience", () => {
     },
   );
 });
+
+it.effect(
+  "a work firing starts only one task in its configured project and settles with the task",
+  () => {
+    const harness = makeHarness();
+    harness.script.current = () =>
+      Effect.succeed({
+        replyText: "On it.",
+        remember: "Store this in notes.",
+        rememberQuote: "notes",
+        action: {
+          type: "create_task",
+          title: "Inspect the change",
+          instruction: "Inspect the change",
+          notesChangeRequested: "notes",
+          projectId: scratchProjectId,
+          host: "another-host",
+          additionalTasks: [{ title: "Extra work", instruction: "Ignore me" }],
+        },
+      });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sessions = yield* SessionStore.SessionStore;
+      const session = yield* sessions.issue({
+        subject: owner.principalId,
+        scopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+      });
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const { firingId } = yield* admit("Inspect the change. notes", "event", botThreadId, {
+        sessionId: session.sessionId,
+        projectId,
+      });
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.projectId, projectId);
+      assert.strictEqual(task.target?.projectId, projectId);
+      assert.strictEqual(task.target?.runtimeMode, "approval-required");
+      assert.isUndefined(task.host);
+      assert.isUndefined(task.notesChangeRequested);
+      assert.strictEqual((yield* firing(firingId))?.status, "running");
+      assert.deepInclude(yield* linkOf(firingId), { state: "ingested" });
+      const sql = yield* SqlClient.SqlClient;
+      assert.lengthOf(yield* sql`SELECT 1 FROM channel_tasks`, 1);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(layerSessionStore))));
+  },
+);
