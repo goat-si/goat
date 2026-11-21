@@ -1,10 +1,12 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 
-it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("bot work upgrade", (it) => {
+describe("bot work upgrade", () => {
   it.effect("preserves a pre-snooze task and its view while adding the status revision", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -29,6 +31,45 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("bot work upgrade", (
       const [stored] = yield* sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state WHERE key = 'task-view:owner:task'`;
       assert.strictEqual(stored?.value_json, view);
-    }),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "rolls back migration 180 when its activity marker insert aborts and retries cleanly",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 179 });
+        yield* sql`
+        CREATE TRIGGER abort_activity_marker BEFORE INSERT ON channel_runtime_state
+        WHEN NEW.key = 'bot-task-activity-since'
+        BEGIN SELECT RAISE(ABORT, 'injected activity marker failure'); END
+      `;
+        const migrate = runMigrations({ toMigrationInclusive: 180 });
+        const failed = yield* Effect.exit(migrate);
+        if (!Exit.isFailure(failed)) return assert.fail("expected migration 180 to abort");
+        assert.include(Cause.pretty(failed.cause), "injected activity marker failure");
+        const columns = yield* sql`SELECT name FROM pragma_table_info('channel_tasks')
+        WHERE name = 'status_version'`;
+        assert.isEmpty(columns);
+        assert.isEmpty(
+          yield* sql`SELECT name FROM sqlite_master
+        WHERE name IN ('channel_task_status_version', 'channel_task_views_by_task')`,
+        );
+        assert.isEmpty(
+          yield* sql`SELECT migration_id FROM effect_sql_migrations WHERE migration_id = 180`,
+        );
+        assert.isEmpty(
+          yield* sql`SELECT key FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`,
+        );
+
+        yield* sql`DROP TRIGGER abort_activity_marker`;
+        assert.deepStrictEqual(yield* migrate, [[180, "ChannelBotTaskSnooze"]]);
+        assert.deepStrictEqual(
+          yield* sql`SELECT key FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`,
+          [{ key: "bot-task-activity-since" }],
+        );
+        assert.isEmpty(yield* migrate);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
