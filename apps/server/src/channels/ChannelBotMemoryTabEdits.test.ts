@@ -104,6 +104,44 @@ const line = (text: string, id: string, replaces?: string) =>
   (replaces === undefined ? "" : " (replaces: " + JSON.stringify(replaces) + ")");
 
 describe("Memory tab requests to change or forget a note", () => {
+  it.effect("refuses a This bot forget on main without changing the shared file", () => {
+    const { asked, layer } = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const original = NOTES_HEADER + line(fridays, "earlier") + "\n";
+      yield* writeNotes(original);
+      yield* send(goatBotForgetNoteMessage(fridays, "private"), "main-private-forget");
+      assert.strictEqual(yield* readNotes, original);
+      assert.isEmpty(asked);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "main proposes a shared note and saves it only after its reply option is selected",
+    () => {
+      const fact = "We release on Friday.";
+      const request = "Remember we release on Friday.";
+      const { layer } = harnessFor(() => ({
+        remember: fact,
+        rememberQuote: request,
+      }));
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(NOTES_HEADER);
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const input = yield* gateway.ingest(goatInput(request, "main-propose"), memoryRpcContext);
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.notInclude(yield* readNotes, fact);
+        const stored = yield* (yield* ChannelLedger.ChannelLedger).getInput(input.inputId);
+        const action = stored?.decision?.action;
+        if (action?.type !== "clarify" || action.options?.[0] === undefined)
+          return yield* Effect.die("Missing shared note confirmation");
+        yield* send(action.options[0], "main-confirm");
+        assert.include(yield* readNotes, fact);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("Ask to change appends the new note with a replaces marker without the model", () => {
     const { asked, layer } = harnessFor();
     return Effect.gen(function* () {

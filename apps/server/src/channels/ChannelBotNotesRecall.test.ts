@@ -3,7 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId, goatBotForgetNoteMessage, type ThreadId } from "@goat/contracts";
+import { BotId, ChannelTaskId, goatBotForgetNoteMessage, type ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -28,6 +28,7 @@ import {
   channelBotFilesFor,
   readChannelBotNotes,
   readChannelBotNotesSnapshot,
+  recallChannelBotNotes,
 } from "./channelBotNotes.ts";
 import {
   EMPTY_NOTES,
@@ -119,6 +120,27 @@ const EVAL_CASES = [
   { name: "held-out", set: HELDOUT_SET, kilobytes: 64 },
   { name: "held-out", set: HELDOUT_SET, kilobytes: 200 },
 ];
+
+describe("scoped note reads", () => {
+  it.effect.each(["private", "shared"] as const)(
+    "keeps the readable file when the %s scope fails",
+    (broken) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const state = yield* fs.makeTempDirectoryScoped();
+        const own = channelBotFilesFor(path, state, BotId.make("scout"));
+        const shared = channelBotFilesFor(path, state);
+        const [bad, good] = broken === "private" ? [own, shared] : [shared, own];
+        const fact = line("The staging gate is Juniper.", "juniper");
+        yield* fs.makeDirectory(bad.notes, { recursive: true });
+        yield* fs.makeDirectory(good.dir, { recursive: true });
+        yield* fs.writeFileString(good.notes, NOTES_HEADER + fact + "\n");
+        const snapshot = yield* recallChannelBotNotes(own, "staging gate", true);
+        assert.include(snapshot?.standing ?? "", fact);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
 
 describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
   it.effect.each(EVAL_CASES)(
