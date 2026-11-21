@@ -66,6 +66,9 @@ export function createChannelEnvironmentAtoms<R, E>(
     { environmentId }: { readonly environmentId: EnvironmentId },
     registry: AtomRegistry.AtomRegistry,
   ) => Effect.sync(() => registry.update(botThreadsRevision(environmentId), (n) => n + 1));
+  const snoozeExpiryRevision = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
+  const snoozeRevisionFor = (environmentId: EnvironmentId, botId: BotId | undefined) =>
+    snoozeExpiryRevision(JSON.stringify([environmentId, botId ?? "main"]));
   const taskChangesPermission = createCommandPermissions(
     runtime,
     CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
@@ -78,7 +81,7 @@ export function createChannelEnvironmentAtoms<R, E>(
   });
   // The thread shell's work signal, installed by `listedBotWork` when the shell is built.
   let shellWorkSignal: ((environmentId: EnvironmentId) => Atom.Atom<string>) | undefined;
-  const botThreadsSignal = Atom.family((environmentId: EnvironmentId) =>
+  const botTaskSignal = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const config = get(sessions.initialConfigValueAtom(environmentId));
       const revised =
@@ -91,18 +94,37 @@ export function createChannelEnvironmentAtoms<R, E>(
         revised !== null && "value" in revised
           ? `${revised.subscription}:${revised.value.revision}`
           : "";
-      return `${get(botThreadsRevision(environmentId))}|${
-        shellWorkSignal === undefined ? "" : get(shellWorkSignal(environmentId))
-      }|${position}`;
-    }).pipe(Atom.withLabel(`environment-data:channel:bot-threads-signal:${environmentId}`)),
+      return `${get(botThreadsRevision(environmentId))}|${position}`;
+    }).pipe(Atom.withLabel(`environment-data:channel:bot-task-signal:${environmentId}`)),
   );
+  const botListSignal = Atom.family((key: string) => {
+    const [environmentId, botId, includeShell] = JSON.parse(key) as [
+      EnvironmentId,
+      BotId | null,
+      boolean,
+    ];
+    return Atom.make(
+      (get) =>
+        `${get(botTaskSignal(environmentId))}|${get(snoozeRevisionFor(environmentId, botId ?? undefined))}|${
+          includeShell && shellWorkSignal !== undefined ? get(shellWorkSignal(environmentId)) : ""
+        }`,
+    );
+  });
   // The bot's rows and the thread lists that hide its work read this one query, so a row the
   // bot can no longer show stops hiding its thread on the same answer.
   const listBotThreads = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-bot-threads",
     tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
     staleTimeMs: 2_000,
-    refreshTrigger: ({ environmentId }) => botThreadsSignal(environmentId),
+    refreshTrigger: ({ environmentId, input }) =>
+      botListSignal(JSON.stringify([environmentId, input.botId ?? null, true])),
+  });
+  const checkBotSnoozes = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:check-bot-snoozes",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+    idleTtlMs: 2_000,
+    refreshTrigger: ({ environmentId, input }) =>
+      botListSignal(JSON.stringify([environmentId, input.botId ?? null, false])),
   });
   const listBots = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-bots",
@@ -206,10 +228,13 @@ export function createChannelEnvironmentAtoms<R, E>(
     const [environmentId, input] = JSON.parse(key) as [EnvironmentId, ChannelListBotThreadsInput];
     const pendingSince = new Map<string, number>();
     let failingSince: number | null = null;
+    let refreshedSnoozeAt: number | undefined;
     return Atom.make((get) => {
       // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
       const now = Date.now();
       let nextExpiry = Infinity;
+      let nextSnooze = Infinity;
+      let listReadAt: number | undefined;
       const stillPending = new Set<string>();
       let everyListRead = true;
       let filtered = null;
@@ -231,11 +256,17 @@ export function createChannelEnvironmentAtoms<R, E>(
         } else {
           failingSince = null;
           const snoozeExpiry = result.value.nextSnoozeExpiry;
-          if (snoozeExpiry !== undefined) {
+          if (
+            !result.waiting &&
+            snoozeExpiry !== undefined &&
+            result.timestamp !== refreshedSnoozeAt
+          ) {
             const expiry = Date.parse(snoozeExpiry);
-            if (expiry > now) nextExpiry = Math.min(nextExpiry, expiry + CUTOFF_MARGIN_MS);
-            else if (now - expiry < CUTOFF_RETRY_WINDOW_MS)
-              nextExpiry = Math.min(nextExpiry, now + CUTOFF_MARGIN_MS);
+            const readAt = result.value.readAt;
+            const remaining =
+              expiry - (readAt === undefined ? result.timestamp : Date.parse(readAt));
+            if (remaining > 0) nextSnooze = result.timestamp + remaining + CUTOFF_MARGIN_MS;
+            listReadAt = result.timestamp;
           }
           const shown = [];
           const retiredTasks = new Set<string>();
@@ -280,15 +311,19 @@ export function createChannelEnvironmentAtoms<R, E>(
         else if (now - since < PENDING_REMOTE_WINDOW_MS)
           nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
       }
-      if (nextExpiry !== Infinity) {
+      const deadline = Math.min(nextExpiry, nextSnooze);
+      if (Number.isFinite(deadline)) {
+        const delay = Math.max(0, Math.min(deadline - now, MAX_TIMER_MS));
         // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
-        const handle = setTimeout(
-          () => {
+        const handle = setTimeout(() => {
+          if (deadline === nextSnooze && deadline - now <= MAX_TIMER_MS) {
+            refreshedSnoozeAt = listReadAt;
+            get.registry.update(snoozeRevisionFor(environmentId, input.botId), (n) => n + 1);
+          } else if (deadline === nextExpiry) {
             get.registry.refresh(listBotThreads({ environmentId, input }));
-            get.refreshSelf();
-          },
-          Math.min(nextExpiry - now, MAX_TIMER_MS),
-        );
+          }
+          get.refreshSelf();
+        }, delay);
         get.addFinalizer(() => clearTimeout(handle));
       }
       return filtered;
@@ -402,6 +437,7 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    checkBotSnoozes,
     getBotTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:get-bot-task",
       tag: CHANNEL_GATEWAY_WS_METHODS.getBotTask,

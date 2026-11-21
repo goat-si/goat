@@ -14,6 +14,8 @@ import { act, render } from "../../../test/render";
 const actions = vi.hoisted(() => ({
   show: vi.fn(),
   update: vi.fn(),
+  snooze: vi.fn(),
+  unsnooze: vi.fn(),
   refresh: vi.fn(),
   permit: true,
   current: { eligible: false, list: "pending", links: [] } as {
@@ -35,6 +37,8 @@ vi.mock("~/localApi", () => {
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     updateTaskView: { permissionAtom: () => "permission", execute: actions.update },
+    snoozeBotTask: { permissionAtom: () => "permission", execute: actions.snooze },
+    unsnoozeBotTask: { permissionAtom: () => "permission", execute: actions.unsnooze },
     listChildWork: () => null,
     remoteWorkOpenable: () => "openable",
     homeCurrentOpenableWorkAtom: () => "current",
@@ -87,6 +91,10 @@ function setup(rows: Row[] = []) {
   actions.show.mockResolvedValue(null);
   actions.update.mockReset();
   actions.update.mockResolvedValue({ _tag: "Success" });
+  actions.snooze.mockReset();
+  actions.snooze.mockResolvedValue({ _tag: "Success" });
+  actions.unsnooze.mockReset();
+  actions.unsnooze.mockResolvedValue({ _tag: "Success" });
   actions.refresh.mockReset();
   return rows;
 }
@@ -832,7 +840,7 @@ it("says a running task waits for your answer when its worker asks you something
   expect(titles(screen, ["Keep going", "Pick a name"])).toEqual(["Keep going", "Pick a name"]);
 });
 
-it("offers snoozed work in a closed fold instead of recent work", async () => {
+it("moves snoozed work to the closed fold and restores it on Unsnooze", async () => {
   setup();
   const recent = taskRow("recent", "Publish notes", "running", "2026-11-09T02:00:00.000Z");
   const folded = taskRow("snoozed", "Verify release build", "running", "2026-11-09T01:00:00.000Z");
@@ -840,19 +848,41 @@ it("offers snoozed work in a closed fold instead of recent work", async () => {
     ...folded,
     view: { ...folded.view, snoozedUntil: "2026-11-10T01:00:00.000Z" },
   };
-  await using screen = await render(view([recent, folded], { snoozed: [snoozed] }));
+  const options = { supportsSnooze: true };
+  await using screen = await render(view([recent, folded], options));
+  const menu = screen.getByRole("button", { name: "Actions for Verify release build" });
+  actions.show.mockResolvedValueOnce("hour");
+  await userEvent.click(menu);
+  await vi.waitFor(() =>
+    expect(actions.snooze).toHaveBeenCalledWith({
+      environmentId,
+      input: { botId: "main", taskId: folded.task.taskId, until: expect.any(String) },
+    }),
+  );
+  await screen.rerender(view([recent], { ...options, snoozed: [snoozed] }));
   await expect.element(screen.getByRole("button", { name: /^Publish notes/ })).toBeVisible();
   await expect
     .element(screen.getByRole("button", { name: /^Verify release build/ }))
     .not.toBeInTheDocument();
   await userEvent.click(screen.getByText("Snoozed", { exact: true }));
   await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
-  await screen.rerender(view([recent, snoozed], { snoozed: [] }));
+  actions.show.mockResolvedValueOnce("unsnooze");
+  await userEvent.click(menu);
+  await vi.waitFor(() =>
+    expect(actions.unsnooze).toHaveBeenCalledWith({
+      environmentId,
+      input: { botId: "main", taskId: folded.task.taskId },
+    }),
+  );
+  await screen.rerender(view([recent, folded], { snoozed: [] }));
   await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
   await expect.element(screen.getByText("Snoozed", { exact: true })).not.toBeInTheDocument();
-  const otherSnoozes = Array.from({ length: 50 }, (_, index) =>
-    taskRow("snoozed-" + index, "Another old task", "completed", "2026-11-09T01:00:00.000Z"),
-  );
+  const otherSnoozes = Array.from({ length: 50 }, (_, index) => {
+    const row = taskRow("snoozed-" + index, "Another old task", "completed", folded.lastActivityAt);
+    return { ...row, view: { ...row.view, snoozedUntil: snoozed.view.snoozedUntil } };
+  });
   await screen.rerender(view([recent, snoozed], { snoozed: otherSnoozes }));
-  await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: /^Verify release build/ }))
+    .not.toBeInTheDocument();
 });

@@ -657,12 +657,21 @@ export type ChannelSearchBotTasksResult = typeof ChannelSearchBotTasksResult.Typ
 export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
 export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
 export const CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH = 512;
+export const CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT = 700;
+const BotTaskSnooze = Schema.Struct({ taskId: ChannelTaskId, until: IsoDateTime });
 /** Opaque and bound to one owner and bot; a server refuses one that is not its own. */
 export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(
   Schema.isMaxLength(CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH),
 );
 export const ChannelListBotThreadsInput = Schema.Struct({
   botId: Schema.optionalKey(BotId),
+  /** Read only the active snoozes of these cached history tasks. */
+  checkSnoozes: Schema.optionalKey(
+    Schema.Array(ChannelTaskId).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT),
+    ),
+  ),
   /**
    * Read by servers with `goatBotTaskThreadsPaged`: instead of the current list, one page of
    * every task of the bot by creation, newest first, from the cursor the previous page returned.
@@ -677,6 +686,11 @@ export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
   snoozed: Schema.optionalKey(Schema.Array(BotTaskRow).check(Schema.isMaxLength(50))),
   nextSnoozeExpiry: Schema.optionalKey(IsoDateTime),
+  readAt: Schema.optionalKey(IsoDateTime),
+  /** Present on a snooze check, including when every requested task is unsnoozed. */
+  activeSnoozes: Schema.optionalKey(
+    Schema.Array(BotTaskSnooze).check(Schema.isMaxLength(CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT)),
+  ),
   /** History pages carry 0: the bot's count belongs to the current list. */
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */

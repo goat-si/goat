@@ -20,18 +20,12 @@ export function botTaskSnoozeUntil(choice: string, now: Date): string | undefine
     : resolveSnoozePreset(presets[preset.id], now)?.snoozedUntil;
 }
 
-/** History stays browsable when a task is outside the bounded current-list fold. */
 export function withoutSnoozedBotTasks(
   rows: ReadonlyArray<BotThreadRow>,
   snoozed: ReadonlyArray<Extract<BotThreadRow, { kind: "task" }>>,
 ) {
   const hidden = new Set(snoozed.map((row) => row.task.taskId));
-  return rows.flatMap<BotThreadRow>((row) => {
-    const id = row.kind === "task" ? row.task.taskId : row.taskId;
-    if (hidden.has(id)) return [];
-    if (row.kind !== "task" || row.view.snoozedUntil === undefined) return [row];
-    // The detail read supplies the live snooze for actions on an older task.
-    const { snoozedUntil: _cached, ...view } = row.view;
-    return [{ ...row, view }];
-  });
+  for (const row of rows)
+    if (row.kind === "task" && row.view.snoozedUntil !== undefined) hidden.add(row.task.taskId);
+  return rows.filter((row) => !hidden.has(row.kind === "task" ? row.task.taskId : row.taskId));
 }

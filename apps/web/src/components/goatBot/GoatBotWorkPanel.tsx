@@ -172,6 +172,7 @@ export function GoatBotWorkPanel({
       : undefined,
     {
       rows: current.rows,
+      ...(current.snoozed === undefined ? {} : { snoozed: current.snoozed }),
       remoteWork: current.remoteWork,
       mainMessageCount: current.mainMessageCount ?? 0,
     },

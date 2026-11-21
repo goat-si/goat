@@ -3,6 +3,7 @@ import {
   applyHistoryPress,
   botThreadKey,
   botThreadsHistoryInput,
+  botWorkHistorySnoozeInput,
   botWorkHistoryView,
   EMPTY_WALK,
   markWalkRead,
@@ -17,6 +18,7 @@ import type {
   ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
+import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 /**
@@ -34,11 +36,21 @@ export function useBotWorkHistory(
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
-  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded });
+  const snoozeInput = botWorkHistorySnoozeInput(walk, current, capabilities, botId);
+  const snoozes = useEnvironmentQuery(
+    snoozeInput === null
+      ? null
+      : channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }),
+  ).data?.activeSnoozes;
+  const snoozeCheck =
+    snoozeInput === null || snoozes === undefined
+      ? undefined
+      : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
+  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded, snoozeCheck });
   const [written, setWritten] = useState("[[],[],[]]");
   if (view.reported !== written) {
     setWritten(view.reported);
-    setWalk((state) => writeThrough(state, current));
+    setWalk((state) => writeThrough(state, current, snoozeCheck));
   }
   // Opening an older row's peek acknowledges it; its read-through only moves forward.
   function markRead(taskId: ChannelTaskId, through: string) {

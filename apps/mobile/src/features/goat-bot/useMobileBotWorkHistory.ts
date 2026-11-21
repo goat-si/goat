@@ -2,6 +2,7 @@ import {
   applyHistoryPress,
   botThreadKey,
   botThreadsHistoryInput,
+  botWorkHistorySnoozeInput,
   botWorkHistoryView,
   EMPTY_WALK,
   markWalkRead,
@@ -20,6 +21,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentQuery } from "../../state/query";
 
 const NO_LIST: ChannelListBotThreadsResult = { rows: [], remoteWork: [], mainMessageCount: 0 };
 const UNWRITTEN = "[[],[],[]]";
@@ -97,19 +99,30 @@ export function useMobileBotWorkHistory(input: {
   const listedCapabilities = walk.started
     ? { ...input.capabilities, goatBotTaskThreadsPaged: true }
     : input.capabilities;
+  const snoozeInput = botWorkHistorySnoozeInput(walk, current, input.capabilities, botId);
+  const snoozes = useEnvironmentQuery(
+    environmentId === null || !enabled || snoozeInput === null
+      ? null
+      : channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }),
+  ).data?.activeSnoozes;
+  const snoozeCheck =
+    snoozeInput === null || snoozes === undefined
+      ? undefined
+      : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
   const view = botWorkHistoryView({
     walk,
     current,
     capabilities: listedCapabilities as ExecutionEnvironmentCapabilities | undefined,
     botId,
     loaded: input.loaded && enabled,
+    snoozeCheck,
   });
   const hasMore = view.hasMore && paged;
   if (held.scope === scope && view.reported !== held.written) {
     const id = held.id;
     setHeld((state) =>
       state.id === id
-        ? { ...state, written: view.reported, walk: writeThrough(state.walk, current) }
+        ? { ...state, written: view.reported, walk: writeThrough(state.walk, current, snoozeCheck) }
         : state,
     );
   }

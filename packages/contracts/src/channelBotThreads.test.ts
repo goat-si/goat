@@ -26,6 +26,7 @@ import { ChannelTaskStatus } from "./channelLedger.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
+const encodeRows = Schema.encodeSync(ChannelListBotThreadsResult);
 const decodeUpdate = Schema.decodeUnknownSync(ChannelUpdateTaskViewInput);
 const decodeChild = Schema.decodeUnknownSync(ChannelChildWork);
 const encodeChild = Schema.encodeSync(ChannelChildWork);
@@ -245,6 +246,32 @@ describe("bot thread contracts", () => {
     expect(decodeRows({ rows: [row], mainMessageCount: 0 }).rows).toEqual([row]);
     expect(decodeShippedTaskRow(row)).toEqual(taskRow);
     expect(decodeShippedLookupRow(row)).toEqual(taskRow);
+  });
+  it("an installed client decodes a new server list with snoozes and a server read time", () => {
+    const shippedList = Schema.Struct({
+      rows: Schema.Array(ShippedTaskRow),
+      mainMessageCount: NonNegativeInt,
+    });
+    const newResult = decodeRows({
+      rows: [{ ...taskRow, task: { ...taskRow.task, doneMeans: "Reviewed" } }],
+      snoozed: [
+        {
+          ...taskRow,
+          task: { ...taskRow.task, taskId: "snoozed-task" },
+          view: { ...taskRow.view, taskId: "snoozed-task", snoozedUntil: at },
+        },
+      ],
+      mainMessageCount: 5,
+      nextSnoozeExpiry: at,
+      readAt: "2026-11-04T09:00:00.000Z",
+    });
+    const encoded = encodeRows(newResult);
+    expect(Schema.decodeUnknownSync(shippedList)(encoded)).toEqual({
+      rows: [taskRow],
+      mainMessageCount: 5,
+    });
+    expect(newResult.snoozed?.[0]?.view.snoozedUntil).toBe(at);
+    expect(newResult.readAt).toBe("2026-11-04T09:00:00.000Z");
   });
   it("bounds a row's pull requests at five", () => {
     const six = Array.from({ length: 6 }, (_, index) => ({

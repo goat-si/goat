@@ -26,6 +26,45 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("checks an older task's live snooze even when the fold is full", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const botId = BotId.make("main");
+        const until = at(-60);
+        for (let index = 0; index <= 50; index++) {
+          const taskId = ChannelTaskId.make(name(index));
+          yield* insertTask(taskId, { status: "completed", createdAt: at(10_000) });
+          yield* service.snooze({ taskId, botId, until }, owner);
+        }
+        const taskId = ChannelTaskId.make(name(50));
+        const home = yield* service.list(owner);
+        assert.lengthOf(home.snoozed ?? [], 50);
+        assert.isFalse(home.snoozed?.some((row) => row.task.taskId === taskId));
+        assert.strictEqual(home.readAt, at(0));
+        assert.deepStrictEqual(
+          (yield* service.list(owner, botId, undefined, [taskId])).activeSnoozes,
+          [{ taskId, until }],
+        );
+        assert.deepStrictEqual(
+          (yield* service.list({ ...owner, ownerId: "other" }, botId, undefined, [taskId]))
+            .activeSnoozes,
+          [],
+        );
+        assert.deepStrictEqual(
+          (yield* service.list(owner, BotId.make("other"), undefined, [taskId])).activeSnoozes,
+          [],
+        );
+        yield* service.unsnooze({ taskId, botId }, owner);
+        assert.deepStrictEqual(
+          (yield* service.list(owner, botId, undefined, [taskId])).activeSnoozes,
+          [],
+        );
+      }),
+    ),
+  );
+
   it.effect("continues after a full search page without skipping later matches", () =>
     provide(
       Effect.gen(function* () {
