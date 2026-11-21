@@ -1,4 +1,5 @@
 import {
+  botAttentionDecisionSearch,
   encodeBotAttentionRequest,
   type BotAttentionDecisionResolver,
   readGoatBotAttentionTarget,
@@ -45,5 +46,6 @@ export async function resolveMobileBotAttentionLink(
   if (!registry.get(channels.listBotAttention.permissionAtom(target.environmentId))) return null;
   return decision === null
     ? botTaskLink(target, fresh.task.originAddress.kind, fresh.requestId, fresh.request)
-    : "/decisions?" + new URLSearchParams(decision).toString();
+    : "/decisions?" +
+        new URLSearchParams(botAttentionDecisionSearch(decision, target, fresh.task)).toString();
 }

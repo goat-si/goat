@@ -1,6 +1,7 @@
 import {
   allowsGoatBotAlert,
   attentionCursorKey,
+  botAttentionDecisionSearch,
   encodeBotAttentionRequest,
   resolveBotAttentionDecision,
   goatBotAttentionTitle,
@@ -15,7 +16,6 @@ import {
 import type { AnyRouter } from "@tanstack/react-router";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 import { useGlobalAgentStore } from "../../globalAgentStore";
-import { orchestrationEnvironment } from "../../state/orchestration";
 import { serverEnvironment } from "../../state/server";
 import { channelEnvironment } from "../../state/channels";
 import { environmentPresentations, environmentSummaries } from "../../state/presentation";
@@ -88,7 +88,6 @@ export function startGoatBotAttentionNotifications(
                       registry,
                       {
                         decisions: serverEnvironment,
-                        orchestration: orchestrationEnvironment,
                         connected: (id) =>
                           registry.get(environmentPresentations.presentationAtom(id))?.connection
                             .phase === "connected",
@@ -100,7 +99,10 @@ export function startGoatBotAttentionNotifications(
               if (!registry.get(channelEnvironment.listBotAttention.permissionAtom(environmentId)))
                 return;
               if (decision !== null) {
-                await router.navigate({ to: "/decisions", search: decision });
+                await router.navigate({
+                  to: "/decisions",
+                  search: botAttentionDecisionSearch(decision, event, target.task),
+                });
                 return;
               }
               await router.navigate({

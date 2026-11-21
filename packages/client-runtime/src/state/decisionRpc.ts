@@ -3,6 +3,7 @@ import {
   type DecisionGetInput,
   type DecisionListInput,
   type EnvironmentId,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -56,6 +57,12 @@ export function createDecisionEnvironmentAtoms<R, E>(
       return AsyncResult.isSuccess(result) ? result.value : null;
     }).pipe(Atom.withLabel(`environment-data:decision:feed-value:${environmentId}`)),
   );
+  const handoffRevision = Atom.family((id: EnvironmentId) =>
+    Atom.make((get) => {
+      const feed = get(decisionFeed(id));
+      return feed?.handoffRevision ?? feed;
+    }),
+  );
 
   const decisionGet = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:decision:item",
@@ -69,6 +76,13 @@ export function createDecisionEnvironmentAtoms<R, E>(
     decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
       decisionItems({ environmentId: target.environmentId, input: target }),
     decisionFeed,
+    targetedHandoff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:decision:targeted-handoff",
+      tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => handoffRevision(environmentId),
+    }),
     getDecision: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:decision:get",
       tag: WS_METHODS.decisionGet,

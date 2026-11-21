@@ -1,11 +1,21 @@
 import {
   readDecisionRequestTarget,
+  targetedHandoffItem,
+  targetedHandoffRead,
   unlistedApprovalsNotice,
   type DecisionRequestTarget,
 } from "@goat/client-runtime/state/decision-inbox";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
-import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  StackActions,
+  useIsFocused,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { useEffect } from "react";
 import { View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,6 +25,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { AppBar } from "../../components/ui/AppBar";
 import { useProject, useThreadShell } from "../../state/entities";
+import { serverEnvironment } from "../../state/server";
 import { useSavedRemoteConnection } from "../../state/use-remote-environment-registry";
 import { PendingApprovalCard } from "../threads/PendingApprovalCard";
 import { HumanHandoffCard } from "../threads/HumanHandoffCard";
@@ -55,6 +66,16 @@ function FocusedDecisionsContent(props: {
   readonly isFocused: () => boolean;
   readonly target?: DecisionRequestTarget | undefined;
 }) {
+  const { target } = props;
+  const read = targetedHandoffRead(target);
+  const result = useAtomValue(
+    read === undefined ? noHandoff : serverEnvironment.targetedHandoff(read),
+  );
+  const handoff =
+    target !== undefined && result._tag === "Success"
+      ? targetedHandoffItem(target, result.value.item)
+      : undefined;
+  const loadingHandoff = read !== undefined && result._tag === "Initial";
   const {
     state,
     queue,
@@ -75,7 +96,7 @@ function FocusedDecisionsContent(props: {
     decisionDraft,
     onSelectOption,
     onChangeCustomAnswer,
-  } = useDecisionInbox(props.session, props.isFocused, useDecisionInboxSideChat(), props.target);
+  } = useDecisionInbox(props.session, props.isFocused, useDecisionInboxSideChat(), target, handoff);
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
@@ -88,6 +109,22 @@ function FocusedDecisionsContent(props: {
   const insets = useSafeAreaInsets();
   const userInput = current?.kind === "user_input" ? current.request : null;
   const partial = state.loadingRefs.length > 0 || state.errors.length > 0;
+  if (
+    read !== undefined &&
+    !loadingHandoff &&
+    handoff === undefined &&
+    target?.originTaskId !== undefined &&
+    target.originEnvironmentId !== undefined
+  ) {
+    return (
+      <OpenOriginTask
+        taskId={target.originTaskId}
+        environmentId={target.originEnvironmentId}
+        botId={target.originBotId}
+        detail={target.originDetail}
+      />
+    );
+  }
   return (
     <ScreenContent>
       <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
@@ -106,7 +143,7 @@ function FocusedDecisionsContent(props: {
             tone="secondary"
             onPress={() => navigation.navigate("SettingsDecisionInbox")}
           />
-          {state.loadingRefs.length > 0 ? (
+          {state.loadingRefs.length > 0 || loadingHandoff ? (
             <Text className="text-sm text-foreground-muted">
               {current ? "Checking more decisions…" : "Loading decisions…"}
             </Text>
@@ -139,7 +176,7 @@ function FocusedDecisionsContent(props: {
               {unlistedApprovalsNotice(state.unlistedApprovals)}
             </Text>
           ) : null}
-          {current === null && !partial ? (
+          {current === null && !partial && !loadingHandoff ? (
             <EmptyState
               title="No pending thread requests"
               detail={
@@ -275,4 +312,32 @@ function FocusedDecisionsContent(props: {
       </KeyboardAvoidingView>
     </ScreenContent>
   );
+}
+
+const noHandoff = Atom.make(AsyncResult.initial());
+
+function OpenOriginTask({
+  taskId,
+  environmentId,
+  botId,
+  detail,
+}: {
+  readonly taskId: string;
+  readonly environmentId: string;
+  readonly botId: string | undefined;
+  readonly detail: "external" | undefined;
+}) {
+  const navigation = useNavigation();
+  // oxlint-disable-next-line goat/react-effect-budget -- Replace a failed exact approval route with the originating task.
+  useEffect(() => {
+    navigation.dispatch(
+      StackActions.replace("GoatBot", {
+        taskId,
+        botId,
+        attentionEnvironment: environmentId,
+        attentionDetail: detail,
+      }),
+    );
+  }, [navigation, taskId, botId, environmentId, detail]);
+  return null;
 }

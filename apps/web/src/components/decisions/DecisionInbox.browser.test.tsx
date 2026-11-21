@@ -3,6 +3,7 @@ import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
 import {
+  ChannelTaskId,
   EnvironmentId,
   ProviderInstanceId,
   RuntimeRequestId,
@@ -40,9 +41,6 @@ type Snapshot = {
 type Receipt = AtomCommandResult<void, Error>;
 type Run = (...args: unknown[]) => Promise<Receipt>;
 const targetedHandoff = vi.hoisted(() => vi.fn());
-vi.mock("../../state/orchestration", () => ({
-  orchestrationEnvironment: { targetedHandoff },
-}));
 const state = vi.hoisted<{
   registry: AtomRegistry.AtomRegistry | null;
   snapshot: Atom.Writable<Snapshot> | null;
@@ -116,7 +114,9 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../state/environments", () => ({
   useEnvironment: (id: EnvironmentId) => ({ label: `Environment ${id}` }),
 }));
-vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "decisionAnswer" } }));
+vi.mock("../../state/server", () => ({
+  serverEnvironment: { answerDecision: "decisionAnswer", targetedHandoff },
+}));
 vi.mock("../../hooks/useSettings", async () => {
   const { DEFAULT_CLIENT_SETTINGS } = await import("@goat/contracts/settings");
   return {
@@ -127,7 +127,7 @@ vi.mock("../../hooks/useSettings", async () => {
 // The handoff card answers through its own RPCs and has its own tests.
 vi.mock("../chat/HandoffCard", () => ({
   HandoffCard: (props: { readonly handoff: { readonly title: string } }) => (
-    <section aria-label={props.handoff.title} />
+    <section aria-label={props.handoff.title}>{props.handoff.title}</section>
   ),
 }));
 
@@ -580,7 +580,7 @@ it.each([true, false])(
       requestId: RuntimeRequestId.make(handoff.handoffId),
       requestKind: "handoff" as const,
       originEnvironmentId: primary,
-      originTaskId: "origin-task",
+      originTaskId: ChannelTaskId.make("origin-task"),
     };
     await targetedRouter.navigate({ to: "/decisions", search });
     // Use the router that handles the Decisions target and originating task.

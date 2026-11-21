@@ -1,5 +1,4 @@
 import { resolveBotAttentionDecision } from "@goat/client-runtime/goatBot";
-import { orchestrationEnvironment } from "../../state/orchestration";
 import { serverEnvironment } from "../../state/server";
 import { RegistryContext } from "@effect/atom-react";
 import { MAIN_BOT_ID } from "@goat/contracts";
@@ -114,7 +113,6 @@ export function useAgentNotificationNavigation(
             registry,
             {
               decisions: serverEnvironment,
-              orchestration: orchestrationEnvironment,
               connected: (id) =>
                 registry.get(environmentPresentations.presentationAtom(id))?.connection.phase ===
                 "connected",

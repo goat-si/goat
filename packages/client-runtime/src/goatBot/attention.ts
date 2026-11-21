@@ -1,14 +1,11 @@
 import {
   pendingDecisionId,
-  TurnItemId,
-  isHandoffPending,
+  MAIN_BOT_ID,
   type DecisionFeed,
   type DecisionItem,
   type ChannelTask,
   type ChannelTaskApprovalRef,
   type EnvironmentId,
-  type RuntimeRequestId,
-  type ScopedThreadRef,
 } from "@goat/contracts";
 import {
   ChannelAttentionRequest,
@@ -22,8 +19,8 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 
 import type { createDecisionEnvironmentAtoms } from "../state/decisionRpc.ts";
-import type { createOrchestrationEnvironmentAtoms } from "../state/orchestration.ts";
 import type { createChannelEnvironmentAtoms } from "../state/channels.ts";
+import type { DecisionRequestTarget } from "../state/decisionInbox.ts";
 import { runAtomCommand } from "../state/runtime.ts";
 
 export const goatBotAlertChoices = [
@@ -222,9 +219,12 @@ function nativeAttentionRequest(
   ref: ChannelAttentionRequest | undefined,
 ): ChannelAttentionRequest | undefined {
   if (ref?.kind === "handoff") {
-    return ref.host === undefined &&
-      task.worker?.host === undefined &&
-      task.worker?.threadId === ref.threadId
+    return task.worker?.threadId === ref.threadId &&
+      task.worker.host === ref.host &&
+      (ref.host === undefined ||
+        task.observed?.needsYou.some(
+          ({ handoff }) => handoff !== undefined && matchesNativeRequest(handoff, ref),
+        ))
       ? ref
       : undefined;
   }
@@ -269,12 +269,26 @@ export function botAttentionRequest(task: ChannelTask, requestId: string | undef
   return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
-type DecisionRequestTarget = ScopedThreadRef & { readonly requestId: RuntimeRequestId };
-
 export type BotAttentionDecisionResolver = (
   request: ChannelAttentionRequest,
   task: ChannelTask,
 ) => Promise<DecisionRequestTarget | null>;
+
+export function botAttentionDecisionSearch(
+  decision: DecisionRequestTarget,
+  target: ChannelAttentionTarget,
+  task: ChannelTask,
+): DecisionRequestTarget {
+  return decision.requestKind !== "handoff"
+    ? decision
+    : {
+        ...decision,
+        originEnvironmentId: target.environmentId,
+        originTaskId: target.taskId,
+        ...(target.botId === MAIN_BOT_ID ? {} : { originBotId: target.botId }),
+        ...(task.originAddress.kind === "goat" ? {} : { originDetail: "external" }),
+      };
+}
 
 type DecisionRpc = Pick<
   ReturnType<typeof createDecisionEnvironmentAtoms>,
@@ -326,10 +340,6 @@ export async function resolveBotAttentionDecision(
   registry: AtomRegistry.AtomRegistry,
   services: {
     readonly decisions: Pick<DecisionRpc, "getDecision">;
-    readonly orchestration: Pick<
-      ReturnType<typeof createOrchestrationEnvironmentAtoms>,
-      "readTurnItem"
-    >;
     readonly connected: (id: EnvironmentId) => boolean;
   },
   origin: EnvironmentId,
@@ -342,41 +352,19 @@ export async function resolveBotAttentionDecision(
       ? origin
       : task.worker?.host === host
         ? task.worker?.environmentId
-        : (await readBotAttentionRuntimeDecision(registry, services.decisions, origin, request))
-            ?.from.environmentId;
+        : request.kind === "handoff"
+          ? undefined
+          : (await readBotAttentionRuntimeDecision(registry, services.decisions, origin, request))
+              ?.from.environmentId;
   if (environmentId === undefined || !services.connected(environmentId)) return null;
-  if (request.kind === "handoff") {
-    const result = await runAtomCommand(
-      registry,
-      services.orchestration.readTurnItem,
-      {
-        environmentId,
-        input: { threadId, itemId: TurnItemId.make(requestId) },
-      },
-      { reportFailure: false },
-    );
-    const item = result._tag === "Success" ? result.value.item : null;
-    if (
-      item?.type !== "human_handoff" ||
-      item.threadId !== threadId ||
-      item.handoff.handoffId !== String(requestId) ||
-      item.handoff.kind !== "approval" ||
-      !isHandoffPending(item.handoff.state)
-    )
-      return null;
-  } else {
-    const item = await readBotAttentionRuntimeDecision(
-      registry,
-      services.decisions,
-      environmentId,
-      {
-        kind: "runtime",
-        threadId,
-        requestId,
-      },
-    );
-    if (item?.from.environmentId !== environmentId) return null;
-  }
+  if (request.kind === "handoff")
+    return { environmentId, threadId, requestId, requestKind: "handoff" };
+  const item = await readBotAttentionRuntimeDecision(registry, services.decisions, environmentId, {
+    kind: "runtime",
+    threadId,
+    requestId,
+  });
+  if (item?.from.environmentId !== environmentId) return null;
   return { environmentId, threadId, requestId };
 }
 

@@ -1,5 +1,8 @@
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type { NotificationResponse } from "expo-notifications";
+import { resolveBotAttentionDecision } from "@goat/client-runtime/goatBot";
+import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
+import { BotId, ChannelTaskId, EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import * as NodeModule from "node:module";
 import * as NodeURL from "node:url";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -109,6 +112,83 @@ describe("extractAgentNotificationDeepLink", () => {
 });
 
 describe("routeAgentNotificationResponseOnce", () => {
+  it("carries the exact SSH handoff and its originating Bot task to mobile Decisions", async () => {
+    const registry = AtomRegistry.make();
+    try {
+      const origin = EnvironmentId.make("origin");
+      const destination = EnvironmentId.make("remote/env");
+      const ref = {
+        host: "box",
+        threadId: ThreadId.make("mcp:worker"),
+        requestId: RuntimeRequestId.make("handoff:old"),
+      };
+      const task = {
+        originAddress: { kind: "slack" },
+        generation: 1,
+        openQuestions: [],
+        worker: { host: ref.host, environmentId: destination, threadId: ref.threadId },
+        observed: { needsYou: [{ kind: "approval", handoff: ref }] },
+      };
+      const allowed = Atom.make(true);
+      const channels = {
+        listBotAttention: { permissionAtom: () => allowed },
+        readAttentionTask: { run: async () => AsyncResult.success(task) },
+      } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+      const target = {
+        environmentId: origin,
+        botId: BotId.make("scout"),
+        taskId: ChannelTaskId.make("task"),
+        generation: 1,
+        request: { kind: "handoff" as const, ...ref },
+      };
+      const decisions = { getDecision: { run: vi.fn() } } as unknown as Parameters<
+        typeof resolveBotAttentionDecision
+      >[1]["decisions"];
+      const link = await resolveMobileBotAttentionLink(
+        registry,
+        channels,
+        target,
+        (request, live) =>
+          resolveBotAttentionDecision(
+            registry,
+            { decisions, connected: (id) => id === destination },
+            origin,
+            live,
+            request,
+          ),
+      );
+      expect(link).toMatch(/^\/decisions\?/);
+      expect(
+        readDecisionRequestTarget(Object.fromEntries(new URLSearchParams(link?.split("?")[1]))),
+      ).toEqual({
+        environmentId: destination,
+        threadId: ref.threadId,
+        requestId: ref.requestId,
+        requestKind: "handoff",
+        originEnvironmentId: origin,
+        originTaskId: target.taskId,
+        originBotId: target.botId,
+        originDetail: "external",
+      });
+      const wrong = await resolveMobileBotAttentionLink(
+        registry,
+        channels,
+        { ...target, request: { ...target.request, host: "different" } },
+        (request, live) =>
+          resolveBotAttentionDecision(
+            registry,
+            { decisions, connected: () => true },
+            origin,
+            live,
+            request,
+          ),
+      );
+      expect(wrong).toMatch(/^\/bot\?/);
+    } finally {
+      registry.dispose();
+    }
+  });
+
   it.each([true, false])(
     "routes an exact native approval with duplicate ids (available: %s)",
     async (available) => {

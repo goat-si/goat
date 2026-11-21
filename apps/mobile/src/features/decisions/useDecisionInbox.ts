@@ -103,6 +103,7 @@ export function useDecisionInbox(
   isFocused: () => boolean,
   sideChat?: DecisionInboxSideChat,
   target?: DecisionRequestTarget,
+  handoff?: DecisionItem,
 ) {
   const registry = useContext(RegistryContext);
   const state = useAtomValue(decisionInbox.itemsAtom);
@@ -126,26 +127,32 @@ export function useDecisionInbox(
       orderDecisionQueue(
         target === undefined
           ? state.items
-          : state.items.filter((item) => matchesDecisionRequest(item, target)),
+          : target.requestKind === "handoff"
+            ? handoff === undefined
+              ? []
+              : [handoff]
+            : state.items.filter((item) => matchesDecisionRequest(item, target)),
         skippedIds,
       ),
-    [state.items, skippedIds, target],
+    [state.items, skippedIds, target, handoff],
   );
   const unresolved = useCallback(
-    (item: DecisionItem) => isDecisionItemWaiting(state, item),
-    [state],
+    (item: DecisionItem) => target?.requestKind !== "handoff" && isDecisionItemWaiting(state, item),
+    [state, target?.requestKind],
   );
   const liveSelected =
     selected === null ? undefined : queue.find((item) => item.id === selected.id);
   const current =
-    liveSelected ??
-    (selected !== null &&
-    (target === undefined || matchesDecisionRequest(selected, target)) &&
-    unresolved(selected)
-      ? selected
-      : state.isLoading && selected === null
-        ? null
-        : (queue[0] ?? null));
+    target?.requestKind === "handoff"
+      ? (handoff ?? null)
+      : (liveSelected ??
+        (selected !== null &&
+        (target === undefined || matchesDecisionRequest(selected, target)) &&
+        unresolved(selected)
+          ? selected
+          : state.isLoading && selected === null
+            ? null
+            : (queue[0] ?? null)));
   const paused = current !== null && unresolved(current);
   const currentId = current?.id ?? null;
   const position = current === null ? 0 : queue.findIndex((item) => item.id === current.id) + 1;

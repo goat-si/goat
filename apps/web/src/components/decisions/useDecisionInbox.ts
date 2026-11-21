@@ -69,7 +69,7 @@ function withoutUntouchedSuggestions(
   );
 }
 
-export function useDecisionInbox(target?: DecisionRequestTarget) {
+export function useDecisionInbox(target?: DecisionRequestTarget, handoff?: DecisionItem) {
   const snapshot = useAtomValue(decisionInbox.itemsAtom);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -90,7 +90,11 @@ export function useDecisionInbox(target?: DecisionRequestTarget) {
   const items =
     target === undefined
       ? snapshot.items
-      : snapshot.items.filter((item) => matchesDecisionRequest(item, target));
+      : target.requestKind === "handoff"
+        ? handoff === undefined
+          ? []
+          : [handoff]
+        : snapshot.items.filter((item) => matchesDecisionRequest(item, target));
   const ordered = orderDecisionQueue(items, skippedIds);
   const current = ordered.find((item) => item.id === activeId) ?? ordered[0] ?? null;
   // The thread composer keeps its answers in the same store, so either surface shows the other's.
