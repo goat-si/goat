@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert } from "@effect/vitest";
 import { type BotId, type RuntimeMode } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -26,6 +27,8 @@ export const slackScenario = (options: Parameters<typeof makeHarness>[0] = {}) =
     Layer.provide(sdk.layer),
     Layer.provide(ServerSecretStore.layer),
     Layer.provideMerge(SlackChannelRuntime.layer.pipe(Layer.provide(sdk.layer))),
+    Layer.provide(NodeCrypto.layer),
+    Layer.orDie,
   );
   const harness = makeHarness({
     ...options,
