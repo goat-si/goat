@@ -18,6 +18,7 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 const session = vi.hoisted(() => ({
