@@ -427,7 +427,10 @@ describe("Slack runtime on the channel core", () => {
           files.notes,
           "- 2026-02-01: The deploy phrase is cobalt. (asked in x)\n",
         );
-        const memoryOwner = { ...owner, grantedScopes: [...owner.grantedScopes, "memory:read"] };
+        const memoryOwner: typeof owner = {
+          ...owner,
+          grantedScopes: [...owner.grantedScopes, "memory:read"],
+        };
         yield* connect(sdk, { owner: memoryOwner });
         yield* linkAlice(sdk, memoryOwner);
         const orchestrator = yield* Orchestrator.OrchestratorV2;

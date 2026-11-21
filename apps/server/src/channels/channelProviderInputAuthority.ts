@@ -1,6 +1,8 @@
 import { isGoatBotSessionThreadId, type MessageId, type OrchestrationV2Run } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { isUnlinkedPrincipal, lowerRuntimeMode } from "./ChannelGateway.ts";
@@ -20,7 +22,7 @@ const permissionChanged = makeProviderFailure({
   retryable: false,
 });
 
-export const makeProviderInputRefusal = Effect.gen(function* () {
+const makeProviderInputRefusal = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
   return Effect.fn("ChannelBotSession.refuseProviderInput")(
@@ -76,3 +78,12 @@ export const makeProviderInputRefusal = Effect.gen(function* () {
       ),
   );
 });
+
+export class ChannelProviderInputAuthority extends Context.Service<
+  ChannelProviderInputAuthority,
+  Effect.Success<typeof makeProviderInputRefusal>
+>()("goat/channels/ChannelProviderInputAuthority") {}
+
+export const layer = Layer.effect(ChannelProviderInputAuthority, makeProviderInputRefusal).pipe(
+  Layer.provide(ChannelLedger.layer),
+);

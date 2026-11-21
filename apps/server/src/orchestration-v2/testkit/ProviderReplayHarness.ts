@@ -484,27 +484,28 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
-  const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerDatabase,
-        layerProvidedRegistry,
-        options.cloudSources ?? Layer.empty,
-        layerContextHandoffServiceProvided,
-        layerEventSinkProvided,
-        IdAllocator.layer,
-        layerStores,
-        layerProviderSessionManagerProvided,
-        Layer.mock(ProviderAuthService.ProviderAuthService)({
-          tryHandlePromptCommand: () => Effect.succeed(false),
-        }),
-        layerRunExecutionServiceProvided,
-        layerRuntime,
-        layerServerConfig,
-        layerServerSettings,
+  const layerProviderTurnStartServiceProvided =
+    ProviderTurnStartService.layerWithChannelAuthority.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerDatabase,
+          layerProvidedRegistry,
+          options.cloudSources ?? Layer.empty,
+          layerContextHandoffServiceProvided,
+          layerEventSinkProvided,
+          IdAllocator.layer,
+          layerStores,
+          layerProviderSessionManagerProvided,
+          Layer.mock(ProviderAuthService.ProviderAuthService)({
+            tryHandlePromptCommand: () => Effect.succeed(false),
+          }),
+          layerRunExecutionServiceProvided,
+          layerRuntime,
+          layerServerConfig,
+          layerServerSettings,
+        ),
       ),
-    ),
-  );
+    );
   const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(layerStores, layerProviderSessionManagerProvided, layerEventSinkProvided),

@@ -201,24 +201,25 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
   ),
 );
 
-const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      CloudTaskSource.layer.pipe(Layer.provide(GitVcsDriver.layer)),
-      layerProviderAdapterRegistryProvided,
-      layerContextHandoffServiceProvided,
-      layerEventSinkProvided,
-      IdAllocator.layer,
-      ProjectionStore.layer,
-      layerProviderSessionManagerProvided,
-      layerProviderAuthServiceProvided,
-      layerRunExecutionServiceProvided,
-      layerRuntimePolicyProvided,
-      TurnItemPositionStore.layer,
-      WorktreeSnapshotStoreLive.layer.pipe(Layer.provide(GitVcsDriver.layer)),
+const layerProviderTurnStartServiceProvided =
+  ProviderTurnStartService.layerWithChannelAuthority.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        CloudTaskSource.layer.pipe(Layer.provide(GitVcsDriver.layer)),
+        layerProviderAdapterRegistryProvided,
+        layerContextHandoffServiceProvided,
+        layerEventSinkProvided,
+        IdAllocator.layer,
+        ProjectionStore.layer,
+        layerProviderSessionManagerProvided,
+        layerProviderAuthServiceProvided,
+        layerRunExecutionServiceProvided,
+        layerRuntimePolicyProvided,
+        TurnItemPositionStore.layer,
+        WorktreeSnapshotStoreLive.layer.pipe(Layer.provide(GitVcsDriver.layer)),
+      ),
     ),
-  ),
-);
+  );
 
 const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layerWithSkills.pipe(
   Layer.provide(
