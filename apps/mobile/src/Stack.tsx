@@ -536,7 +536,7 @@ function RootStackLayout(props: {
       .filter((route) => !isWorkspaceOverlayRoute(route.name)),
   );
   const draftFlowProps = draftRouteFlowProps(props.state);
-  useAgentNotificationNavigation(workspaceLocation.pathname);
+  useAgentNotificationNavigation(workspaceLocation.pathname, props.state);
   useConnectOnboardingNavigation();
   useAppShortcuts(props.state);
   useEffect(() => {
@@ -779,6 +779,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       },
     }),
     GoatBot: createNativeStackScreen({
+      linking: "bot",
       screen: GoatBotRouteScreen,
       options: { ...DETAIL_HEADER_OPTIONS, title: "GOAT Bot" },
     }),
