@@ -169,11 +169,16 @@ describe("open asks across bots", () => {
   it.effect(
     "publishes an existing SSH worker binding only to its owner and exact destination",
     () => {
-      const harness = makeHarness({ projects: 2 });
+      const harness = makeHarness();
       return Effect.gen(function* () {
         yield* linkSlackUser();
         const members = yield* ChannelBotMembers.ChannelBotMembers;
-        const task = yield* startWaiting(harness, "do: which repo?", "Ev-legacy-ssh-binding");
+        const task = yield* startWaiting(
+          harness,
+          "do: deploy staging",
+          "Ev-legacy-ssh-binding",
+          request("legacy-ssh-binding"),
+        );
         const sql = yield* SqlClient.SqlClient;
         const destination = EnvironmentId.make("old-ssh-destination");
         const worker = { environmentId: destination, threadId: task.worker!.threadId };
