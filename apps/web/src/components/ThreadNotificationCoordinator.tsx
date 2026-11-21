@@ -271,15 +271,15 @@ export function startThreadNotifications(
       registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
         ?.environment.capabilities.goatBotAttention === true);
 
-  const owningOrigins = (destination: EnvironmentId, source: OrchestrationV2ThreadShell) =>
-    source.creationSource !== "mcp"
+  const owningOrigins = (destination: EnvironmentId, source?: OrchestrationV2ThreadShell) =>
+    source?.creationSource !== undefined && source.creationSource !== "mcp"
       ? []
       : registry
           .get(environmentSummaries.environmentIdsAtom)
           .filter(
             (origin) =>
               origin !== destination &&
-              (source.launchedBy?.environmentId == null ||
+              (source?.launchedBy?.environmentId == null ||
                 source.launchedBy.environmentId === origin) &&
               registry.get(environmentPresentations.presentationAtom(origin))?.serverConfig
                 ?.environment.capabilities.goatBotAttention === true &&
@@ -599,7 +599,8 @@ export function startThreadNotifications(
         const shown =
           kind === "input" ? approvalHandoffShownBy(entry.threads, threadId, state.status) : null;
         if (shown) entry.approvals.remember(shown.id);
-        const origins = owningOrigins(environmentId, state.raw);
+        const origins =
+          state.raw.creationSource === "mcp" ? owningOrigins(environmentId, state.raw) : [];
         if (origins.length === 0) {
           present(environmentId, state, kind, shown?.title);
           return;
@@ -617,7 +618,19 @@ export function startThreadNotifications(
       }),
       approvals: createApprovalNotificationGate<string>((handoffId) => {
         const handoff = handoffs.get(handoffId);
-        if (handoff) presentApproval(environmentId, handoff);
+        if (handoff === undefined) return;
+        const threadId = handoff.handoff.requestedBy.threadId;
+        const source = entry.threads.find((thread) => thread.id === threadId);
+        const origins = owningOrigins(environmentId, source);
+        if (origins.length === 0) {
+          presentApproval(environmentId, handoff);
+          return;
+        }
+        void ownedByBot(origins, environmentId, threadId).then((owned) => {
+          const current = handoffs.get(handoffId);
+          if (!owned && current !== undefined && watched.get(environmentId) === entry)
+            presentApproval(environmentId, current);
+        });
       }),
     };
     // Held for as long as notifications watch this environment, whatever is on screen.

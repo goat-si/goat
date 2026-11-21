@@ -71,13 +71,16 @@ const asksFor = (task: ChannelTask): ReadonlyArray<Ask> =>
           },
         ];
       case "approval":
+      case "handoff":
       case "native_question":
         return [
           {
-            kind: ask.kind === "approval" ? "approval" : "question",
+            kind: ask.kind === "native_question" ? "question" : "approval",
             requestId: ask.ref.requestId,
-            request: { kind: "runtime", ...ask.ref },
-            identity: JSON.stringify([ask.ref.host ?? null, ask.ref.threadId, ask.ref.requestId]),
+            request: { kind: ask.kind === "handoff" ? "handoff" : "runtime", ...ask.ref },
+            identity:
+              (ask.kind === "handoff" ? "handoff:" : "") +
+              JSON.stringify([ask.ref.host ?? null, ask.ref.threadId, ask.ref.requestId]),
           },
         ];
       case "sign_in":
