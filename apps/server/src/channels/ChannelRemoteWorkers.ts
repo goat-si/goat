@@ -1670,7 +1670,11 @@ const make = Effect.gen(function* () {
                     }
                   : { type: "cwd" },
             title: task.title,
-            ...remoteWorkerLaunchPrompt(task, frozen.brief.deliveredText),
+            ...remoteWorkerLaunchPrompt(
+              task,
+              frozen.brief.deliveredText,
+              frozen.sendsNotes || frozen.brief.context.notesRevision != null,
+            ),
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.

@@ -11,7 +11,7 @@ import {
 import { NOTES_REPLACED_RULE, type ChannelBotFiles } from "./channelBotNotes.ts";
 import {
   channelBotNotesSection,
-  NOTES_SECTION_CHARS,
+  REMOTE_WORKER_NOTES_CHARS,
   type ChannelBotNotesSnapshot,
 } from "./channelBotNotesRecall.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -275,22 +275,42 @@ export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) 
   return render(best.join("\n"), skills);
 };
 
-export const remoteWorkerLaunchPrompt = (task: BriefTask, frozenText: string) => {
+export const remoteWorkerLaunchPrompt = (
+  task: BriefTask,
+  frozenText: string,
+  knownNotes = false,
+): { readonly message: string; readonly providerNotes?: string } => {
   const header = workerHeader(task).join("\n");
   const wrapper = `\n${REMOTE_CONTEXT_INTRO}\n${NOTES_OPEN}\n`;
-  const headerAt = frozenText.indexOf(header);
-  const opening = frozenText.indexOf(wrapper, headerAt === -1 ? 0 : headerAt + header.length);
-  if (opening === -1) return { message: frozenText };
+  const headerAt = frozenText.indexOf(header + wrapper);
+  const safePrompt = () => ({
+    message: remoteWorkerMessage(task, { notes: undefined, skills: [] }),
+  });
+  if (headerAt === -1)
+    return knownNotes || frozenText.includes(NOTES_OPEN) || frozenText.includes(NOTES_CLOSE)
+      ? safePrompt()
+      : { message: frozenText };
+  const opening = headerAt + header.length;
   const start = opening + wrapper.length;
-  // Notes files can contain a line that looks like the closing delimiter.
-  const end = frozenText.lastIndexOf(`\n${NOTES_CLOSE}\n`);
-  if (end < start) return { message: remoteWorkerMessage(task, { notes: undefined, skills: [] }) };
-  const remainder = frozenText.slice(end + NOTES_CLOSE.length + 1);
-  const intro = remainder.startsWith('\n<goat_bot_skill name="') ? `\n${REMOTE_CONTEXT_INTRO}` : "";
+  const publicTail = [...remoteContextLines(task, "", []), ...channelWorkerRules("remote")].join(
+    "\n",
+  );
+  const tailAt = frozenText.lastIndexOf(`\n${publicTail}`);
+  // A closing delimiter inside a note is not the end of the generated frame.
+  const end = frozenText.lastIndexOf(`\n${NOTES_CLOSE}\n`, tailAt);
+  if (end < start || tailAt === -1) return safePrompt();
+  const remainderAt = end + NOTES_CLOSE.length + 1;
+  const skills = frozenText.slice(remainderAt, tailAt);
+  const hasSkills =
+    skills.startsWith('\n<goat_bot_skill name="') && skills.endsWith("\n</goat_bot_skill>");
+  if (skills !== "" && !hasSkills) return safePrompt();
   const notes = frozenText.slice(start, end);
   return {
-    message: frozenText.slice(0, opening) + intro + remainder,
-    ...(notes.length <= NOTES_SECTION_CHARS && notes.trim() ? { providerNotes: notes } : {}),
+    message:
+      frozenText.slice(0, opening) +
+      (hasSkills ? `\n${REMOTE_CONTEXT_INTRO}` : "") +
+      frozenText.slice(remainderAt),
+    ...(notes.length <= REMOTE_WORKER_NOTES_CHARS && notes.trim() ? { providerNotes: notes } : {}),
   };
 };
 

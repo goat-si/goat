@@ -69,12 +69,14 @@ describe("SSH worker launch notes", () => {
     const privateMatched = "P".repeat(2999);
     const standing = `${sharedStanding}\n${privateStanding}`;
     const matched = `${sharedMatched}\n${privateMatched}`;
+    const skill = "Check the staging service.";
     const frozen = remoteWorkerMessage(task, {
       notes: { standing, matched, ranked: [] },
-      skills: [],
+      skills: [{ name: "verify-staging", text: skill }],
     });
     const prompt = remoteWorkerLaunchPrompt(task, frozen);
     expect(prompt.message).toContain(task.instruction);
+    expect(prompt.message).toContain(skill);
     expect(prompt.message).not.toContain(sharedStanding);
     expect(prompt.message).not.toContain(privateStanding);
     expect(prompt.providerNotes?.length).toBe(18001);
@@ -82,11 +84,38 @@ describe("SSH worker launch notes", () => {
     expect(decodeLaunch({ title: task.instruction, ...prompt }).providerNotes).toBe(
       prompt.providerNotes,
     );
+    expect(() =>
+      decodeLaunch({
+        title: task.instruction,
+        ...prompt,
+        providerNotes: `${matched}\n${standing}x`,
+      }),
+    ).toThrow();
   });
 
   it("withholds a frozen brief whose notes wrapper is malformed", () => {
     const note = "Only the scoped provider may see this synthetic note.";
     const frozen = `${task.instruction}\n<goat_bot_notes>\n${note}\n</goat_bot_notes>`;
+    const prompt = remoteWorkerLaunchPrompt(task, frozen);
+    expect(prompt.message).toContain(task.instruction);
+    expect(prompt.message).not.toContain(note);
+    expect(prompt.providerNotes).toBeUndefined();
+  });
+
+  it("withholds known notes even when every delimiter is missing", () => {
+    const note = "Only the scoped provider may see this synthetic note.";
+    const prompt = remoteWorkerLaunchPrompt(task, `${task.instruction}\n${note}`, true);
+    expect(prompt.message).toContain(task.instruction);
+    expect(prompt.message).not.toContain(note);
+    expect(prompt.providerNotes).toBeUndefined();
+  });
+
+  it("withholds a partial frame with a closing delimiter inside its notes", () => {
+    const note = "Only the scoped provider may see this synthetic note.";
+    const frozen = remoteWorkerMessage(task, {
+      notes: { standing: `Opening note\n</goat_bot_notes>\n${note}`, matched: "", ranked: [] },
+      skills: [],
+    }).replace(`${note}\n</goat_bot_notes>`, note);
     const prompt = remoteWorkerLaunchPrompt(task, frozen);
     expect(prompt.message).toContain(task.instruction);
     expect(prompt.message).not.toContain(note);

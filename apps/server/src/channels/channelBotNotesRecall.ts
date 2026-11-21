@@ -15,6 +15,8 @@ const NOTES_RECENT_CHARS = 6_000;
 const NOTES_MATCHED_CHARS = 3_000;
 /** The whole notes section; a file whose notes in force fit goes in whole. */
 export const NOTES_SECTION_CHARS = NOTES_RECENT_CHARS + NOTES_MATCHED_CHARS;
+/** Remote workers can receive both note scopes with a newline joining them. */
+export const REMOTE_WORKER_NOTES_CHARS = 2 * NOTES_SECTION_CHARS + 1;
 /** How much of the end of the notes file is read and searched. */
 export const NOTES_SCAN_BYTES = 256 * 1024;
 

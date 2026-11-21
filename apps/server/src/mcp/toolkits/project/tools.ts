@@ -31,7 +31,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
-import { NOTES_SECTION_CHARS } from "../../../channels/channelBotNotesRecall.ts";
+import { REMOTE_WORKER_NOTES_CHARS } from "../../../channels/channelBotNotesRecall.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -196,7 +196,7 @@ export const ThreadLaunchParameters = Schema.Struct({
     }),
   ),
   providerNotes: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(NOTES_SECTION_CHARS)).annotate({
+    TrimmedNonEmptyString.check(Schema.isMaxLength(REMOTE_WORKER_NOTES_CHARS)).annotate({
       description:
         "Scoped GOAT Bot notes for the first provider turn of an outside dispatch. Agents omit it.",
     }),
