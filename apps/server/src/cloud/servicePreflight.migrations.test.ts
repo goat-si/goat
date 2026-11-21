@@ -73,7 +73,7 @@ it.layer(NodeServices.layer)("service preflight migration history", (it) => {
     }),
   );
 
-  it.effect.each([176, 177])("accepts the bot attention preview recorded at %s", (id) =>
+  it.effect.each([176, 177, 178])("accepts the bot attention preview recorded at %s", (id) =>
     Effect.gen(function* () {
       const preview = [
         ...migrationManifest.filter(([migrationId]) => migrationId < id),

@@ -23,8 +23,11 @@ const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
-const LEGACY_BOT_ATTENTION_ID = 176;
 const BOT_ATTENTION_MIGRATION_NAME = "ChannelBotAttention";
+const BOT_ATTENTION_PREVIEW_PREDECESSORS = [
+  [176, "ChannelWorkerLaunchHeads"],
+  [177, WORK_TRIGGER_FENCE_MIGRATION_NAME],
+] as const;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -181,14 +184,13 @@ function legacyBotAttentionId<E>(
   );
   const current = entries.find(([, name]) => name === BOT_ATTENTION_MIGRATION_NAME);
   if (latest?.name !== BOT_ATTENTION_MIGRATION_NAME || current === undefined) return undefined;
-  return latest.migration_id === LEGACY_BOT_ATTENTION_ID ||
-    (latest.migration_id === LEGACY_BOT_ATTENTION_ID + 1 &&
-      latest.migration_id < current[0] &&
-      history.some(
-        (row) =>
-          row.migration_id === LEGACY_BOT_ATTENTION_ID && row.name === "ChannelWorkerLaunchHeads",
-      ))
-    ? latest.migration_id
+  const previewId = latest.migration_id;
+  if (previewId < 176 || previewId > 178 || previewId >= current[0]) return undefined;
+  return BOT_ATTENTION_PREVIEW_PREDECESSORS.every(
+    ([id, name]) =>
+      id >= previewId || history.some((row) => row.migration_id === id && row.name === name),
+  )
+    ? previewId
     : undefined;
 }
 

@@ -3,7 +3,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
-import channelBotAttention from "./Migrations/178_ChannelBotAttention.ts";
+import channelBotAttention from "./Migrations/181_ChannelBotAttention.ts";
 
 import {
   assertMemoryMigrationsCompatible,
@@ -161,7 +161,7 @@ it.effect.each([176, 177])(
       assert.deepStrictEqual((yield* history).slice(-3), [
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
-        [178, "ChannelBotAttention"],
+        [181, "ChannelBotAttention"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM channel_bot_attention`, []);
@@ -170,29 +170,31 @@ it.effect.each([176, 177])(
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-describe("bot attention ledger before worker launch heads", () => {
-  it.effect.each([176, 177])("preserves an alert written by the PR preview at migration %s", (id) =>
-    Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: id - 1 });
-      yield* Migrator.make({})({
-        loader: Migrator.fromRecord({ [`${id}_ChannelBotAttention`]: channelBotAttention }),
-      });
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO channel_bot_attention (
+describe("bot attention preview ledgers", () => {
+  it.effect.each([176, 177, 178])(
+    "preserves an alert written by the PR preview at migration %s",
+    (id) =>
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: id - 1 });
+        yield* Migrator.make({})({
+          loader: Migrator.fromRecord({ [`${id}_ChannelBotAttention`]: channelBotAttention }),
+        });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_bot_attention (
         owner_id, bot_id, task_id, event_id, kind, generation, occurred_at
       ) VALUES ('owner', 'main', 'task', 'alert', 'question', 1, '2026-11-21T00:00:00Z')`;
-      assert.isTrue(yield* hasPendingMigrations());
+        assert.isTrue(yield* hasPendingMigrations());
 
-      yield* runMigrations();
+        yield* runMigrations();
 
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* sql`SELECT sequence, event_id FROM channel_bot_attention`, [
-        { sequence: 1, event_id: "alert" },
-      ]);
-      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
-      assert.isFalse(yield* hasPendingMigrations());
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.deepStrictEqual(yield* sql`SELECT sequence, event_id FROM channel_bot_attention`, [
+          { sequence: 1, event_id: "alert" },
+        ]);
+        assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
+        assert.isFalse(yield* hasPendingMigrations());
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
 

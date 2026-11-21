@@ -807,7 +807,7 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         assert.isUndefined(yield* checkOldBuild);
         assert.deepStrictEqual(yield* migrate, [
           [177, "WorkTriggerAuthorityFence"],
-          [178, "ChannelBotAttention"],
+          [181, "ChannelBotAttention"],
         ]);
         assert.include(
           (yield* checkOldBuild)?.message ?? "",
