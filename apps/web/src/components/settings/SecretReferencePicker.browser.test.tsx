@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const { state, checkSecretSource, checkSecretSourceCommand } = vi.hoisted(() => ({
   state: { capabilities: {} as { secretSourceCheck?: boolean | undefined }, canManage: true },
@@ -93,6 +93,37 @@ describe("secret source", () => {
       environmentId: "fixture",
       input: { source: saved },
     });
+  });
+
+  it("keeps the latest check pending when an older check of the same reference returns", async () => {
+    setup(true);
+    let finishFirst!: (value: { _tag: "Success"; value: { _tag: "Resolved" } }) => void;
+    const first = new Promise<{ _tag: "Success"; value: { _tag: "Resolved" } }>((resolve) => {
+      finishFirst = resolve;
+    });
+    checkSecretSource.mockImplementationOnce(() => first);
+    checkSecretSource.mockImplementationOnce(() => new Promise(() => {}));
+    checkSecretSource.mockImplementationOnce(() => new Promise(() => {}));
+    const other = { ...saved, reference: "op://work/other/token" };
+    const picker = (value: typeof saved) => (
+      <SecretReferencePicker
+        environmentId={EnvironmentId.make("fixture")}
+        value={value}
+        onChange={vi.fn()}
+      />
+    );
+    await using screen = await render(picker(saved));
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    await screen.rerender(picker(other));
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    await screen.rerender(picker(saved));
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    await act(async () => {
+      finishFirst({ _tag: "Success", value: { _tag: "Resolved" } });
+      await first;
+    });
+    await expect.element(screen.getByRole("button", { name: "Check" })).toBeDisabled();
+    expect(screen.getByRole("status").query()).toBeNull();
   });
 
   it("shows why a saved reference could not be read", async () => {
