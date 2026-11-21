@@ -28,6 +28,8 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
+import { installKeptSummaryPersistence } from "./features/goat-bot/keptPerComputerStore";
+import { mobileKeptSummaryPersistence } from "./features/goat-bot/keptSummaryPersistence";
 import { followKeptPerComputerCatalog } from "./features/goat-bot/useKeptPerComputer";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
@@ -118,6 +120,7 @@ const appServiceDisposers = [
   installPermissionUpdateNotice(),
   installThreadOutboxDelivery(),
   installComposerAttachmentUploads(),
+  installKeptSummaryPersistence(appAtomRegistry, mobileKeptSummaryPersistence),
   followKeptPerComputerCatalog(appAtomRegistry),
 ];
 disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () => {

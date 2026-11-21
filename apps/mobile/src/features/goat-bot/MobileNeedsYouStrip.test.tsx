@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotProfile, EnvironmentId } from "@goat/contracts";
+import { BotProfile, ChannelListOpenAsksResult, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 type Rect = readonly [number, number, number, number];
@@ -281,12 +281,15 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 
+import { installKeptSummaryPersistence, refuseConnection } from "./keptPerComputerStore";
+import { createKeptSummaryStore } from "./keptSummaryStore";
 import { MobileBotList } from "./MobileBotList";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 const at = "2026-11-11T10:00:00.000Z";
 const decodeProfile = Schema.decodeUnknownSync(BotProfile);
+const decodeAsks = Schema.decodeUnknownSync(ChannelListOpenAsksResult);
 const profile = (botId: string, name: string, extra: object = {}) =>
   decodeProfile({
     botId,
@@ -585,22 +588,21 @@ function setupLink(phase: string) {
   resetKeptPerComputerForTests();
 }
 
-it("keeps the asks it last read while the computer is offline, says they may be out of date, and offers no retry", async () => {
+it("hides live ask text immediately after disconnect, before an offline summary is restored", async () => {
   setupLink("connected");
   await showRoster(true);
   serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
   await act(async () => {});
   link.phase = "disconnected";
   await showRoster(true);
-  expect(stripButton()?.getAttribute("aria-label")).toBe(
-    "1 waiting for you, offline, may be out of date. Scout: Which machine?",
-  );
-  expect(container.textContent).toContain("Offline · this may be out of date");
+  expect(stripButton()).toBeNull();
+  expect(container.textContent).not.toContain("Which machine?");
+  expect(container.textContent).toContain("unavailable while Studio Mac is offline");
   expect(container.textContent).not.toContain("Try again");
   link.phase = "connected";
 });
 
-it("keeps the last asks through a failed refresh when the computer then goes offline", async () => {
+it("hides ask text from an earlier read when a failed refresh is followed by disconnect", async () => {
   setupLink("connected");
   await showRoster(true);
   serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
@@ -609,8 +611,8 @@ it("keeps the last asks through a failed refresh when the computer then goes off
   await act(async () => {});
   link.phase = "disconnected";
   await showRoster(true);
-  expect(container.textContent).toContain("Scout: Which machine?");
-  expect(container.textContent).toContain("Offline · this may be out of date");
+  expect(container.textContent).not.toContain("Which machine?");
+  expect(container.textContent).toContain("unavailable while Studio Mac is offline");
   link.phase = "connected";
 });
 
@@ -622,9 +624,13 @@ it("says what waits is unavailable when the computer is offline before any read 
 });
 
 /** The phone's bot list, rendered with its real panel and view, for one state of the roster's computer. */
-async function showPhoneList(state: Partial<typeof phone>) {
+async function showPhoneList(
+  state: Partial<typeof phone>,
+  pair?: (registry: AtomRegistry.AtomRegistry) => void,
+) {
   registry = AtomRegistry.make();
   resetKeptPerComputerForTests();
+  pair?.(registry);
   Object.assign(phone, {
     selected: [],
     bots: [{ kind: "main", profile: null }],
@@ -705,4 +711,62 @@ it("says what waits is unavailable after a cold start offline, before anything w
   link.config = null;
   await showRoster(true);
   expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
+});
+
+it("reopens the read-only Bots roster and ask counts offline, then removes them on refusal", async () => {
+  const values = new Map<string, string>();
+  const environmentId = EnvironmentId.make("env");
+  const disk = {
+    read: async (_id: EnvironmentId, kind: string) => values.get(kind) ?? null,
+    write: async (_id: EnvironmentId, kind: string, value: string) => {
+      values.set(kind, value);
+    },
+    remove: async (_id: EnvironmentId, kind: string) => {
+      values.delete(kind);
+    },
+    clear: async () => values.clear(),
+  };
+  const previousApp = createKeptSummaryStore(disk);
+  const readAt = Date.parse("2026-11-21T10:42:00.000Z");
+  vi.useFakeTimers({ toFake: ["Date"], now: readAt + 60_000 });
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const scope = "paired-device";
+  await previousApp.keep(previousApp.lease(environmentId), "bots", scope, readAt, {
+    bots: [scout],
+  });
+  await previousApp.keep(
+    previousApp.lease(environmentId),
+    "asks",
+    scope,
+    readAt,
+    decodeAsks({
+      asks: [ask("scout", "task-s", "Private question", at)],
+      total: 1,
+      truncated: false,
+    }),
+  );
+  const accountAtom = Atom.make<string | null>(null);
+  await import("./OfflineBotRoster");
+  await showPhoneList({ connected: false, mayManage: true }, (registry) => {
+    installKeptSummaryPersistence(registry, {
+      store: createKeptSummaryStore(disk),
+      scopes: async () => [scope],
+      accountAtom,
+    });
+  });
+
+  expect(container.textContent).toContain("Scout");
+  expect(container.textContent).toContain("Needs you · 1");
+  expect(container.textContent).toContain("1 waiting");
+  expect(container.textContent).toContain("As of");
+  expect(container.textContent).not.toMatch(/Private question|New bot|Restore/);
+  expect(
+    [...container.querySelectorAll("button")].some((button) =>
+      button.textContent?.includes("Scout"),
+    ),
+  ).toBe(false);
+
+  await act(async () => refuseConnection(registry, environmentId));
+  expect(container.textContent).not.toMatch(/Scout|As of|Needs you · 1/);
+  expect(values.size).toBe(0);
 });

@@ -26,14 +26,24 @@ import {
   setAgentAwarenessRelayTokenProvider,
   unregisterAgentAwarenessDeviceForCurrentUser,
 } from "../agent-awareness/remoteRegistration";
-import { refuseRelayOnlyComputers } from "../goat-bot/keptPerComputerStore";
+import {
+  getKeptSummaryPersistence,
+  purgeKeptSummaries,
+  refuseRelayOnlyComputers,
+} from "../goat-bot/keptPerComputerStore";
 import { removeCloudEnvironments } from "./cloud-drafts";
 import { clearConnectOnboardingRequest, requestConnectOnboarding } from "./connectOnboarding";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
 
 type ClerkInstance = ReturnType<typeof getClerkInstance>;
 
+function hasActiveKeptSummaryAccount(): boolean {
+  const persistence = getKeptSummaryPersistence(appAtomRegistry);
+  return persistence !== undefined && appAtomRegistry.get(persistence.accountAtom) !== null;
+}
+
 export function deactivateCloudRelayAccount(): void {
+  if (hasActiveKeptSummaryAccount()) purgeKeptSummaries(appAtomRegistry);
   setAgentAwarenessRelayTokenProvider(null);
   setManagedRelaySession(appAtomRegistry, null);
   // A cleanup that fails leaves relay-only computers listed; nothing read from them shows meanwhile.
@@ -96,7 +106,10 @@ export const cloudAccountService = createCloudAccountService<ClerkInstance>({
     setManagedRelaySession(appAtomRegistry, null);
   },
   // A not-yet-presented onboarding request belongs to the account that left.
-  onSignOutTransition: clearConnectOnboardingRequest,
+  onSignOutTransition: () => {
+    clearConnectOnboardingRequest();
+    if (!hasActiveKeptSummaryAccount()) purgeKeptSummaries(appAtomRegistry);
+  },
   cleanUp: ({ source, accountId, wasActive }) => cleanUpCloudAccount(source, accountId, wasActive),
   prepare: async ({ source, accountId, isCurrent }) => {
     const storedAccount = await getComposerCloudAccountId();
