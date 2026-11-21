@@ -55,7 +55,16 @@ export const makeRoutineWorkAuthority = Effect.fn("channel.makeRoutineWorkAuthor
 
     const sessionId = AuthSessionId.make(owner.value.sessionId);
     // Revocation commits before SessionStore removes its cached scopes.
-    const persisted = yield* authSessions.getById({ sessionId });
+    const persisted = yield* authSessions.getById({ sessionId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ChannelLedgerError({
+            reason: "persistence",
+            detail: "read trigger owner session",
+            cause,
+          }),
+      ),
+    );
     const current =
       Option.isNone(sessions) ||
       Option.isNone(persisted) ||

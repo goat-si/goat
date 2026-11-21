@@ -96,9 +96,8 @@ export const modelSelection = {
 const refusingAdapter = {
   instanceId: modelSelection.instanceId,
   driver: ProviderDriverKind.make("codex"),
-  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-} as ProviderAdapter.ProviderAdapterV2["Service"];
+};
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
 const LIVE_RUN = new Set(["queued", "preparing", "starting", "running", "waiting"]);
