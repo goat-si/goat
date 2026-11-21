@@ -557,6 +557,7 @@ const make = Effect.gen(function* () {
           contentHash: contentHashFor(stored),
           requester,
           acceptedAt,
+          authSessionId: context.authSessionId,
           botId,
           ...(context.slackRouting === undefined ? {} : { slackRouting: context.slackRouting }),
           ...(requester === undefined

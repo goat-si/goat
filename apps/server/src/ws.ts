@@ -997,7 +997,7 @@ export const layerWsRpc = (
       const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
-      const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
+      const channelOwner = ownerFromSession(channelEnvironmentId, currentSession, currentSessionId);
       const decisionCaller = yield* DecisionClient.caller(channelEnvironmentId, currentSession);
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;

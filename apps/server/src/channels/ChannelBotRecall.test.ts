@@ -39,6 +39,7 @@ import {
   onlyTask,
   owner,
   ownerId,
+  memoryRpcContext,
   rpcContext,
   setupBot,
   slackContext,
@@ -312,15 +313,18 @@ describe("GOAT Bot reads its memory and work before answering", () => {
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(goatInput("remember deploys happen on Fridays", "m1"), rpcContext);
+      yield* gateway.ingest(
+        goatInput("remember deploys happen on Fridays", "m1"),
+        memoryRpcContext,
+      );
       yield* runtime.drain;
-      yield* gateway.ingest(goatInput("do: fix the build", "m2"), rpcContext);
+      yield* gateway.ingest(goatInput("do: fix the build", "m2"), memoryRpcContext);
       yield* runtime.drain;
       const started = yield* onlyTask;
       harness.world.setStatus(started.worker!.threadId, 1, "completed", "The build is green.");
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      yield* gateway.ingest(goatInput("anything new?", "m3"), rpcContext);
+      yield* gateway.ingest(goatInput("anything new?", "m3"), memoryRpcContext);
       yield* runtime.drain;
 
       const last = seen.at(-1)!;
@@ -421,11 +425,11 @@ describe("GOAT Bot reads its memory and work before answering", () => {
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       yield* gateway.ingest(
         goatInput('the score dropped to 61% "lighthouse"\nsecond line', "c1"),
-        rpcContext,
+        memoryRpcContext,
       );
-      yield* gateway.ingest(goatInput("remember staging rotates monthly", "c2"), rpcContext);
+      yield* gateway.ingest(goatInput("remember staging rotates monthly", "c2"), memoryRpcContext);
       yield* runtime.drain;
-      yield* gateway.ingest(goatInput("when did I mention that score?", "c3"), rpcContext);
+      yield* gateway.ingest(goatInput("when did I mention that score?", "c3"), memoryRpcContext);
       yield* runtime.drain;
       const [memory, older, metadata, asking] = results[0]!;
       assert.include(memory!.text, "The staging password rotates monthly.");

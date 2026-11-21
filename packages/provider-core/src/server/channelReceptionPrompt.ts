@@ -336,7 +336,8 @@ function receptionLanguageDirective(text: string): string {
  * default bot gets none, leaving its prompt unchanged.
  */
 const receptionIdentityLines = (identity: ChannelReceptionInput["identity"]) =>
-  identity === undefined || (identity.name === "GOAT Bot" && identity.purpose.trim() === "")
+  identity === undefined ||
+  (identity.name === "GOAT Bot" && identity.purpose.trim() === "" && !identity.instructions?.trim())
     ? []
     : [
         "The person named you " +
@@ -348,6 +349,12 @@ const receptionIdentityLines = (identity: ChannelReceptionInput["identity"]) =>
               "Your purpose, in the person's words (a JSON string): " +
                 JSON.stringify(identity.purpose),
             ]),
+        ...(identity.instructions?.trim()
+          ? [
+              "Your standing bot instructions (a JSON string): " +
+                JSON.stringify(identity.instructions),
+            ]
+          : []),
       ];
 
 export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {

@@ -129,14 +129,14 @@ export const acceptChannelInput = Effect.fn("ChannelLedger.acceptInput")(functio
       yield* sql`
             INSERT INTO channel_inbox (
               input_id, owner_id, kind, connection_id, idempotency_key, content_hash,
-              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id
+              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id, auth_session_id
             ) VALUES (
               ${input.inputId}, ${input.ownerId}, ${input.message.kind},
               ${input.message.connectionId}, ${input.message.idempotencyKey}, ${input.contentHash},
               ${input.conversationId}, ${input.bindingId}, ${encodeInbound(message)},
               ${requester === undefined ? null : encodeRequester(requester)},
               ${requester === undefined ? "rejected" : "accepted"}, ${input.acceptedAt},
-              ${botId}
+              ${botId}, ${input.authSessionId ?? null}
             )
           `;
       const notice = refused === undefined ? input.rejectNotice : privateNotice(input, refused);

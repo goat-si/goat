@@ -1,11 +1,3 @@
-/**
- * A channel core harness for tests: the GOAT bot thread is a real orchestrator thread whose
- * provider adapter refuses to run anything, worker threads are scripted (`WorkerWorld`), and the
- * reception model and Slack transport are fakes the test controls. Other lanes swap in their own
- * channel layer or Slack transport through `makeHarness` options.
- *
- * @module ChannelHarness
- */
 import {
   type ChannelIngestInput,
   type ChannelOutboundMessage,
@@ -944,14 +936,26 @@ export const slackContext = {
   caller: { type: "transport" as const, kind: "slack" as const, connectionId: "slack-1" },
 };
 
-/** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
-export const linkSlackUser = (user = "U1", linkOwner = owner) =>
+export const memoryRpcContext = {
+  ...rpcContext,
+  grantedScopes: [...rpcContext.grantedScopes, "memory:read", "memory:write"] as const,
+};
+export const memorySlackContext = {
+  ...slackContext,
+  grantedScopes: memoryRpcContext.grantedScopes,
+};
+export const linkSlackUser = (user = "U1", withMemory: boolean | typeof owner = false) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
+    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...(withMemory || {}) };
     const { code } = yield* identities.createLink(
-      { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
-      linkOwner,
+      {
+        connectionId: "slack-1",
+        runtimeModeCeiling: "auto-accept-edits",
+        ...(withMemory ? { grantedScopes: context.grantedScopes } : {}),
+      },
+      context,
     );
     yield* gateway.linkIdentity(
       {
@@ -967,7 +971,7 @@ export const linkSlackUser = (user = "U1", linkOwner = owner) =>
           rootTs: "1",
         },
       },
-      { ...slackContext, grantedScopes: linkOwner.grantedScopes },
+      context,
     );
   });
 

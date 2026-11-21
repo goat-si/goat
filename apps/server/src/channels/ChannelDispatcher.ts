@@ -56,7 +56,9 @@ import { makeForwardFollowUp } from "./channelForwardFollowUp.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
-import { channelBotFilesFor } from "./channelBotNotes.ts";
+import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
+import { identitySection } from "./channelBotSessionBrief.ts";
+import { channelBotFilesFor, mayReadBotNotes, recallChannelBotNotes } from "./channelBotNotes.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
@@ -129,7 +131,9 @@ const make = Effect.gen(function* () {
   /** Remote dispatches handed off but not yet claimed, by task, with whose work they are. */
   const remoteReservations = yield* Ref.make<ReadonlyMap<string, ChannelRequester>>(new Map());
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
-  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  const filesFor = (botId: ChannelLedger.ChannelStoredTask["botId"]) =>
+    channelBotFilesFor(path, stateDir, botId);
   const proposals = yield* makeSkillProposalAnswers;
 
   /**
@@ -415,7 +419,14 @@ const make = Effect.gen(function* () {
       if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
       const requester = yield* dispatchGrant(initial.task);
       if (requester === undefined) return yield* refuseDispatch(initial, owner);
-      const notesAllowed = canReadChannelBotNotes(requester);
+      const botFiles = filesFor(initial.botId);
+      const mayRead = initial.task.routineWork !== true && mayReadBotNotes(requester);
+      const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
+      const notes = yield* recallChannelBotNotes(botFiles, initial.task.instruction, mayRead).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      );
+      const identity = yield* profiles.identity(initial.ownerId, initial.botId).pipe(Effect.option);
+      if (Option.isNone(identity)) return yield* refuseDispatch(initial, owner);
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
       // channel worker follows the rules every thread in that project follows.
@@ -427,11 +438,23 @@ const make = Effect.gen(function* () {
         owner,
         prependStandingInstructions(
           standing,
-          workerInstruction(initial.task, botFiles, notesAllowed),
+          identitySection(identity.value) +
+            workerInstruction(initial.task, botFiles, {
+              read: mayRead,
+              write: mayWrite,
+              notes: notes === undefined ? "" : channelBotNotesSection(notes),
+            }),
         ).text,
-        yield* localNotesBriefContext(botFiles, notesAllowed, initial.task.briefVersion).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-        ),
+        {
+          ...(mayRead ? { notesPath: botFiles.notes } : {}),
+          notesRevision:
+            mayRead && initial.task.briefVersion === undefined
+              ? yield* channelNotesRevision(botFiles.notes).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                )
+              : null,
+          skillsPath: botFiles.skills,
+        },
       );
       const task = stored.task;
       const target = task.target!;
@@ -446,8 +469,9 @@ const make = Effect.gen(function* () {
         Effect.map(
           (current) =>
             current !== undefined &&
-            (!hasSlackNotes ||
-              (canReadChannelBotNotes(current) &&
+            (brief.context.notesPath === undefined ||
+              (mayRead && brief.context.notesPath === botFiles.notes &&
+                canReadChannelBotNotes(current) &&
                 sessionMemoryCeiling(current, target) === (target.memoryGrantCeiling ?? "none"))),
         ),
       );

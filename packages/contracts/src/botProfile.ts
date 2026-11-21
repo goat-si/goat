@@ -15,12 +15,22 @@ export const BotRole = Schema.Literals(["main", "member"]);
 /** A member bot's accent, as opaque sRGB `#RRGGBB`; clients pick the text color over it. */
 export const BotColor = Schema.String.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/));
 export type BotColor = typeof BotColor.Type;
+export const BOT_INSTRUCTIONS_MAX_BYTES = 16 * 1024;
+export const BotInstructions = Schema.String.check(
+  Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_BYTES),
+  Schema.makeFilter(
+    (value) =>
+      new TextEncoder().encode(value).byteLength <= BOT_INSTRUCTIONS_MAX_BYTES ||
+      "Instructions must fit in 16 KB.",
+  ),
+);
 export const BotProfile = Schema.Struct({
   botId: BotId,
   role: BotRole,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   avatar: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(16))),
   purpose: Schema.String.check(Schema.isMaxLength(4000)),
+  instructions: Schema.optionalKey(BotInstructions),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultProjectId: Schema.NullOr(ProjectId),
   environmentId: EnvironmentId,

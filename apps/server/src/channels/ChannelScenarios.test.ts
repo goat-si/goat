@@ -35,7 +35,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { splitStandingInstructions } from "@goat/shared/standingInstructions";
-
 import * as ServerSettings from "../serverSettings.ts";
 import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as ServerConfig from "../config.ts";
@@ -89,6 +88,7 @@ import {
   ownerId,
   projectId,
   resultsTo,
+  memoryRpcContext,
   rpcContext,
   setupBot,
   scratchProjectId,
@@ -1965,10 +1965,10 @@ describe("who may do what (scenario 4)", () => {
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const receipt = yield* gateway.ingest(
         goatInput("Always reply in Korean, remember that", "notes-1"),
-        rpcContext,
+        memoryRpcContext,
       );
       yield* runtime.drain;
-      yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), rpcContext);
+      yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), memoryRpcContext);
       yield* runtime.drain;
       const later = seen.find((input) => input.inputText === "what machine is this?");
       assert.include(later?.notes ?? "", "Reply in Korean. (asked in " + receipt.inputId + ")");
@@ -2271,7 +2271,7 @@ describe("notes require a request in the current input", () => {
         if (scenario === "earlier message only") {
           yield* gateway.ingest(
             goatInput("Always reply in Korean, remember that", "earlier-note"),
-            rpcContext,
+            memoryRpcContext,
           );
           yield* runtime.drain;
         }
@@ -2319,7 +2319,7 @@ describe("notes require a request in the current input", () => {
                 : "What machine is this?",
               "unasked-note",
             ),
-            rpcContext,
+            memoryRpcContext,
           );
         }
         yield* runtime.drain;
@@ -2342,7 +2342,7 @@ describe("notes require a request in the current input", () => {
         const gateway = yield* ChannelGateway.ChannelGateway;
         const receipt = yield* gateway.ingest(
           goatInput("Always reply in Korean, remember that", "superseded-note"),
-          rpcContext,
+          memoryRpcContext,
         );
         const newerId = ChannelReceptionId.make("reception:newer-note-pass");
         harness.script.current = () =>
@@ -2419,7 +2419,7 @@ describe("notes require a request in the current input", () => {
         yield* setupBot;
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
           goatInput("Please forget the Korean note", "change-note"),
-          rpcContext,
+          memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         const task = yield* onlyTask;

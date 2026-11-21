@@ -1,11 +1,6 @@
 import { readRecords, rejected } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
-/**
- * ChannelBotSession - GOAT Bot's warm session per conversation and requester: each task is its own
- * run there, follow-ups steer their task's run, and the session rotates only on a cold cache or a
- * full context.
- */
-
+/** Warm sessions are bound per conversation, bot and requester. */
 import {
   type ChannelConversationId,
   type ChannelInputId,
@@ -145,7 +140,7 @@ const make = Effect.gen(function* () {
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const { stateDir } = yield* ServerConfig.ServerConfig;
   // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -523,11 +518,13 @@ const make = Effect.gen(function* () {
       initial.task,
       requester,
     );
+    const botFiles = channelBotFilesFor(path, stateDir, initial.botId);
     const { notes, instruction, context } = yield* sessionTurnBrief(
       initial.task,
       requester,
       botFiles,
       settings.goatclaw.enabled,
+      memoryGrantCeiling,
     ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
     const message = instruction + "\n\n" + formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
@@ -623,7 +620,6 @@ const make = Effect.gen(function* () {
     const records = yield* readRecords(threads, threadId);
     const own = yield* sessionTaskRuns(sql, threadId, records, task);
     const current = ownResultRuns(own, records.messages).at(-1);
-    // A replay after a crash finds the run its first send started instead of sending again.
     const already = records.runs.find(
       (run) =>
         run.userMessageId === ids.first.messageId || run.userMessageId === ids.queued.messageId,
@@ -632,8 +628,6 @@ const make = Effect.gen(function* () {
       yield* recordRun(threadId, already.userMessageId as MessageId, already, false);
       return { _tag: "sent", run: already } as const;
     }
-    // A steer recorded before a crash replays under its own ids, whatever runs now: the thread
-    // answers an accepted one with the run it joined, and refuses one that never landed.
     const firstIntent = yield* sql<{ readonly steered_into_run_id: RunId | null }>`
       SELECT steered_into_run_id FROM channel_bot_session_runs
       WHERE thread_id = ${threadId} AND message_id = ${ids.first.messageId}
@@ -653,7 +647,6 @@ const make = Effect.gen(function* () {
       yield* recordRun(threadId, accepted.id, run, true);
       return { _tag: "sent", run } as const;
     }
-    // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
     const authority = yield* SenderAuthority.requesterForDelivery(task, forward.sender).pipe(
@@ -667,6 +660,11 @@ const make = Effect.gen(function* () {
       } as const;
     const requester = authority.requester;
     const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
+    if (
+      memoryGrantCeiling === "none" &&
+      (yield* ledger.latestTaskBrief(task.taskId))?.context.notesPath !== undefined
+    )
+      return { _tag: "permission_changed", senderName: undefined } as const;
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup", forward.sequence).pipe(

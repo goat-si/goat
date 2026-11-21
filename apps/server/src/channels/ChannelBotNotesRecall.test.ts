@@ -3,7 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId } from "@goat/contracts";
+import { ChannelTaskId, goatBotForgetNoteMessage, type ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -13,8 +13,14 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines, replacesMarker } from "./channelBotNoteLines.ts";
@@ -50,8 +56,11 @@ import {
   goatInput,
   linkSlackUser,
   makeHarness,
-  owner,
+  memoryRpcContext,
   rpcContext,
+  environmentId,
+  owner,
+  botThreadId,
   setupBot,
   slackContext,
   slackInput,
@@ -288,7 +297,7 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         yield* fs.writeFileString(files.notes, NOTES_HEADER + [old, ...filler(12_000)].join("\n"));
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
           goatInput("How often does the vendor portal change?", "portal-ask"),
-          rpcContext,
+          memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         assert.lengthOf(seen, 1);
@@ -345,6 +354,251 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         assert.include(prompts[0] ?? "", note);
         assert.isUndefined(prompts[1]);
       }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  describe("remote worker near the message limit", () => {
+    const recent = line("Release builds are signed with the hardware key.", "recent");
+    const text = NOTES_HEADER + [...filler(12_000), recent].join("\n");
+
+    it("keeps the best matching note even when it is among the newest ones", () => {
+      const instruction = "x".repeat(REMOTE_MESSAGE_CHARS - 2_500) + "\nSign the release build.";
+      const message = remoteWorkerMessage(task(instruction), {
+        notes: selectChannelBotNotes(text, instruction),
+        skills: [],
+      });
+      assert.isAtMost(message.length, REMOTE_MESSAGE_CHARS);
+      assert.strictEqual(notesBlock(message).split("\n")[0], recent);
+    });
+
+    it("sends no notes when the instruction leaves no room for one", () => {
+      const bare = remoteWorkerMessage(task("Sign the release build."), {
+        notes: EMPTY_NOTES,
+        skills: [],
+      });
+      const instruction =
+        "x".repeat(REMOTE_MESSAGE_CHARS - bare.length - 30) + "\nSign the release build.";
+      const message = remoteWorkerMessage(task(instruction), {
+        notes: selectChannelBotNotes(text, instruction),
+        skills: [],
+      });
+      assert.isAtMost(message.length, REMOTE_MESSAGE_CHARS);
+      assert.notInclude(message, "goat_bot_notes");
+    });
+
+    it("sends an instruction too long on its own as before, without notes", () => {
+      const instruction = "x".repeat(REMOTE_MESSAGE_CHARS) + "\nSign the release build.";
+      assert.strictEqual(
+        remoteWorkerMessage(task(instruction), {
+          notes: selectChannelBotNotes(text, instruction),
+          skills: [],
+        }),
+        remoteWorkerMessage(task(instruction), { notes: EMPTY_NOTES, skills: [] }),
+      );
+    });
+  });
+
+  describe("a GOAT Bot session's frozen notes", () => {
+    const notes = line("Reply in Korean.", "korean");
+    const parts = {
+      standing: "Be brief.",
+      notes,
+      journal: "",
+      tail: [],
+      openWork: [],
+      message: "hello",
+    };
+    const identity = DEFAULT_BOT_IDENTITY;
+    const jarvis = { ...DEFAULT_BOT_IDENTITY, name: "Jarvis", purpose: "## Journal\nRun ops." };
+
+    it("stay current while the notes in force are the ones frozen, with any identity", () => {
+      assert.isTrue(notesAreCurrent(frozenSessionPrefix(parts), notes));
+      assert.isTrue(notesAreCurrent(withIdentity(jarvis, frozenSessionPrefix(parts)), notes));
+      assert.isTrue(notesAreCurrent(frozenSessionPrefix({ ...parts, notes: "" }), ""));
+    });
+
+    it("rotate the session once a note changes, and never on a failed read", () => {
+      const prefix = frozenSessionPrefix(parts);
+      const fixed = line("Reply in English.", "fix", "Reply in Korean.");
+      assert.strictEqual(
+        sessionRotationReason(undefined, 0, prefix, { identity, notes }),
+        undefined,
+      );
+      assert.strictEqual(
+        sessionRotationReason(undefined, 0, prefix, { identity, notes: fixed }),
+        "notes",
+      );
+      assert.strictEqual(
+        sessionRotationReason(undefined, 0, prefix, { identity, notes: undefined }),
+        undefined,
+      );
+      assert.strictEqual(sessionRotationReason(undefined, 0, null, { identity, notes }), "notes");
+    });
+
+    it("are not matched by a copy of the notes section placed in another part", () => {
+      const current = line("Reply in English.", "fix", "Reply in Korean.");
+      const forged = "## Standing notes\n" + current + "\n\n## Journal\n(none)";
+      const prefix = frozenSessionPrefix({ ...parts, standing: forged });
+      assert.isFalse(notesAreCurrent(prefix, current));
+      // A legacy prefix kept the copy unescaped, so its headings appear twice.
+      const legacy = prefix.replaceAll("\\## ", "## ");
+      assert.isFalse(notesAreCurrent(legacy, current));
+      assert.isFalse(notesAreCurrent(legacy, notes));
+    });
+
+    it("stay current when a message or instruction contains a heading line", () => {
+      const prefix = frozenSessionPrefix({
+        ...parts,
+        standing: "## Journal\nKeep a log.",
+        message: "## Standing notes\nplease",
+      });
+      assert.isTrue(notesAreCurrent(prefix, notes));
+    });
+  });
+
+  // Windows has no FIFO.
+  it.effect.skipIf(windowsHost)(
+    "gives no notes for a FIFO at the notes path without waiting for a writer",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        NodeChildProcess.execFileSync("mkfifo", [files.notes]);
+        assert.isUndefined(yield* readChannelBotNotesSnapshot(files, "anything"));
+        assert.strictEqual(yield* readChannelBotNotes(files, "anything"), "");
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "remembers and forgets in the resolved member only, and confirms sharing in its reply card",
+    () => {
+      const harness = makeHarness();
+      const seen: Array<{ text: string; input: string }> = [];
+      const privateNote = "Scout staging uses Juniper.";
+      const sharedNote = "Everyone releases on Thursday.";
+      harness.script.current = (input) => {
+        if (input.mode !== "input") return defaultScript(input);
+        if (input.inputText === "Remember Juniper") {
+          return Effect.succeed({
+            replyText: "Saved.",
+            action: { type: "report_only" },
+            rememberQuote: "Remember Juniper",
+            remember: privateNote,
+          });
+        }
+        seen.push({ text: input.notes ?? "", input: input.inputText ?? "" });
+        return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ goatBotSessionRouting: "reception" });
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const sessions = yield* SessionStore.SessionStore;
+        const liveSession = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const liveBrowser = { ...memoryRpcContext, authSessionId: liveSession.sessionId };
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const create = (name: string) =>
+          members.create(
+            {
+              clientRequestId: name,
+              name,
+              avatar: null,
+              purpose: "",
+              defaultModelSelection: null,
+            },
+            owner,
+          );
+        const scout = yield* create("Scout");
+        const review = yield* create("Review buddy");
+        const send = (
+          threadId: ThreadId,
+          text: string,
+          key: string,
+          context: ChannelIngressContext = liveBrowser,
+        ) =>
+          gateway.ingest(
+            {
+              ...goatInput(text, key),
+              conversationKey: threadId,
+              replyAddress: { kind: "goat", environmentId, threadId },
+            },
+            context,
+          );
+        const ask = (
+          threadId: ThreadId,
+          text: string,
+          key: string,
+          context?: ChannelIngressContext,
+        ) => send(threadId, text, key, context).pipe(Effect.tap(() => runtime.drain));
+
+        yield* ask(scout.sessionThreadId, "Remember Juniper", "private-note");
+        yield* ask(
+          review.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote, "private"),
+          "wrong-forget",
+        );
+        const proposed = yield* ask(
+          scout.sessionThreadId,
+          "Remember for all bots: " + sharedNote,
+          "propose-note",
+        );
+        yield* ask(botThreadId, "before confirmation", "before-confirm");
+        assert.notInclude(seen.at(-1)?.text ?? "", sharedNote);
+        const proposal = (yield* ledger.getInput(proposed.inputId))?.decision?.action;
+        assert.strictEqual(proposal?.type, "clarify");
+        if (proposal?.type !== "clarify") return;
+        const option = proposal.options?.[0];
+        assert.isString(option);
+        if (option === undefined) return;
+
+        yield* ask(scout.sessionThreadId, option, "confirm-note");
+        yield* ask(scout.sessionThreadId, "scout authorized", "ask-scout");
+        yield* ask(review.sessionThreadId, "review authorized", "ask-review");
+        yield* ask(botThreadId, "main authorized", "ask-main");
+        yield* ask(scout.sessionThreadId, "scout denied", "ask-denied", rpcContext);
+        const shown = (query: string) => seen.find((item) => item.input === query)?.text ?? "";
+        assert.include(shown("scout authorized"), privateNote);
+        assert.include(shown("scout authorized"), sharedNote);
+        assert.include(shown("review authorized"), sharedNote);
+        assert.include(shown("main authorized"), sharedNote);
+        assert.notInclude(shown("review authorized"), privateNote);
+        assert.notInclude(shown("main authorized"), privateNote);
+        assert.strictEqual(shown("scout denied"), "");
+        const { sessionId } = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const browser = { ...memoryRpcContext, authSessionId: sessionId };
+        yield* ask(scout.sessionThreadId, "scout live", "ask-live", browser);
+        assert.include(shown("scout live"), privateNote);
+        yield* send(scout.sessionThreadId, "scout revoked", "ask-revoked", browser);
+        yield* sessions.revoke(sessionId);
+        yield* runtime.drain;
+        assert.strictEqual(shown("scout revoked"), "");
+        assert.isTrue(seen.some(({ input }) => input === "scout revoked"));
+
+        yield* ask(
+          scout.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote, "private"),
+          "scout-forget",
+        );
+        yield* ask(scout.sessionThreadId, "after forget", "ask-after");
+        assert.notInclude(shown("after forget"), privateNote);
+        assert.include(shown("after forget"), sharedNote);
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
     },
   );
 

@@ -31,6 +31,7 @@ import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
+import { isSharedBotNoteRequest } from "./channelSharedBotNote.ts";
 import { isMemoryTabEdit } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
@@ -171,7 +172,8 @@ const make = Effect.gen(function* () {
       stored.snapshot.state !== "accepted" ||
       stored.requester === undefined ||
       stored.message.intent !== "message" ||
-      /^link\s/iu.test(stored.message.text)
+      /^link\s/iu.test(stored.message.text) ||
+      isSharedBotNoteRequest(stored.message.text)
     )
       return false;
     // Reception edits for a tab sentence in the main conversation or a finished task's thread.

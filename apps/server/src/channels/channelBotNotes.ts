@@ -10,7 +10,14 @@
  *
  * @module channelBotNotes
  */
-import type { ChannelReceptionSkill } from "@goat/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- opaque bot ids are hashed to a portable file name.
+import * as NodeCrypto from "node:crypto";
+import {
+  MAIN_BOT_ID,
+  type BotId,
+  type ChannelReceptionSkill,
+  type ChannelRequester,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -44,19 +51,29 @@ export const NOTES_REPLACED_RULE =
 export interface ChannelBotFiles {
   readonly dir: string;
   readonly notes: string;
+  readonly sharedNotes?: string;
   readonly skills: string;
   readonly scratch: string;
   readonly artifacts: string;
 }
 
-export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBotFiles => {
-  const dir = path.join(stateDir, "goat-bot");
+export const channelBotFilesFor = (
+  path: Path.Path,
+  stateDir: string,
+  botId?: BotId,
+): ChannelBotFiles => {
+  const home = path.join(stateDir, "goat-bot");
+  const dir =
+    botId === undefined || botId === MAIN_BOT_ID
+      ? home
+      : path.join(home, "bots", NodeCrypto.createHash("sha256").update(botId).digest("hex"));
   return {
     dir,
     notes: path.join(dir, "memory.md"),
-    skills: path.join(dir, "skills"),
-    scratch: path.join(dir, "scratch"),
-    artifacts: path.join(dir, "artifacts"),
+    ...(dir === home ? {} : { sharedNotes: path.join(home, "memory.md") }),
+    skills: path.join(home, "skills"),
+    scratch: path.join(home, "scratch"),
+    artifacts: path.join(home, "artifacts"),
   };
 };
 
@@ -86,6 +103,26 @@ export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
   Effect.map(readChannelBotNotesSnapshot(files, query), (notes) =>
     notes === undefined ? "" : channelBotNotesSection(notes),
   );
+
+export const mayReadBotNotes = (who: ChannelRequester) =>
+  who.originKind !== "mcp" && who.grantedScopes.includes("memory:read");
+
+export const recallChannelBotNotes = Effect.fn("channelBotNotes.recall")(function* (
+  files: ChannelBotFiles,
+  query: string,
+  mayRead: boolean,
+) {
+  if (!mayRead) return EMPTY_NOTES;
+  const own = yield* readChannelBotNotesSnapshot(files, query);
+  if (files.sharedNotes === undefined) return own;
+  const shared = yield* readChannelBotNotesSnapshot({ ...files, notes: files.sharedNotes }, query);
+  if (own === undefined || shared === undefined) return undefined;
+  return {
+    standing: [shared.standing, own.standing].filter(Boolean).join("\n"),
+    matched: [shared.matched, own.matched].filter(Boolean).join("\n"),
+    ranked: [...own.ranked, ...shared.ranked],
+  };
+});
 
 export interface ChannelBotNoteSaved {
   /**

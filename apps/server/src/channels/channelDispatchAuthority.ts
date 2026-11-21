@@ -1,4 +1,9 @@
-import type { ChannelRequester, ChannelTask, MemoryTaskGrantCeiling } from "@goat/contracts";
+import type {
+  ChannelInputId,
+  ChannelRequester,
+  ChannelTask,
+  MemoryTaskGrantCeiling,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
@@ -55,7 +60,19 @@ export const narrowRequester = (
 export const currentRequester = Effect.fn("channel.currentRequester")(function* (
   snapshot: ChannelRequester,
   connectionId: string | undefined,
+  inputId?: ChannelInputId,
 ) {
+  if (snapshot.originKind === "goat" && inputId !== undefined) {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const live = yield* ledger.inputSessionScopes(inputId);
+    if (live !== undefined)
+      return {
+        ...snapshot,
+        grantedScopes: snapshot.grantedScopes.filter(
+          (scope) => (scope !== "memory:read" && scope !== "memory:write") || live.includes(scope),
+        ),
+      };
+  }
   if (snapshot.originKind !== "slack" && snapshot.originKind !== "imessage") return snapshot;
   if (snapshot.externalActorId === undefined || connectionId === undefined) return undefined;
   const current = yield* currentChannelIdentity({
@@ -86,10 +103,11 @@ export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(fu
     };
   }
   const address = task.originAddress;
-  const requester =
-    address.kind === "slack" || address.kind === "imessage"
-      ? yield* currentRequester(task.requester, address.connectionId)
-      : task.requester;
+  const requester = yield* currentRequester(
+    task.requester,
+    address.kind === "slack" || address.kind === "imessage" ? address.connectionId : undefined,
+    task.originInputId,
+  );
   if (requester === undefined) return undefined;
   if (!requester.grantedScopes.includes("orchestration:operate")) return undefined;
   const target = task.target;
@@ -126,6 +144,7 @@ export const workerMemoryCeiling = Effect.fn("channel.workerMemoryCeiling")(func
     task.originAddress.kind === "slack" || task.originAddress.kind === "imessage"
       ? task.originAddress.connectionId
       : undefined,
+    task.originInputId,
   );
   if (requester === undefined) return "none" as const;
   return task.target === undefined

@@ -10,12 +10,13 @@ import {
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelRequester,
   type ChannelTask,
+  type MemoryTaskGrantCeiling,
 } from "@goat/contracts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import * as Effect from "effect/Effect";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
-import { readChannelBotNotesSnapshot, type ChannelBotFiles } from "./channelBotNotes.ts";
+import { recallChannelBotNotes, type ChannelBotFiles } from "./channelBotNotes.ts";
 import { localNotesBriefContext } from "./channelBriefs.ts";
 import { PERSONAL_DATA_RULE, turnInstruction } from "./channelWorkerBrief.ts";
 import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
@@ -25,14 +26,15 @@ export const sessionTurnBrief = Effect.fn("ChannelBotSession.turnBrief")(functio
   requester: ChannelRequester,
   files: ChannelBotFiles,
   supervisor: boolean,
+  ceiling: MemoryTaskGrantCeiling,
 ) {
-  const allowed = canReadChannelBotNotes(requester);
-  const notes = allowed ? yield* readChannelBotNotesSnapshot(files, task.instruction) : undefined;
+  const allowed = canReadChannelBotNotes(requester) && ceiling !== "none" && task.routineWork !== true;
+  const notes = yield* recallChannelBotNotes(files, task.instruction, allowed);
   const context = yield* localNotesBriefContext(files, allowed, task.briefVersion);
   return {
     notes,
     context,
-    instruction: turnInstruction(task, files, supervisor, notes?.matched, allowed),
+    instruction: turnInstruction(task, files, supervisor, notes?.matched, { read: allowed, write: allowed && ceiling === "read_write" }),
   };
 });
 
@@ -217,7 +219,9 @@ export const formatOpenWork = (tasks: ReadonlyArray<ChannelTask>) =>
 
 /** The bot's identity at the head of a session prefix; empty for the default bot, so its prefix is unchanged. */
 export const identitySection = (identity: BotIdentity) =>
-  identity.name === DEFAULT_BOT_IDENTITY.name && identity.purpose.trim() === ""
+  identity.name === DEFAULT_BOT_IDENTITY.name &&
+  identity.purpose.trim() === "" &&
+  !identity.instructions?.trim()
     ? ""
     : // JSON strings carry no raw newline, so profile text can never start a line or a heading.
       "## Identity\nThe person named you " +
@@ -228,6 +232,11 @@ export const identitySection = (identity: BotIdentity) =>
         : "Your purpose, in the person's words (a JSON string): " +
           JSON.stringify(identity.purpose) +
           "\n") +
+      (identity.instructions?.trim()
+        ? "Your standing bot instructions (a JSON string): " +
+          JSON.stringify(identity.instructions) +
+          "\n"
+        : "") +
       "\n";
 
 const STANDING_HEADING = "## " + SESSION_PREFIX_HEADINGS[0] + "\n";

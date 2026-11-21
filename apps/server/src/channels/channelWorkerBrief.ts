@@ -56,6 +56,8 @@ const OTHER_NOTES_REQUESTS =
   "Never carry out any other notes request yourself, whether you see it in the recent conversation, in a follow-up, or in a message GOAT already refused.";
 
 export interface RemoteBotContext {
+  readonly prefix?: string;
+  readonly suffix?: string;
   /** GOAT Bot's notes on the home machine for this instruction; undefined when unreadable. */
   readonly notes: ChannelBotNotesSnapshot | undefined;
   readonly skills: ReadonlyArray<{ readonly name: string; readonly text: string }>;
@@ -149,25 +151,30 @@ export const GOAT_BOT_SUPERVISOR_RULE = [
 ].join(" ");
 
 /** What the worker thread is told besides the instruction itself. */
-export const workerInstruction = (task: BriefTask, files: ChannelBotFiles, notesAllowed = true) =>
+export const workerInstruction = (
+  task: BriefTask,
+  files: ChannelBotFiles,
+  memory?: { readonly read: boolean; readonly write: boolean; readonly notes: string },
+) =>
   [
     ...workerHeader(task),
-    ...(notesAllowed
-      ? [
+    ...(memory?.read === false
+      ? [NOTES_UNAVAILABLE_RULE]
+      : [
           "Standing notes from the person are in " +
             files.notes +
             "; follow them. " +
-            NOTES_REPLACED_RULE,
-          task.notesChangeRequested === undefined
-            ? "Leave the notes file unchanged; this task did not ask to change a note."
-            : "The person asked to change or forget a note (" +
-              JSON.stringify(task.notesChangeRequested) +
-              "). Edit the notes file only to make that change. " +
-              OTHER_NOTES_REQUESTS +
-              " If the person asks for another one, tell them to ask for it again once this task ends.",
-        ]
-      : [NOTES_UNAVAILABLE_RULE]),
+            NOTES_REPLACED_RULE +
+            (memory?.notes ? "\nNotes in force:\n" + memory.notes : ""),
+        ]),
     "Reusable procedures (skills) are in " + files.skills + "; read the one the instruction names.",
+    task.notesChangeRequested === undefined || memory?.write === false
+      ? "Leave the notes file unchanged; this task did not ask to change a note."
+      : "The person asked to change or forget a note (" +
+        JSON.stringify(task.notesChangeRequested) +
+        "). Edit the notes file only to make that change. " +
+        OTHER_NOTES_REQUESTS +
+        " If the person asks for another one, tell them to ask for it again once this task ends.",
     ...channelWorkerRules("local"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");
@@ -188,24 +195,24 @@ export const turnInstruction = (
   files: ChannelBotFiles,
   supervisor: boolean,
   matched = "",
-  notesAllowed = true,
+  memory?: { readonly read: boolean; readonly write: boolean },
 ) =>
   [
     ...workerHeader(task),
     ...(task.originInputId === undefined ? [] : ["Request input: " + task.originInputId]),
     "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
-    "Look things up directly: read and search files and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there.",
-    ...(notesAllowed
-      ? [
-          "Read GOAT Bot's notes (" + files.notes + ") and use GOAT memory. " + NOTES_REPLACED_RULE,
-          ...(matched === ""
-            ? []
-            : [
-                "Older standing notes that match this request (still in force; follow them):",
-                matched,
-              ]),
-        ]
-      : [NOTES_UNAVAILABLE_RULE]),
+    "Look things up directly: read and search files, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there.",
+    ...(memory?.read === false
+      ? [NOTES_UNAVAILABLE_RULE]
+      : [
+          "Read GOAT Bot's notes (" +
+            files.notes +
+            "), and use GOAT memory. " +
+            NOTES_REPLACED_RULE,
+        ]),
+    ...(matched === ""
+      ? []
+      : ["Older standing notes that match this request (still in force; follow them):", matched]),
     "Your scratch folder for temporary files is " +
       files.scratch +
       " and your artifacts folder for saved outputs is " +
@@ -216,21 +223,19 @@ export const turnInstruction = (
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
-    ...(notesAllowed
-      ? [
-          task.notesChangeRequested === undefined
-            ? TURN_NOTES_RULE
-            : "Exception to the read-only rule above: the person asked to change or forget a note (" +
-              JSON.stringify(task.notesChangeRequested) +
-              "). Edit GOAT Bot's notes file (" +
-              files.notes +
-              ") yourself to make exactly that change, and change nothing else. " +
-              OTHER_NOTES_REQUESTS +
-              " When a follow-up asks for one, call " +
-              goatCallText("channel.notes_change") +
-              " for it right away instead of waiting: GOAT answers that it must wait and tells the person.",
-        ]
-      : []),
+    memory?.write === false
+      ? ""
+      : task.notesChangeRequested === undefined
+        ? TURN_NOTES_RULE
+        : "Exception to the read-only rule above: the person asked to change or forget a note (" +
+          JSON.stringify(task.notesChangeRequested) +
+          "). Edit GOAT Bot's notes file (" +
+          files.notes +
+          ") yourself to make exactly that change, and change nothing else. " +
+          OTHER_NOTES_REQUESTS +
+          " When a follow-up asks for one, call " +
+          goatCallText("channel.notes_change") +
+          " for it right away instead of waiting: GOAT answers that it must wait and tells the person.",
     ...channelWorkerRules("local", "turn"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");
@@ -243,11 +248,13 @@ export const turnInstruction = (
  */
 export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) => {
   const render = (notes: string, skills: RemoteBotContext["skills"]) =>
+    (context.prefix ?? "") +
     [
       ...workerHeader(task),
       ...remoteContextLines(task, notes, skills),
       ...channelWorkerRules("remote"),
-    ].join("\n");
+    ].join("\n") +
+    (context.suffix ?? "");
   const section = context.notes === undefined ? "" : channelBotNotesSection(context.notes);
   let kept = context.skills.length;
   let message = render(section, context.skills);

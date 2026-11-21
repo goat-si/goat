@@ -11,7 +11,7 @@ import {
   goatInput,
   makeHarness,
   onlyTask,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
@@ -44,7 +44,7 @@ it.effect.each([
       yield* setupBot;
       yield* (yield* ChannelGateway.ChannelGateway).ingest(
         goatInput(message, "note-" + kind),
-        rpcContext,
+        memoryRpcContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual((yield* onlyTask).notesChangeRequested, JSON.stringify(note).slice(1, -1));

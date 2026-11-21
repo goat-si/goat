@@ -10,6 +10,7 @@
 import type {
   AuthEnvironmentScope,
   BotId,
+  AuthSessionId,
   ChannelKind,
   CommandId,
   RuntimeMode,
@@ -41,6 +42,7 @@ export type ChannelIngressCaller =
  */
 export interface ChannelConnectionOwner {
   readonly ownerId: string;
+  readonly authSessionId?: AuthSessionId;
   readonly principalId: string;
   readonly displayName: string;
   readonly grantedScopes: ReadonlyArray<AuthEnvironmentScope>;

@@ -116,6 +116,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RepairStaleTitleRegeneration",
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
+  "ChannelInputSessionAuthority",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
   "SlackConversationBot",
 ]);
