@@ -22,6 +22,7 @@ import type {
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useStableCallback } from "~/hooks/useStableCallback";
 
 /**
  * A bot's older work, read page by page while its Home panel is open. The panel is keyed by
@@ -67,6 +68,13 @@ export function useBotWorkHistory(
             return result._tag === "Success" ? result.value : undefined;
           },
   });
+  const loadMoreSnoozed = useStableCallback(() => fold.continuation?.loadMore());
+  const loadingSnoozed = fold.continuation?.loading;
+  const failedSnoozed = fold.continuation?.failed ?? false;
+  const snoozedContinuation =
+    loadingSnoozed === undefined
+      ? undefined
+      : { loading: loadingSnoozed, failed: failedSnoozed, loadMore: loadMoreSnoozed };
   const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded, snoozeCheck });
   const [written, setWritten] = useState("[[],[],[]]");
   if (view.reported !== written) {
@@ -103,7 +111,7 @@ export function useBotWorkHistory(
   }
   return {
     supported: view.supported,
-    snoozeList: { snoozed: fold.rows, snoozedContinuation: fold.continuation },
+    snoozeList: { snoozed: fold.rows, snoozedContinuation },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

@@ -966,6 +966,6 @@ it("offers hour snooze only when the task's server supports it", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Snooze" }));
   expect(state.snooze).toHaveBeenCalledWith({
     environmentId: "env",
-    input: { taskId: "task-1", botId: "main", until: expect.any(String) },
+    input: { taskId: "task-1", botId: "main", preset: "hour" },
   });
 });

@@ -25,6 +25,7 @@ export function withoutSnoozedBotTasks(
 }
 
 type SnoozedTasks = NonNullable<ChannelListBotThreadsResult["snoozed"]>;
+const NO_SNOOZED_TASKS: SnoozedTasks = [];
 export type BotSnoozeFoldPages = {
   readonly scope: string;
   readonly rows: SnoozedTasks;
@@ -51,13 +52,12 @@ export function botSnoozeFold(input: {
   const { scope, first, setPages, read } = input;
   const pages = input.pages?.scope === scope ? input.pages : undefined;
   const cursor = pages === undefined ? first?.snoozedNextCursor : pages.nextCursor;
-  const initial = first?.snoozed ?? [];
-  const rows = pages === undefined ? initial : [...initial, ...pages.rows];
+  const rows = pages?.rows ?? first?.snoozed ?? NO_SNOOZED_TASKS;
   async function loadMore() {
     if (cursor === undefined || read === null || pages?.loading) return;
     const pending = {
       scope,
-      rows: pages?.rows ?? [],
+      rows,
       nextCursor: cursor,
       loading: true,
       failed: false,
@@ -70,10 +70,7 @@ export function botSnoozeFold(input: {
       const seen = new Set(rows.map((row) => row.task.taskId));
       return {
         scope,
-        rows: [
-          ...pending.rows,
-          ...(result.snoozed ?? []).filter((row) => !seen.has(row.task.taskId)),
-        ],
+        rows: [...rows, ...(result.snoozed ?? []).filter((row) => !seen.has(row.task.taskId))],
         nextCursor: result.snoozedNextCursor,
         loading: false,
         failed: false,
