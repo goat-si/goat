@@ -515,6 +515,50 @@ it.effect("persists a date-only SSH observation and keeps the PR in Activity aft
   );
 });
 
+it.effect(
+  "records an acknowledged SSH worker starting and finishing without an environment id",
+  () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const taskId = "ssh-activity";
+        yield* insertTask(taskId, { status: "running", createdAt: at(10) });
+        const subject = { host: "unpaired", threadId: "ssh-worker" };
+        const launch = {
+          surface: "ssh_thread_launch",
+          destination: { ...subject, correlationId: "dispatch" },
+        };
+        const started = {
+          id: "launch:child",
+          type: "worker_started",
+          actor: "bot",
+          at: at(1),
+          ...subject,
+        };
+        yield* childRecord(taskId, "child", { ...launch, state: "bound" });
+        const inProgress = yield* lookup(taskId);
+        assert.deepStrictEqual(
+          inProgress.activity?.entries.filter((entry) => "threadId" in entry),
+          [started],
+        );
+
+        yield* childRecord(taskId, "child", { ...launch, state: "completed" });
+        const finished = {
+          id: "launch-end:child",
+          type: "worker_finished",
+          actor: "goat",
+          at: at(1),
+          ...subject,
+        };
+        const completed = yield* lookup(taskId);
+        assert.deepStrictEqual(
+          completed.activity?.entries.filter((entry) => "threadId" in entry),
+          [started, finished],
+        );
+      }),
+    ),
+);
+
 it.effect("returns bounded, distinct PR summaries for the assigned and launched SSH workers", () =>
   provide(
     Effect.gen(function* () {

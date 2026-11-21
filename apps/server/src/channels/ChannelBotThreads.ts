@@ -65,6 +65,7 @@ import {
 } from "./channelBotThreadHistory.ts";
 import {
   type HomeTaskRow,
+  readHomeSnoozedRevision,
   recentHomeTaskRows,
   snoozedHomeTaskRows,
   unreadableHomeTaskView,
@@ -507,6 +508,10 @@ const make = Effect.gen(function* () {
             taskId: last.task_id,
           })
         : undefined;
+    const snoozedRevision =
+      after === undefined && snoozedNextCursor === undefined
+        ? undefined
+        : yield* readHomeSnoozedRevision(sql, scope).pipe(Effect.mapError(failed));
     const messages = after === undefined ? yield* mainMessageCount(owner, botId) : 0;
     for (const threadId of built.unreadablePullRequests)
       yield* warnPullRequests(
@@ -518,6 +523,7 @@ const make = Effect.gen(function* () {
       rows: built.rows,
       ...(snoozed.length === 0 ? {} : { snoozed }),
       ...(snoozedNextCursor === undefined ? {} : { snoozedNextCursor }),
+      ...(snoozedRevision === undefined ? {} : { snoozedRevision }),
       ...(nextSnoozeExpiry === undefined ? {} : { nextSnoozeExpiry, readAt: nowIso }),
       mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),

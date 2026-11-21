@@ -1,5 +1,5 @@
 import type { BotWorkTask } from "@goat/client-runtime/goatBot";
-import type { BotWorkResult } from "@goat/contracts";
+import { type BotWorkResult, ThreadId } from "@goat/contracts";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -346,6 +346,22 @@ it("shows the bot's criterion and activity, with snooze only on a server that su
         activity: {
           entries: [
             {
+              id: "started:ssh",
+              type: "worker_started",
+              actor: "bot",
+              at,
+              threadId: ThreadId.make("remote-worker"),
+              host: "unpaired",
+            },
+            {
+              id: "finished:ssh",
+              type: "worker_finished",
+              actor: "goat",
+              at,
+              threadId: ThreadId.make("remote-worker"),
+              host: "unpaired",
+            },
+            {
               id: "linked:42",
               type: "pr_linked",
               actor: "goat",
@@ -366,6 +382,9 @@ it("shows the bot's criterion and activity, with snooze only on a server that su
   expect(text()).toContain("The release notes are reviewed.");
   await act(async () => button("Activity")?.click());
   expect(text()).toContain("Pull request linked · example/release#42");
+  expect(text()).toContain("Worker started · remote-worker on unpaired");
+  expect(text()).toContain("Worker finished · remote-worker on unpaired");
+  expect(threadLinks().some(([label]) => label.includes("remote-worker"))).toBe(false);
   await act(async () => button("Snooze")?.click());
   await act(async () => button("1 hour")?.click());
   expect(change).toHaveBeenCalledWith(task.row.view, "hour");

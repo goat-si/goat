@@ -309,25 +309,19 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
       });
     }
     for (const child of children) {
-      const {
-        threadId,
-        host,
-        environmentId = host === undefined ? input.environmentId : undefined,
-      } = child.destination ?? {};
-      if (
-        threadId === undefined ||
-        environmentId === undefined ||
-        child.state === "reserved" ||
-        child.state === "released"
-      )
+      const { threadId, host, environmentId } = child.destination ?? {};
+      if (threadId === undefined || child.state === "reserved" || child.state === "released")
         continue;
+      const subject =
+        host === undefined
+          ? { threadId, environmentId: environmentId ?? input.environmentId }
+          : { threadId, host, ...(environmentId === undefined ? {} : { environmentId }) };
       entries.push({
         id: "launch:" + child.childWorkId,
         type: "worker_started",
         actor: "bot",
         at: child.createdAt,
-        environmentId,
-        threadId,
+        ...subject,
       });
       if (isChannelChildWorkTerminal(child.state))
         entries.push({
@@ -335,8 +329,7 @@ const readBotTaskActivity = Effect.fn("ChannelLedger.readTaskActivity")(
           type: "worker_finished",
           actor: "goat",
           at: child.updatedAt,
-          environmentId,
-          threadId,
+          ...subject,
         });
     }
     const linked = new Set<string>();

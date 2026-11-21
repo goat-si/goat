@@ -506,3 +506,46 @@ it("retains a snoozed continuation during and after Home refresh and removes an 
   await screen.rerender(<History list={snapshot(4, "new-boundary")} snooze />);
   await expect.element(more).toBeEnabled();
 });
+
+it("finds the 52nd snooze after Home refreshes with the same first-page cursor", async () => {
+  setup();
+  const until = "2026-11-13T02:00:00Z";
+  const snoozed = Array.from({ length: 52 }, (_, index) => {
+    const taskId = ChannelTaskId.make(`snooze-${index + 1}`);
+    return {
+      ...old,
+      task: { ...old.task, taskId, title: `Task ${index + 1}` },
+      view: { ...old.view, taskId, snoozedUntil: until },
+    };
+  });
+  const snapshot = (snoozedRevision: string) => ({
+    ...current([]),
+    snoozed: snoozed.slice(0, 50),
+    snoozedNextCursor: "same-cursor",
+    snoozedRevision,
+  });
+  mock.active = snoozed.slice(50).map(({ task }) => ({ taskId: task.taskId, until }));
+  mock.read
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { ...current([]), snoozed: snoozed.slice(50, 51), snoozedRevision: "51" },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { ...current([]), snoozed: snoozed.slice(50), snoozedRevision: "52" },
+    });
+  await using screen = await render(<History list={snapshot("51")} snooze />);
+  const more = screen.getByRole("button", { name: "Show more snoozed tasks" });
+  await userEvent.click(more);
+  const loaded = screen.getByText("Snoozed: Task 51");
+  await expect.element(loaded).toBeVisible();
+  await expect.element(more).not.toBeInTheDocument();
+
+  await screen.rerender(<History list={snapshot("52")} snooze />);
+  await expect.element(loaded).toBeVisible();
+  await expect.element(more).toBeEnabled();
+  await userEvent.click(more);
+  await expect.element(screen.getByText("Snoozed: Task 52")).toBeVisible();
+  expect(loaded.all()).toHaveLength(1);
+  await expect.element(more).not.toBeInTheDocument();
+});

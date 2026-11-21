@@ -1,5 +1,7 @@
 import { CHANNEL_BOT_THREADS_SNOOZED_LIMIT } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import * as NodeCrypto from "node:crypto";
 import { taskViewKeyPrefix } from "./channelTaskViews.ts";
 
 interface HomeScope {
@@ -65,18 +67,12 @@ export const recentHomeTaskRows = (
 
 export const snoozedHomeTaskRows = (
   sql: SqlClient.SqlClient,
-  { ownerId, botId, now }: HomeScope,
+  scope: HomeScope,
   after: { readonly createdAt: string; readonly taskId: string } | undefined,
 ) => sql<HomeTaskRow & { readonly until: string }>`
   SELECT t.task_id, t.task_json, t.status_version,
     json_extract(v.value_json, '$.snoozedUntil') AS until
-  FROM channel_runtime_state v
-  JOIN channel_tasks t ON t.task_id = ${viewTaskId(sql)}
-  JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-  WHERE ${ownerViews(sql, ownerId)} AND json_valid(v.value_json) = 1
-    AND t.owner_id = ${ownerId} AND t.bot_id = ${botId}
-    AND c.owner_id = ${ownerId} AND c.kind = 'goat'
-    AND ${activeSnooze(sql, now)}
+  ${activeHomeSnoozeViews(sql, scope)}
     ${
       after === undefined
         ? sql``
@@ -84,3 +80,32 @@ export const snoozedHomeTaskRows = (
     }
   ORDER BY until, t.task_id LIMIT ${CHANNEL_BOT_THREADS_SNOOZED_LIMIT + 1}
 `;
+
+const activeHomeSnoozeViews = (sql: SqlClient.SqlClient, { ownerId, botId, now }: HomeScope) =>
+  sql`FROM channel_runtime_state v
+    JOIN channel_tasks t ON t.task_id = ${viewTaskId(sql)}
+    JOIN channel_conversations c ON c.conversation_id = t.conversation_id
+    WHERE ${ownerViews(sql, ownerId)} AND json_valid(v.value_json) = 1
+      AND t.owner_id = ${ownerId} AND t.bot_id = ${botId}
+      AND c.owner_id = ${ownerId} AND c.kind = 'goat'
+      AND ${activeSnooze(sql, now)}`;
+
+// Home hashes only IDs and deadlines in bounded batches within its existing reader snapshot.
+export const readHomeSnoozedRevision = Effect.fn("ChannelBotThreads.snoozedRevision")(function* (
+  sql: SqlClient.SqlClient,
+  scope: HomeScope,
+) {
+  const hash = NodeCrypto.createHash("sha256");
+  const batchSize = 256;
+  let after = taskViewKeyPrefix(scope.ownerId);
+  while (true) {
+    const rows = yield* sql<{ readonly key: string; readonly until: string }>`
+      SELECT v.key, json_extract(v.value_json, '$.snoozedUntil') AS until
+      ${activeHomeSnoozeViews(sql, scope)} AND v.key > ${after}
+      ORDER BY v.key LIMIT ${batchSize}`;
+    for (const { key, until } of rows) hash.update(JSON.stringify([key, until]));
+    const last = rows.at(-1);
+    if (last === undefined || rows.length < batchSize) return hash.digest("hex");
+    after = last.key;
+  }
+});

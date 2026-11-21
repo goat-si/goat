@@ -39,6 +39,7 @@ vi.mock("~/state/channels", () => ({
 }));
 
 import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { GoatBotTaskActivity } from "./GoatBotTaskActivity";
 
 const childWork = Atom.make(() => {
   state.reads += 1;
@@ -74,6 +75,41 @@ const decodeRemoteWork = Schema.decodeSync(BotRemoteWork);
 const decodeRow = Schema.decodeSync(BotThreadRow);
 const decodeLookupWork = Schema.decodeUnknownSync(BotWorkResult);
 const at = "2026-11-09T00:00:00.000Z";
+it("shows unpaired SSH worker Activity as text even when a local thread has the same id", async () => {
+  const subject = { host: "unpaired", threadId: "worker" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Work", status: "completed", updatedAt: at },
+    },
+    codingRows: [
+      {
+        kind: "coding",
+        taskId: "task-1",
+        environmentId: "local",
+        threadId: "worker",
+        title: "Local work",
+        state: "completed",
+        lastActivityAt: at,
+      },
+    ],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { ...subject, id: "end", type: "worker_finished", actor: "goat", at },
+        { ...subject, id: "start", type: "worker_started", actor: "bot", at },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect.element(screen.getByText("Worker started · worker on unpaired")).toBeVisible();
+  await expect.element(screen.getByText("Worker finished · worker on unpaired")).toBeVisible();
+  expect(screen.getByRole("link").all()).toHaveLength(0);
+});
+
 const rows = [
   Schema.decodeSync(BotThreadRow)({
     kind: "task",

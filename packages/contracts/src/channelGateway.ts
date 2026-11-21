@@ -589,18 +589,30 @@ const activityFields = {
   actor: Schema.Literals(["bot", "person", "goat"]),
   at: IsoDateTime,
 };
-const workerFields = { environmentId: EnvironmentId, threadId: ThreadId };
 const questionFields = { requestId: TrimmedNonEmptyString };
 const activityEntry = <const Type extends string, Fields extends Schema.Struct.Fields>(
   type: Type,
   fields: Fields,
 ) => Schema.Struct({ type: Schema.Literal(type), ...activityFields, ...fields });
+const workerActivityEntry = <const Type extends "worker_started" | "worker_finished">(type: Type) =>
+  activityEntry(type, {
+    environmentId: Schema.optionalKey(EnvironmentId),
+    host: Schema.optionalKey(TrimmedNonEmptyString),
+    threadId: ThreadId,
+  }).check(
+    Schema.makeFilter(
+      ({ environmentId, host }) => environmentId !== undefined || host !== undefined,
+      {
+        expected: "a worker environment or SSH host",
+      },
+    ),
+  );
 
 export const ChannelBotTaskActivityEntry = Schema.Union([
   activityEntry("created", {}),
   activityEntry("status", { status: ChannelTaskStatus }),
-  activityEntry("worker_started", workerFields),
-  activityEntry("worker_finished", workerFields),
+  workerActivityEntry("worker_started"),
+  workerActivityEntry("worker_finished"),
   activityEntry("pr_linked", { repo: TrimmedNonEmptyString, number: PositiveInt }),
   activityEntry("asked", questionFields),
   activityEntry("answered", questionFields),
@@ -696,6 +708,8 @@ export const ChannelListBotThreadsResult = Schema.Struct({
     Schema.Array(BotTaskRow).check(Schema.isMaxLength(CHANNEL_BOT_THREADS_SNOOZED_LIMIT)),
   ),
   snoozedNextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
+  /** Identifies the active set for Home and its Snoozed pages when pagination is needed. */
+  snoozedRevision: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
   nextSnoozeExpiry: Schema.optionalKey(IsoDateTime),
   readAt: Schema.optionalKey(IsoDateTime),
   /** Present on a snooze check, including when every requested task is unsnoozed. */

@@ -25,12 +25,16 @@ export function withoutSnoozedBotTasks(
 }
 
 type SnoozedTasks = NonNullable<ChannelListBotThreadsResult["snoozed"]>;
-type SnoozeRead = Pick<ChannelListBotThreadsResult, "rows" | "snoozed" | "snoozedNextCursor">;
+type SnoozeRead = Pick<
+  ChannelListBotThreadsResult,
+  "rows" | "snoozed" | "snoozedNextCursor" | "snoozedRevision"
+>;
 const NO_SNOOZED_TASKS: SnoozedTasks = [];
 export type BotSnoozeFoldPages = {
   readonly scope: string;
   readonly rows: SnoozedTasks;
   readonly firstCursor: string | undefined;
+  readonly revision: string | undefined;
   readonly nextCursor: string | undefined;
   readonly loading: boolean;
   readonly failed: boolean;
@@ -56,10 +60,15 @@ export function botSnoozeFold(input: {
   const { scope, first, setPages, read } = input;
   const pages = input.pages?.scope === scope ? input.pages : undefined;
   const firstCursor = first.snoozedNextCursor;
+  const revision = first.snoozedRevision;
+  const continuation =
+    pages?.firstCursor === firstCursor && pages?.revision === revision ? pages : undefined;
   const exhausted = input.loaded && firstCursor === undefined;
   const cursor = exhausted
     ? undefined
-    : (pages?.nextCursor ?? (pages?.firstCursor === firstCursor ? undefined : firstCursor));
+    : continuation === undefined
+      ? firstCursor
+      : continuation.nextCursor;
   const firstRows = first.snoozed ?? NO_SNOOZED_TASKS;
   const rows =
     pages === undefined || exhausted
@@ -69,8 +78,9 @@ export function botSnoozeFold(input: {
     if (cursor === undefined || read === null || pages?.loading) return;
     const pending = {
       scope,
-      rows: mergeSnoozeRows(pages?.rows ?? NO_SNOOZED_TASKS, firstRows),
+      rows,
       firstCursor,
+      revision,
       nextCursor: cursor,
       loading: true,
       failed: false,
@@ -80,6 +90,8 @@ export function botSnoozeFold(input: {
     setPages((prior) => {
       if (prior !== pending) return prior;
       if (result === undefined) return { ...pending, loading: false, failed: true };
+      if (revision !== undefined && result.snoozedRevision !== revision)
+        return { ...pending, loading: false };
       return {
         ...pending,
         rows: mergeSnoozeRows(pending.rows, result.snoozed ?? NO_SNOOZED_TASKS),
@@ -94,7 +106,7 @@ export function botSnoozeFold(input: {
     continuation:
       cursor === undefined || read === null
         ? undefined
-        : { loading: pages?.loading ?? false, failed: pages?.failed ?? false, loadMore },
+        : { loading: pages?.loading ?? false, failed: continuation?.failed ?? false, loadMore },
   };
 }
 

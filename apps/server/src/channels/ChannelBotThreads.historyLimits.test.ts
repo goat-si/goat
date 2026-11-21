@@ -72,6 +72,25 @@ describe("ChannelBotThreads history limits", () => {
         );
         assert.isUndefined(next.snoozedNextCursor);
         assert.deepStrictEqual(next.rows, []);
+        const added = ChannelTaskId.make(name(51));
+        yield* insertTask(added, { status: "completed", createdAt: at(10_000) });
+        yield* service.snooze({ taskId: added, botId, until: at(-120) }, owner);
+        const refreshed = yield* service.list(owner);
+        assert.strictEqual(refreshed.snoozedNextCursor, home.snoozedNextCursor);
+        assert.notStrictEqual(refreshed.snoozedRevision, home.snoozedRevision);
+        assert.strictEqual(next.snoozedRevision, home.snoozedRevision);
+        const refreshedNext = yield* service.list(
+          owner,
+          botId,
+          undefined,
+          undefined,
+          refreshed.snoozedNextCursor,
+        );
+        assert.strictEqual(refreshedNext.snoozedRevision, refreshed.snoozedRevision);
+        assert.deepStrictEqual(
+          refreshedNext.snoozed?.map((row) => row.task.taskId),
+          [taskId, added],
+        );
         const wrongBot = yield* Effect.flip(
           service.list(owner, BotId.make("other"), undefined, undefined, home.snoozedNextCursor),
         );
@@ -90,6 +109,9 @@ describe("ChannelBotThreads history limits", () => {
           [],
         );
         yield* service.unsnooze({ taskId, botId }, owner);
+        const replaced = yield* service.list(owner);
+        assert.strictEqual(replaced.snoozedNextCursor, home.snoozedNextCursor);
+        assert.notStrictEqual(replaced.snoozedRevision, home.snoozedRevision);
         assert.deepStrictEqual(
           (yield* service.list(owner, botId, undefined, [taskId])).activeSnoozes,
           [],

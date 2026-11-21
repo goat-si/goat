@@ -218,6 +218,46 @@ describe("bot thread contracts", () => {
       }),
     ).toThrow();
   });
+  it("round trips SSH Activity with a host and thread when the environment is unknown", () => {
+    const codec = Schema.toCodecJson(BotWorkResult);
+    const decode = Schema.decodeUnknownSync(codec);
+    const encode = Schema.encodeSync(codec);
+    const work = {
+      task: { state: "known", row: taskRow },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    };
+    const start = {
+      id: "start",
+      type: "worker_started",
+      actor: "bot",
+      at,
+      threadId: "ssh",
+      host: "box",
+    };
+    const entries = [
+      start,
+      { id: "end", type: "worker_finished", actor: "goat", at, threadId: "ssh", host: "box" },
+      {
+        id: "local",
+        type: "worker_started",
+        actor: "bot",
+        at,
+        threadId: "local",
+        environmentId: "env",
+      },
+    ];
+    const updated = { ...work, activity: { entries } };
+    expect(decode(encode(decode(updated)))).toEqual(updated);
+    const shippedLookup = Schema.decodeUnknownSync(
+      BotWorkResult.mapFields(({ activity: _activity, ...fields }) => fields),
+    );
+    expect(shippedLookup(updated)).toEqual(work);
+    const { host: _host, ...missingIdentity } = start;
+    expect(() => decode({ ...work, activity: { entries: [missingIdentity] } })).toThrow();
+  });
   it("rejects a NUL in a bot task search query", () => {
     const decode = Schema.decodeUnknownSync(ChannelSearchBotTasksInput);
     expect(() => decode({ botId: "main", query: "abc\0zzz" })).toThrow();
@@ -291,6 +331,7 @@ describe("bot thread contracts", () => {
         },
       ],
       mainMessageCount: 5,
+      snoozedRevision: "example-revision",
       nextSnoozeExpiry: at,
       readAt: "2026-11-04T09:00:00.000Z",
     });
@@ -301,6 +342,7 @@ describe("bot thread contracts", () => {
     });
     expect(newResult.snoozed?.[0]?.view.snoozedUntil).toBe(at);
     expect(newResult.readAt).toBe("2026-11-04T09:00:00.000Z");
+    expect(decodeRows(encoded).snoozedRevision).toBe("example-revision");
   });
   it("bounds a row's pull requests at five", () => {
     const six = Array.from({ length: 6 }, (_, index) => ({

@@ -154,7 +154,6 @@ export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }
   const activity = work.activity;
   if (activity === undefined || (activity.entries.length === 0 && !activity.incompleteBefore))
     return null;
-  const titleOf = new Map(work.codingRows.map((row) => [row.threadId, row.title]));
   return (
     <View>
       <Pressable
@@ -169,12 +168,7 @@ export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }
         <ScrollView className="max-h-52" nestedScrollEnabled>
           {activity.entries.map((entry) => (
             <View key={entry.id} className="pb-2">
-              <Text className="text-foreground">
-                {botTaskActivityText(
-                  entry,
-                  "threadId" in entry ? titleOf.get(entry.threadId) : undefined,
-                )}
-              </Text>
+              <Text className="text-foreground">{botTaskActivityText(entry, work.codingRows)}</Text>
               <Text className="text-xs text-foreground-muted">
                 {new Date(entry.at).toLocaleString()} ·{" "}
                 {entry.actor === "goat" ? "GOAT" : entry.actor === "bot" ? "Bot" : "Person"}

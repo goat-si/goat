@@ -1,9 +1,9 @@
-import type { ChannelBotTaskActivityEntry } from "@goat/contracts";
+import type { BotWorkResult, ChannelBotTaskActivityEntry } from "@goat/contracts";
 import { presentTaskStatus } from "./readers.ts";
 
 export function botTaskActivityText(
   entry: ChannelBotTaskActivityEntry,
-  workerTitle?: string | undefined,
+  workers: BotWorkResult["codingRows"],
 ): string {
   switch (entry.type) {
     case "created":
@@ -11,9 +11,17 @@ export function botTaskActivityText(
     case "status":
       return presentTaskStatus(entry.status, null).label;
     case "worker_started":
-      return `Worker started · ${workerTitle ?? entry.threadId}`;
-    case "worker_finished":
-      return `Worker finished · ${workerTitle ?? entry.threadId}`;
+    case "worker_finished": {
+      const label = entry.type === "worker_started" ? "Worker started" : "Worker finished";
+      const worker = workers.find(
+        (row) => row.environmentId === entry.environmentId && row.threadId === entry.threadId,
+      );
+      const subject =
+        entry.environmentId === undefined && entry.host !== undefined
+          ? `${entry.threadId} on ${entry.host}`
+          : (worker?.title ?? entry.threadId);
+      return `${label} · ${subject}`;
+    }
     case "pr_linked":
       return `Pull request linked · ${entry.repo}#${entry.number}`;
     case "asked":
