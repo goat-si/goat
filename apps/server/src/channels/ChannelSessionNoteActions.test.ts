@@ -45,6 +45,7 @@ import {
 
 import { providerBrief } from "./testkit/providerBrief.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import {
   askMemberNotes,
   memberNoteFiles as notesFile,
@@ -238,6 +239,35 @@ describe("notes changes from a GOAT Bot session turn", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("does not give a main turn a shared edit grant from the reception model", () => {
+    const harness = sessionHarness();
+    const text = "tidy up the shared notes";
+    harness.script.current = () =>
+      Effect.succeed({
+        replyText: "On it.",
+        action: {
+          type: "run_turn",
+          title: "Tidy notes",
+          instruction: text,
+          notesChangeRequested: text,
+        },
+      });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        goatBotSessionRouting: "reception",
+      });
+      const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        goatInput(text, "main-free-form-edit"),
+        memoryRpcContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const turn = yield* boundTurn(harness, input.inputId);
+      assert.isUndefined(turn.task.notesChangeRequested);
+      assert.notInclude(turn.sent, "Exception to the read-only rule above");
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect(
     "remember from a session turn on the default routing saves one line with its source",

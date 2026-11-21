@@ -187,7 +187,11 @@ describe("scoped note reads", () => {
         yield* fs.writeFileString(own.notes, line(privateFact, "scout-ci") + "\n");
         yield* fs.writeFileString(shared.notes, sharedLines + "\n");
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
-          { ...goatInput("How is rollout done?", "reception-note-budget"), botId: scout.botId },
+          {
+            ...goatInput("How is rollout done?", "reception-note-budget"),
+            conversationKey: scout.sessionThreadId,
+            replyAddress: { kind: "goat", environmentId, threadId: scout.sessionThreadId },
+          },
           memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
