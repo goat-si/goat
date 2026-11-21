@@ -10,7 +10,7 @@ import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { runMigrations } from "../persistence/Migrations.ts";
+import { hasPendingMigrations, runMigrations } from "../persistence/Migrations.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
@@ -924,39 +924,49 @@ it.effect(
     ),
 );
 
-it.effect("startup fences a work-trigger input written by #3795 after migration 179", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    assert.deepInclude(yield* runMigrations({ skipStartupRepairs: true }), [
-      179,
-      "ChannelWorkerGenerations",
-    ]);
-    const at = "2026-11-21T00:00:00.000Z";
-    const payload = JSON.stringify({
-      ...owner,
-      routineMode: "work",
-      threadId: botThread,
-      text: "Triage the event",
-      receivedAt: at,
-      projectId: "rollback-project",
-      webhookDeliveryId: "rollback-delivery",
-      taskCreatedAt: at,
-    });
-    yield* sql`INSERT INTO scheduled_task_channel_inputs
+it.effect.each(["with indexes", "without indexes"] as const)(
+  "startup %s fences a work-trigger input written by #3795 after migration 179 without changing the schema",
+  (indexState) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepInclude(yield* runMigrations({ skipStartupRepairs: true }), [
+        179,
+        "ChannelWorkerGenerations",
+      ]);
+      if (indexState === "without indexes") {
+        yield* sql`DROP INDEX IF EXISTS scheduled_tasks_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS scheduled_task_channel_inputs_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS channel_tasks_work_trigger_idx`;
+      }
+      const at = "2026-11-21T00:00:00.000Z";
+      const payload = JSON.stringify({
+        ...owner,
+        routineMode: "work",
+        threadId: botThread,
+        text: "Triage the event",
+        receivedAt: at,
+        projectId: "rollback-project",
+        webhookDeliveryId: "rollback-delivery",
+        taskCreatedAt: at,
+      });
+      yield* sql`INSERT INTO scheduled_task_channel_inputs
       (firing_id, task_id, payload_json, state, created_at)
       VALUES ('rollback-firing', 'rollback-routine', ${payload}, 'pending', ${at})`;
-    for (const through of [176, 177] as const) {
-      assert.isUndefined(yield* checkRollbackPredecessor(sql, through));
-    }
+      for (const through of [176, 177] as const) {
+        assert.isUndefined(yield* checkRollbackPredecessor(sql, through));
+      }
 
-    assert.isEmpty(yield* runMigrations());
+      assert.isFalse(yield* hasPendingMigrations());
+      const schemaVersion = yield* sql`PRAGMA schema_version`;
+      assert.isEmpty(yield* runMigrations());
+      assert.deepStrictEqual(yield* sql`PRAGMA schema_version`, schemaVersion);
 
-    for (const through of [176, 177] as const) {
-      assert.include(
-        (yield* checkRollbackPredecessor(sql, through))?.message ?? "",
-        "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
-        `startup through migration ${through} must refuse the database`,
-      );
-    }
-  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+      for (const through of [176, 177] as const) {
+        assert.include(
+          (yield* checkRollbackPredecessor(sql, through))?.message ?? "",
+          "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
+          `startup through migration ${through} must refuse the database`,
+        );
+      }
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
