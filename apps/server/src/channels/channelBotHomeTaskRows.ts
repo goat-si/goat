@@ -81,14 +81,15 @@ export const snoozedHomeTaskRows = (
   ORDER BY until, t.task_id LIMIT ${CHANNEL_BOT_THREADS_SNOOZED_LIMIT + 1}
 `;
 
+// The CASE lets the revision scan seek by view key instead of scanning the JSON-validity index.
 const activeHomeSnoozeViews = (sql: SqlClient.SqlClient, { ownerId, botId, now }: HomeScope) =>
   sql`FROM channel_runtime_state v
     JOIN channel_tasks t ON t.task_id = ${viewTaskId(sql)}
     JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-    WHERE ${ownerViews(sql, ownerId)} AND json_valid(v.value_json) = 1
+    WHERE ${ownerViews(sql, ownerId)}
       AND t.owner_id = ${ownerId} AND t.bot_id = ${botId}
       AND c.owner_id = ${ownerId} AND c.kind = 'goat'
-      AND ${activeSnooze(sql, now)}`;
+      AND CASE WHEN json_valid(v.value_json) THEN (${activeSnooze(sql, now)}) END`;
 
 // Home hashes only IDs and deadlines in bounded batches within its existing reader snapshot.
 export const readHomeSnoozedRevision = Effect.fn("ChannelBotThreads.snoozedRevision")(function* (

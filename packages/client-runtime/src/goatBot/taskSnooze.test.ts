@@ -19,7 +19,7 @@ it("reopens an exhausted continuation on a changed snooze set without dropping l
   const first = row("first");
   const loaded = row("loaded");
   const added = row("added");
-  const result = (snoozedRevision: string, snoozed: readonly BotTaskRow[]) => ({
+  const result = (snoozedRevision: string, snoozed: ReadonlyArray<typeof BotTaskRow.Type>) => ({
     rows: [],
     mainMessageCount: 0,
     snoozed,
