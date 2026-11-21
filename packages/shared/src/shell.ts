@@ -1,6 +1,10 @@
 export { mergePathEntries } from "./shellPathEntries.ts";
 import { npmShimExecutable, preferGitForWindowsBinary } from "./windowsExecutableShim.ts";
-export { npmShimExecutable, preferGitForWindowsBinary } from "./windowsExecutableShim.ts";
+export {
+  gitForWindowsBash,
+  npmShimExecutable,
+  preferGitForWindowsBinary,
+} from "./windowsExecutableShim.ts";
 export { runsGitWithoutConsole } from "./gitWindowsReads.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
