@@ -1,32 +1,34 @@
 # 050 — Each bot keeps its own memory (G09)
 
-**Class:** C4 (persisted data layout). **Severity:** P2. **Depends on:** nothing.
+**Class:** C4 (persisted data, authority). **Severity:** P2. **Depends on:** nothing.
 
 ## Problem
 
-All bots on a machine share one notes file and one skill set (`docs/user/goat-bot.md:42`, `apps/server/src/channels/channelBotNotes.ts:48`). A member's purpose is injected into its brief (`channelBotSessionBrief.ts:147`), but a fact told to Scout is visible to every bot, and a bot cannot keep standing instructions longer than its purpose field. Orca keeps `SOUL.md` and `MEMORY.md` per bot with history; akeru and threebot separate private and shared memory (`030` T3-04).
+All bots on a machine share one notes file and skill set (`docs/user/goat-bot.md:42`). The notes reader takes no bot (`apps/server/src/channels/ChannelBotNotesReader.ts:66`), and reception, the bot session, local workers and remote workers each read notes on their own paths. A member's purpose reaches its brief (`channelBotSessionBrief.ts:147`), but there is nowhere for longer standing instructions. Orca keeps `SOUL.md` and `MEMORY.md` per bot; akeru and threebot separate private and shared memory (`030` T3-04).
+
+## Meaning of "private"
+
+Scoped recall and editing: a member bot's notes are read, recalled, edited and forgotten only through that bot. It is not filesystem isolation — a full-access worker on the machine could read the file — and the docs say so.
 
 ## Change
 
-1. **Storage**: member bots get a private notes file beside the shared one (same writer, same 64 KB view limit, same history), keyed by `botId`. Main keeps today's file as the shared file. No migration of existing notes: they stay shared.
-2. **Server**: `channelBotNoteWriter.ts` writes a note to the bot's private file by default for member bots, and to the shared file when the person says "for all bots" (decision field `scope: "bot" | "shared"`). Recall (`channelBotNotesRecall.ts`) reads the bot's private file first, then shared.
-3. **Instructions**: the profile's `purpose` stays the short description; add `instructions` (≤ 16 KB) on `BotProfile` (`packages/contracts/src/botProfile.ts:18`) edited in **Edit bot → Instructions**, injected into the brief after purpose.
-4. **Web/desktop**: Library → Memory shows **This bot** and **All bots** sections; Ask to change/forget keep working per note.
-5. **Mobile**: `MobileBotMemory.tsx` same two sections; instructions editable in `MobileBotEditSheet.tsx`.
-6. **Docs**: goat-bot.md Memory paragraph.
+1. **Scope from authority**: every notes read, recall, edit, forget and worker brief takes the `botId` of the authorized task or reader, not the caller's guess; carried through `ChannelBotNotesReader.list`, `channelBotNotesRecall.ts`, `channelBotNoteWriter.ts`, `channelBotNoteTabEdits.ts`, `channelWorkerBrief.ts` and `ChannelRemoteWorkers.ts`.
+2. **Storage**: member bots get a private notes file beside the shared one (same 64 KB view, history and replacement rules). Existing notes stay shared; no migration of content.
+3. **Writes**: member bots write private notes by default; a shared note needs the person's explicit "for all bots" confirmation in the reply card.
+4. **Instructions**: `BotProfile.instructions` (≤ 16 KB, `packages/contracts/src/botProfile.ts:18`), edited in Edit bot → Instructions; a change rotates the bot's warm session (`channelBotSessionRotation.ts`) so the next turn uses it.
+5. **Clients**: Library → Memory shows **This bot** and **All bots** on web/desktop and mobile (`MobileBotMemory.tsx`); instructions editable on both.
+6. **Docs**: `docs/user/goat-bot.md` Memory.
 
 ## Tests (failing first)
 
-- Notes writer test: a member bot's note lands in its private file and is not recalled by another member; a shared note is recalled by both.
-- Brief test: instructions appear after purpose and are capped.
-- Browser test: Memory shows both sections for a member bot.
+`ChannelBotNotesReader.test.ts`, `ChannelBotNotesRecall.test.ts`, `channelBotNotes.test.ts`: a member's note is listed and recalled for it and not for another member or main; a shared note reaches all; forget on bot A cannot touch bot B's note; a worker brief for bot A contains only A's private and shared notes; an instructions change rotates the warm session.
 
 ## Acceptance
 
-1. Tell Scout a fact; ask Review buddy: it does not know it. Ask main: it does not know it unless shared.
-2. Instructions survive restart and reach the next turn.
-3. Existing shared notes are unchanged and still recalled by every bot.
+1. Tell Scout a fact; Review buddy and main do not know it unless it was shared.
+2. Instructions reach the next turn after an edit, on every path that runs the bot.
+3. Existing shared notes are unchanged and recalled by every bot.
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; review lane; M2 real-client pass.
+Focused tests; `vp run check:changed`; independent review; before merge, web capture of the two Memory sections.

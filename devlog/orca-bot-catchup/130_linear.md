@@ -1,19 +1,19 @@
 # 130 — Linear (G19)
 
-**Class:** C4 (external account, credentials). **Severity:** P2. **Decision:** D5. **Depends on:** 010, 040.
+**Class:** C4 (external account, credentials). **Severity:** P2. **Decision:** D5 (NEEDS_HUMAN). **Depends on:** 010.
 
 ## Problem
 
-Orca routes Linear issues to a default bot (`274_orca/src/main/runtime/rpc/methods/bots-linear.ts:11`). GOAT has no Linear integration.
+Orca routes Linear issues to a default bot (`274_orca/src/main/runtime/rpc/methods/bots-linear.ts:11`). GOAT has none.
 
-## Decision D5 (NEEDS_HUMAN)
+## Decision D5
 
-Needs a Linear workspace and an API key or OAuth app that agents must not create. Recommendation: a personal API key entered by the owner through `handoff.create`/Settings secrets, polling assigned or labeled issues every few minutes (no public URL needed), each matching issue sent to the bound bot as a 010 `work` event with the issue fenced; replies posted as issue comments. Options: (a) API key + polling; (b) Linear webhook to the 010 trigger URL (needs a public URL until GOAT Connect); (c) defer.
+Deferred until the owner chooses what the integration may read and write: workspace and teams, which issue actors may start work, polling vs webhook (a webhook needs a public URL until GOAT Connect), and whether comment write-back is allowed. Agents never create the Linear account or key; a persistent key needs an owner-authorized consumer, since `handoff.create` returns a one-use reference (`packages/contracts/src/agentSurface/entries/handoff.ts:4`).
 
-## Acceptance (once D5 is answered)
+## Shape once D5 is answered
 
-An issue labeled for Scout starts a Scout task; its result is commented on the issue; an issue from an unknown requester follows the access rule chosen in D5.
+Issues matching the chosen team/label become 010 `work` events for the bound bot with a durable cursor and per-issue dedupe; unlink stops polling and purges the cursor; comment write-back, if allowed, is a separate opt-in with a recorded delivery result and retries.
 
 ## Verification floor
 
-Focused tests against a recorded Linear API fake; live Linear NOT RUN without the owner's workspace.
+Tests against a recorded Linear API fake; live Linear NOT RUN without the owner's workspace.

@@ -1,25 +1,26 @@
-# 120 — Hand a thread to a bot (G18)
+# 120 — A bot follows a thread (G18)
 
-**Class:** C3. **Severity:** P2. **Depends on:** 020.
+**Class:** C4 (wire contract, authority over another thread). **Severity:** P2. **Depends on:** 020.
 
 ## Problem
 
-A bot follows only work it started. Orca can hand an existing worktree with running agents to a bot, which then owns follow-up (`274_orca/src/main/runtime/rpc/methods/bots-take-over.ts:21`). In GOAT, a person who wants a bot to babysit a PR must re-explain it in chat.
+A bot follows only work it launched; its threads view reads launch records and reconciles results by launcher and generation (`apps/server/src/channels/ChannelBotThreads.ts:198`, `channelLaunchedResults.ts:124`). Orca can hand a running worktree to a bot (`274_orca/src/main/runtime/rpc/methods/bots-take-over.ts:21`). In GOAT, asking a bot to babysit a PR means re-explaining it in chat.
 
 ## Change
 
-1. Thread menu (web/desktop/mobile) **Hand to bot…** picks a bot and an optional "done means".
-2. Server creates a bot task linked to that thread (the existing launch-link records in `ChannelBotThreads.ts`), so the thread shows in the bot's Home and its PR state, questions and ending flow through the bot. The thread keeps running; nothing restarts.
-3. Reverse: **Take back** on the task unlinks it; the thread returns to Threads.
+1. **Follow relationship**: a guarded record keyed by environment and thread linking it to a bot task (with an optional Done means), separate from launch provenance. The thread keeps running and stays visible in Threads; nothing restarts or changes owner.
+2. **What the bot gets**: observation of the thread's status, PR and ending, reported in its chat. Answering the thread's questions stays with people unless the person already could through the bot's normal approval path.
+3. **Clients**: thread menu **Ask a bot to follow…** (web/desktop/mobile); the bot's Home shows followed threads; **Stop following** removes future observation and routing.
+4. Ownership transfer is a separate decision, not in this unit.
 
 ## Tests (failing first)
 
-Server: handing a running thread creates one linked task without starting a turn; Take back removes the link. Browser: the thread moves to the bot's Home and back.
+A second handoff of the same thread to the same bot is a no-op; a terminal event racing the handoff is reported once; losing access to the thread ends the follow with a visible note; Stop following leaves the thread untouched.
 
 ## Acceptance
 
-A running thread handed to Scout appears in Scout's Home with its PR; Scout reports its end; Take back restores it.
+A running thread followed by Scout appears in Scout's Home with its PR; Scout reports its end; Stop following removes it from Home only.
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; review lane; M3 real-client pass.
+Focused tests; `vp run check:changed`; independent review; before merge, web capture.

@@ -4,36 +4,35 @@
 
 ## Problem
 
-`apps/server/src/channels/ChannelGateway.ts:382` returns `main` for every Slack input, so a member bot is reachable only in the GOAT app. Orca gives each bot its own Slack app with "Who can ask" (`274_orca/src/renderer/src/components/bots/slack/BotSlackSetupDialog.tsx:120`); akeru binds a channel to a bot and project (`030` T3-02).
+`apps/server/src/channels/ChannelGateway.ts:382` returns `main` for every Slack input. A member bot is reachable only in the GOAT app. Home and task lookup select GOAT conversations (`apps/server/src/channels/ChannelBotThreads.ts:423`), so Slack work would not appear in a member's Home even if routed. Orca gives each bot a Slack app with **Who can ask** in the connector settings (`274_orca/src/renderer/src/components/bots/slack/BotSlackSetupDialog.tsx:323`); akeru binds a channel to a bot and project (`030` T3-02).
 
 ## Decision D3
 
-Recommendation: keep one Slack app and route by **channel binding** (a Slack channel ID → a bot, set in Settings → GOAT Bot → Slack) plus a **name prefix** in DMs and mentions ("Scout: …" or "@goat Scout …"). Replies carry the bot's name as a prefix; `chat:write.customize` (name and icon per message) is used only if the workspace grants it. Options: (a) recommended; (b) one Slack app per bot (more setup for users, mirrors Orca); (c) keep main-only.
+Recommendation: one Slack app; a person binds Slack channels to bots; a DM or mention may name a bot ("Scout: …"). Options: (a) recommended; (b) one Slack app per bot; (c) keep main-only.
 
 ## Change
 
-1. **Contract**: `SlackChannelSettings` gains `botBindings: Array<{ channelId, botId }>` (≤ 100). Saved through the existing Slack settings path (`apps/server/src/channels/SlackChannelSettings.ts`); Slack settings are not part of `SETTINGS_ACCESS` today and this unit keeps it that way.
-2. **Server**: `ChannelGateway.checkCaller` Slack case resolves the bot from the binding, then from a leading bot name (case-insensitive, active members only), else `main`. The sender's access level and channel allowlist apply unchanged; a binding never widens who may ask. Slack thread → bot is sticky after the first message (stored with the conversation), so a rename or rebinding does not move an open thread.
-3. **Delivery**: `SlackChannelAdapter.ts` prefixes replies with the bot name for member bots; with `chat:write.customize` it sets `username` and `icon_url` instead.
-4. **Web/desktop**: Settings → GOAT Bot → Slack **Channels** list gains a bot picker per channel. A member bot's Home shows "Reachable in Slack: #eng" when bound.
-5. **Mobile**: read-only binding display in Settings → GOAT Bot.
-6. **Docs**: `docs/user/slack.md` and `goat-bot.md` ("Slack and iMessage talk to the main bot" becomes the new rule).
-
-## Security note
-
-Routing decides which bot answers, never who may ask; access ceilings stay per person. Deleted or hidden bots: deleted → falls back to main with a one-line notice; hidden → still answers.
+1. **Contract**: Slack settings gain `botBindings: Array<{ channelId, botId }>` (≤ 100), saved through the existing Slack settings path (`apps/server/src/channels/SlackChannelSettings.ts`); Slack settings stay outside `SETTINGS_ACCESS`.
+2. **Routing, decided once per Slack thread**: on the first admitted message of a workspace/connection/channel/thread, resolve the bot with precedence explicit name > channel binding > main, and persist it with the conversation in the same write as the input (`ChannelLedger.ts:920`). Later messages in that thread use the stored bot; rebinding or renaming affects new threads only.
+3. **Names**: active bot names are unique case-insensitively (enforced at create/rename in `ChannelBotMembers.ts`); an explicit name that matches no active bot, or a hidden/deleted one, gets a private Slack reply listing reachable bots and starts nothing.
+4. **Unbind and deletion**: unbinding sends new threads to main. A thread stored for a bot that is later deleted gets a private reply ("Scout was deleted; restore it in GOAT or start a new thread") and starts nothing — never a silent move to main.
+5. **Access**: routing picks the bot; who may ask stays per person (link levels, channel allowlist, `channelSenderAuthority.ts`).
+6. **Home**: `ChannelBotThreads.ts` lists a member bot's Slack-origin tasks in its Home Work, scoped by `bot_id`, with the existing "work whose ending the chat never told keeps its card" rule.
+7. **Delivery**: `SlackChannelAdapter.ts` prefixes member replies with the bot's name; with `chat:write.customize` granted, it sets `username`/`icon_url` instead.
+8. **Clients**: Settings → GOAT Bot → Slack **Channels** gets a bot picker (web/desktop); mobile shows bindings read-only; a member's Home shows "Reachable in Slack: #eng".
+9. **Docs**: `docs/user/slack.md`, `docs/user/goat-bot.md`.
 
 ## Tests (failing first)
 
-- `apps/server/src/channels/slack/SlackChannelScenarios.test.ts`: a bound channel's mention reaches the member bot; an unbound channel reaches main; "Scout: hi" in a DM reaches Scout; a thread started with Scout stays with Scout after the binding changes; an unlinked person bound to Scout still works at "Access without a link".
-- Settings test: a binding to a deleted bot is refused.
+In `apps/server/src/channels/slack/SlackChannelScenarios.test.ts` with `slackSdkFake.ts`: bound channel → member; unbound → main; "Scout: hi" DM → Scout; thread stays with Scout after rebinding; unknown or hidden name → private reply, no task; thread of a deleted bot → private reply, no task; unlinked person keeps "Access without a link". `ChannelBotMembers.test.ts`: duplicate name refused. `ChannelBotThreads.test.ts`: Slack-origin task appears in the member's Home.
 
 ## Acceptance
 
-1. A message in a bound channel is answered by the member bot, with its name, and its task appears in that bot's Home.
-2. DM name prefix routes; unknown name routes to main and says which bots exist.
-3. Access levels behave exactly as before for every route.
+1. A message in a bound channel is answered by the member bot under its name, and the task appears in that bot's Home on web and mobile.
+2. Follow-ups in a thread stay with the bot that took it.
+3. Unknown, hidden and deleted targets never fall through silently.
+4. Access levels behave as before on every route.
 
 ## Verification floor
 
-Focused tests with the Slack SDK fake (`slackSdkFake.ts`); `vp run check:changed`; review lane. Live Slack: NOT RUN (no workspace credentials); stated in the PR.
+Focused tests; `vp run check:changed`; independent review; before merge, web capture of the binding picker and Home. Live Slack: NOT RUN (no workspace credentials), stated in the PR.

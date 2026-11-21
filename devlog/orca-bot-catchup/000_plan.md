@@ -39,36 +39,40 @@ Earlier GOAT Bot research this builds on: `~/Developer/codex/049_goat-bot-uiux-c
 
 ## Units, in order of user value
 
-| Unit                                                             | Closes   | Class          | Depends on | Decision              | Milestone |
-| ---------------------------------------------------------------- | -------- | -------------- | ---------- | --------------------- | --------- |
-| [010](010_bot_event_triggers.md) Events start a named bot        | G01, G02 | C4             | —          | D1                    | M1        |
-| [020](020_bot_work_items.md) Bot work says what done means       | G03      | C4             | —          | —                     | M1        |
-| [030](030_bot_attention_alerts.md) Alerts when a bot needs you   | G04–G07  | C3 (A), C4 (B) | —          | D2 (slice B)          | M1        |
-| [040](040_slack_named_bots.md) Slack reaches named bots          | G08      | C4             | —          | D3                    | M2        |
-| [050](050_bot_private_memory.md) Each bot keeps its own memory   | G09      | C4             | —          | —                     | M2        |
-| [060](060_bot_templates.md) Start from a template                | G10      | C3             | 010, 050   | —                     | M2        |
-| [070](070_run_history.md) Run history says why                   | G11      | C3             | 010        | —                     | M2        |
-| [080](080_mobile_continuity.md) The phone keeps up               | G12–G14  | C3             | 010, 030   | —                     | M2        |
-| [090](090_bot_tool_scope.md) Tools per bot                       | G15      | C4             | 050        | —                     | M3        |
-| [100](100_bot_sharing.md) Share a bot's setup                    | G16      | C4             | 050, 060   | —                     | M3        |
-| [110](110_agent_bot_surface.md) Agents propose bots and ask them | G17      | C4             | 060        | D4                    | M3        |
-| [120](120_hand_to_bot.md) Hand a thread to a bot                 | G18      | C3             | 020        | —                     | M3        |
-| [130](130_linear.md) Linear                                      | G19      | C4             | 010, 040   | D5 (needs an account) | M3        |
+| Unit                                                           | Closes                     | Class | Depends on                       | Decision              |
+| -------------------------------------------------------------- | -------------------------- | ----- | -------------------------------- | --------------------- |
+| [010](010_bot_event_triggers.md) Events start a named bot      | G01, G02                   | C4    | —                                | D1                    |
+| [020](020_bot_work_items.md) Bot work says what done means     | G03                        | C4    | —                                | —                     |
+| [030](030_bot_attention_alerts.md) Alerts when a bot needs you | G04, G05; G06, G07 partial | C4    | —                                | D2 (slice B)          |
+| [040](040_slack_named_bots.md) Slack reaches named bots        | G08                        | C4    | —                                | D3                    |
+| [050](050_bot_private_memory.md) Each bot keeps its own memory | G09                        | C4    | —                                | —                     |
+| [060](060_bot_templates.md) Start from a template              | G10                        | C4    | 010, 050                         | —                     |
+| [070](070_run_history.md) Run history says why                 | G11                        | C4    | 010                              | —                     |
+| [080](080_mobile_continuity.md) The phone keeps up             | G12–G14                    | C4    | 010 (trigger rows), 070 (labels) | —                     |
+| [090](090_bot_tool_scope.md) Tools per bot                     | G15                        | C4    | 050                              | —                     |
+| [100](100_bot_sharing.md) Share a bot's setup                  | G16                        | C4    | 050, 060, 090                    | —                     |
+| [110](110_agent_bot_surface.md) Agents propose bots            | G17                        | C4    | 060                              | D4                    |
+| [120](120_hand_to_bot.md) A bot follows a thread               | G18                        | C4    | 020                              | —                     |
+| [130](130_linear.md) Linear                                    | G19                        | C4    | 010                              | D5 (needs an account) |
 
-Each unit is one PR to `dev` (or a short stack), with failing-first tests for behavior, screen-level browser tests for UI, before/after captures, `vp run check:changed`, a fresh independent review, and a merge through `node scripts/merge-pr.ts` when `goat-ci-result` is SUCCESS on the exact head. Each milestone ends with one real-client pass (test-goat-app on web, test-goat-mobile on the iOS simulator, both with the Replay provider).
+Every unit changes a wire contract, persisted state or authority, so every unit is C4: a full plan at its start, failing-first tests including the denied, revoked and mixed-version cases, `vp run check:changed`, a fresh independent review, and a merge through `node scripts/merge-pr.ts` only when `goat-ci-result` is SUCCESS on the exact head. Each visible change carries its own real-client captures (test-goat-app on web, test-goat-mobile on the iOS simulator or Android emulator, with the Replay provider) before merge. Three integrated passes then walk whole journeys across units: **M1** after 010–030 (an event starts a bot, its task says what done means, the person is alerted and answers), **M2** after 040–080, **M3** at the end.
 
 ## Decisions
 
-Product calls go to a GOAT decision request when the unit starts; until answered, the unit's dependent slice waits and other units proceed.
+Product calls go to a GOAT decision request when the unit starts; until answered, the dependent slice waits and other units proceed.
 
-| ID  | Question                                          | Recommendation                                                   |
-| --- | ------------------------------------------------- | ---------------------------------------------------------------- |
-| D1  | May an event trigger start work, not just answer? | Yes, as the trigger's owner at `approval-required`               |
-| D2  | How does push reach a closed phone?               | Wait for GOAT Connect; ship desktop and in-app phone alerts now  |
-| D3  | How does Slack pick a bot?                        | One Slack app; per-channel binding plus a name prefix            |
-| D4  | May agents propose bots and ask member bots?      | Both, proposals need a person's Accept                           |
-| D5  | Linear access                                     | Owner-provided API key, polling; agents never create the account |
+| ID  | Question                            | Recommendation                                                                                                        |
+| --- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| D1  | What may an event trigger do?       | Start new work only, in its project, under a revocable grant re-checked at dispatch; timer check-ins stay answer-only |
+| D2  | How does push reach a closed phone? | Wait for GOAT Connect; ship alerts for running clients now                                                            |
+| D3  | How does Slack pick a bot?          | One Slack app; per-channel binding plus a name prefix, decided once per Slack thread                                  |
+| D4  | What may agents do with bots?       | Propose only; a person accepts                                                                                        |
+| D5  | Linear                              | Deferred until the owner sets read/write scope and provides the account                                               |
 
 ## Done means
 
-Every unit meets its acceptance criteria with fresh evidence recorded in [900_ledger.md](900_ledger.md): the merged PR, the exact head with a green `goat-ci-result`, the review verdict and the captures. Units blocked on D2 slice B or D5 end as NEEDS_HUMAN with the decision id rather than shipping a partial integration.
+Every unit meets its acceptance criteria with fresh evidence recorded in [900_ledger.md](900_ledger.md): the merged PR, the exact head with a green `goat-ci-result`, the review verdict and the captures. Units or slices waiting on D2 slice B or D5 end as NEEDS_HUMAN with the decision id, and their gaps stay open in [003](003_gap_ledger.md).
+
+## Review history
+
+- 2026-11-21: first independent audit returned FAIL with nine blockers (trigger authority and settlement, alert delivery path, Slack thread routing, enforcement points for memory and tools, import posture, agent authority, follow provenance, verification floors). All nine were folded into the unit docs above; re-audit recorded in 900.

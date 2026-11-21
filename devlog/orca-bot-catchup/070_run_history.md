@@ -1,27 +1,26 @@
 # 070 — Run history says why (G11)
 
-**Class:** C3. **Severity:** P2. **Depends on:** 010.
+**Class:** C4 (wire contract). **Severity:** P2. **Depends on:** 010.
 
 ## Problem
 
-Home shows seven run dots per routine (`apps/web/src/components/goatBot/GoatBotRoutineRuns.tsx:134`). It cannot say whether a run came from the timer, a person (**Run now**) or an event, nor show deliveries that were filtered, duplicated, missed while offline or unreadable; Deliveries exist only in Settings (`docs/user/project-settings.md:196`). Orca separates these (`274_orca/src/shared/automations/history/automation-run.ts:6`).
+Home shows seven run dots per routine (`apps/web/src/components/goatBot/GoatBotRoutineRuns.tsx:134`) without saying whether a run came from the timer, **Run now** or an event. Runs already store `trigger_kind` and the webhook delivery id (`apps/server/src/scheduledTasks/ScheduledTaskRuns.ts:434`). Filtered and duplicate deliveries create no run; they live in the Deliveries log, shown only in Settings (`docs/user/project-settings.md:196`).
 
 ## Change
 
-1. **Contract**: recent-run entries gain `origin: "schedule" | "manual" | "event"` and, for events, the delivery outcome (`accepted | filtered | duplicate | coalesced | rejected`); a read failure is its own state, never "no runs".
-2. **Server**: `ScheduledTaskRuns.ts` records origin; the bot routine read joins the webhook delivery log.
-3. **Web/desktop**: a routine's run list (opened from the dots) labels origin and outcome, links the resulting task, and offers **Deliveries** for trigger rows.
-4. **Mobile**: `MobileRoutineRunStrip.tsx` labels the same.
+1. **Runs**: the recent-runs read (`scheduledTaskRecentRuns.ts`) projects the stored `trigger_kind` as `origin: "schedule" | "manual" | "event"` and links the resulting task. An unreadable or budget-truncated history is its own state, never "no runs".
+2. **Deliveries**: a trigger row offers **Deliveries**, reusing the existing bounded Deliveries read under its existing permissions; deliveries stay a separate list from runs.
+3. **Missed**: only the detectable case is shown — a timer firing skipped while the server was down, if the scheduler records it; otherwise "missed" stays out of scope and G11 records it as open.
+4. **Clients**: web/desktop run list from the dots; mobile `MobileRoutineRunStrip.tsx` labels origin.
 
 ## Tests (failing first)
 
-- `ScheduledTaskService.recentRuns.test.ts`: manual, timer and event runs report their origin; a filtered delivery appears with the failing filter.
-- Browser test: a read failure shows "Couldn't read runs", not an empty list.
+`ScheduledTaskService.recentRuns.test.ts`: manual, timer and event runs report origin; an unreadable history differs from an empty one. Browser test: a read failure shows "Couldn't read runs".
 
 ## Acceptance
 
-From a bot's Home a person can tell, for each of the last runs, why it ran and what came of it, and reach the deliveries of a trigger.
+From a bot's Home a person can tell why each recent run ran, open its task, and reach a trigger's deliveries.
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; review lane.
+Focused tests; `vp run check:changed`; independent review; before merge, web capture.
