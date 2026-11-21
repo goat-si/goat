@@ -807,6 +807,12 @@ it.effect.each([
             (yield* runs.deliveryReceipt(delivered.deliveryId))?.status,
             "running",
           );
+          assert.isTrue(
+            (yield* service.getWebhookDelivery({
+              id: task.id,
+              deliveryId: delivered.deliveryId,
+            })).delivery.firingAccepted,
+          );
           harness.world.setStatus(
             work.worker.threadId,
             1,

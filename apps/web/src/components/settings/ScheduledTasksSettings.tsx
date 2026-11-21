@@ -732,7 +732,7 @@ function WebhookDeliveriesDialog({
                     selected.pendingWindow ? "coalesced" : selected.outcome,
                   )}
                 >
-                  {webhookDeliveryLabel(selected)}
+                  {webhookDeliveryLabel(selected, task.routineMode)}
                 </Badge>
                 <span>
                   {selected.method} · <ScheduledRelativeLabel value={selected.receivedAt} />
@@ -753,7 +753,13 @@ function WebhookDeliveriesDialog({
                 </p>
               ) : null}
               <DeliveryBlock
-                title={selected.pendingWindow ? "Scheduled run" : "Prompt sent to the agent"}
+                title={
+                  selected.pendingWindow
+                    ? "Scheduled run"
+                    : task.routineMode === "work" && selected.firingAccepted !== true
+                      ? "Webhook prompt"
+                      : "Prompt sent to the agent"
+                }
               >
                 {selected.renderedPrompt ??
                   (selected.pendingWindow
@@ -797,7 +803,7 @@ function WebhookDeliveriesDialog({
                         delivery.pendingWindow ? "coalesced" : delivery.outcome,
                       )}
                     >
-                      {webhookDeliveryLabel(delivery)}
+                      {webhookDeliveryLabel(delivery, task.routineMode)}
                     </Badge>
                     <span>{delivery.method}</span>
                     <span className="text-muted-foreground">

@@ -690,6 +690,11 @@ it.effect("a second accepted signed delivery waits for intake and keeps its deli
         assert.deepStrictEqual(yield* sql`SELECT delivery_id FROM scheduled_task_webhook_pending`, [
           { delivery_id: second.deliveryId },
         ]);
+        const pending = yield* service.getWebhookDelivery({
+          id: task.id,
+          deliveryId: second.deliveryId,
+        });
+        assert.deepInclude(pending.delivery, { firingAccepted: false, pendingWindow: false });
         const before = frames;
         yield* drainPendingDispatch(workers);
         assert.strictEqual(frames, before, "a busy retry must not frame the payload again");

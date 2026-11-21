@@ -45,7 +45,7 @@ export const makeRoutineWorkAuthority = Effect.fn("channel.makeRoutineWorkAuthor
       payload.value.projectId !== row.project_id ||
       payload.value.threadId !== row.thread_id ||
       owner.value.principalId !== payload.value.principalId ||
-      owner.value.bindingRevision !== payload.value.bindingRevision ||
+      (owner.value.bindingRevision ?? 0) !== (payload.value.bindingRevision ?? 0) ||
       owner.value.sessionId === undefined ||
       owner.value.sessionId !== payload.value.sessionId
     )

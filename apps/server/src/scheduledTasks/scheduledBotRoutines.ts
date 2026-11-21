@@ -283,9 +283,10 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       return yield* taskError("A bot work trigger needs a verified webhook.", { taskId: task.id });
     const current = yield* binding(task.id);
     if (
-      current?.revision !== task.bindingRevision ||
-      current?.project_id !== task.projectId ||
-      current?.thread_id !== task.threadId
+      current === undefined ||
+      (current.revision ?? 0) !== (task.bindingRevision ?? 0) ||
+      current.project_id !== task.projectId ||
+      current.thread_id !== task.threadId
     )
       return yield* new WebhookDeliverySkipped({
         reason: "The task was replaced before this delivery ran.",

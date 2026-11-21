@@ -49,6 +49,7 @@ import {
   workerLaunchIdsFor,
 } from "./channelIds.ts";
 import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
+import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
@@ -713,6 +714,13 @@ const make = Effect.gen(function* () {
         );
         return true;
       }
+      const releaseReason =
+        latest.task.routineWork === true && current.status === "failed"
+          ? routineWorkerReleaseReason(
+              yield* threads.getThreadShell(worker.threadId).pipe(Effect.orElseSucceed(() => null)),
+              current.id,
+            )
+          : undefined;
       yield* commitTransition(
         ledger,
         latest,
@@ -721,7 +729,9 @@ const make = Effect.gen(function* () {
           payload: {
             generation: task.generation,
             reason: current.status,
-            summary: "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
+            summary:
+              releaseReason ??
+              "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
           },
         },
         { owner, narrate: true, completionHold: null },
