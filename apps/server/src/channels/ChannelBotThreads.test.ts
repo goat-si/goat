@@ -89,6 +89,14 @@ describe("ChannelBotThreads", () => {
       assert.isTrue(
         list.rows.some((row) => row.kind === "task" && row.task.taskId === task.taskId),
       );
+      const search = yield* home.searchBotTasks(
+        { botId: member.botId, query: "check the build" },
+        owner,
+      );
+      assert.deepStrictEqual(
+        search.tasks.map((row) => row.taskId),
+        [task.taskId],
+      );
       const history = yield* home.list(owner, member.botId, {});
       assert.isTrue(
         history.rows.some((row) => row.kind === "task" && row.task.taskId === task.taskId),

@@ -9,6 +9,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { botWorkConversationFilter } from "./channelBotThreadHistory.ts";
 
 const invalid = () => new ChannelGatewayError({ reason: "invalid_input" });
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
@@ -116,7 +117,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
           WHEN json_type(t.task_json, '$.conversationId') IS NOT 'text' THEN 0
           WHEN json_extract(t.task_json, '$.taskId') != p.task_id THEN 0
           WHEN json_extract(t.task_json, '$.conversationId') != p.conversation_id THEN 0
-          WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = p.conversation_id AND c.owner_id = ${scope.ownerId} AND c.kind IN ('goat', 'slack')) THEN 0
+          WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = p.conversation_id AND c.owner_id = ${scope.ownerId} AND ${botWorkConversationFilter(sql, scope.botId)}) THEN 0
           WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') = 'turn' THEN 0
           WHEN json_extract(t.task_json, '$.title') LIKE ${pattern} ESCAPE ${escape} THEN 1
           ELSE 0 END AS matches

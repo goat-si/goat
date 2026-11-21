@@ -3,6 +3,7 @@ import {
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelGatewayError,
   ChannelTask,
+  MAIN_BOT_ID,
   type ChannelTaskId,
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a synchronous digest keeps the cursor codec pure.
@@ -14,6 +15,9 @@ import {
   threadPullRequestColumns,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
+
+export const botWorkConversationFilter = (sql: SqlClient.SqlClient, botId: string) =>
+  botId === MAIN_BOT_ID ? sql`c.kind = 'goat'` : sql`c.kind IN ('goat', 'slack')`;
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 // [botTag, ownerTag, createdAt, taskId]
@@ -138,7 +142,7 @@ export const historyStatement = (
   }>`SELECT t.task_id, t.created_at, CASE
       WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c
         WHERE c.conversation_id = t.conversation_id AND c.owner_id = ${input.ownerId}
-          AND c.kind IN ('goat', 'slack')) THEN NULL
+          AND ${botWorkConversationFilter(sql, input.botId)}) THEN NULL
       WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' THEN t.task_json
       WHEN EXISTS (SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
         -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.

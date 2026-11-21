@@ -75,7 +75,7 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-Tasks started in Slack appear in the assigned bot's **Home → Work** on
+Tasks a member bot starts in Slack appear in its **Home → Work** on
 web, desktop and mobile. The member's Home shows its configured Slack
 channel IDs. You can change the bindings in [Slack settings](slack.md).
 
