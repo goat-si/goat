@@ -1,3 +1,4 @@
+import { makeClaudeAssistantEventEmitter } from "./ClaudeAssistantEvent.ts";
 import { absorbHeldResult, dropUnreadSteer, holdSuccessfulResult } from "./ClaudeSteerLifecycle.ts";
 import {
   claudeProgramReader,
@@ -150,7 +151,6 @@ import {
   normalizeClaudeResultText,
   makeClaudeAssistantTextProjector,
 } from "./ClaudeAssistantText.ts";
-import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
 import {
   claudeLaunchArgParseOptions,
@@ -5692,71 +5692,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
-        const emitAssistantTextArtifacts = Effect.fnUntraced(function* (input: {
-          readonly context: ActiveClaudeTurnContext;
-          readonly nativeItemId: string;
-          readonly text: string;
-          readonly streaming?: boolean;
-          readonly sealed?: boolean;
-          // Republishes an emitted reply that a steer cut off mid-stream.
-          readonly interrupted?: { readonly startedAt: DateTime.Utc };
-        }) {
-          if (
-            input.interrupted === undefined &&
-            input.context.assistant.emittedNativeItemIds.has(input.nativeItemId)
-          ) {
-            return undefined;
-          }
-          if (!input.streaming)
-            input.context.assistant.emittedNativeItemIds.add(input.nativeItemId);
-          const now = yield* DateTime.now;
-          const startedAt =
-            input.interrupted?.startedAt ??
-            input.context.textProjector.startedAt(input.nativeItemId, now);
-          const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
-          const artifacts = buildAssistantArtifacts({
-            idAllocator,
-            turnInput: input.context.input,
-            providerTurnId: input.context.providerTurnId,
-            nativeItemId: input.nativeItemId,
-            text: input.text,
-            ordinal,
-            ...(input.interrupted === undefined ? {} : { status: "interrupted" as const }),
-            startedAt,
-            completedAt: now,
-            streaming: input.streaming,
-          });
-          yield* Effect.all(
-            [
-              emitProviderEvent({
-                type: "node.updated",
-                driver: CLAUDE_PROVIDER,
-                node: artifacts.node,
-              }),
-              input.streaming
-                ? Effect.void
-                : emitProviderEvent({
-                    type: "message.updated",
-                    driver: CLAUDE_PROVIDER,
-                    message: artifacts.message,
-                  }),
-              emitProviderEvent(
-                input.sealed
-                  ? sealAssistantTextEvent({
-                      type: "turn_item.updated",
-                      driver: CLAUDE_PROVIDER,
-                      turnItem: artifacts.turnItem,
-                    })
-                  : {
-                      type: "turn_item.updated",
-                      driver: CLAUDE_PROVIDER,
-                      turnItem: artifacts.turnItem,
-                    },
-              ),
-            ],
-            { concurrency: 1 },
-          );
-          return startedAt;
+        const emitAssistantTextArtifacts = makeClaudeAssistantEventEmitter({
+          idAllocator,
+          resolveItemOrdinal,
+          emitProviderEvent,
         });
 
         const endSubagentsOfClosedQuery = Effect.fnUntraced(function* (input: {
@@ -8009,7 +7948,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               : limitedCompaction !== null
                 ? "failed"
                 : terminalStatusFromResult(message, failureHint);
-            if (holdSuccessfulResult(context, status, terminalFailure, message)) return;
+            if (holdSuccessfulResult(context, status, terminalFailure, message)) {
+              const answer = context.assistant.lastReply;
+              if (answer !== null)
+                yield* emitAssistantTextArtifacts({
+                  context,
+                  ...answer,
+                  finalAnswer: { startedAt: answer.startedAt },
+                });
+              return;
+            }
             yield* finalizeActiveTurn({
               context,
               status,

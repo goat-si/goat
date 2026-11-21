@@ -63,6 +63,13 @@ describe("Claude unread steers", () => {
         );
       yield* Queue.offer(
         harness.sdkMessages,
+        makeAssistantTextFrame({
+          uuid: "00000000-0000-4000-8000-000000002505",
+          text: "Build answer.",
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
         claudeSdkFrame({
           ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000002500", result: "Built." }),
           user_message_uuid: harness.promptUuid(0),
@@ -89,6 +96,18 @@ describe("Claude unread steers", () => {
         (event) => event.type === "message.updated" && event.message.text === "Steer reply.",
       );
       assert.equal(reply?.type === "message.updated" ? reply.message.runId : null, input.runId);
+      const answer = harness.events.findLast(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "assistant_message" &&
+          event.turnItem.text === "Build answer.",
+      );
+      assert.equal(
+        answer?.type === "turn_item.updated" && answer.turnItem.type === "assistant_message"
+          ? answer.turnItem.phase
+          : null,
+        "final_answer",
+      );
       assert.deepEqual(
         harness.events.flatMap((event) =>
           event.type === "steer.updated" ? [[event.messageId, event.status]] : [],
