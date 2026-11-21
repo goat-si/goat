@@ -4,7 +4,11 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelTaskEventWrite } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { recordBotAttention, taskEventCanCreateAttention } from "./channelBotAttention.ts";
+import {
+  reconcileBoundBotHandoffAttention,
+  recordBotAttention,
+  taskEventCanCreateAttention,
+} from "./channelBotAttention.ts";
 import { newestAskAt } from "./channelWaitingTasks.ts";
 
 const taskJson = Schema.fromJsonString(ChannelTask);
@@ -73,5 +77,6 @@ export const writeChannelTaskEvent = Effect.fn("channel.writeTaskEvent")(functio
       event,
     });
   }
+  if (event.type === "task.worker.bound") yield* reconcileBoundBotHandoffAttention(sql, next);
   return inserted[0]?.sequence ?? 0;
 });

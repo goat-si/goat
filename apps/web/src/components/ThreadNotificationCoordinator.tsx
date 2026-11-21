@@ -264,12 +264,15 @@ export function startThreadNotifications(
     return parents;
   };
 
+  const usesLocalBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    (isChannelWorkerThreadId(threadId) || isGoatBotSessionThreadId(threadId)) &&
+    registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
+      ?.environment.capabilities.goatBotAttention === true;
+
   const usesBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
     isGoatBotSessionThreadId(threadId) ||
     isRemoteChannelWorkerThreadId(threadId) ||
-    (isChannelWorkerThreadId(threadId) &&
-      registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
-        ?.environment.capabilities.goatBotAttention === true);
+    usesLocalBotAlerts(environmentId, threadId);
 
   const owningOrigins = (destination: EnvironmentId, source?: OrchestrationV2ThreadShell) =>
     source?.creationSource !== undefined && source.creationSource !== "mcp"
@@ -620,7 +623,8 @@ export function startThreadNotifications(
         const handoff = handoffs.get(handoffId);
         if (handoff === undefined) return;
         const threadId = handoff.handoff.requestedBy.threadId;
-        if (isRemoteChannelWorkerThreadId(threadId)) return;
+        if (isRemoteChannelWorkerThreadId(threadId) || usesLocalBotAlerts(environmentId, threadId))
+          return;
         const source = entry.threads.find((thread) => thread.id === threadId);
         const origins = owningOrigins(environmentId, source);
         if (origins.length === 0) {

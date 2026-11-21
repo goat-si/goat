@@ -5,8 +5,10 @@ import {
   type ChannelTask,
   type ChannelTaskEvent,
   type EnvironmentId,
+  isGoatBotSessionThreadId,
   type OrchestrationV2StoredEvent,
   RuntimeRequestId,
+  type ThreadId,
 } from "@goat/contracts";
 import {
   type ChannelAttentionEvent,
@@ -23,6 +25,7 @@ import * as Schedule from "effect/Schedule";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { attentionEventIdFor } from "./channelIds.ts";
 import { waitingAsks } from "./channelWaitingTasks.ts";
 
@@ -152,33 +155,100 @@ const pruneOwner = Effect.fn("channel.pruneBotAttention")(function* (
   )`;
 });
 
+const writeLocalHandoffAttention = Effect.fn("channel.writeLocalHandoffAttention")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly threadId: ThreadId;
+    readonly environmentId: EnvironmentId;
+    readonly handoffId: string;
+    readonly createdAt: string;
+    readonly task: Pick<ChannelTask, "taskId" | "generation"> | undefined;
+  },
+) {
+  const { threadId, environmentId, handoffId, createdAt, task } = input;
+  const request = encodeRequest({
+    kind: "handoff",
+    threadId,
+    requestId: RuntimeRequestId.make(handoffId),
+  });
+  const taskFilter =
+    task === undefined
+      ? sql``
+      : sql`AND task.task_id = ${task.taskId} AND task.generation = ${task.generation}`;
+  const inserted = yield* sql<{ owner_id: string }>`INSERT INTO channel_bot_attention
+    (owner_id, bot_id, task_id, event_id, kind, request_id, generation, occurred_at)
+    SELECT task.owner_id, task.bot_id, task.task_id, ${"handoff:" + handoffId}, 'approval',
+      ${request}, task.generation, ${createdAt}
+    FROM channel_tasks AS task
+    WHERE task.worker_thread_id = ${threadId}
+      AND task.status IN ('running', 'waiting_input')
+      AND json_extract(task.task_json, '$.worker.environmentId') = ${environmentId}
+      AND json_extract(task.task_json, '$.worker.host') IS NULL
+      ${taskFilter}
+    ORDER BY task.updated_at DESC, task.task_id
+    LIMIT 1
+    ON CONFLICT(event_id) DO NOTHING
+    RETURNING owner_id`;
+  for (const { owner_id } of inserted) yield* pruneOwner(sql, owner_id);
+});
+
 export const recordBotHandoffAttention = Effect.fn("channel.recordBotHandoffAttention")(function* (
   sql: SqlClient.SqlClient,
   events: ReadonlyArray<OrchestrationV2StoredEvent>,
 ) {
   for (const { event } of events) {
     if (event.type !== "turn-item.updated" || event.payload.type !== "human_handoff") continue;
-    const { handoff, threadId } = event.payload;
+    const { handoff, threadId, runId } = event.payload;
     if (handoff.kind !== "approval" || handoff.state !== "pending") continue;
-    const request = encodeRequest({
-      kind: "handoff",
+    let task: Pick<ChannelTask, "taskId" | "generation"> | undefined;
+    if (isGoatBotSessionThreadId(threadId)) {
+      if (runId === null) continue;
+      const intent = yield* resolveSessionRun(sql, threadId, undefined, runId);
+      if (intent === undefined) continue;
+      task = { taskId: intent.task_id, generation: intent.task_generation };
+    }
+    yield* writeLocalHandoffAttention(sql, {
       threadId,
-      requestId: RuntimeRequestId.make(handoff.handoffId),
+      environmentId: handoff.target.environmentId,
+      handoffId: handoff.handoffId,
+      createdAt: DateTime.formatIso(handoff.createdAt),
+      task,
     });
-    const inserted = yield* sql<{ owner_id: string }>`INSERT INTO channel_bot_attention
-      (owner_id, bot_id, task_id, event_id, kind, request_id, generation, occurred_at)
-      SELECT task.owner_id, task.bot_id, task.task_id, ${"handoff:" + handoff.handoffId}, 'approval',
-        ${request}, task.generation, ${DateTime.formatIso(handoff.createdAt)}
-      FROM channel_tasks AS task
-      WHERE task.worker_thread_id = ${threadId}
-        AND task.status IN ('running', 'waiting_input')
-        AND json_extract(task.task_json, '$.worker.environmentId') = ${handoff.target.environmentId}
-        AND json_extract(task.task_json, '$.worker.host') IS NULL
-      ORDER BY task.updated_at DESC, task.task_id
-      LIMIT 1
-      ON CONFLICT(event_id) DO NOTHING
-      RETURNING owner_id`;
-    for (const { owner_id } of inserted) yield* pruneOwner(sql, owner_id);
+  }
+});
+
+export const reconcileBoundBotHandoffAttention = Effect.fn(
+  "channel.reconcileBoundBotHandoffAttention",
+)(function* (sql: SqlClient.SqlClient, task: ChannelTask) {
+  const worker = task.worker;
+  if (worker === undefined || worker.host !== undefined || worker.runId === undefined) return;
+  const { threadId, environmentId, runId } = worker;
+  const pending = yield* sql<{ handoff_id: string; created_at: string }>`
+      SELECT item.turn_item_id AS handoff_id,
+        json_extract(item.payload_json, '$.handoff.createdAt') AS created_at
+      FROM orchestration_v2_projection_turn_items item
+      WHERE item.thread_id = ${threadId} AND item.run_id = ${runId}
+        AND item.type IN ('human_handoff', 'secret_request') AND item.type = 'human_handoff'
+        AND item.status = 'waiting'
+        AND json_extract(item.payload_json, '$.handoff.kind') = 'approval'
+        AND json_extract(item.payload_json, '$.handoff.target.environmentId') = ${environmentId}
+        AND NOT EXISTS (SELECT 1 FROM channel_bot_attention a
+          WHERE a.event_id = 'handoff:' || item.turn_item_id)
+      ORDER BY item.ordinal
+    `;
+  if (pending.length === 0) return;
+  if (isGoatBotSessionThreadId(threadId)) {
+    const intent = yield* resolveSessionRun(sql, threadId, undefined, runId);
+    if (intent?.task_id !== task.taskId || intent.task_generation !== task.generation) return;
+  }
+  for (const { handoff_id, created_at } of pending) {
+    yield* writeLocalHandoffAttention(sql, {
+      threadId,
+      environmentId,
+      handoffId: handoff_id,
+      createdAt: created_at,
+      task,
+    });
   }
 });
 
