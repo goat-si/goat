@@ -12,8 +12,10 @@ import type {
   ChannelTaskNeedsYou,
   ChannelTaskNeedsYouKind,
   ChannelTaskPullRequest,
+  ChannelWorkerRef,
   ChannelWorkerObservation,
   ChannelChildWork,
+  EnvironmentId,
   ThreadResult,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
@@ -84,18 +86,37 @@ export const needsYouFromRuntimeRequests = <
 export const withApprovalHost = (
   needsYou: ReadonlyArray<ChannelTaskNeedsYou>,
   host: string,
-): ReadonlyArray<ChannelTaskNeedsYou> =>
-  host === ""
-    ? needsYou
-    : needsYou.map((need) =>
-        need.approval === undefined && need.question === undefined
-          ? need
-          : {
-              ...need,
-              ...(need.approval === undefined ? {} : { approval: { ...need.approval, host } }),
-              ...(need.question === undefined ? {} : { question: { ...need.question, host } }),
-            },
-      );
+  environmentId?: EnvironmentId,
+): ReadonlyArray<ChannelTaskNeedsYou> => {
+  if (host === "") return needsYou;
+  const stamp = ({ requestId, threadId }: ChannelTaskApprovalRef): ChannelTaskApprovalRef => ({
+    requestId,
+    threadId,
+    host,
+    ...(environmentId === undefined ? {} : { environmentId }),
+  });
+  return needsYou.map((need) =>
+    need.approval === undefined && need.question === undefined
+      ? need
+      : {
+          ...need,
+          ...(need.approval === undefined ? {} : { approval: stamp(need.approval) }),
+          ...(need.question === undefined ? {} : { question: stamp(need.question) }),
+        },
+  );
+};
+
+export const observeRemoteWorker = (
+  observation: ChannelWorkerObservation | undefined,
+  host: string,
+  worker: ChannelWorkerRef | undefined,
+): ChannelWorkerObservation | undefined =>
+  observation === undefined
+    ? undefined
+    : {
+        ...observation,
+        needsYou: withApprovalHost(observation.needsYou, host, worker?.environmentId),
+      };
 
 /** Approvals in `next` that `previous` did not list: each gets one card. */
 export const newApprovals = (

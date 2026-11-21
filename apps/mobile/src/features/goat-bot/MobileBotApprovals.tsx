@@ -33,7 +33,7 @@ export interface MobileBotApprovalProps {
 
 export type MobileBotApprovalSlot = ComponentType<MobileBotApprovalProps>;
 
-const MAX_HOME_APPROVAL_DETAILS = 4;
+const MAX_APPROVAL_DETAILS = 4;
 
 function verifiedHostEnvironments(
   snapshot: HubNodesSnapshot,
@@ -94,14 +94,22 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
               workers.set(key, { thread: null, title: chip.title, observationKey: key });
               continue;
             }
+            const destination = request?.environmentId;
             const target =
-              host === undefined
-                ? environmentId
-                : host === worker?.host
-                  ? worker.environmentId
-                  : remoteEnvironment(host);
+              request === undefined
+                ? (worker?.environmentId ?? environmentId)
+                : host === undefined
+                  ? environmentId
+                  : destination !== undefined &&
+                      ((host === worker?.host && destination === worker.environmentId) ||
+                        remoteEnvironment(host) === destination)
+                    ? destination
+                    : null;
             const ref = target === null ? null : scopeThreadRef(target, id);
-            const key = ref === null ? JSON.stringify([environmentId, host, id]) : threadKey(ref);
+            const key =
+              ref === null
+                ? JSON.stringify([environmentId, host, destination, id])
+                : threadKey(ref);
             let observed = workers.get(key);
             if (observed === undefined) {
               const thread = ref !== null && canOpen(ref.environmentId) ? ref : null;
@@ -149,8 +157,10 @@ export default function MobileBotApprovals(props: MobileBotApprovalProps) {
           }
         }
         const approvals: ChildThreadApproval[] = [];
-        const limit = taskId === undefined ? MAX_HOME_APPROVAL_DETAILS : detailReads.size;
-        for (const { thread, title, requests } of [...detailReads.values()].slice(0, limit)) {
+        for (const { thread, title, requests } of [...detailReads.values()].slice(
+          0,
+          MAX_APPROVAL_DETAILS,
+        )) {
           for (const approval of get(environmentThreadDetails.pendingRequestsAtom(thread))
             ?.approvals ?? []) {
             if (requests === null || requests.has(approval.requestId))

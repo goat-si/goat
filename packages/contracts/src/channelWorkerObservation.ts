@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   PositiveInt,
   RuntimeRequestId,
@@ -52,6 +53,8 @@ export const ChannelTaskApprovalRef = Schema.Struct({
   requestId: RuntimeRequestId,
   threadId: ThreadId,
   host: Schema.optional(TrimmedNonEmptyString),
+  /** Destination identity recorded when the work was dispatched. */
+  environmentId: Schema.optional(EnvironmentId),
 });
 export type ChannelTaskApprovalRef = typeof ChannelTaskApprovalRef.Type;
 
@@ -118,9 +121,11 @@ export const channelWorkerObservationEquals = (
         item.approval?.requestId === b.needsYou[index]?.approval?.requestId &&
         item.approval?.threadId === b.needsYou[index]?.approval?.threadId &&
         item.approval?.host === b.needsYou[index]?.approval?.host &&
+        item.approval?.environmentId === b.needsYou[index]?.approval?.environmentId &&
         item.question?.requestId === b.needsYou[index]?.question?.requestId &&
         item.question?.threadId === b.needsYou[index]?.question?.threadId &&
-        item.question?.host === b.needsYou[index]?.question?.host,
+        item.question?.host === b.needsYou[index]?.question?.host &&
+        item.question?.environmentId === b.needsYou[index]?.question?.environmentId,
     ) &&
     a.pullRequests.length === b.pullRequests.length &&
     a.pullRequests.every((item, index) => {

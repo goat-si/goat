@@ -170,6 +170,7 @@ const storeObservation = (correlationId: string, observation: ChannelWorkerObser
 /** A remote GOAT that can launch one worker and report its observation. */
 class RemoteMachine {
   readonly calls: RecordedCall[] = [];
+  readonly environmentId = EnvironmentId.make("environment:mac-studio");
   readonly threadId = ThreadId.make("thread:remote");
   readonly runId = RunId.make("run:remote");
   observation: ChannelWorkerObservation = { pullRequests: [], needsYou: [] };
@@ -238,7 +239,7 @@ class RemoteMachine {
                 nextCursor: null,
               };
             case "goat_environment_read":
-              return { environmentId: EnvironmentId.make("environment:mac-studio") };
+              return { environmentId: machine.environmentId };
             case "goat_origin_reports_wait":
               return yield* machine.wait(call.arguments);
             default:
@@ -357,7 +358,7 @@ const approvalNeed = (
 });
 
 describe("approvals held on another machine", () => {
-  it.effect("stamps the worker's host and sends one card per new remote approval", () => {
+  it.effect("stamps the worker's destination and sends one card per new remote approval", () => {
     const machine = new RemoteMachine();
     const harness = makeHarness({ sshRemote: machine.layer });
     harness.script.current = remoteScript;
@@ -379,6 +380,7 @@ describe("approvals held on another machine", () => {
         requestId: RuntimeRequestId.make("approval:rm"),
         threadId: child,
         host: "mac-studio",
+        environmentId: machine.environmentId,
       });
       yield* runtime.drain;
       assert.strictEqual((yield* questionCards).length, 1);

@@ -118,13 +118,14 @@ vi.mock("../../components/ui/Button", () => ({
 
 const at = "2026-11-21T10:00:00.000Z";
 const taskId = ChannelTaskId.make("task");
-const to = (worker: string, host = "studio", requestId = "approval") => ({
+const to = (worker: string, host = "studio", requestId = "approval", environmentId?: string) => ({
   kind: "approval",
   since: at,
   approval: {
     requestId,
     threadId: worker,
     host,
+    environmentId,
   },
 });
 const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
@@ -143,13 +144,13 @@ const chip = decodeChip({
   observed: {
     pullRequests: [],
     needsYou: [
-      to("connected"),
-      to("loading"),
-      to("connected", "mini"),
-      to("connected", "mini", "second-approval"),
+      to("connected", "studio", "approval", "work"),
+      to("loading", "studio", "approval", "work"),
+      to("connected", "mini", "approval", "remote"),
+      to("connected", "mini", "second-approval", "remote"),
       to("unavailable", "unknown"),
-      to("restricted", "restricted-host"),
-      to("copied", "offline-host"),
+      to("restricted", "restricted-host", "approval", "denied"),
+      to("copied", "offline-host", "approval", "offline"),
     ],
   },
 });
@@ -249,19 +250,87 @@ it("counts observed workers on the task screen before requests load, and links o
   }
 });
 
-it("counts every observed worker on Bot Home with only four approval details open", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  setupTaskNavigation();
-  const chips = Array.from({ length: 12 }, (_, index) =>
-    decodeChip({
-      ...chip,
-      taskId: `task-${index}`,
-      worker: { environmentId: "work", threadId: `worker-${index}`, host: "studio" },
-      observed: { pullRequests: [], needsYou: [to(`worker-${index}`)] },
-    }),
-  );
-  for (const { worker } of chips) {
-    threadReads.approvals.set(`work\u0000${worker?.threadId}`, [
+it.each([
+  ["Bot Home", undefined],
+  ["the task screen", taskId],
+] as const)(
+  "counts and links every observed worker in %s with only four approval details open",
+  async (_screen, selectedTaskId) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    setupTaskNavigation();
+    const chips = Array.from({ length: 12 }, (_, index) =>
+      decodeChip({
+        ...chip,
+        taskId: `task-${index}`,
+        worker: { environmentId: "work", threadId: `worker-${index}`, host: "studio" },
+        observed: {
+          pullRequests: [],
+          needsYou: [to(`worker-${index}`, "studio", "approval", "work")],
+        },
+      }),
+    );
+    for (const { worker } of chips) {
+      threadReads.approvals.set(`work\u0000${worker?.threadId}`, [
+        {
+          requestId: "approval",
+          requestKind: "file-change",
+          responseCapability: "live",
+          createdAt: at,
+        },
+      ]);
+    }
+    Object.assign(screenSession, {
+      supportsTaskThreads: true,
+      environmentId: "main",
+      threadId: "bot",
+      taskChips: new Map(
+        selectedTaskId === undefined
+          ? chips.map((entry) => [entry.taskId, entry])
+          : [
+              [
+                selectedTaskId,
+                decodeChip({
+                  ...chip,
+                  observed: {
+                    pullRequests: [],
+                    needsYou: chips.flatMap((entry) => entry.observed?.needsYou ?? []),
+                  },
+                }),
+              ],
+            ],
+      ),
+    });
+    const view = await render(
+      <RegistryContext value={appAtomRegistry}>
+        <GoatBotScreen visible taskId={selectedTaskId} approvalCards={MobileBotApprovals} />
+      </RegistryContext>,
+    );
+    try {
+      expect(view.container.textContent).toContain("12 waiting");
+      const buttons = [...view.container.querySelectorAll("button")];
+      expect(buttons.filter((button) => button.textContent === "Allow once")).toHaveLength(4);
+      expect(
+        buttons.filter((button) => button.getAttribute("aria-label")?.startsWith("Open worker")),
+      ).toHaveLength(12);
+    } finally {
+      threadReads.approvals.clear();
+      await view.unmount();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it.each([
+  ["another environment", "former"],
+  ["a legacy server", undefined],
+] as const)(
+  "keeps an approval from %s count-only when the host now points to a readable copy",
+  async (_origin, destination) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    setupTaskNavigation();
+    appAtomRegistry.set(canOperate, true);
+    threadReads.shells.push({ environmentId: "remote", id: "copied", title: "Copy", source: {} });
+    threadReads.approvals.set("remote\u0000copied", [
       {
         requestId: "approval",
         requestKind: "file-change",
@@ -269,28 +338,40 @@ it("counts every observed worker on Bot Home with only four approval details ope
         createdAt: at,
       },
     ]);
-  }
-  Object.assign(screenSession, {
-    supportsTaskThreads: true,
-    environmentId: "main",
-    threadId: "bot",
-    taskChips: new Map(chips.map((entry) => [entry.taskId, entry])),
-  });
-  const view = await render(
-    <RegistryContext value={appAtomRegistry}>
-      <GoatBotScreen visible approvalCards={MobileBotApprovals} />
-    </RegistryContext>,
-  );
-  try {
-    expect(view.container.textContent).toContain("12 waiting");
-    const buttons = [...view.container.querySelectorAll("button")];
-    expect(buttons.filter((button) => button.textContent === "Allow once")).toHaveLength(4);
-    expect(
-      buttons.filter((button) => button.getAttribute("aria-label")?.startsWith("Open worker")),
-    ).toHaveLength(12);
-  } finally {
-    threadReads.approvals.clear();
-    await view.unmount();
-    vi.unstubAllGlobals();
-  }
-});
+    Object.assign(screenSession, {
+      supportsTaskThreads: true,
+      environmentId: "main",
+      threadId: "bot",
+      taskChips: new Map([
+        [
+          taskId,
+          decodeChip({
+            ...chip,
+            observed: {
+              pullRequests: [],
+              needsYou: [to("copied", "mini", "approval", destination)],
+            },
+          }),
+        ],
+      ]),
+    });
+    const view = await render(
+      <RegistryContext value={appAtomRegistry}>
+        <GoatBotScreen visible taskId={taskId} approvalCards={MobileBotApprovals} />
+      </RegistryContext>,
+    );
+    try {
+      expect(view.container.textContent).toContain("1 waiting");
+      const buttons = [...view.container.querySelectorAll("button")];
+      expect(
+        buttons.some((button) => button.getAttribute("aria-label")?.startsWith("Open worker")),
+      ).toBe(false);
+      expect(buttons.some((button) => button.textContent === "Allow once")).toBe(false);
+    } finally {
+      threadReads.approvals.clear();
+      threadReads.shells.length = 0;
+      await view.unmount();
+      vi.unstubAllGlobals();
+    }
+  },
+);

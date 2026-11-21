@@ -534,8 +534,10 @@ const make = Effect.gen(function* () {
           ),
         ).values(),
       ];
+      const remoteLaunches = remoteLaunchChildren(childWork, latest.task.generation);
+      const launchIds = new Set(remoteLaunches.map((child) => child.correlationId));
       const remoteNeeds = yield* Effect.forEach(
-        children.remote,
+        children.remote.filter((child) => !launchIds.has(child.correlationId)),
         (child) =>
           storedRemoteNeeds(sql, child.correlationId).pipe(
             Effect.map((needs) => withApprovalHost(needs, child.host)),
@@ -544,7 +546,7 @@ const make = Effect.gen(function* () {
       );
       const launchNeeds = yield* launchObservationNeeds(
         sql,
-        remoteLaunchChildren(childWork, latest.task.generation),
+        remoteLaunches,
         latest.task.observed?.needsYou,
       );
       const resultRead = yield* readWorkerSettlement(

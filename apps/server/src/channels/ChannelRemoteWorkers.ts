@@ -109,7 +109,11 @@ import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
-import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
+import {
+  newApprovals,
+  observesUsageLimit,
+  observeRemoteWorker,
+} from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 const REMOTE_WAIT_MS = 50_000;
@@ -2051,11 +2055,7 @@ const make = Effect.gen(function* () {
       // keeps the remote's own observation, so the next wait does not see the host we stamp here.
       stored = yield* ledger.getTask(taskId);
       if (stored === undefined || !sameWorker(stored, state)) return "stop" as const;
-      const observation = watched?.observation;
-      const stamped =
-        observation === undefined
-          ? undefined
-          : { ...observation, needsYou: withApprovalHost(observation.needsYou, state.host) };
+      const stamped = observeRemoteWorker(watched?.observation, state.host, stored.task.worker);
       if (
         stamped !== undefined &&
         watched !== null &&
@@ -2078,7 +2078,7 @@ const make = Effect.gen(function* () {
       }
       // A usage limit pauses the worker; the continuation run the remote starts rebinds the task.
       const limited =
-        watched !== null && watched.status === "failed" && observesUsageLimit(observation);
+        watched !== null && watched.status === "failed" && observesUsageLimit(stamped);
 
       // 3. The inbox, oldest first, against the current run.
       if (state.dropped > 0) {
