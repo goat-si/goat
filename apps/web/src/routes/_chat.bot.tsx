@@ -10,6 +10,7 @@ import {
   useThreadShell,
   useThreadVisibleTurnItems,
 } from "../state/entities";
+import { GoatBotAlertTask } from "../components/goatBot/GoatBotAlertTask";
 import { GoatBotTaskPane } from "../components/goatBot/GoatBotTaskPane";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
@@ -58,7 +59,7 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
-  const { task, taskTitle, bot: botId } = Route.useSearch();
+  const { task, taskTitle, bot: botId, attentionEnvironment, attentionRequest } = Route.useSearch();
   const roster = useBotRoster();
   // A bot this client just created opens from the create's answer, even when the list read after
   // it failed.
@@ -98,6 +99,19 @@ function GoatBotRouteSession() {
         replace: true,
       });
   }, [bot, navigate, task, session.supportsTaskThreads]);
+  if (
+    task &&
+    attentionEnvironment &&
+    (bot?.environmentId !== attentionEnvironment || !session.supportsTaskThreads)
+  )
+    return (
+      <GoatBotAlertTask
+        environmentId={attentionEnvironment}
+        taskId={task}
+        botId={botId}
+        requestId={attentionRequest}
+      />
+    );
   if (memberUnknown && !memberResolving) return <GoatBotMemberMissing />;
   if (bot && task && session.supportsTaskThreads)
     return (
@@ -108,6 +122,7 @@ function GoatBotRouteSession() {
             session={session}
             taskId={task}
             taskTitle={taskTitle}
+            attentionRequest={attentionRequest}
           />
         </GoatBotMemberContext>
       </GoatBotMainProfileContext>
@@ -172,11 +187,13 @@ export function GoatBotTaskRoute({
   session,
   taskId,
   taskTitle,
+  attentionRequest,
 }: {
   environmentId: EnvironmentId;
   session: ReturnType<typeof useGoatBotSession>;
   taskId: ChannelTaskId;
   taskTitle?: string | undefined;
+  attentionRequest?: string | undefined;
 }) {
   const taskFocus = getTaskPaneFocus();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
@@ -233,6 +250,7 @@ export function GoatBotTaskRoute({
           session={session}
           taskId={taskId}
           taskTitle={taskTitle}
+          attentionRequest={attentionRequest}
           onClose={() => {
             requestTaskFocusReturn(taskFocus);
             void navigate({ to: "/bot", search: goatBotSearch(member) });

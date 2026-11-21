@@ -2,6 +2,13 @@ import { msg } from "gt-react";
 import type { SettingsSearchItem } from "./settingsSearch";
 export const GOAT_BOT_SEARCH_ITEMS = [
   {
+    id: "goat-bot-alerts",
+    title: msg("Bot alerts"),
+    to: "/settings/goat-bot",
+    targetId: "goat-bot-alerts",
+    searchTerms: ["bot notification approval question sign in finished off"],
+  },
+  {
     id: "goat-bot-suggestions",
     title: msg("Suggestions on the bot's home"),
     to: "/settings/goat-bot",
