@@ -302,6 +302,7 @@ export interface AcpAdapterV2Flavor {
   ) => boolean;
   readonly deferFinalizeForBackgroundWork?: AcpNegotiatedFlag;
   readonly replyEndsWithUsageUpdate?: boolean;
+  readonly hasPendingReply?: (sessionId: string) => Effect.Effect<boolean>;
   readonly wakeOnDetachedRequest?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */

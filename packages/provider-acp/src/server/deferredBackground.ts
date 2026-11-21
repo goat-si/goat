@@ -122,3 +122,55 @@ export function takeAcpSessionPlans(
   }
   return plans;
 }
+
+export function makeDeferredFinalizeScheduler(input: {
+  readonly flavor: AcpAdapterV2Flavor;
+  readonly enabled: () => boolean;
+  readonly hasDeferredBackgroundWork: (context: ActiveAcpTurn) => boolean;
+  readonly finalizeTurn: (
+    context: ActiveAcpTurn,
+    status: "completed" | "interrupted" | "failed" | "cancelled",
+  ) => Effect.Effect<void>;
+  readonly sessionScope: import("effect/Scope").Scope;
+  readonly onScheduled?:
+    | ((duration: import("effect/Duration").Input) => Effect.Effect<void>)
+    | undefined;
+}) {
+  const schedule: (context: ActiveAcpTurn) => Effect.Effect<void> = Effect.fn(
+    "scheduleDeferredFinalize",
+  )(function* (context: ActiveAcpTurn): Effect.fn.Return<void> {
+    if (
+      !input.enabled() ||
+      !context.promptSettled ||
+      context.finalized ||
+      context.interrupted ||
+      input.hasDeferredBackgroundWork(context)
+    )
+      return;
+    const generation = ++context.backgroundFinalizeGeneration;
+    const replyOpen = context.replyOpen;
+    const debounce = replyOpen ? "2 minutes" : "3000 millis";
+    yield* Effect.gen(function* () {
+      yield* Effect.sleep(debounce);
+      const current = () =>
+        !context.finalized &&
+        !context.interrupted &&
+        context.backgroundFinalizeGeneration === generation &&
+        !input.hasDeferredBackgroundWork(context);
+      if (!current()) return;
+      const pending =
+        !replyOpen && input.flavor.hasPendingReply !== undefined
+          ? yield* input.flavor.hasPendingReply(context.nativeThreadId)
+          : false;
+      if (!current()) return;
+      if (pending) {
+        context.replyOpen = true;
+        yield* schedule(context);
+        return;
+      }
+      yield* input.finalizeTurn(context, context.promptSettledStatus ?? "completed");
+    }).pipe(Effect.forkIn(input.sessionScope), Effect.asVoid);
+    yield* input.onScheduled?.(debounce) ?? Effect.void;
+  });
+  return schedule;
+}

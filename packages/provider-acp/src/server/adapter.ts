@@ -4,6 +4,7 @@ import {
   makeAcpAwaitBackgroundTasks,
   takeAcpSessionPlans,
   acpTiming,
+  makeDeferredFinalizeScheduler,
 } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
@@ -6718,29 +6719,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* options.testHooks?.afterTurnFinalized?.() ?? Effect.void;
         });
 
-        scheduleDeferredFinalize = Effect.fn("scheduleDeferredFinalize")(function* (context) {
-          if (!defersFinalizeForBackgroundWork) return;
-          if (!context.promptSettled || context.finalized || context.interrupted) return;
-          if (hasDeferredBackgroundWork(context)) return;
-          context.backgroundFinalizeGeneration += 1;
-          const generation = context.backgroundFinalizeGeneration;
-          const debounce = context.replyOpen
-            ? acpTiming.ACP_OPEN_REPLY_QUIET_LIMIT
-            : acpTiming.ACP_DEFERRED_FINALIZE_DEBOUNCE;
-          yield* Effect.gen(function* () {
-            yield* Effect.sleep(debounce);
-            if (
-              context.finalized ||
-              context.interrupted ||
-              context.backgroundFinalizeGeneration !== generation
-            ) {
-              return;
-            }
-            if (hasDeferredBackgroundWork(context)) return;
-            const status = context.promptSettledStatus ?? "completed";
-            yield* finalizeTurn(context, status);
-          }).pipe(Effect.forkIn(sessionScope), Effect.asVoid);
-          yield* options.testHooks?.onDeferredFinalizeScheduled?.(debounce) ?? Effect.void;
+        scheduleDeferredFinalize = makeDeferredFinalizeScheduler({
+          flavor,
+          enabled: () => defersFinalizeForBackgroundWork,
+          hasDeferredBackgroundWork,
+          finalizeTurn,
+          sessionScope,
+          onScheduled: options.testHooks?.onDeferredFinalizeScheduled,
         });
 
         const promptInactivityPaused = Effect.fn("AcpAdapterV2.promptInactivityPaused")(function* (
@@ -7512,12 +7497,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* idleReportedSubagents(context, flavor, emitSubagent);
                     if (context.finalized) return;
-                    if (
+                    const deferred =
                       defersFinalizeForBackgroundWork &&
                       !context.interrupted &&
-                      hasDeferredBackgroundWork(context)
-                    ) {
+                      hasDeferredBackgroundWork(context);
+                    const pendingReply =
+                      !deferred &&
+                      defersFinalizeForBackgroundWork &&
+                      status === "completed" &&
+                      !context.interrupted &&
+                      flavor.hasPendingReply !== undefined
+                        ? yield* flavor.hasPendingReply(context.nativeThreadId)
+                        : false;
+                    if (context.finalized) return;
+                    if (deferred || pendingReply) {
                       yield* closeTextStreams(context);
+                      if (pendingReply) {
+                        context.replyOpen = true;
+                        yield* scheduleDeferredFinalize(context);
+                      }
                       yield* (
                         options.testHooks?.afterPromptSettledWithBackgroundWork?.() ?? Effect.void
                       );
