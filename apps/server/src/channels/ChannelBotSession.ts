@@ -79,7 +79,7 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { sessionCarriesNotes } from "./channelProviderBrief.ts";
 import { sessionFollowUpText } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";

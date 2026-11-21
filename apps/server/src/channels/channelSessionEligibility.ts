@@ -11,7 +11,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { goatBotSessionSharingFor } from "./channelIds.ts";
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 

@@ -1,4 +1,4 @@
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 /** Dispatches and tracks channel workers on linked machines. */
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";

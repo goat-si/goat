@@ -3,7 +3,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import { canReadChannelBotNotes, recheckReceptionNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes, recheckReceptionNotes } from "./channelBotNoteAccess.ts";
 import {
   type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,

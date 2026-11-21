@@ -16,7 +16,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { currentRequester, requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import { deliveryIdFor } from "./channelIds.ts";
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 
 export const senderOf = (
   requester: ChannelRequester,

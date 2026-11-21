@@ -66,7 +66,7 @@ import {
   sessionMemoryCeiling,
   workerMemoryCeiling,
 } from "./channelDispatchAuthority.ts";
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";

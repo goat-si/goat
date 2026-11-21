@@ -20,6 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { isUnlinkedPrincipal } from "./ChannelGateway.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import {
   collapseNoteText,
   currentNoteNamedBy,
@@ -239,9 +240,8 @@ const linesAmong = (fileText: string, raws: ReadonlySet<string>) =>
   parseChannelBotNoteLines(fileText).filter((line) => raws.has(line.raw)).length;
 
 export const mayWriteBotNotes = (who: ChannelRequester) =>
-  who.originKind !== "mcp" &&
+  canReadChannelBotNotes(who) &&
   !isUnlinkedPrincipal(who.principalId) &&
-  who.grantedScopes.includes("memory:read") &&
   who.grantedScopes.includes("memory:write");
 
 export const makeChannelBotNoteWriter = (

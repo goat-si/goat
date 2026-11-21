@@ -27,28 +27,37 @@ export const bindWorkerProviderBrief = Effect.fn("channel.bindWorkerProviderBrie
   );
 });
 
+export const workerBriefOwner = Effect.fn("channel.workerBriefOwner")(function* (
+  sql: SqlClient.SqlClient,
+  threadId: ThreadId,
+  messageId: MessageId,
+) {
+  const [owner] = yield* sql<{
+    readonly task_id: ChannelTask["taskId"];
+    readonly generation: number;
+  }>`
+    SELECT json_extract(value_json, '$.taskId') AS task_id,
+      json_extract(value_json, '$.generation') AS generation
+    FROM channel_runtime_state WHERE key = ${keyFor(threadId)}
+  `;
+  return owner !== undefined &&
+    workerLaunchIdsFor(owner.task_id, owner.generation).messageId === messageId
+    ? owner
+    : undefined;
+});
+
 export const readChannelProviderBrief = Effect.fn("channel.readProviderBrief")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
   messageId: MessageId,
 ) {
-  type Owner = { readonly task_id: ChannelTask["taskId"]; readonly generation: number };
-  const worker = isChannelWorkerThreadId(threadId);
-  const [owner] = worker
-    ? yield* sql<Owner>`
-        SELECT json_extract(value_json, '$.taskId') AS task_id,
-          json_extract(value_json, '$.generation') AS generation
-        FROM channel_runtime_state WHERE key = ${keyFor(threadId)}
-      `
-    : yield* sql<Owner>`
+  const owner = isChannelWorkerThreadId(threadId)
+    ? yield* workerBriefOwner(sql, threadId, messageId)
+    : (yield* sql<{ readonly task_id: ChannelTask["taskId"]; readonly generation: number }>`
         SELECT task_id, task_generation AS generation FROM channel_bot_session_runs
         WHERE thread_id = ${threadId} AND message_id = ${messageId} AND kind IN ('launch','task')
-      `;
-  if (
-    owner === undefined ||
-    (worker && workerLaunchIdsFor(owner.task_id, owner.generation).messageId !== messageId)
-  )
-    return undefined;
+      `)[0];
+  if (owner === undefined) return undefined;
   const [row] = yield* sql<{ readonly delivered_text: string }>`
     SELECT json_extract(event_json, '$.payload.brief.deliveredText') AS delivered_text
     FROM channel_task_events

@@ -1,4 +1,4 @@
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 /**
  * GOAT Bot's notes and skills: plain files on the bot's home machine that every reception pass
  * reads and every worker can open.
