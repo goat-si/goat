@@ -803,7 +803,8 @@ function WebhookDeliveriesDialog({
                     <span className="text-muted-foreground">
                       <ScheduledRelativeLabel value={delivery.receivedAt} />
                     </span>
-                    {delivery.outcome === "filtered" && delivery.error ? (
+                    {(delivery.outcome === "filtered" || delivery.outcome === "dispatch_failed") &&
+                    delivery.error ? (
                       <span className="text-muted-foreground">{delivery.error}</span>
                     ) : null}
                     {delivery.missingFields.length > 0 ? (

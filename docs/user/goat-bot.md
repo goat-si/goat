@@ -151,6 +151,10 @@ them in the trigger. You can pause or resume a configured trigger on mobile.
 
 ## Going back to an older GOAT
 
+Once you save a work trigger, older GOAT versions that cannot check its dispatch grant refuse to
+open that database. To go back to one of those versions, restore a backup from before you saved
+the first work trigger.
+
 An older GOAT keeps your bots' data, but it doesn't know about added bots. Before you go back,
 let added bots finish or stop their tasks, and don't edit added bots while the older version
 runs. Work that one of them had already accepted runs as the main bot there, and its replies

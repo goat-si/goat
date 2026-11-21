@@ -7,6 +7,7 @@ import * as Migrator from "effect/sql/Migrator";
 import { V1_DATABASE_FILENAME } from "./initializeV2Database.ts";
 import { migrationEntries } from "./Migrations.ts";
 import {
+  canonicalMigrationName,
   displacedUpstreamMigrations,
   memoryMigrationProblem,
   plannedGoatLedger,
@@ -81,7 +82,11 @@ export function migrationLedgerProblem(
 ): string | undefined {
   const entries = migrationEntries;
   const known = new Set<string>(entries.map(([, name]) => name));
-  const unknown = [...new Set(history.map((row) => row.name).filter((name) => !known.has(name)))];
+  const unknown = [
+    ...new Set(
+      history.map((row) => row.name).filter((name) => !known.has(canonicalMigrationName(name))),
+    ),
+  ];
   if (unknown.length > 0) {
     return `This database has migrations that goat@${version} does not know: ${unknown.join(", ")}. A newer build wrote them, and running goat@${version} on this database is not safe. Stay on the newer release, or wait for a release that includes these migrations.`;
   }

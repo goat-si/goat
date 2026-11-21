@@ -9,6 +9,8 @@ import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { migrationEntries, runMigrations } from "../persistence/Migrations.ts";
+import { skippedV2Migrations } from "../persistence/reconcileGoatMigrationIds.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
@@ -642,4 +644,174 @@ it.effect("a coalesced signed work delivery survives restart and hands off only 
       { sql, workers },
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+const eventTriggerOwner = {
+  memoryGrantCeiling: "none" as const,
+  owner: {
+    principalId: owner.principalId,
+    sessionId: "fixture-session",
+    grantedScopes: ["orchestration:operate", "settings:write"] as const,
+  },
+};
+const eventSecret = "event-fixture-signing-secret";
+const eventSignature = {
+  header: "x-test-signature",
+  encoding: "hex",
+  prefix: "",
+  secret: eventSecret,
+} as const;
+
+it.effect("a second accepted signed delivery waits for intake and keeps its delivery id", () => {
+  const workers = new Map<string, Effect.Effect<void>>();
+  return withWebhookService(
+    ({ service, sql, runs }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const { task } = yield* service.upsert(
+          yield* routineInput({
+            routineMode: "work",
+            schedule: { type: "webhook", signature: eventSignature },
+          }),
+          eventTriggerOwner,
+        );
+        const first = yield* waitForSpan(
+          service.triggerWebhook(signedEvent(task, "first")),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        const second = yield* waitForSpan(
+          service.triggerWebhook(signedEvent(task, "second")),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        if (first._tag !== "accepted" || second._tag !== "accepted")
+          return assert.fail("Both signed deliveries should be accepted");
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 1);
+        assert.deepStrictEqual(yield* sql`SELECT delivery_id FROM scheduled_task_webhook_pending`, [
+          { delivery_id: second.deliveryId },
+        ]);
+        const receipt = yield* runs.deliveryReceipt(first.deliveryId);
+        if (receipt === null) return assert.fail("First firing should exist");
+        yield* runs.finishChannelFiring({
+          firingId: receipt.firingId,
+          outcome: { type: "accepted", threadId: task.threadId! },
+          at: DateTime.formatIso(yield* DateTime.now),
+        });
+        yield* drainPendingDispatch(workers);
+        assert.strictEqual(
+          (yield* runs.deliveryReceipt(second.deliveryId))?.dispatchStatus,
+          "dispatching",
+        );
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 2);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
+      }),
+    { workers },
+  );
+});
+
+it.effect("a signed delivery after a rebind starts its own coalescing window", () => {
+  const workers = new Map<string, Effect.Effect<void>>();
+  return withWebhookService(
+    ({ service, sql, runs }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const schedule = {
+          type: "webhook",
+          signature: eventSignature,
+          dedupe: { coalesceKey: "{{body.group}}", coalesceWindowSeconds: 10 },
+        };
+        const { task } = yield* service.upsert(
+          yield* routineInput({
+            routineMode: "work",
+            schedule,
+            prompt: "Triage {{body.value}}",
+          }),
+          eventTriggerOwner,
+        );
+        assert.deepInclude(yield* service.triggerWebhook(signedEvent(task, "old")), {
+          outcome: "accepted",
+        });
+        const { task: moved } = yield* service.upsert(
+          yield* routineInput({
+            projectId: "new-project",
+            routineMode: "work",
+            schedule,
+            prompt: "Triage {{body.value}}",
+          }),
+          eventTriggerOwner,
+        );
+        const delivery = yield* service.triggerWebhook(signedEvent(moved, "new"));
+        assert.deepInclude(delivery, { outcome: "accepted" });
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 2);
+        yield* TestClock.adjust("10 seconds");
+        yield* drainPendingDispatch(workers);
+        if (delivery._tag !== "accepted") return assert.fail("Expected signed delivery");
+        const [link, ...others] = yield* sql<LinkRow>`SELECT * FROM scheduled_task_channel_inputs`;
+        assert.lengthOf(others, 0);
+        assert.include(link?.payload_json ?? "", "new-project");
+        assert.include(link?.payload_json ?? "", "Triage");
+        assert.strictEqual(
+          (yield* runs.deliveryReceipt(delivery.deliveryId))?.firingId,
+          link?.firing_id,
+        );
+      }),
+    { workers },
+  );
+});
+
+function signedEvent(task: Parameters<typeof requestFor>[0], value: string) {
+  const bodyText = JSON.stringify({ group: "one", value });
+  const body = new TextEncoder().encode(bodyText);
+  const signature = NodeCrypto.createHmac("sha256", eventSecret).update(body).digest("hex");
+  return requestFor(task, {
+    body,
+    bodyText,
+    headers: { "content-type": "application/json", "x-test-signature": signature },
+  });
+}
+
+it.effect("work triggers fence startup on a build that cannot enforce their grants", () =>
+  withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        const legacy = migrationEntries.filter(([id]) => id <= 176);
+        const checkOldBuild = Effect.gen(function* () {
+          const history = yield* sql<{
+            migration_id: number;
+            name: string;
+          }>`SELECT migration_id, name FROM effect_sql_migrations`;
+          return skippedV2Migrations(
+            legacy,
+            history,
+            Math.max(...history.map((row) => row.migration_id)),
+          );
+        });
+        assert.isUndefined(yield* checkOldBuild);
+        yield* registerBot(sql);
+        yield* service.upsert(
+          yield* routineInput({
+            routineMode: "work",
+            enabled: false,
+            schedule: { type: "webhook", signature: eventSignature },
+          }),
+          eventTriggerOwner,
+        );
+        assert.include(
+          (yield* checkOldBuild)?.message ?? "",
+          "would skip required schema migrations",
+        );
+        const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        assert.isEmpty(yield* migrate);
+        // The published build could already have a work trigger without the fence.
+        yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
+        yield* sql`DELETE FROM effect_sql_migrations WHERE name='WorkTriggerAuthorityFence'`;
+        assert.isUndefined(yield* checkOldBuild);
+        assert.deepStrictEqual(yield* migrate, [[177, "WorkTriggerAuthorityFence"]]);
+        assert.include(
+          (yield* checkOldBuild)?.message ?? "",
+          "would skip required schema migrations",
+        );
+        assert.isEmpty(yield* migrate);
+      }),
+    {},
+  ),
 );

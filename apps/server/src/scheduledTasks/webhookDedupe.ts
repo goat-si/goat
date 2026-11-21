@@ -61,7 +61,7 @@ const pendingRequest = (request: WebhookRequest) =>
   });
 
 export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhookDedupe")(function* (
-  task: ScheduledTask,
+  task: PendingWebhookTask,
   request: WebhookTriggerRequest,
   deliveryId: string,
   now: number,
@@ -76,8 +76,12 @@ export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhook
   const keys = replayKeys(task, request);
   for (const replayKey of keys)
     if (yield* hasReplayKey(task.id, replayKey, now)) return "duplicate" as const;
-  const coalesceKey = key(dedupe.coalesceKey, request);
-  if (coalesceKey === "") return "run" as const;
+  const renderedKey = key(dedupe.coalesceKey, request);
+  if (renderedKey === "") return "run" as const;
+  const coalesceKey =
+    task.routineMode === "work"
+      ? `${task.createdAt}:${task.bindingRevision ?? 0}:${renderedKey}`
+      : renderedKey;
   const pending = yield* sql<{
     delivery_id: string;
   }>`SELECT delivery_id FROM scheduled_task_webhook_pending
@@ -108,7 +112,7 @@ export const acceptWebhookDedupe = Effect.fn("ScheduledTaskService.acceptWebhook
 export const acceptImmediateWebhookDedupe = Effect.fn(
   "ScheduledTaskService.acceptImmediateWebhookDedupe",
 )(function* (
-  task: ScheduledTask,
+  task: PendingWebhookTask,
   request: WebhookTriggerRequest,
   deliveryId: string,
   now: number,
@@ -126,7 +130,12 @@ export const acceptImmediateWebhookDedupe = Effect.fn(
   return "run" as const;
 });
 
-const PendingTaskJson = Schema.fromJsonString(ScheduledTask);
+const PendingWebhookTask = Schema.Struct({
+  ...ScheduledTask.fields,
+  bindingRevision: Schema.optional(Schema.Int),
+});
+export type PendingWebhookTask = typeof PendingWebhookTask.Type;
+const PendingTaskJson = Schema.fromJsonString(PendingWebhookTask);
 export const encodePendingTask = Schema.encodeEffect(PendingTaskJson);
 export const decodePendingTask = Schema.decodeUnknownEffect(PendingTaskJson);
 const PendingRequestJson = Schema.fromJsonString(
