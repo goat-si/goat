@@ -43,6 +43,13 @@ const assistantEvent = (text: string): ProviderAdapter.ProviderAdapterV2Event =>
   },
 });
 
+it("flushes a line-leading inline backtick span before a later unfinished fence", () => {
+  expect(splitBufferedAssistantText("```a``` is inline.\n\n```\ncode\n\nmore\n")).toEqual({
+    ready: "```a``` is inline.\n\n",
+    rest: "```\ncode\n\nmore\n",
+  });
+});
+
 effectIt.effect("publishes an idle paragraph but waits while its text keeps growing", () =>
   Effect.gen(function* () {
     const filter = makeAssistantStreamingFilter("paragraph");

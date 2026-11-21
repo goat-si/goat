@@ -1,3 +1,4 @@
+import { blend } from "./terminalColorBlend";
 import {
   type GhosttyKeyboardLayoutMap,
   ghosttyConsumedMods,
@@ -148,15 +149,6 @@ export interface GhosttyMouseInput {
 
 const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const encoder = new TextEncoder();
-
-function blend(foreground: GhosttyColor, background: GhosttyColor): GhosttyColor {
-  const channel = (front: number, back: number) => Math.floor((front * 155 + back * 100) / 255);
-  return {
-    r: channel(foreground.r, background.r),
-    g: channel(foreground.g, background.g),
-    b: channel(foreground.b, background.b),
-  };
-}
 
 function sameColor(left: GhosttyColor, right: GhosttyColor): boolean {
   return left.r === right.r && left.g === right.g && left.b === right.b;
@@ -481,20 +473,12 @@ export class GhosttyTerminalCore {
 
   isMouseAnyEventTracking(): boolean {
     this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 1003, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.modeEnabled(1003);
   }
 
   isSynchronizedOutput(): boolean {
     this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 2026, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.modeEnabled(2026);
   }
 
   endSynchronizedOutput(): void {
@@ -516,11 +500,7 @@ export class GhosttyTerminalCore {
 
   isApplicationCursorKeys(): boolean {
     this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 1, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.modeEnabled(1);
   }
 
   encodeKey(event: KeyboardEvent, action: "press" | "release" = "press"): string {
@@ -580,10 +560,7 @@ export class GhosttyTerminalCore {
     if (input.length === 0) return "";
     const inputPointer = this.runtime.alloc(input.length);
     this.runtime.bytes(inputPointer, input.length).set(input);
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    const bracketed =
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 2004, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0;
+    const bracketed = this.modeEnabled(2004);
     const written = this.runtime.call("ghostty_wasm_alloc_usize");
     let encoded = "";
     const sizeResult = this.runtime.call(
@@ -614,6 +591,18 @@ export class GhosttyTerminalCore {
     }
     this.runtime.call("ghostty_wasm_free_usize", written);
     this.runtime.free(inputPointer, input.length);
+    return encoded;
+  }
+
+  /** Empty unless the program enabled DEC 1004 focus reporting. */
+  encodeFocus(focused: boolean): string {
+    this.ensureActive();
+    if (!this.modeEnabled(1004)) return "";
+    const written = this.runtime.call("ghostty_wasm_alloc_usize");
+    const encoded = this.encodeOutput(written, (output, outputSize) =>
+      this.runtime.call("ghostty_focus_encode", focused ? 0 : 1, output, outputSize, written),
+    );
+    this.runtime.call("ghostty_wasm_free_usize", written);
     return encoded;
   }
 
@@ -974,6 +963,15 @@ export class GhosttyTerminalCore {
     ]) {
       this.runtime.freeOpaque(slot);
     }
+  }
+
+  /** Reads a DEC private mode; an unknown mode reads as off. */
+  private modeEnabled(mode: number): boolean {
+    this.runtime.bytes(this.scratch, 1)[0] = 0;
+    return (
+      this.runtime.call("ghostty_terminal_mode_get", this.terminal, mode, this.scratch) ===
+        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
   }
 
   private encodeOutput(

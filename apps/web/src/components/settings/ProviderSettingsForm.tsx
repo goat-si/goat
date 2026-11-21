@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { supportsProviderHome } from "@goat/client-runtime/state/provider-instance-display";
+import { isMiniMaxCode } from "@goat/provider-acp-registry/settings";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -122,7 +123,11 @@ export function deriveProviderSettingsFields(
       const fieldSchema = definition.settingsSchema.fields[key]!;
       const formAnnotation = readProviderSettingsFormAnnotation(fieldSchema);
       if (formAnnotation.hidden) return [];
-      if (isLocalAcp && key !== "source" && key !== "commandPath") return [];
+      if (definition.driverKind === "acpRegistry" && key === "readMiniMaxCodeQuota") {
+        if (!isMiniMaxCode(value)) return [];
+      } else if (isLocalAcp && key !== "source" && key !== "commandPath") {
+        return [];
+      }
 
       const annotatedTitle = readFieldAnnotationString(fieldSchema, "title");
       const annotatedDescription = readFieldAnnotationString(fieldSchema, "description");
@@ -310,7 +315,7 @@ interface ProviderSettingsFormProps {
   readonly environmentId?: EnvironmentId | undefined;
   readonly value: unknown;
   readonly idPrefix: string;
-  readonly variant: "card" | "dialog" | "settings";
+  readonly variant: "card" | "dialog" | "settings" | "instance-settings";
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
 }
 
@@ -487,6 +492,7 @@ function ProviderSettingsFieldRow({
               size="sm"
               className="min-w-0 flex-1"
               configured={secretConfigured}
+              placeholder="Enter or re-enter secret"
               value=""
               onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
             />
@@ -639,16 +645,18 @@ export function ProviderSettingsForm({
   environmentId,
   value,
   idPrefix,
-  variant,
+  variant: formVariant,
   onChange,
 }: ProviderSettingsFormProps) {
+  const variant = formVariant === "instance-settings" ? "settings" : formVariant;
   // Settings shows the Home route in its own section; the add-instance forms keep these fields.
   const fields = deriveProviderSettingsFields(definition, value).filter(
     (field) =>
-      variant !== "settings" ||
-      definition.driverKind === undefined ||
-      !supportsProviderHome(definition.driverKind) ||
-      !HOME_ROUTE_FIELDS.has(field.key),
+      (formVariant === "instance-settings" || field.key !== "readMiniMaxCodeQuota") &&
+      (variant !== "settings" ||
+        definition.driverKind === undefined ||
+        !supportsProviderHome(definition.driverKind) ||
+        !HOME_ROUTE_FIELDS.has(field.key)),
   );
   const isLocalAcp =
     definition.driverKind === "acpRegistry" &&

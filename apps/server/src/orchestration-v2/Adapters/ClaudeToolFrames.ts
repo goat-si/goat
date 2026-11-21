@@ -385,9 +385,19 @@ function claudeCommandOutputText(output: ClaudeNativeToolOutput): string {
 // Claude Code prefixes foreground Agent results with a note for the parent model, not the report.
 const CLAUDE_TOOLS_USED_NOTE =
   /^\s*<tools-used-before-summary>[^<]*<\/tools-used-before-summary>\s*/;
+const CLAUDE_HAND_BACK_FRAME =
+  /^\[Subagent hand-back\] The text below is the final report of a subagent [^\n]* The report follows:\n/;
+const CLAUDE_USAGE_TRAILER = /(?:^|\n)<usage>[^<]*<\/usage>\s*$/;
+const CLAUDE_AGENT_ID_TRAILER =
+  /(?:^|\n)agentId: ([\w-]+) \(use SendMessage with to: '\1'[^\n]*\)\s*$/;
 
 function claudeSubagentResultText(output: ClaudeNativeToolOutput): string {
-  return claudeSubagentRawResultText(output).replace(CLAUDE_TOOLS_USED_NOTE, "");
+  const unwrapped = claudeSubagentRawResultText(output)
+    .replace(CLAUDE_TOOLS_USED_NOTE, "")
+    .replace(CLAUDE_USAGE_TRAILER, "")
+    .replace(CLAUDE_AGENT_ID_TRAILER, "");
+  const report = unwrapped.replace(CLAUDE_HAND_BACK_FRAME, "");
+  return report === unwrapped ? report : report.replace(/^ {2}/gm, "");
 }
 
 function claudeSubagentRawResultText(output: ClaudeNativeToolOutput): string {
@@ -427,7 +437,9 @@ function isClaudeSubagentAsyncLaunchAck(output: ClaudeNativeToolOutput): boolean
       return true;
     }
   }
-  return claudeSubagentResultText(output).startsWith("Async agent launched successfully.");
+  return claudeSubagentRawResultText(output)
+    .replace(CLAUDE_TOOLS_USED_NOTE, "")
+    .startsWith("Async agent launched successfully.");
 }
 
 const WEB_FETCH_SNIPPET_MAX_CHARS = 8_000;

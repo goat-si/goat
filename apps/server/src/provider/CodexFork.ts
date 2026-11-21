@@ -6,7 +6,7 @@ export const forkCodexThread = Effect.fn("CodexAdapterV2.forkNativeThread")((
   client: CodexClient.CodexAppServerClient["Service"],
   params: CodexSchema.V2ThreadForkParams,
 ) => {
-  const fork = client.request("thread/fork", params);
+  const fork = client.request("thread/fork", { ...params, excludeTurns: true });
   return fork.pipe(
     Effect.catchTags({
       CodexAppServerRequestError: (cause) =>

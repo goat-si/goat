@@ -47,6 +47,9 @@ it("keeps draft previews current through edits, promotion and removal", async ()
     initial.setPrompt(draftId, "First draft preview");
   });
   await expect.element(row).toHaveAccessibleName("First draft preview, Unsent draft");
+  const drawnTitle = row.element().querySelector(".truncate");
+  expect(drawnTitle?.textContent).toBe("First draft preview");
+  expect(drawnTitle?.closest('[aria-hidden="true"]')).toBeNull();
   screen.getByRole("button", { name: "Before drafts" }).element().focus();
   await userEvent.tab();
   expect(document.activeElement).toBe(row.element());

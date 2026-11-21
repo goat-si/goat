@@ -146,7 +146,7 @@ it.effect.each([
           connect: (_entry, reportProgress) =>
             reportProgress({ stage: "synchronizing", prepared }).pipe(
               Effect.andThen(session.ready),
-              Effect.as({ prepared, session, openProbeSocket: Effect.never }),
+              Effect.as({ prepared, session, openProbeSocket: Effect.never, refusedRouteIds: [] }),
             ),
           checkHost: () => Effect.succeed("unchecked"),
           checkRoute: () => Effect.succeed("unchecked"),

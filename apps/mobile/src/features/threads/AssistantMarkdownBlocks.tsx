@@ -5,6 +5,7 @@ import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
 } from "@goat/shared/codexArtifactTemplates";
+import { textDirection } from "@goat/shared/textDirection";
 import {
   renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
@@ -60,8 +61,12 @@ function ArtifactTemplateCard(props: {
   readonly template: CodexArtifactTemplate;
   readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
 }) {
+  const direction = textDirection(props.template.displayName);
   return (
-    <View className="my-2 min-w-0 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-3 py-3">
+    <View
+      className="my-2 min-w-0 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-3 py-3"
+      style={direction ? { direction } : undefined}
+    >
       <View className="relative h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-subtle">
         <SymbolView
           name={ARTIFACT_TEMPLATE_SYMBOL_BY_KIND[props.template.artifactKind]}
@@ -101,6 +106,7 @@ function ArtifactTemplateCard(props: {
 // Folds split first, so an artifact card inside a fold stays inside it.
 export function AssistantMarkdownBlocks(props: {
   readonly markdown: string;
+  readonly streaming?: boolean | undefined;
   /** The reply's reference definitions, passed down by the enclosing fold. */
   readonly definitions?: ReadonlyArray<string> | undefined;
   readonly iconSubtleColor: string;
@@ -159,6 +165,7 @@ export function AssistantMarkdownBlocks(props: {
           )}
           skills={props.skills}
           textStyle={props.markdownStyles.nativeTextStyle}
+          streaming={props.streaming}
           {...props.linkHandlers}
           renderImage={props.renderImage}
         />

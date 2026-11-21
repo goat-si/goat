@@ -43,6 +43,15 @@ export const overlaps = (left: string, right: string, rules: PathRules) =>
   isStrictlyInside(left, right, rules) ||
   isStrictlyInside(right, left, rules);
 
+export const CLAUDE_SETTINGS_TEMP_PREFIX = "goat-claude-settings-";
+
+export function claudeSettingsTempOwner(name: string): number | undefined {
+  if (!name.startsWith(CLAUDE_SETTINGS_TEMP_PREFIX)) return undefined;
+  const pid = /^p([1-9]\d*)-/.exec(name.slice(CLAUDE_SETTINGS_TEMP_PREFIX.length))?.[1];
+  const owner = Number(pid);
+  return Number.isSafeInteger(owner) && owner <= 2_147_483_647 ? owner : undefined;
+}
+
 /**
  * Temp folders GOAT creates for one in-process operation and removes when it ends, so one older
  * than a day was left by a crash. Token broker sockets (goat-token-), Windows jobs (goat-job-)
@@ -56,6 +65,7 @@ const REMOVABLE_TEMP_PREFIXES = [
   "goat-codex-reception-home-",
   "goat-codex-reception-",
   "goat-claude-title-",
+  CLAUDE_SETTINGS_TEMP_PREFIX,
 ] as const;
 
 export const TEMP_MIN_AGE_MS = 24 * 60 * 60_000;

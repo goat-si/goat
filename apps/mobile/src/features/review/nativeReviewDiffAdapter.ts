@@ -1,3 +1,4 @@
+import { cutLineNoteStart } from "@goat/shared/diffCutLines";
 import type { NativeReviewDiffRow, NativeReviewDiffTheme } from "../diffs/nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "../diffs/nativeReviewDiffTypes";
 import * as Arr from "effect/Array";
@@ -200,6 +201,8 @@ export function createNativeReviewDiffTheme(
       deleteBar: terminalRed ?? "#ff2e3f",
       addText: "#5ECC71",
       deleteText: "#FF6762",
+      warningText: nativeColor(appTheme["--color-warning-foreground"]),
+      warningBackground: nativeColor(appTheme["--color-warning"]),
     };
   }
 
@@ -217,6 +220,8 @@ export function createNativeReviewDiffTheme(
     deleteBar: terminalRed ?? "#ff2e3f",
     addText: "#199F43",
     deleteText: "#D52C36",
+    warningText: nativeColor(appTheme["--color-warning-foreground"]),
+    warningBackground: nativeColor(appTheme["--color-warning"]),
   };
 }
 
@@ -244,7 +249,15 @@ function createNoticeRow(fileId: string, suffix: string, text: string): NativeRe
 }
 
 function noticeRowsForFile(file: ReviewRenderableFile): ReadonlyArray<NativeReviewDiffRow> {
-  if (file.notice) return [createNoticeRow(file.id, "loading", file.notice)];
+  if (file.notice) {
+    return [
+      {
+        ...createNoticeRow(file.id, "loading", file.notice),
+        ...(file.noticeTone === undefined ? {} : { tone: file.noticeTone }),
+        ...(file.noticeActionable ? { actionable: true } : {}),
+      },
+    ];
+  }
   if (file.rows.length > 0) {
     return [];
   }
@@ -362,6 +375,7 @@ function mapLineRow(
   row: ReviewRenderableLineRow,
   rowIndex: number,
 ): NativeReviewDiffRow {
+  const noteStart = file.cutLines ? cutLineNoteStart(row.content) : null;
   return {
     kind: "line",
     id: `${file.id}:line:${rowIndex}:${row.id}`,
@@ -370,6 +384,7 @@ function mapLineRow(
     change: row.change,
     oldLineNumber: row.oldLineNumber,
     newLineNumber: row.newLineNumber,
+    ...(noteStart === null ? {} : { noteStart }),
   };
 }
 

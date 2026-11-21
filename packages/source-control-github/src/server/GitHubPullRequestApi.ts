@@ -1,10 +1,25 @@
+import { collectGitHubPages } from "./gitHubPullRequestPageCollector.ts";
+import { isGraphQlClientError } from "./gitHubGraphQlClientError.ts";
+import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
+import {
+  decodeWith,
+  readError,
+  GitHubDiffCommitError,
+  type GitHubDiffCursorError,
+  type GitHubPullRequestReadError,
+} from "./gitHubPullRequestReadErrors.ts";
+export {
+  GitHubDiffCommitError,
+  GitHubDiffCursorError,
+  GitHubPullRequestReadError,
+} from "./gitHubPullRequestReadErrors.ts";
+import { DIFF_TIMEOUT, makeGitHubPullRequestDiff } from "./gitHubPullRequestDiff.ts";
 import {
   toReviewerCandidates,
   type GitHubReviewerCandidateInput,
 } from "./gitHubReviewerCandidates.ts";
 import {
   parseRepositorySelector,
-  diffCursorPage,
   isCommitSha,
   decodeRevisionRefs,
   decodeMergeBase,
@@ -30,7 +45,6 @@ import { runGitHubStackAction, type GitHubStackActionError } from "./githubStack
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -89,7 +103,6 @@ import * as SourceControlRateLimit from "@goat/source-control-core/server/Source
 import {
   buildReviewSubmission,
   buildReviewerRequest,
-  decodeCommitFilesJson,
   pullRequestChecksFromContexts,
   decodeWorkflowRunsJson,
   type GitHubPullRequestCore,
@@ -122,7 +135,6 @@ import {
   toReviewThreadPage,
   toStackMembership,
   toViewerPermissions,
-  decodePullRequestFilesJson,
   decodePullRequestStacksJson,
   buildLabelRequest,
   PULL_REQUEST_SEARCH_MAX_ROWS,
@@ -144,23 +156,11 @@ import {
 } from "./gitHubPullRequestJson.ts";
 import type {
   ProviderChangeRequestSummary,
+  ProviderAcrossListCursor,
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
 import { LIST_STATES, type GitHubPullRequestListPage } from "./gitHubPullRequestListStates.ts";
 import { decodeUnfinishedWorkflowRunsJson } from "./gitHubWorkflowRunsJson.ts";
-
-export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullRequestReadError>()(
-  "GitHubPullRequestReadError",
-  {
-    cwd: Schema.String,
-    operation: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `GitHub returned an unreadable ${this.operation} response.`;
-  }
-}
 
 export class GitHubViewerLoginUnavailableError extends Schema.TaggedError<GitHubViewerLoginUnavailableError>()(
   "GitHubViewerLoginUnavailableError",
@@ -183,28 +183,6 @@ export class GitHubPullRequestUpdatedAtUnavailableError extends Schema.TaggedErr
 ) {
   override get message(): string {
     return `Pull request ${this.repository}#${this.number} reported no update time.`;
-  }
-}
-
-export class GitHubDiffCursorError extends Schema.TaggedError<GitHubDiffCursorError>()(
-  "GitHubDiffCursorError",
-  {
-    cwd: Schema.String,
-  },
-) {
-  override get message(): string {
-    return "The diff cursor was not one this pull request handed out.";
-  }
-}
-
-export class GitHubDiffCommitError extends Schema.TaggedError<GitHubDiffCommitError>()(
-  "GitHubDiffCommitError",
-  {
-    cwd: Schema.String,
-  },
-) {
-  override get message(): string {
-    return "The named commit was not a commit sha.";
   }
 }
 
@@ -328,19 +306,16 @@ export type GitHubPullRequestApiError =
   | GitHubViewerLoginUnavailableError
   | GitHubPullRequestUpdatedAtUnavailableError;
 
-const isGraphQlClientError = (error: unknown): error is GraphQLClientError.GraphQLClientError =>
-  GraphQLClientError.isGraphQLClientError(error);
-
 const { isNotFoundOnly } = GitHubGraphQlClient;
 
-/** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
-const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
-const DIFF_TIMEOUT = Duration.seconds(60);
+const isGitHubApiResponseError = Schema.is(GitHubRequestPolicy.GitHubApiResponseError);
+const isGitHubServerError = (error: unknown): boolean =>
+  isGitHubApiResponseError(error) && error.status >= 500;
+
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
-const DIFF_FILES_PAGE_SIZE = 100;
 const FILES_VIEWED_MAX_PAGES = 5;
 const FILES_VIEWED_PER_REQUEST = 100;
 
@@ -380,6 +355,8 @@ export interface GitHubPullRequestDiffSlice {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
+  readonly withheldFilesReadable?: boolean;
+  readonly revision?: PullRequestDiffInput["revision"];
 }
 
 export interface GitHubPullRequestFilesViewed {
@@ -437,7 +414,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly viewer: string;
       readonly limit: number;
       readonly query?: string | undefined;
-      readonly cursor?: ProviderListCursor | undefined;
+      readonly cursor?: ProviderAcrossListCursor | undefined;
       readonly filters?: PullRequestListFilters | undefined;
     }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestApiError>;
 
@@ -525,6 +502,8 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
+      readonly path?: string | undefined;
+      readonly revision?: PullRequestDiffInput["revision"];
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiffFileContents: (input: {
@@ -681,6 +660,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
+      readonly revision?: PullRequestSubmitReviewInput["revision"];
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
@@ -859,9 +839,6 @@ export const make = Effect.gen(function* () {
       Effect.map(({ accountId, viewer }) => ({ accountId, viewer })),
     );
 
-  const readError = (cwd: string, operation: string, cause: unknown) =>
-    new GitHubPullRequestReadError({ cwd, operation, cause });
-
   const graphql =
     (input: {
       readonly cwd: string;
@@ -994,18 +971,6 @@ export const make = Effect.gen(function* () {
       .pipe(graphql({ ...input, allowReserve: true }), Effect.map(isSubjectOfPullRequest));
   };
 
-  const decodeWith = <A>(
-    cwd: string,
-    operation: string,
-    decode: (raw: string) => Result.Result<A, unknown>,
-    raw: string,
-  ): Effect.Effect<A, GitHubPullRequestReadError> => {
-    const decoded = decode(raw.trim());
-    return Result.isSuccess(decoded)
-      ? Effect.succeed(decoded.success)
-      : Effect.fail(readError(cwd, operation, decoded.failure));
-  };
-
   /** A REST read whose JSON answer is decoded the same way. */
   const restRead = <A>(input: RestReadInput<A>): Effect.Effect<A, GitHubPullRequestApiError> =>
     api
@@ -1058,61 +1023,6 @@ export const make = Effect.gen(function* () {
       : Cache.invalidate(validators, key);
     return decoded;
   });
-
-  const diffFilesPage = (input: {
-    readonly cwd: string;
-    readonly repository: string;
-    readonly host: string;
-    readonly number: number;
-    readonly page: number;
-    readonly commit?: string | undefined;
-  }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError> => {
-    const { owner, name } = parseRepositorySelector(input.repository);
-    const paging = `per_page=${DIFF_FILES_PAGE_SIZE}&page=${input.page}`;
-    return api
-      .rest({
-        host: input.host,
-        operation: "getPullRequestDiff",
-        path:
-          input.commit === undefined
-            ? `repos/${owner}/${name}/pulls/${input.number}/files?${paging}`
-            : `repos/${owner}/${name}/commits/${input.commit}?${paging}`,
-        maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-        timeout: DIFF_TIMEOUT,
-      })
-      .pipe(
-        Effect.flatMap((response) => {
-          // Byte-truncated responses are unparseable JSON prefixes.
-          if (response.truncated) {
-            return Effect.fail(
-              readError(
-                input.cwd,
-                "getPullRequestDiff",
-                new Error(`Page ${input.page} of the changed files was too large to read.`),
-              ),
-            );
-          }
-          return decodeWith(
-            input.cwd,
-            "getPullRequestDiff",
-            input.commit === undefined ? decodePullRequestFilesJson : decodeCommitFilesJson,
-            response.body,
-          );
-        }),
-        Effect.map((files) => {
-          // Use raw row counts so malformed files cannot prematurely end pagination.
-          const morePages = files.rawCount >= DIFF_FILES_PAGE_SIZE;
-          return {
-            patch: files.patch,
-            truncated: files.truncated,
-            nextCursor: morePages ? String(input.page + 1) : null,
-            ...(files.omittedFileStats.length === 0
-              ? {}
-              : { omittedFileStats: files.omittedFileStats }),
-          };
-        }),
-      );
-  };
 
   const getPullRequestDiffFileContents: GitHubPullRequestApi["Service"]["getPullRequestDiffFileContents"] =
     Effect.fn("GitHubPullRequestApi.getPullRequestDiffFileContents")(function* (input) {
@@ -1625,48 +1535,15 @@ export const make = Effect.gen(function* () {
         endCursor: page.endCursor,
         pageInfo: { hasNextPage: page.endCursor !== null, endCursor: page.endCursor },
       });
-      /**
-       * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
-       * for only the rows still missing, so the last one does not overshoot.
-       */
-      const collect = Effect.fn("GitHubPullRequestApi.collect")(function* (
-        rows: number,
-        page: (
-          after: string | null,
-          rows: number,
-        ) => Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError>,
-      ) {
-        const countRows = (pages: ReadonlyArray<GitHubPullRequestListPage>) =>
-          pages.reduce((total, read) => total + read.rawCount, 0);
-        const pages: GitHubPullRequestListPage[] = [];
-        const seen = new Set<string>();
-        let after: string | null = null;
-        let truncated = false;
-        while (true) {
-          const read: GitHubPullRequestListPage = yield* page(after, rows - countRows(pages));
-          pages.push(read);
-          const next = read.endCursor;
-          if (next === null) break;
-          // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
-          if (seen.has(next) || countRows(pages) >= rows) {
-            truncated = true;
-            break;
-          }
-          seen.add(next);
-          after = next;
-        }
-        return {
-          items: pages.flatMap((read) => read.items),
-          rawCount: countRows(pages),
-          truncated,
-        };
-      });
       const stacks = input.host.toLowerCase() === "github.com";
+      const seenAt = new Set(input.cursor?.seenAt ?? []);
+      const isSeen = (item: GitHubPullRequestListItem) =>
+        item.updatedAt === input.cursor?.updatedBefore && seenAt.has(item.number);
       const read = (
         continues: boolean,
-        requestedRows = input.limit + 1,
+        requestedRows = input.limit + 1 + (continues ? seenAt.size : 0),
       ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> =>
-        collect(requestedRows, (after, rows) =>
+        collectGitHubPages(requestedRows, (after, rows) =>
           (continues
             ? client
                 .PullRequestSearch({
@@ -1697,7 +1574,7 @@ export const make = Effect.gen(function* () {
         ).pipe(
           Effect.flatMap(({ items: rawItems, rawCount, truncated: cutShort }) => {
             const items = continues
-              ? rawItems
+              ? rawItems.filter((item) => !isSeen(item))
               : rawItems.filter((item) => matchesUnsortedListing(item, input));
             if (
               !continues &&
@@ -1714,19 +1591,20 @@ export const make = Effect.gen(function* () {
               truncated:
                 cutShort ||
                 (continues
-                  ? rawCount > input.limit
+                  ? rawCount - (rawItems.length - items.length) > input.limit
                   : items.length > input.limit || rawCount >= requestedRows),
               continues,
             });
           }),
         );
-      // Unindexed repositories silently return no search rows; fall back to the repository listing.
-      const hasQuery = (input.query?.trim().length ?? 0) > 0;
+      const listingServes = input.cursor === undefined && (input.query?.trim().length ?? 0) === 0;
       return read(true).pipe(
-        Effect.filterOrElse(
-          (batch) => batch.items.length > 0 || input.cursor !== undefined || hasQuery,
-          () => read(false),
-        ),
+        Effect.matchEffect({
+          onSuccess: (batch) =>
+            batch.items.length > 0 || !listingServes ? Effect.succeed(batch) : read(false),
+          onFailure: (error) =>
+            listingServes && isGitHubServerError(error) ? read(false) : Effect.fail(error),
+        }),
         Effect.filterOrElse(
           (batch) => !stacks || batch.items.length === 0,
           (batch) =>
@@ -1773,27 +1651,51 @@ export const make = Effect.gen(function* () {
           operation: "searchPullRequests",
         });
       }
-      const rows = Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS);
-      return yield* client
-        .PullRequestSearch({
-          q: query,
-          first: rows,
-          stacks: input.host.toLowerCase() === "github.com",
-          stats: false,
-        })
-        .pipe(
-          graphql({ ...input, operation: "searchPullRequests" }),
-          Effect.map(({ search }) => {
-            const page = toPullRequestRows(search);
-            const items = page.rows.flatMap(({ item, repository }) =>
-              repository === null ? [] : [{ ...item, repository }],
-            );
-            return {
-              items: items.slice(0, input.limit),
-              truncated: page.rawCount > input.limit || page.hasNextPage,
-            };
-          }),
-        );
+      // Search cannot exclude numbers, so the rows already delivered at the boundary come back
+      // first; read past them so they do not use up the limit.
+      const seenAt = new Set(
+        (input.cursor?.seenAt ?? []).map(
+          ({ repository, number }) => `${repository.trim().toLowerCase()}#${number}`,
+        ),
+      );
+      const stacks = input.host.toLowerCase() === "github.com";
+      let endedShort = false;
+      const {
+        items: rawItems,
+        rawCount,
+        truncated,
+      } = yield* collectGitHubPages(
+        Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS) + seenAt.size,
+        (after, rows) =>
+          client
+            .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
+            .pipe(
+              graphql({ ...input, operation: "searchPullRequests" }),
+              Effect.map(({ search }) => {
+                const page = toPullRequestRows(search);
+                // A short page that says it has more is where this read stops, not a gap to read past.
+                const short = page.endCursor !== null && page.rawCount < pageRows(rows);
+                if (short) endedShort = true;
+                return {
+                  items: page.rows.flatMap(({ item, repository }) =>
+                    repository === null ? [] : [{ ...item, repository }],
+                  ),
+                  rawCount: page.rawCount,
+                  endCursor: short ? null : page.endCursor,
+                };
+              }),
+            ),
+      );
+      const items = rawItems.filter(
+        (item) =>
+          item.updatedAt !== input.cursor?.updatedBefore ||
+          !seenAt.has(`${item.repository.trim().toLowerCase()}#${item.number}`),
+      );
+      return {
+        items: items.slice(0, input.limit),
+        truncated:
+          truncated || endedShort || rawCount - (rawItems.length - items.length) > input.limit,
+      };
     }),
 
     listPullRequestStats: Effect.fn("GitHubPullRequestApi.listPullRequestStats")(
@@ -1946,54 +1848,12 @@ export const make = Effect.gen(function* () {
             left.createdAt.localeCompare(right.createdAt),
           ),
           commits: commits.map((commit) => ({ ...commit, ...commitStats.get(commit.oid) })),
+          truncated: commentsAfter !== null || reviewsAfter !== null,
         } satisfies GitHubPullRequestActivity;
       },
     ),
 
-    getPullRequestDiff: Effect.fn("GitHubPullRequestApi.getPullRequestDiff")(function (input) {
-      const filesPage = (page: number) =>
-        diffFilesPage({
-          cwd: input.cwd,
-          repository: input.repository,
-          host: input.host,
-          number: input.number,
-          page,
-          ...(input.commit === undefined ? {} : { commit: input.commit }),
-        });
-      if (input.commit !== undefined && !isCommitSha(input.commit)) {
-        return Effect.fail(new GitHubDiffCommitError({ cwd: input.cwd }));
-      }
-      if (input.cursor !== undefined) {
-        const page = diffCursorPage(input.cursor);
-        return page === null
-          ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
-          : filesPage(page);
-      }
-      if (input.commit !== undefined) {
-        return filesPage(1);
-      }
-      const { owner, name } = parseRepositorySelector(input.repository);
-      return api
-        .rest({
-          host: input.host,
-          operation: "getPullRequestDiff",
-          path: `repos/${owner}/${name}/pulls/${input.number}`,
-          accept: "application/vnd.github.diff",
-          maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-          timeout: DIFF_TIMEOUT,
-        })
-        .pipe(
-          Effect.flatMap((response) =>
-            response.truncated
-              ? filesPage(1)
-              : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
-          ),
-          // Above 300 changed files, GitHub returns 406; use the paged files API.
-          Effect.catchTags({
-            GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
-          }),
-        );
-    }),
+    getPullRequestDiff: makeGitHubPullRequestDiff(api),
 
     getPullRequestDiffFileContents,
 
@@ -2556,19 +2416,35 @@ export const make = Effect.gen(function* () {
       );
     }),
 
-    submitReview: Effect.fn("GitHubPullRequestApi.submitReview")(function (input) {
+    submitReview: Effect.fn("GitHubPullRequestApi.submitReview")(function* (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
-      return api
+      const path = `repos/${owner}/${name}/pulls/${input.number}`;
+      const { revision } = input;
+      if (revision !== undefined) {
+        const response = yield* api.rest({ host: input.host, operation: "submitReview", path });
+        const current = Option.getOrUndefined(decodeRevisionRefs(response.body));
+        if (
+          response.truncated ||
+          current?.head?.sha !== revision.headSha ||
+          (revision.baseSha !== undefined && current.base?.sha !== revision.baseSha)
+        ) {
+          return yield* readError(
+            input.cwd,
+            "submitReview",
+            new Error("Move the affected line comments to the current diff before submitting."),
+          );
+        }
+      }
+      return yield* api
         .rest({
           host: input.host,
           operation: "submitReview",
           method: "POST",
-          path: `repos/${owner}/${name}/pulls/${input.number}/reviews`,
-          body: buildReviewSubmission({
-            verdict: input.verdict,
-            body: input.body,
-            comments: input.comments,
-          }),
+          path: path + "/reviews",
+          body: {
+            ...buildReviewSubmission(input),
+            ...(revision === undefined ? {} : { commit_id: revision.headSha }),
+          },
         })
         .pipe(Effect.asVoid);
     }),

@@ -1,3 +1,9 @@
+import { verifyManagedCheckout } from "./goat/restoreSnapshot.ts";
+import { makeRestorePending } from "./goat/restorePending.ts";
+import { git as realGit } from "./goat/restoreSnapshot.ts";
+import { GitCommandError } from "@goat/contracts";
+import * as PlatformError from "effect/PlatformError";
+import { makeSetAsideFolder } from "./goat/setAsideFolder.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -32,6 +38,10 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 interface Row {
   readonly restoreFiles?: boolean;
   readonly createFails?: boolean;
+  readonly lateCreateFails?: boolean;
+  readonly wrongBranchHook?: boolean;
+  readonly nativeTurns?: boolean;
+  readonly malformedMarker?: boolean;
   readonly shared?: boolean;
   readonly unmanaged?: boolean;
   readonly checkout?: boolean;
@@ -46,6 +56,10 @@ const rollBackOverLeftover = (row: Row) =>
     const {
       restoreFiles = true,
       createFails,
+      lateCreateFails,
+      wrongBranchHook,
+      nativeTurns,
+      malformedMarker,
       shared,
       unmanaged,
       checkout,
@@ -72,6 +86,45 @@ const rollBackOverLeftover = (row: Row) =>
     const checkpointId = CheckpointId.make("rollback-aside-checkpoint");
     const scopeId = CheckpointScopeId.make("rollback-aside-scope");
     const branch = "feature/rollback";
+    yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
+    if (lateCreateFails || wrongBranchHook || malformedMarker) {
+      yield* Effect.promise(async () => {
+        await realGit(workspaceRoot, ["init", "-b", "main"]);
+        await realGit(workspaceRoot, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "base",
+        ]);
+        await realGit(workspaceRoot, ["branch", branch]);
+      });
+      if (malformedMarker) {
+        yield* fileSystem.remove(worktreePath, { recursive: true });
+        const admin = yield* Effect.promise(async () => {
+          await realGit(workspaceRoot, ["worktree", "add", worktreePath, branch]);
+          return (await realGit(worktreePath, ["rev-parse", "--absolute-git-dir"]))
+            .toString()
+            .trim();
+        });
+        yield* fileSystem.writeFileString(
+          path.join(admin, "goat-restore-pending"),
+          "{partial json",
+        );
+      } else {
+        const hook = path.join(workspaceRoot, ".git", "hooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hook,
+          wrongBranchHook
+            ? "#!/bin/sh\ngit -c core.hooksPath=/dev/null switch -c other && printf keep > late.txt\n"
+            : "#!/bin/sh\nprintf keep > late.txt\nexit 1\n",
+        );
+        yield* fileSystem.chmod(hook, 0o755);
+      }
+    }
     const calls: string[] = [];
     const written: OrchestrationV2DomainEvent[] = [];
     const projection = {
@@ -91,7 +144,7 @@ const rollBackOverLeftover = (row: Row) =>
       providerSession: undefined,
       checkpoint: { id: checkpointId, scopeId, status: "ready", appRunOrdinal: 0 },
       scope: { id: scopeId, cwd: worktreePath },
-      runsToRollback: [],
+      runsToRollback: nativeTurns ? [{ id: "fixture-run" }] : [],
       targetAttempt: undefined,
       rolledBackAttemptIds: [],
       staleCheckpoints: [],
@@ -104,13 +157,44 @@ const rollBackOverLeftover = (row: Row) =>
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           NodeServices.layer,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir, stateDir: workspaceRoot } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: () => Effect.succeedSome({ workspaceRoot } as never),
           }),
           Layer.mock(GitWorkflow.GitWorkflowService)({
+            verifyManagedCheckout: (input) =>
+              wrongBranchHook
+                ? verifyManagedCheckout(input).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new GitCommandError({
+                          operation: "verifyManagedCheckout",
+                          command: "git worktree",
+                          cwd: input.projectCwd,
+                          detail: cause.detail,
+                          cause,
+                        }),
+                    ),
+                  )
+                : Effect.void,
             pruneWorktrees: () => Effect.sync(() => void calls.push("prune")),
+            resolveCommit: ({ cwd, revision }) =>
+              lateCreateFails || wrongBranchHook
+                ? Effect.tryPromise({
+                    try: async () => ({
+                      commitSha: (await realGit(cwd, ["rev-parse", revision])).toString().trim(),
+                    }),
+                    catch: (cause) =>
+                      new GitCommandError({
+                        operation: "resolveCommit",
+                        command: "git",
+                        cwd,
+                        detail: "unresolved",
+                        cause,
+                      }),
+                  })
+                : Effect.succeed({ commitSha: "fixture-head" }),
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {
@@ -124,6 +208,26 @@ const rollBackOverLeftover = (row: Row) =>
                   .readDirectory(worktreePath)
                   .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
                 assert.deepEqual(entries, []);
+                if (lateCreateFails || wrongBranchHook) {
+                  return yield* Effect.tryPromise({
+                    try: async () =>
+                      (await realGit(workspaceRoot, [
+                        "worktree",
+                        "add",
+                        worktreePath,
+                        branch,
+                      ])) as never,
+                    catch: (cause) =>
+                      new GitCommandError({
+                        operation: "git worktree add",
+                        command: "git",
+                        cwd: workspaceRoot,
+                        detail: "post-checkout failed",
+                        cause,
+                      }),
+                  });
+                }
+                if (createFails) return yield* Effect.die("the branch is gone");
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
@@ -132,13 +236,17 @@ const rollBackOverLeftover = (row: Row) =>
                   yield* fileSystem.chmod(path.dirname(worktreePath), 0o555).pipe(Effect.orDie);
                   return yield* Effect.fail(new Error("the branch is gone") as never);
                 }
-                if (createFails) return yield* Effect.die("the branch is gone");
                 return {} as never;
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             restore: () =>
               Effect.sync(() => void calls.push("files")).pipe(
+                Effect.andThen(
+                  wrongBranchHook
+                    ? fileSystem.remove(path.join(worktreePath, "late.txt")).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
                 Effect.andThen(
                   filesFail
                     ? Effect.fail(new Error("the checkpoint is unreadable") as never)
@@ -169,7 +277,17 @@ const rollBackOverLeftover = (row: Row) =>
             getThreadProviderContext: () => Effect.succeed({ providerSessions: [] } as never),
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-            open: () => Effect.sync(() => (calls.push("session"), {} as never)),
+            open: () =>
+              Effect.sync(() => {
+                calls.push("session");
+                return {
+                  rollbackThread: () =>
+                    Effect.sync(() => {
+                      calls.push("native rollback");
+                      return { providerThread: projection.providerThread };
+                    }),
+                } as never;
+              }),
           }),
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({
             resolve: ({ thread }) => Effect.succeed({ cwd: thread.worktreePath } as never),
@@ -197,8 +315,16 @@ const rollBackOverLeftover = (row: Row) =>
     const setAside = siblings.find((name) => name !== "feature");
     const setAsidePath =
       setAside === undefined ? null : path.join(path.dirname(worktreePath), setAside);
+    const pending = yield* makeRestorePending.pipe(
+      Effect.provideService(ServerConfig.ServerConfig, { stateDir: workspaceRoot } as never),
+    );
     return {
       exit,
+      lateContents: yield* fileSystem
+        .readFileString(path.join(worktreePath, "late.txt"))
+        .pipe(Effect.orElseSucceed(() => null)),
+      pending: yield* pending.marked(worktreePath, workspaceRoot),
+      linked: yield* fileSystem.exists(path.join(worktreePath, ".git")),
       calls,
       siblings,
       notices,
@@ -277,5 +403,94 @@ it.effect.each<Row & { readonly name: string; readonly rollsBack: boolean }>([
     assert.deepEqual(siblings, ["feature"]);
     assert.equal(inPlace, "keep");
     assert.deepEqual(notices, []);
+  }),
+);
+
+it.effect.each([false, true])(
+  "preserves a busy outer folder during set-aside (restore fails: %s)",
+  (fails) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-busy-worktree-" });
+      const workspace = path.join(parent, "worktree");
+      const leftovers = path.join(workspace, "node_modules");
+      yield* fs.makeDirectory(leftovers, { recursive: true });
+      yield* fs.writeFileString(path.join(leftovers, "keep.txt"), "keep");
+      const identity = (yield* fs.stat(workspace)).ino;
+      const busyFs = {
+        ...fs,
+        rename: (from: string, to: string) =>
+          from === workspace
+            ? Effect.fail(
+                PlatformError.systemError({ _tag: "Busy", module: "FileSystem", method: "rename" }),
+              )
+            : fs.rename(from, to),
+      };
+      const setAside = yield* makeSetAsideFolder.pipe(
+        Effect.provideService(FileSystem.FileSystem, busyFs),
+      );
+      const restored = yield* setAside
+        .around(
+          workspace,
+          Effect.gen(function* () {
+            assert.deepEqual(yield* fs.readDirectory(workspace), []);
+            if (fails) return yield* Effect.fail("recreate failed");
+          }),
+        )
+        .pipe(Effect.result);
+      assert.deepEqual((yield* fs.stat(workspace)).ino, identity);
+      if (restored._tag === "Failure") {
+        assert.equal(restored.failure, "recreate failed");
+        assert.equal(yield* fs.readFileString(path.join(leftovers, "keep.txt")), "keep");
+      } else {
+        assert.equal(
+          yield* fs.readFileString(
+            path.join(restored.success.setAsidePath, "node_modules", "keep.txt"),
+          ),
+          "keep",
+        );
+      }
+      assert.equal(restored._tag, fails ? "Failure" : "Success");
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("Edit from here leaves a late hook failure marked after Git registers the checkout", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ lateCreateFails: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.isTrue(result.linked);
+    assert.isTrue(result.pending);
+    assert.equal(result.setAsideFiles, "keep");
+    assert.deepEqual(result.calls, ["prune", "create"]);
+  }),
+);
+
+it.effect("Edit from here leaves files alone if the add hook switched to another branch", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ wrongBranchHook: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "files");
+    assert.equal(result.lateContents, "keep");
+    assert.isTrue(result.pending);
+  }),
+);
+
+it.effect("Edit from here refuses a linked checkout with a malformed restore marker", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ malformedMarker: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "files");
+    assert.isTrue(result.pending);
+  }),
+);
+
+it.effect("rejects a wrong-branch checkpoint before rewinding any native provider turns", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ wrongBranchHook: true, nativeTurns: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "native rollback");
+    assert.notInclude(result.calls, "files");
+    assert.equal(result.lateContents, "keep");
   }),
 );

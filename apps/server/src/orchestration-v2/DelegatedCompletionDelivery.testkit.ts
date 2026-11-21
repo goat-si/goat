@@ -1,3 +1,8 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
+import { applyToProjection } from "./projectionReducer.ts";
+import * as Option from "effect/Option";
+import * as Tracer from "effect/Tracer";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -9,6 +14,8 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2Run,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2PendingBackgroundTask,
   NodeId,
   ProjectId,
   ProviderDriverKind,
@@ -89,7 +96,7 @@ const providerInstance = {
   enabled: true,
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 
 const layerTestProviderInstanceRegistry = Layer.succeed(
@@ -478,3 +485,343 @@ export const seedRestartCancelledChild = (input: {
     });
     return { taskId, childThreadId, childRunId };
   });
+
+export const seedBoundedDeliveryHistory = Effect.fn("seedBoundedDeliveryHistory")(function* (
+  sink: EventSink.EventSinkV2["Service"],
+  now: DateTime.Utc,
+) {
+  const threadId = ThreadId.make("thread:bounded-delivery-recovery");
+  const runId = RunId.make("run:bounded-delivery-recovery");
+  const taskId = NodeId.make("task:bounded-delivery-recovery");
+  yield* seedParentWithTerminalTask({
+    threadId,
+    runId,
+    taskId,
+    projectId: ProjectId.make("project:bounded-delivery-recovery"),
+    rootNodeId: NodeId.make("node:bounded-delivery-recovery"),
+    deliveryState: "claimed",
+    deliveryTaskIds: [taskId],
+    completionWake: "always",
+    now,
+  });
+  for (const suffix of ["first", "second"]) {
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`event:bounded-delivery-history:${suffix}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: MessageId.make(`message:bounded-delivery-history:${suffix}`),
+            threadId,
+            runId: null,
+            nodeId: null,
+            createdBy: "user",
+            creationSource: "web",
+            role: "user",
+            text: "Unrelated historical input",
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+  }
+  return runId;
+});
+
+export const seedUnheldFollowup = Effect.fn("seedUnheldFollowup")(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make("thread:held-followup-parent");
+  const projectId = ProjectId.make("project:held-followup");
+  const runId = RunId.make("run:held-followup-parent");
+  const rootNodeId = NodeId.make("node:held-followup-parent");
+  yield* seedParentWithTerminalTask({
+    threadId,
+    projectId,
+    runId,
+    rootNodeId,
+    taskId: NodeId.make("node:held-followup-seed"),
+    deliveryState: "acknowledged",
+    now,
+  });
+  const child = yield* seedRestartCancelledChild({
+    parentThreadId: threadId,
+    projectId,
+    parentRunId: runId,
+    rootNodeId,
+    name: "held-followup-child",
+    completionWake: "always",
+    continuationPending: false,
+    now,
+  });
+  yield* orchestrator.recoverDelegatedTasks;
+  const parent = yield* orchestrator.getThreadProjection(threadId);
+  const original = parent.subagents.find((task) => task.id === child.taskId);
+  if (original === undefined) return yield* Effect.die("Original delegated task is missing");
+  const taskId = NodeId.make("node:held-followup");
+  const held = runEvent({
+    threadId: child.childThreadId,
+    runId: RunId.make("run:held-followup"),
+    ordinal: 2,
+    status: "queued",
+    now,
+  });
+  yield* sink.write({
+    commandId: reconcileCommandId("held-followup"),
+    events: [
+      {
+        ...held,
+        payload: {
+          ...held.payload,
+          delegatedTaskId: taskId,
+          startedAt: null,
+          completedAt: null,
+          queueHeld: false,
+        },
+      },
+      {
+        id: EventId.make("event:held-followup-task"),
+        type: "subagent.updated",
+        threadId,
+        runId,
+        nodeId: taskId,
+        occurredAt: now,
+        payload: {
+          ...original,
+          id: taskId,
+          status: "pending",
+          result: null,
+          completedAt: null,
+          completionDelivery: { state: "pending", observedByRunId: null },
+        },
+      },
+    ],
+  });
+  return { sink, orchestrator, threadId, taskId, childThreadId: child.childThreadId };
+});
+
+export const recoverChildWithIndependentParentWake = Effect.fn(
+  "recoverChildWithIndependentParentWake",
+)(function* () {
+  const sink = yield* EventSink.EventSinkV2;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make("thread:reoffer");
+  const projectId = ProjectId.make("project:reoffer");
+  const unrelatedRunId = RunId.make("run:reoffer:unrelated");
+  const ownerRunId = RunId.make("run:reoffer:owner");
+  const unrelatedTaskId = NodeId.make("node:reoffer:unrelated");
+  const rootNodeId = NodeId.make("node:reoffer:owner");
+  yield* seedParentWithTerminalTask({
+    threadId,
+    projectId,
+    rootNodeId,
+    runId: unrelatedRunId,
+    taskId: unrelatedTaskId,
+    deliveryState: "claimed",
+    deliveryTaskIds: [unrelatedTaskId],
+    completionWake: "always",
+    now,
+  });
+  const child = yield* seedRestartCancelledChild({
+    parentThreadId: threadId,
+    projectId,
+    parentRunId: ownerRunId,
+    rootNodeId,
+    name: "reoffer-child",
+    completionWake: "always",
+    continuationPending: false,
+    now,
+  });
+  const owner = runEvent({
+    threadId,
+    runId: ownerRunId,
+    ordinal: 2,
+    status: "completed",
+    now,
+    providerThreadId: parentProviderThreadId(threadId),
+    delegatedCompletion: {
+      disposition: "open",
+      nextGeneration: 2,
+      delivery: {
+        generation: 1,
+        messageId: MessageId.make("message:reoffer:owner"),
+        taskIds: [child.taskId],
+      },
+    },
+  });
+  yield* sink.write({ commandId: reconcileCommandId("reoffer-owner"), events: [owner] });
+  const control = yield* orchestrator.getThreadProjection(child.childThreadId);
+  const sourceRun = control.runs.at(-1);
+  if (sourceRun === undefined) return yield* Effect.die("Child run missing");
+  yield* orchestrator.recoverDelegatedTask(child.childThreadId, { sourceRunId: sourceRun.id });
+  return yield* requests.take;
+});
+
+export const finishFollowupWithAwaitedTask = Effect.fn("finishFollowupWithAwaitedTask")(
+  function* () {
+    const seeded = yield* seedUnheldFollowup();
+    const { orchestrator, sink, childThreadId, taskId } = seeded;
+    const now = yield* DateTime.now;
+    const child = yield* orchestrator.getThreadProjection(childThreadId);
+    const followup = child.runs.find((run) => run.delegatedTaskId === taskId);
+    if (followup === undefined) return yield* Effect.die("Follow-up run missing");
+    const providerThread: OrchestrationV2ProviderThread = {
+      id: ProviderThreadId.make("provider-thread:held-followup-child"),
+      driver,
+      providerInstanceId: modelSelection.instanceId,
+      providerSessionId: null,
+      appThreadId: childThreadId,
+      ownerNodeId: null,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 2,
+      lastRunOrdinal: 2,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      pendingBackgroundTasks: [{ kind: "command", taskId: "followup-command", awaited: true }],
+    };
+    yield* sink.write({
+      commandId: reconcileCommandId("finish-followup-with-await"),
+      events: [
+        {
+          id: EventId.make("event:followup-roster"),
+          type: "provider-thread.updated",
+          threadId: childThreadId,
+          runId: followup.id,
+          occurredAt: now,
+          payload: providerThread,
+        },
+        {
+          id: EventId.make("event:completed-followup"),
+          type: "run.updated",
+          threadId: childThreadId,
+          runId: followup.id,
+          occurredAt: now,
+          payload: {
+            ...followup,
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            providerThreadId: providerThread.id,
+          },
+        },
+      ],
+    });
+    return {
+      ...seeded,
+      now,
+      followup,
+      providerThread,
+      pending: orchestrator.delegatedTaskResultPending(childThreadId, taskId),
+    };
+  },
+);
+
+export const captureDeliveryQueries = Effect.fn("captureDeliveryQueries")(function* <E, R>(
+  effect: Effect.Effect<unknown, E, R>,
+) {
+  const statements: string[] = [];
+  const tracer = Tracer.make({
+    span(options) {
+      const span = new Tracer.NativeSpan(options);
+      const end = span.end.bind(span);
+      span.end = (time, exit) => {
+        end(time, exit);
+        const query = span.attributes.get("db.query.text");
+        if (typeof query === "string") statements.push(query);
+      };
+      return span;
+    },
+  });
+  yield* effect.pipe(Effect.withTracer(tracer));
+  return statements;
+});
+
+export const followupRosterSettlement = Effect.fn("followupRosterSettlement")(function* () {
+  const { sink, orchestrator, providerThread, childThreadId, taskId, threadId, now, followup } =
+    yield* finishFollowupWithAwaitedTask();
+  const unrelated: OrchestrationV2PendingBackgroundTask = {
+    kind: "command",
+    taskId: "unrelated",
+    awaited: true,
+  };
+  const legacy: OrchestrationV2PendingBackgroundTask = {
+    kind: "command",
+    taskId: "legacy",
+    awaited: true,
+  };
+  const base = yield* orchestrator.getThreadProjection(childThreadId);
+  const rosterEvent = (
+    id: string,
+    tasks: OrchestrationV2PendingBackgroundTask[],
+    runId?: RunId,
+  ) => ({
+    id: EventId.make(`event:followup-roster:${id}`),
+    type: "provider-thread.updated" as const,
+    threadId: childThreadId,
+    ...(runId === undefined ? {} : { runId }),
+    occurredAt: now,
+    payload: { ...providerThread, pendingBackgroundTasks: tasks },
+  });
+  let replay = applyToProjection(
+    { ...base, providerThreads: [] },
+    rosterEvent("replay", [...(providerThread.pendingBackgroundTasks ?? [])], followup.id),
+  );
+  const update = Effect.fn("test.followupRosterUpdate")(function* (
+    id: string,
+    tasks: OrchestrationV2PendingBackgroundTask[],
+    runId?: RunId,
+  ) {
+    const event = rosterEvent(id, tasks, runId);
+    replay = applyToProjection(replay, event);
+    yield* sink.write({ events: [event] });
+  });
+  const original = [...(providerThread.pendingBackgroundTasks ?? [])];
+  yield* update("legacy", [...original, legacy]);
+  yield* update(
+    "unrelated",
+    [...original, legacy, unrelated],
+    RunId.make("run:unrelated-followup"),
+  );
+  const { providerThreads } = yield* orchestrator.getThreadProjection(childThreadId);
+  const tasks = providerThreads.find(
+    (thread) => thread.id === providerThread.id,
+  )?.pendingBackgroundTasks;
+  const replayTasks = replay.providerThreads.find(
+    (thread) => thread.id === providerThread.id,
+  )?.pendingBackgroundTasks;
+  const ownerFor = (id: string) => tasks?.find((task) => task.taskId === id)?.runId;
+  const afterSequence = yield* sink.latestSequence();
+  yield* update("owned-task-exit", [legacy, unrelated], RunId.make("run:later-followup"));
+  const result = yield* sink
+    .stream({ threadId, afterSequence, eventType: "subagent.updated" })
+    .pipe(
+      Stream.filter(
+        ({ event }) =>
+          event.type === "subagent.updated" &&
+          event.payload.id === taskId &&
+          event.payload.result !== null,
+      ),
+      Stream.map(({ event }) => (event.type === "subagent.updated" ? event.payload.result : null)),
+      Stream.runHead,
+    );
+  return {
+    owned: ownerFor("followup-command"),
+    otherOwner: ownerFor("unrelated"),
+    unattributed: ownerFor("legacy"),
+    result: Option.getOrNull(result),
+    tasks,
+    replayTasks,
+  };
+});

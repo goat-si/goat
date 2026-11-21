@@ -68,49 +68,9 @@ export const withLocalTracing = <A, E, R>(effect: Effect.Effect<A, E, R>): Effec
     ),
   );
 
-function cleanTraceStack(error: Error): string {
-  const stack = error.stack ?? `${error.name}: ${error.message}`;
-  const lines = stack.split("\n");
-  const effectFrameIndex = lines.findIndex(
-    (line, index) => index > 0 && /(?:Generator\.next|~effect\/Effect)/.test(line),
-  );
-  return effectFrameIndex < 0 ? stack : lines.slice(0, effectFrameIndex).join("\n");
-}
-
-function traceSafeError(value: unknown, seen = new WeakSet<object>()): Error {
-  const message =
-    value instanceof Error
-      ? value.message
-      : typeof value === "object" &&
-          value !== null &&
-          "message" in value &&
-          typeof value.message === "string"
-        ? value.message
-        : String(value);
-
-  let cause: Error | undefined;
-  if (typeof value === "object" && value !== null && !seen.has(value)) {
-    seen.add(value);
-    if ("cause" in value && value.cause !== undefined) {
-      cause = traceSafeError(value.cause, seen);
-    }
-  }
-
-  const error = new Error(message, cause ? { cause } : undefined);
-  if (value instanceof Error) {
-    error.name = value.name;
-    error.stack = cleanTraceStack(value);
-  } else if (
-    typeof value === "object" &&
-    value !== null &&
-    "name" in value &&
-    typeof value.name === "string"
-  ) {
-    error.name = value.name;
-  }
-  if (cause) {
-    error.stack = `${error.stack ?? `${error.name}: ${error.message}`}\nCaused by: ${cause.stack ?? `${cause.name}: ${cause.message}`}`;
-  }
+function traceSafeError(): Error {
+  const error = new Error("Relay operation failed");
+  error.stack = "Error: Relay operation failed";
   return error;
 }
 
@@ -122,10 +82,10 @@ function traceSafeExit(exit: Exit.Exit<unknown, unknown>): Exit.Exit<unknown, un
     Cause.fromReasons(
       exit.cause.reasons.map((reason) => {
         if (Cause.isFailReason(reason)) {
-          return Cause.makeFailReason(traceSafeError(reason.error));
+          return Cause.makeFailReason(traceSafeError());
         }
         if (Cause.isDieReason(reason)) {
-          return Cause.makeDieReason(traceSafeError(reason.defect));
+          return Cause.makeDieReason(traceSafeError());
         }
         return reason;
       }),
@@ -133,13 +93,80 @@ function traceSafeExit(exit: Exit.Exit<unknown, unknown>): Exit.Exit<unknown, un
   );
 }
 
-function nonInterferingTracer(delegate: Tracer.Tracer): Tracer.Tracer {
+const RELAY_SPAN_NAMES = new Set([
+  "environment.relay.request",
+  "EnvironmentAuth.authenticateHttpRequest",
+  "relay.connection.attempt",
+  "clientRuntime.managedRelay.authorize",
+  "clientRuntime.managedRelay.connectEnvironment",
+  "clientRuntime.managedRelay.cooldown",
+  "clientRuntime.managedRelay.createEnvironmentLinkChallenge",
+  "clientRuntime.managedRelay.deleteAccount",
+  "clientRuntime.managedRelay.exchangeAccessToken",
+  "clientRuntime.managedRelay.getAccountDeletion",
+  "clientRuntime.managedRelay.getAgentActivitySnapshot",
+  "clientRuntime.managedRelay.getEnvironmentStatus",
+  "clientRuntime.managedRelay.invalidateAccessToken",
+  "clientRuntime.managedRelay.linkEnvironment",
+  "clientRuntime.managedRelay.listDevices",
+  "clientRuntime.managedRelay.listEnvironments",
+  "clientRuntime.managedRelay.obtainAccessToken",
+  "clientRuntime.managedRelay.readmitKey",
+  "clientRuntime.managedRelay.registerDevice",
+  "clientRuntime.managedRelay.registerLiveActivity",
+  "clientRuntime.managedRelay.resetTokenCache",
+  "clientRuntime.managedRelay.tokenCacheCriticalSection",
+  "clientRuntime.managedRelay.unlinkEnvironment",
+  "clientRuntime.managedRelay.unregisterDevice",
+  "clientRuntime.managedRelayAccount.make",
+  "clientRuntime.managedRelaySession.deregisterEnvironment",
+  "clientRuntime.managedRelaySession.readClerkToken",
+]);
+const RELAY_NUMERIC_ATTRIBUTES = new Set([
+  "http.response.status_code",
+  "http.status_code",
+  "connection.attempt",
+  "connection.generation",
+  "connection.retry.failure_count",
+  "connection.retry.delay_ms",
+]);
+
+function isSafeRelayAttribute(key: string, value: unknown): boolean {
+  return (
+    (RELAY_NUMERIC_ATTRIBUTES.has(key) && typeof value === "number" && Number.isFinite(value)) ||
+    (key === "url.scheme" && (value === "http" || value === "https"))
+  );
+}
+
+export function nonInterferingTracer(delegate: Tracer.Tracer): Tracer.Tracer {
   return Tracer.make({
     span(options) {
-      const span = delegate.span(options);
+      const span = delegate.span({
+        ...options,
+        name: RELAY_SPAN_NAMES.has(options.name) ? options.name : "relay.operation",
+        links: options.links.map((link) => ({ ...link, attributes: {} })),
+      });
+      const attribute = span.attribute.bind(span);
+      const addLinks = span.addLinks.bind(span);
+      span.attribute = (key, value) => {
+        if (isSafeRelayAttribute(key, value)) attribute(key, value);
+      };
+      span.event = () => {};
+      span.addLinks = (links) => addLinks(links.map((link) => ({ ...link, attributes: {} })));
       const end = span.end.bind(span);
       span.end = (endTime, exit) => {
         try {
+          if (span.attributes instanceof Map) {
+            for (const [key, value] of span.attributes) {
+              if (!isSafeRelayAttribute(key, value)) span.attributes.delete(key);
+            }
+          }
+          if (Array.isArray(span.links)) {
+            for (let index = 0; index < span.links.length; index += 1) {
+              const link = span.links[index];
+              if (link !== undefined) span.links[index] = { ...link, attributes: {} };
+            }
+          }
           end(endTime, traceSafeExit(exit));
         } catch {}
       };

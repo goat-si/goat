@@ -4,6 +4,7 @@ import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,6 +17,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 import { sshHostsRefusal } from "./hostAccess.ts";
+import { REMOTE_HOME_OWNER_WAIT_MARKER } from "./remoteHomeOwnerWait.ts";
 import {
   isRemoteShellScript,
   remoteDeadlineSettleMs,
@@ -130,8 +132,10 @@ export interface RunSshCommandOptions extends SshAuthOptions {
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string | Uint8Array;
+  readonly stdinSuffix?: Uint8Array;
   readonly onStdinProgress?: (sentBytes: number) => void;
   readonly timeoutMs?: number;
+  readonly ownerWaitTimeoutMs?: number;
   readonly timeoutStage?: "runtime-install" | "runtime-launch" | "pairing";
   /** Keep the end of long failed-command stdout, where the final cause usually is. */
   readonly keepErrorOutputTail?: boolean;
@@ -204,6 +208,10 @@ export function baseSshArgs(
     `BatchMode=${input?.batchMode ?? "no"}`,
     "-o",
     "ConnectTimeout=10",
+    "-o",
+    "RemoteCommand=none",
+    "-o",
+    "RequestTTY=no",
     ...(target.port !== null ? ["-p", String(target.port)] : []),
   ];
 }
@@ -275,7 +283,7 @@ const SSH_CHATTER_RE =
 // failure. Buffer only short prefixes so a long line cannot grow without bound.
 export const sshDiagnosticChunks = <E>(
   stream: Stream.Stream<Uint8Array, E>,
-  observeLine?: (line: string) => void,
+  observeLine?: (line: string) => boolean | void,
 ): Stream.Stream<string, E> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -284,7 +292,7 @@ export const sshDiagnosticChunks = <E>(
       let mode: "buffer" | "keep" | "drop" = "buffer";
       const diagnostic = (line: string) => {
         if (cost?.active && /^(?:debug1: )?Authenticated to /u.test(line)) cost.authentications++;
-        observeLine?.(line.replace(/\r?\n$/u, ""));
+        if (observeLine?.(line.replace(/\r?\n$/u, "")) === true) return "";
         const text = line.replace(
           /^debug1: (?:kex_exchange_identification|ssh_exchange_identification): banner line \d+: (Tailscale is stopped\.|Logged out\.|Machine is not yet approved by tailnet admin\.)(\r?\n)?$/u,
           "Tailscale proxy status: $1$2",
@@ -367,6 +375,22 @@ function describeSshTarget(target: DesktopSshEnvironmentTarget): string {
 
 const UNREACHABLE_HINT = "Check the network or VPN connection to that host.";
 
+function describeHostKeyFailure(
+  target: DesktopSshEnvironmentTarget,
+  hostSpec: string,
+  stderr: string,
+): string | undefined {
+  if (!/^Host key verification failed\.?\r?$/imu.test(stderr)) return undefined;
+  const command = /^[a-z0-9_.@:-]+$/iu.test(hostSpec)
+    ? `Run \`ssh${target.port === null ? "" : ` -p ${target.port}`} -- ${hostSpec}\` in a terminal.`
+    : "Connect to this host with SSH in a terminal.";
+  const changed = /REMOTE HOST IDENTIFICATION HAS CHANGED/iu.test(stderr);
+  const reason = changed
+    ? "The SSH host key has changed. Only remove the existing key if you expected it to change."
+    : "SSH could not verify the host key.";
+  return `${reason} ${command} Check that the host key fingerprint matches the one you expect, then reconnect.\n\n${stderr.trim()}`;
+}
+
 /**
  * ssh exits 255 for its own failures. When the connection itself failed, the message leads
  * with the host and the address ssh dialed, so it reads as a network problem instead of a
@@ -413,9 +437,11 @@ function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
 function stdinStream(
   input: string | Uint8Array | undefined,
   onProgress?: (sentBytes: number) => void,
+  suffix?: Uint8Array,
 ) {
   if (input === undefined) return Stream.empty;
   const bytes = typeof input === "string" ? encoder.encode(input) : input;
+  const totalBytes = bytes.byteLength + (suffix?.byteLength ?? 0);
   return Stream.unfold(0, (offset) =>
     Effect.sync(() => {
       // The stdin sink pulls again only after writing the preceding chunk and draining it.
@@ -426,9 +452,13 @@ function stdinStream(
           // A disposed progress observer must not interrupt an upload.
         }
       }
-      if (offset === bytes.byteLength) return undefined;
-      const end = Math.min(offset + SSH_STDIN_CHUNK_BYTES, bytes.byteLength);
-      return [bytes.subarray(offset, end), end] as const;
+      if (offset === totalBytes) return undefined;
+      const afterPrefix = offset >= bytes.byteLength;
+      const chunkOffset = afterPrefix ? offset - bytes.byteLength : offset;
+      const body = afterPrefix ? suffix : bytes;
+      if (!body) return undefined;
+      const chunk = body.subarray(chunkOffset, chunkOffset + SSH_STDIN_CHUNK_BYTES);
+      return [chunk, offset + chunk.byteLength] as const;
     }),
   );
 }
@@ -441,7 +471,11 @@ function stdinStream(
  */
 const remoteScriptSettle = (input: RunSshCommandOptions, spawned: boolean) =>
   spawned && typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
-    ? { remoteSettleMs: remoteDeadlineSettleMs(input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS) }
+    ? {
+        remoteSettleMs: remoteDeadlineSettleMs(
+          input.ownerWaitTimeoutMs ?? input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS,
+        ),
+      }
     : {};
 
 const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(function* (
@@ -453,6 +487,8 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     authenticated: boolean;
     proxyPending: boolean;
     spawned: boolean;
+    ownerWaiting: boolean;
+    ownerWaitSeen: Deferred.Deferred<void>;
     stderr: string;
     stdoutChunks: Uint8Array[];
   },
@@ -511,9 +547,13 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         stdin: {
           stream: stdinStream(
             typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
-              ? withRemoteDeadline(input.stdin, input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS)
+              ? withRemoteDeadline(
+                  input.stdin,
+                  input.ownerWaitTimeoutMs ?? input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS,
+                )
               : input.stdin,
             input.onStdinProgress,
+            input.stdinSuffix,
           ),
           endOnDone: true,
         },
@@ -549,6 +589,11 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     [
       collectProcessOutput(child.stdout, progress.stdoutChunks),
       sshDiagnosticChunks(child.stderr, (line) => {
+        if (input.ownerWaitTimeoutMs !== undefined && line === REMOTE_HOME_OWNER_WAIT_MARKER) {
+          progress.ownerWaiting = true;
+          Deferred.doneUnsafe(progress.ownerWaitSeen, Effect.void);
+          return true;
+        }
         // A VERBOSE jump can report success without DEBUG1 forwarding details.
         // Ignore its auth milestones until the final target starts its own login.
         if (
@@ -630,7 +675,10 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       stdout: diagnosticStdout,
       stderr: diagnosticStderr,
       message:
-        (exitCode === 255 ? describeSshConnectionFailure(target, diagnosticStderr) : undefined) ??
+        (exitCode === 255
+          ? (describeSshConnectionFailure(target, diagnosticStderr) ??
+            describeHostKeyFailure(target, hostSpec, diagnosticStderr))
+          : undefined) ??
         normalizeSshErrorMessage({
           stdout: diagnosticStdout,
           stderr: diagnosticStderr,
@@ -655,18 +703,44 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
   SshCommandError | SshInvalidTargetError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
+  const ownerWaitSeen = yield* Deferred.make<void>();
+  const startedAt = yield* Clock.currentTimeMillis;
   const progress = {
     authenticating: false,
     authenticated: false,
     proxyPending: false,
     spawned: false,
+    ownerWaiting: false,
+    ownerWaitSeen,
     stderr: "",
     stdoutChunks: [] as Uint8Array[],
   };
-  return yield* Effect.scopedWith((commandScope) =>
+  const command = Effect.scopedWith((commandScope) =>
     runSshCommandInScope(target, input, commandScope, progress),
-  ).pipe(
-    Effect.timeoutOption(Duration.millis(input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS)),
+  );
+  const initialTimeoutMs = input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS;
+  const ownerWaitTimeoutMs = input.ownerWaitTimeoutMs;
+  const timed =
+    ownerWaitTimeoutMs === undefined
+      ? command.pipe(Effect.timeoutOption(Duration.millis(initialTimeoutMs)))
+      : Effect.raceFirst(
+          command.pipe(Effect.asSome),
+          Deferred.await(ownerWaitSeen).pipe(
+            Effect.timeoutOption(Duration.millis(initialTimeoutMs)),
+            Effect.flatMap((seen) => {
+              if (Option.isNone(seen)) return Effect.void;
+              return Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  Effect.sleep(
+                    Duration.millis(Math.max(0, ownerWaitTimeoutMs - (now - startedAt))),
+                  ),
+                ),
+              );
+            }),
+            Effect.as(Option.none<SshCommandResult>()),
+          ),
+        );
+  return yield* timed.pipe(
     Effect.flatMap((result) =>
       Option.match(result, {
         onSome: Effect.succeed,
@@ -680,7 +754,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               hasStdin: input.stdin !== undefined,
             });
             const host = describeSshTarget(target);
-            const elapsed = `${input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS}ms`;
+            const elapsed = `${progress.ownerWaiting ? ownerWaitTimeoutMs : initialTimeoutMs}ms`;
             const operation =
               input.timeoutStage === "runtime-install"
                 ? "GOAT runtime install/download"
@@ -689,11 +763,13 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
                   : input.timeoutStage === "pairing"
                     ? "GOAT pairing"
                     : "Remote SSH command";
-            const message = progress.authenticated
-              ? `${operation} on ${host} timed out after ${elapsed}.`
-              : progress.authenticating
-                ? `SSH authentication timed out for ${host} after ${elapsed}. Unlock your SSH key or ssh-agent, then reconnect.`
-                : `SSH connection to ${host} timed out after ${elapsed} before authentication began. Check the network or SSH ProxyCommand.`;
+            const message = progress.ownerWaiting
+              ? `Remote GOAT on ${host} is updating or did not become ready within ${elapsed}.`
+              : progress.authenticated
+                ? `${operation} on ${host} timed out after ${elapsed}.`
+                : progress.authenticating
+                  ? `SSH authentication timed out for ${host} after ${elapsed}. Unlock your SSH key or ssh-agent, then reconnect.`
+                  : `SSH connection to ${host} timed out after ${elapsed} before authentication began. Check the network or SSH ProxyCommand.`;
             const diagnosticStderr = redactSshErrorOutput(
               progress.stderr,
               input.keepErrorOutputTail,

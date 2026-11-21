@@ -15,6 +15,42 @@ import {
 } from "./testing/gitFixture.ts";
 
 it.layer(layerTest)("merge conflict markers", (it) => {
+  it.effect("refuses unresolved UTF-16 conflicts without changing HEAD", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const { initialBranch } = yield* initRepoWithCommit(cwd);
+      const path = yield* Path.Path;
+      const writeUtf16 = (text: string) =>
+        Effect.sync(() =>
+          NodeFS.writeFileSync(
+            path.join(cwd, "README.md"),
+            Buffer.from(`\ufeff${text}`, "utf16le"),
+          ),
+        );
+      yield* writeTextFile(cwd, ".gitattributes", "README.md text working-tree-encoding=UTF-16\n");
+      yield* writeUtf16("base\n");
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", "encoding"]);
+      yield* git(cwd, ["checkout", "-b", "feature"]);
+      yield* writeUtf16("feature\n");
+      yield* git(cwd, ["commit", "-am", "feature"]);
+      yield* git(cwd, ["checkout", initialBranch]);
+      yield* writeUtf16("main\n");
+      yield* git(cwd, ["commit", "-am", "main"]);
+      const head = yield* git(cwd, ["rev-parse", "HEAD"]);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const merge = yield* driver.execute({
+        operation: "test.merge",
+        cwd,
+        args: ["merge", "feature"],
+        allowNonZeroExit: true,
+      });
+      assert.equal(merge.exitCode, 1);
+      const result = yield* driver.commit(cwd, "merge", "", { stage: {} }).pipe(Effect.result);
+      assert.isTrue(Result.isFailure(result), "committed an unresolved conflict");
+      assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), head);
+    }),
+  );
   it.effect.each([
     { location: "root", conflict: false },
     { location: "nested", conflict: false },

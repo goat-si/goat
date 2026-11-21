@@ -4,6 +4,7 @@ import { decodeCodexHomeCatalogArg as decodeCatalogArg } from "./CodexHomeRouteC
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -12,6 +13,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
+import { waitForCodexStartupWork } from "./CodexProbeShutdown.ts";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -76,7 +78,6 @@ import {
   type CodexResetCreditsSummary,
 } from "./codexUsageLimits.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import packageJson from "../../package.json" with { type: "json" };
 import { parseCodexSkillsListResponse } from "./codexSkillsList.ts";
 const isHomeRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
@@ -109,7 +110,6 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
 const CODEX_CONFIG_PROBE_TIMEOUT_MS = 3_000;
 const CODEX_CATALOG_REFRESH_POLL = "100 millis" as const;
-const CODEX_CLIENT_NAME = "T3 Code";
 // Handshake plus account/models/skills requests can exceed the shared 10s probe budget.
 const CODEX_AUTH_PROBE_TIMEOUT_MS = 20_000;
 const CODEX_DISCOVERY_MARGIN_MS = 250;
@@ -375,26 +375,8 @@ const requestCodexChatGptModels = Effect.fn("requestCodexChatGptModels")(functio
   );
 });
 
-/** Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models. */
-export const codexAppServerEnvironment = (
-  environment: NodeJS.ProcessEnv | undefined,
-): NodeJS.ProcessEnv => ({
-  CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
-  ...environment,
-});
-
-export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
-  return {
-    clientInfo: {
-      name: CODEX_CLIENT_NAME,
-      title: CODEX_CLIENT_NAME,
-      version: packageJson.version,
-    },
-    capabilities: {
-      experimentalApi: true,
-    },
-  };
-}
+import { codexAppServerEnvironment, buildCodexInitializeParams } from "./CodexClientIdentity.ts";
+export { codexAppServerEnvironment, buildCodexInitializeParams } from "./CodexClientIdentity.ts";
 
 const codexProcessEnvironment = Effect.fn("codexProcessEnvironment")(function* (input: {
   readonly homePath?: string | undefined;
@@ -492,7 +474,7 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
         );
       }
     }
-    return { client, initialize, effectiveBaseUrl };
+    return { client, initialize, effectiveBaseUrl, pid: child.pid };
   },
   Effect.mapError((error) =>
     isHomeRouteUnavailable(error)
@@ -513,7 +495,24 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly skipNativeUsage?: boolean;
 }) {
   const spawnedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
-  const { client, initialize, effectiveBaseUrl } = yield* withCodexAppServerClient(input);
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const platform = yield* HostProcess.Platform;
+  const processScope = yield* Scope.make();
+  let pid: number | undefined;
+  yield* Effect.addFinalizer(() => {
+    const close = Scope.close(processScope, Exit.void);
+    if (pid === undefined || (platform !== "darwin" && platform !== "linux")) return close;
+    const busy = spawnAndCollect("pgrep", ChildProcess.make("pgrep", ["-g", `${pid}`])).pipe(
+      Effect.map(({ stdout }) =>
+        stdout.split("\n").some((line) => line.trim() !== "" && Number(line) !== pid),
+      ),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    return waitForCodexStartupWork(busy, close).pipe(Effect.forkDetach, Effect.asVoid);
+  });
+  const opened = yield* withCodexAppServerClient(input).pipe(Scope.provide(processScope));
+  pid = opened.pid;
+  const { client, initialize, effectiveBaseUrl } = opened;
 
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
   const version = versionMatch ? versionMatch[1] : undefined;

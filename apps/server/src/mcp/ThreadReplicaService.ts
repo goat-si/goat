@@ -1,3 +1,4 @@
+import { verifyManagedCheckout } from "../orchestration-v2/goat/restoreSnapshot.ts";
 // @effect-diagnostics nodeBuiltinImport:off - hashes bounded replica bytes, never credentials.
 import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
 import { admitLaunch } from "./pressureAdmission.ts";
@@ -489,9 +490,18 @@ const make = Effect.gen(function* () {
                 applied.type === "base_missing" ? "base_missing" : "bundle_identity_mismatch",
               );
             yield* fs.makeDirectory(path.dirname(worktreePath), { recursive: true });
-            // Only this operation's private worktree is reset; captured changes remain uncommitted.
             yield* script(
-              `set -eu\ncd ${quote(cwd)}\nif [ ! -d ${quote(worktreePath)} ]; then git -c core.hooksPath=/dev/null worktree add --quiet -b ${quote(branch)} ${quote(worktreePath)} ${quote(`refs/heads/goat/recovery-snapshots/${key}`)}; fi\ncd ${quote(worktreePath)}\n[ "$(git rev-parse HEAD)" = ${quote(input.replica.commitOid)} ]\ngit -c core.hooksPath=/dev/null reset --mixed ${quote(input.replica.headOid)} >/dev/null\n`,
+              `set -eu\ncd ${quote(cwd)}\nif [ ! -d ${quote(worktreePath)} ]; then git -c core.hooksPath=/dev/null worktree add --quiet -b ${quote(branch)} ${quote(worktreePath)} ${quote(`refs/heads/goat/recovery-snapshots/${key}`)}; fi\n`,
+            );
+            yield* verifyManagedCheckout({
+              projectCwd: cwd,
+              worktreePath,
+              branch,
+              expectedHead: input.replica.commitOid,
+            }).pipe(Effect.mapError(() => refused("worktree_identity_mismatch")));
+            // Only this operation's verified checkout is reset; captured changes remain uncommitted.
+            yield* script(
+              `set -eu\ncd ${quote(worktreePath)}\n[ "$(git symbolic-ref --quiet HEAD)" = ${quote(`refs/heads/${branch}`)} ]\n[ "$(git rev-parse HEAD)" = ${quote(input.replica.commitOid)} ]\ngit -c core.hooksPath=/dev/null reset --mixed ${quote(input.replica.headOid)} >/dev/null\n`,
             );
             yield* allowed(authorize);
           }).pipe(Effect.result);

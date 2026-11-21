@@ -1,5 +1,8 @@
+import { gtFallback, type useGT } from "gt-react";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
 import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
+
+export type DesktopUpdateTranslate = ReturnType<typeof useGT>;
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
@@ -71,70 +74,111 @@ export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null):
   return state?.status === "downloading";
 }
 
-export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
+export function getArm64IntelBuildWarningDescription(
+  state: DesktopUpdateState,
+  gt: DesktopUpdateTranslate = gtFallback,
+): string {
   if (!shouldShowArm64IntelBuildWarning(state)) {
-    return "This install is using the correct architecture.";
+    return gt("This install is using the correct architecture.");
   }
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.";
+    return gt(
+      "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.",
+    );
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.";
+    return gt(
+      "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.",
+    );
   }
-  return "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return gt(
+    "This Mac has Apple Silicon, but GOAT is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.",
+  );
 }
 
-export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
-  if (!state.enabled) return state.message ?? "Automatic updates are disabled.";
-  const actionTooltip = getDesktopUpdateActionTooltip(state);
-  return state.installationNotice ? `${actionTooltip}\n${state.installationNotice}` : actionTooltip;
+export function getDesktopUpdateButtonTooltip(
+  state: DesktopUpdateState,
+  gt: DesktopUpdateTranslate = gtFallback,
+): string {
+  if (!state.enabled)
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ?? gt("Automatic updates are disabled.")
+    );
+  const actionTooltip = getDesktopUpdateActionTooltip(state, gt);
+  const installationNotice = state.installationNotice
+    ? translateDesktopUpdateMessage(state.installationNotice, gt)
+    : null;
+  return installationNotice ? `${actionTooltip}\n${installationNotice}` : actionTooltip;
 }
 
-function getDesktopUpdateActionTooltip(state: DesktopUpdateState): string {
+function getDesktopUpdateActionTooltip(
+  state: DesktopUpdateState,
+  gt: DesktopUpdateTranslate,
+): string {
   if (
     state.notAppliedVersion !== undefined &&
     (state.status === "available" || state.status === "downloaded") &&
     getDesktopUpdateDownloadedVersion(state) === state.notAppliedVersion
   ) {
-    return `Update ${state.notAppliedVersion} did not apply. Click to retry.`;
+    return gt("Update {version} did not apply. Click to retry.", {
+      version: state.notAppliedVersion,
+    });
+  }
+  if (
+    (state.status === "available" || state.status === "error") &&
+    state.errorContext === "download" &&
+    state.availableVersion
+  ) {
+    return gt("Download failed for {version}. Click to retry.", {
+      version: state.availableVersion,
+    });
   }
   if (state.status === "available") {
-    return `Update ${state.availableVersion ?? "available"} ready to download`;
+    return state.availableVersion
+      ? gt("Update {version} ready to download", { version: state.availableVersion })
+      : gt("Update available to download");
   }
   if (state.status === "downloading") {
-    const progress =
-      typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
-    return `Downloading update${progress}`;
+    return typeof state.downloadPercent === "number"
+      ? gt("Downloading update ({percent}%)", { percent: Math.floor(state.downloadPercent) })
+      : gt("Downloading update");
   }
   if (state.status === "downloaded") {
+    const version = state.downloadedVersion ?? state.availableVersion;
     const waiting =
-      state.pendingRestartReason === "busy" || state.pendingRestartReason === "unknown"
-        ? " It also installs when you quit GOAT."
-        : "";
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.${waiting}`;
+      state.pendingRestartReason === "busy" || state.pendingRestartReason === "unknown";
+    const downloaded = version
+      ? gt("Update {version} downloaded. Click to restart and install.", { version })
+      : gt("Update downloaded. Click to restart and install.");
+    return waiting ? `${downloaded} ${gt("It also installs when you quit GOAT.")}` : downloaded;
   }
   if (state.status === "error") {
-    if (state.errorContext === "download" && state.availableVersion) {
-      return `Download failed for ${state.availableVersion}. Click to retry.`;
-    }
     if (state.errorContext === "install" && state.downloadedVersion) {
-      return `Install failed for ${state.downloadedVersion}. Click to retry.`;
+      return gt("Install failed for {version}. Click to retry.", {
+        version: state.downloadedVersion,
+      });
     }
     if (state.downloadedVersion) {
-      return `Update ${state.downloadedVersion} downloaded. Click to restart and install.`;
+      return gt("Update {version} downloaded. Click to restart and install.", {
+        version: state.downloadedVersion,
+      });
     }
-    return state.message ?? "Update failed";
+    return translateDesktopUpdateMessage(state.message, gt) ?? gt("Update failed");
   }
-  return "Up to date";
+  return gt("Up to date");
 }
 
 export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
+  gt: DesktopUpdateTranslate = gtFallback,
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  return `Install update${version ? ` ${version}` : ""} and restart GOAT?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
+  const question = version
+    ? gt("Install update {version} and restart GOAT?", { version })
+    : gt("Install update and restart GOAT?");
+  return `${question}\n\n${gt("Any running tasks will be interrupted. Make sure you're ready before continuing.")}`;
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {
@@ -142,6 +186,12 @@ export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): 
   if (typeof result.state.message !== "string") return null;
   const message = result.state.message.trim();
   return message.length > 0 ? message : null;
+}
+
+export function getDesktopUpdateInstallError(result: DesktopUpdateActionResult): string | null {
+  if (result.completed || result.state.errorContext !== "install")
+    return getDesktopUpdateActionError(result);
+  return result.state.message?.trim() || null;
 }
 
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {
@@ -156,33 +206,88 @@ export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
 }
 
 /** Describes the app-owned automatic install policy and pending recovery. */
-export function getDesktopUpdateStatusText(state: DesktopUpdateState): string {
-  if (!state.enabled) return state.message ?? "Automatic updates are disabled.";
-  if (state.errorContext === "download" && state.message) return state.message;
-  const checkError = getDesktopUpdateCheckError(state);
+export function getDesktopUpdateStatusText(
+  state: DesktopUpdateState,
+  gt: DesktopUpdateTranslate = gtFallback,
+): string {
+  if (!state.enabled)
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ?? gt("Automatic updates are disabled.")
+    );
+  if (state.errorContext === "download" && state.message)
+    return translateDesktopUpdateMessage(state.message, gt) ?? state.message;
+  const checkError = getDesktopUpdateCheckError(state, gt);
   if (checkError) return checkError;
   if (state.installPolicy === "paused")
-    return "Automatic downloads and installation are paused. You can still check, download, and install manually.";
+    return gt(
+      "Automatic downloads and installation are paused. You can still check, download, and install manually.",
+    );
 
   if (state.recoveryStatus === "needs-network")
-    return "Connect to the network to restore the downloaded update.";
-  if (state.recoveryStatus === "restoring") return "Restoring the downloaded update…";
+    return gt("Connect to the network to restore the downloaded update.");
+  if (state.recoveryStatus === "restoring") return gt("Restoring the downloaded update…");
   if (state.pendingRestartReason === "busy")
-    return "Automatic restart postponed until backend work finishes.";
+    return gt("Automatic restart postponed until backend work finishes.");
   if (state.pendingRestartReason === "unknown")
-    return state.message ?? "Automatic restart postponed: backend activity cannot be verified.";
+    return (
+      translateDesktopUpdateMessage(state.message, gt) ??
+      gt("Automatic restart postponed: backend activity cannot be verified.")
+    );
   if (state.installPolicy === "install-on-quit")
     return state.downloadedVersion
-      ? "The downloaded update will install when you quit the app."
-      : "Updates download automatically and install when you quit the app.";
-  return "Updates download automatically and restart the app when every backend is idle, or install when you quit.";
+      ? gt("The downloaded update will install when you quit the app.")
+      : gt("Updates download automatically and install when you quit the app.");
+  return gt(
+    "Updates download automatically and restart the app when every backend is idle, or install when you quit.",
+  );
 }
 
-function getDesktopUpdateDisabledReason(
+// Exact app-owned sentences only. Service diagnostics are not message ids.
+export function translateDesktopUpdateMessage(
+  message: string | null | undefined,
+  gt: DesktopUpdateTranslate,
+): string | null {
+  switch (message) {
+    case "Automatic updates are not available because no update feed is configured.":
+      return gt("Automatic updates are not available because no update feed is configured.");
+    case "Automatic updates are only available in packaged production builds.":
+      return gt("Automatic updates are only available in packaged production builds.");
+    case "Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting.":
+      return gt("Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting.");
+    case "Automatic updates on Linux require the AppImage or the .deb package.":
+      return gt("Automatic updates on Linux require the AppImage or the .deb package.");
+    case "GOAT can't update itself while it runs from where it was downloaded. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "GOAT can't update itself while it runs from where it was downloaded. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "GOAT can't update itself from a read-only disk. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "GOAT can't update itself from a read-only disk. Move GOAT to Applications and reopen it. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
+      return gt(
+        "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "Could not clear the pending update record. Check again to retry.":
+      return gt("Could not clear the pending update record. Check again to retry.");
+    case "Could not persist the downloaded update. Retry the download.":
+      return gt("Could not persist the downloaded update. Retry the download.");
+    case "Automatic restart postponed: WSL activity cannot be verified.":
+      return gt("Automatic restart postponed: WSL activity cannot be verified.");
+    default:
+      return message ?? null;
+  }
+}
+
+export function getDesktopUpdateDisabledReason(
   state: Pick<DesktopUpdateState, "enabled" | "status" | "message"> | null,
+  gt: DesktopUpdateTranslate = gtFallback,
 ): string | null {
   if (!state || (state.enabled && state.status !== "disabled")) return null;
-  return state.message?.trim() || "Automatic updates are not available in this build.";
+  return (
+    translateDesktopUpdateMessage(state.message?.trim() || null, gt) ??
+    gt("Automatic updates are not available in this build.")
+  );
 }
 
 /** Why the last update check failed, while that failure is the current state. */
@@ -191,6 +296,7 @@ export function getDesktopUpdateCheckError(
     DesktopUpdateState,
     "enabled" | "status" | "errorContext" | "downloadedVersion" | "message"
   > | null,
+  gt: DesktopUpdateTranslate = gtFallback,
 ): string | null {
   if (
     !state?.enabled ||
@@ -199,17 +305,21 @@ export function getDesktopUpdateCheckError(
     state.downloadedVersion !== null
   )
     return null;
-  return state.message?.trim() || "Could not check for updates.";
+  const message = state.message?.trim();
+  return message
+    ? (translateDesktopUpdateMessage(message, gt) ?? message)
+    : gt("Could not check for updates.");
 }
 
 /** The version row's description when no update is waiting. */
 export function getDesktopUpdateIdleDescription(
   state: Parameters<typeof getDesktopUpdateCheckError>[0],
+  gt: DesktopUpdateTranslate = gtFallback,
 ): string {
   return (
-    getDesktopUpdateDisabledReason(state) ??
-    getDesktopUpdateCheckError(state) ??
-    "Current version of the application."
+    getDesktopUpdateDisabledReason(state, gt) ??
+    getDesktopUpdateCheckError(state, gt) ??
+    gt("Current version of the application.")
   );
 }
 
@@ -218,11 +328,15 @@ export function getDesktopUpdateIdleTooltip(
     DesktopUpdateState,
     "enabled" | "status" | "errorContext" | "downloadedVersion" | "message"
   > | null,
+  gt: DesktopUpdateTranslate = gtFallback,
 ) {
-  const disabledReason = getDesktopUpdateDisabledReason(state);
-  if (disabledReason) return { title: "Updates unavailable", detail: disabledReason };
-  const checkError = getDesktopUpdateCheckError(state);
+  const disabledReason = getDesktopUpdateDisabledReason(state, gt);
+  if (disabledReason) return { title: gt("Updates unavailable"), detail: disabledReason };
+  const checkError = getDesktopUpdateCheckError(state, gt);
   return checkError
-    ? { title: "Update check failed", detail: `${checkError} Click to check again.` }
-    : { title: "Check for updates", detail: null };
+    ? {
+        title: gt("Update check failed"),
+        detail: gt("{error} Click to check again.", { error: checkError }),
+      }
+    : { title: gt("Check for updates"), detail: null };
 }

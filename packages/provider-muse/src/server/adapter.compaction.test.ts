@@ -12,6 +12,7 @@ import {
   makeFakeMuse,
   makeHarness,
   turnInput,
+  captureWakeOffer,
   startConversation,
 } from "./test/adapterHelpers.ts";
 
@@ -80,6 +81,70 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect.each(["offer", "disconnect"] as const)(
+    "drains the inbox while a wake retry waits for space, then handles %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakeMuse();
+        const waiting = yield* Deferred.make<void>();
+        const space = yield* Deferred.make<void>();
+        const finished = yield* Deferred.make<void>();
+        const offered =
+          yield* Deferred.make<ProviderContinuationRequests.ProviderContinuationRequest>();
+        let offers = 0;
+        const harness = yield* makeHarness(
+          fake,
+          INSTANCE_ID,
+          undefined,
+          undefined,
+          undefined,
+          runtimePolicy,
+          {
+            continuationRequests: {
+              offer: (request) =>
+                Effect.suspend(() =>
+                  ++offers === 1
+                    ? Effect.succeed("overflow" as const)
+                    : Deferred.succeed(offered, request).pipe(Effect.asVoid),
+                ),
+              awaitSpace: () =>
+                Deferred.succeed(waiting, undefined).pipe(
+                  Effect.andThen(Deferred.await(space)),
+                  Effect.ensuring(Deferred.succeed(finished, undefined)),
+                ),
+            },
+          },
+        );
+        yield* Effect.addFinalizer(() => Deferred.succeed(space, undefined).pipe(Effect.asVoid));
+        const previous = yield* startConversation(harness, fake);
+        yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });
+        yield* harness.takeEvent("turn.terminal");
+        yield* fake.emit("turn/started", { turnId: "delayed-wake" });
+        yield* Deferred.await(waiting);
+        yield* fake.emit("session/contextUsage", { usedTokens: 613, windowTokens: 1000 });
+        yield* harness.takeEvent(
+          "provider_thread.updated",
+          (event) => event.providerThread.contextUsage?.usedTokens === 613,
+        );
+        assert.equal(offers, 1);
+        if (outcome === "disconnect") {
+          yield* fake.disconnect();
+          yield* harness.takeEvent(
+            "provider_session.updated",
+            (event) => event.providerSession.status === "error",
+          );
+          yield* Deferred.await(finished);
+          yield* Deferred.succeed(space, undefined);
+          assert.isFalse(yield* Deferred.isDone(offered));
+        } else {
+          yield* Deferred.succeed(space, undefined);
+          const result = yield* Deferred.await(offered);
+          assert.equal(offers, 2);
+          assert.equal(result.providerThreadId, harness.providerThread.id);
+        }
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("ends a compaction whose item names the held wake as its run", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
@@ -92,7 +157,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });
@@ -130,7 +195,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });
@@ -165,7 +230,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });

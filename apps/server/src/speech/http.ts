@@ -13,15 +13,12 @@ import {
   VoiceTranscriptionUpstreamError,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { requireEnvironmentScope } from "../auth/http.ts";
 import * as VoiceTranscription from "../voiceTranscription.ts";
-import * as SpeechInference from "./SpeechInference.ts";
 import * as SpeechManagement from "./SpeechManagement.ts";
-import * as SpeechModelStore from "./SpeechModelStore.ts";
 
 const KNOWN_FAILURES: ReadonlyArray<unknown> = [
   "The selected speech model is not installed.",
@@ -172,13 +169,4 @@ export const layerHttp = HttpApiBuilder.group(
         }),
       );
   }),
-);
-
-export const layer = layerHttp.pipe(
-  Layer.provide(
-    SpeechManagement.layer.pipe(
-      Layer.provide(SpeechModelStore.layer),
-      Layer.provide(SpeechInference.layer),
-    ),
-  ),
 );

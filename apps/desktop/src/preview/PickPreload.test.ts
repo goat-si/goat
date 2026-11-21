@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vite-plus/test";
 
 import {
+  ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
   POINTER_DOWN_HOST_CHANNEL,
   START_PICK_CHANNEL,
@@ -124,4 +125,76 @@ it("a replayed thumb press tells the host page and the main process, like a clic
     y: 6,
     button: 3,
   });
+});
+
+it.each([
+  { scrolled: false, rect: { x: 40, y: 60, width: 200, height: 120 } },
+  // The last rect would point at whatever now sits there, so no crop beats a wrong one.
+  { scrolled: true, rect: { x: 0, y: 0, width: 0, height: 0 } },
+])(
+  "submits a replaced element's last rect unless the page scrolled ($scrolled)",
+  async ({ scrolled, rect }) => {
+    const picked = Promise.withResolvers<{ elements: Array<{ rect: unknown }> }>();
+    ipcSends.send.mockImplementation((channel, annotation) => {
+      if (channel === ELEMENT_PICKED_CHANNEL) picked.resolve(annotation);
+    });
+    const card = document.body.appendChild(document.createElement("div"));
+    const pickedRect = new DOMRect(40, 60, 200, 120);
+    // Browsers report a detached element at 0x0 in the corner.
+    using _rect = vi
+      .spyOn(card, "getBoundingClientRect")
+      .mockImplementation(() => (card.isConnected ? pickedRect : new DOMRect()));
+    const properties = new DisposableStack();
+    using _restore = properties;
+    const previous = Object.getOwnPropertyDescriptor(document, "elementsFromPoint");
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: () => [card],
+    });
+    properties.defer(() => {
+      if (previous) Object.defineProperty(document, "elementsFromPoint", previous);
+      else Reflect.deleteProperty(document, "elementsFromPoint");
+    });
+    const shadowRoot = startAnnotation();
+
+    card.dispatchEvent(
+      new PointerEvent("pointerdown", { button: 0, clientX: 100, clientY: 100, bubbles: true }),
+    );
+    // A polling page re-renders while the comment is written and replaces the picked node.
+    card.remove();
+    if (scrolled) window.dispatchEvent(new Event("scroll"));
+    const attach = Array.from(shadowRoot.querySelectorAll("button")).find(
+      (button) => button.textContent === "Attach",
+    );
+    if (!attach) throw new Error("Attach button not found");
+    attach.click();
+
+    expect((await picked.promise).elements[0]?.rect).toEqual(rect);
+  },
+);
+
+it("shows the annotation comment limit while retaining a comment at the boundary", () => {
+  const shadowRoot = startAnnotation();
+  const comment = shadowRoot.querySelector("textarea");
+  if (!comment) throw new Error("comment textarea not found");
+  expect(comment.maxLength).toBe(8000);
+  comment.value = "x".repeat(8000);
+  comment.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(comment.value).toHaveLength(8000);
+  expect(shadowRoot.textContent).toContain("8000 / 8000");
+});
+
+it("keeps an oversized inserted annotation and shows its count", () => {
+  const shadowRoot = startAnnotation();
+  const comment = shadowRoot.querySelector("textarea");
+  const attach = Array.from(shadowRoot.querySelectorAll("button")).find(
+    (button) => button.textContent === "Attach",
+  );
+  if (!comment || !attach) throw new Error("annotation editor not found");
+  comment.value = "x".repeat(8001);
+  comment.dispatchEvent(new Event("input", { bubbles: true }));
+  attach.click();
+  expect(comment.value).toHaveLength(8001);
+  expect(shadowRoot.textContent).toContain("8001 / 8000");
+  expect(shadowRoot.host.isConnected).toBe(true);
 });

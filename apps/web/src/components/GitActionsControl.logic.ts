@@ -11,12 +11,15 @@ import type {
   SshWorkspaceFetchBackInput,
   GitRunStackedActionResult,
   GitStackedAction,
+  PullRequestChangeBreakdown,
   ReviewDiffPreviewSource,
   VcsStatusResult,
 } from "@goat/contracts";
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
+import { summarizeChangedFiles } from "@goat/shared/changedFileKind";
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 import {
+  canCreateChangeRequest,
   changeRequestTerminologyFor,
   type DefaultBranchActionDialogCopy,
   type DefaultBranchConfirmableAction,
@@ -139,6 +142,7 @@ export function buildMenuItems(
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
+    canCreateChangeRequest(gitStatus) &&
     !isBusy &&
     hasBranch &&
     !hasOpenPr &&
@@ -250,7 +254,7 @@ export function resolveQuickAction(
     if (isBehind || (!gitStatus.hasUpstream && !hasPrimaryRemote)) {
       return { label: "Commit", disabled: false, kind: "run_action", action: "commit" };
     }
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return { label: "Commit & push", disabled: false, kind: "run_action", action: "commit_push" };
     }
     return {
@@ -285,7 +289,7 @@ export function resolveQuickAction(
         hint: "No local commits to push.",
       };
     }
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -319,7 +323,7 @@ export function resolveQuickAction(
   }
 
   if (isAhead) {
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -344,7 +348,7 @@ export function resolveQuickAction(
     };
   }
 
-  if (hasDefaultBranchDelta && !isDefaultRef) {
+  if (hasDefaultBranchDelta && !isDefaultRef && canCreateChangeRequest(gitStatus)) {
     return {
       label: `Create ${terminology.shortLabel}`,
       disabled: false,
@@ -400,13 +404,19 @@ export function resolveDefaultBranchActionDialogCopy(input: {
   };
 }
 
-/** Clean trees cannot create feature branches because the server derives names from uncommitted changes. */
+/** The server names a feature branch from the commit it makes, so the action must commit changes. */
 export function resolveFeatureBranchUnavailableReason(input: {
+  action: DefaultBranchConfirmableAction;
   branchName: string;
   hasWorkingTreeChanges: boolean;
 }): string | null {
-  if (input.hasWorkingTreeChanges) return null;
-  return `There are no changes to commit, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  if (!input.hasWorkingTreeChanges) {
+    return `There are no changes to commit, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  }
+  if (input.action === "push" || input.action === "create_pr") {
+    return `This action doesn't commit your changes, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  }
+  return null;
 }
 
 export function resolveThreadBranchUpdate(
@@ -532,6 +542,7 @@ export type ChangesLineTotals = {
   readonly deletions: number;
   /** Ref the counts compare against; `null` means they are uncommitted changes against HEAD. */
   readonly baseRef: string | null;
+  readonly breakdown?: PullRequestChangeBreakdown;
 };
 
 // `branchChanges ?? workingTree` treats `{0,0}` as present, so a zero branch total hid a dirty
@@ -541,6 +552,7 @@ export type ChangesLineTotals = {
 export function resolveChangesTotals(
   status: VcsStatusResult | null | undefined,
   branchPreview?: ReviewDiffPreviewSource | null,
+  includeBreakdown = false,
 ): ChangesLineTotals | null {
   if (branchPreview?.files) {
     let insertions = 0;
@@ -549,7 +561,14 @@ export function resolveChangesTotals(
       insertions += file.additions;
       deletions += file.deletions;
     }
-    return { insertions, deletions, baseRef: branchPreview.baseRef };
+    return {
+      insertions,
+      deletions,
+      baseRef: branchPreview.baseRef,
+      ...(includeBreakdown
+        ? { breakdown: branchPreview.truncated ? null : summarizeChangedFiles(branchPreview.files) }
+        : {}),
+    };
   }
   if (!status) return null;
   const branch = status.branchChanges;
@@ -560,10 +579,23 @@ export function resolveChangesTotals(
       : tree.insertions > 0 || tree.deletions > 0
         ? tree
         : (branch ?? tree);
+  let breakdown: PullRequestChangeBreakdown = null;
+  if (includeBreakdown && selected === tree) {
+    const files = tree.files.map((file) => ({
+      path: file.path,
+      additions: file.insertions,
+      deletions: file.deletions,
+    }));
+    const fileInsertions = files.reduce((sum, file) => sum + file.additions, 0);
+    const fileDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
+    if (fileInsertions === selected.insertions && fileDeletions === selected.deletions)
+      breakdown = summarizeChangedFiles(files);
+  }
   return {
     insertions: selected.insertions,
     deletions: selected.deletions,
     baseRef: selected.baseRef,
+    ...(includeBreakdown ? { breakdown } : {}),
   };
 }
 
@@ -598,9 +630,6 @@ export function getMenuActionDisabledReason({
     if (!hasBranch) {
       return "Detached HEAD: check out a branch before pushing.";
     }
-    if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
-    }
     if (isBehind) {
       return "Branch is behind upstream. Pull/rebase before pushing.";
     }
@@ -627,3 +656,15 @@ export function getMenuActionDisabledReason({
   }
   return `Create ${terminology.singular} is currently unavailable.`;
 }
+
+export const COMMIT_DIALOG_TITLE = "Commit changes";
+export const COMMIT_DIALOG_DESCRIPTION =
+  "Review and confirm your commit. Leave the message blank to auto-generate one.";
+
+export const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
+
+export const RUNNING_SOURCE_CONTROL_ACTIONS = [
+  "runStackedAction",
+  "pull",
+  "publishRepository",
+] as const;

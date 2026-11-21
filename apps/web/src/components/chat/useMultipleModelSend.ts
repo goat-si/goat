@@ -41,6 +41,7 @@ import {
   startFanoutThread,
 } from "./chatViewSend";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
+import type { useLinkCheckoutPullRequest } from "./useLinkCheckoutPullRequest";
 
 interface MultipleModelSendInput {
   readonly environmentId: EnvironmentId;
@@ -61,7 +62,10 @@ interface MultipleModelSendInput {
  * stay selected and the prompt comes back, either straight into this composer or, when the
  * user has moved on, through a "Restore prompt" toast.
  */
-export function useMultipleModelSend(input: MultipleModelSendInput) {
+export function useMultipleModelSend(
+  input: MultipleModelSendInput,
+  checkoutLink: ReturnType<typeof useLinkCheckoutPullRequest>,
+) {
   const {
     environmentId,
     routeThreadKey,
@@ -115,6 +119,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readonly isCurrentSend: () => boolean;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
+    const checkoutPullRequestUrl = checkoutLink.read(draftId, branch);
     const failedSelections: ModelSelection[] = [];
     let clearedDraft = false;
     let releasedComposer = false;
@@ -150,7 +155,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
       setThreadError(threadId, null);
       const starts = Promise.all(
         targets.map(async (target) => {
-          const started = await startFanoutThread({
+          const startedThreadId = await startFanoutThread({
             retryKey: JSON.stringify([
               routeThreadKey,
               target.selection.instanceId,
@@ -209,8 +214,15 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                 params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
               }),
           });
-          if (started) startedCount += 1;
-          else failedSelections.push(target.selection);
+          if (startedThreadId === null) {
+            failedSelections.push(target.selection);
+          } else {
+            startedCount += 1;
+            checkoutLink.link(
+              scopeThreadRef(environmentId, startedThreadId),
+              checkoutPullRequestUrl,
+            );
+          }
         }),
       );
       sendInFlightRef.current = false;
@@ -226,7 +238,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         );
       }
       if (failedSelections.length === 0 && usesAttachmentUploads) {
-        releaseDraftAttachments(attachmentsSnapshot);
+        releaseDraftAttachments(attachmentsSnapshot, environmentId);
       }
     });
     if (sendResult._tag === "Failure") {

@@ -36,6 +36,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factory-droid" });
+const DEVIN_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "devin" });
 const OMP_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({
   source: "local",
   commandPath: "/usr/local/bin/omp",
@@ -171,7 +172,15 @@ describe("ACP Registry elicitation", () => {
       scenario: "OMP unrelated form uses generic mapping",
       settings: OMP_SETTINGS,
       schema: { type: "object", properties: { name: { type: "string" } } },
-      questions: [{ id: "name", header: "Question 1", question: "Your answer?", options: [] }],
+      questions: [
+        {
+          id: "name",
+          header: "Question 1",
+          question: "Your answer?",
+          options: [],
+          required: false,
+        },
+      ],
       answers: { name: "Ada" },
       result: { action: "accept", content: { name: "Ada" } },
     },
@@ -214,7 +223,15 @@ describe("ACP Registry elicitation", () => {
     {
       scenario: "falls back for an unrelated form",
       schema: { type: "object", properties: { name: { type: "string" } } },
-      questions: [{ id: "name", header: "Question 1", question: "Your answer?", options: [] }],
+      questions: [
+        {
+          id: "name",
+          header: "Question 1",
+          question: "Your answer?",
+          options: [],
+          required: false,
+        },
+      ],
       answers: { name: "Ada" },
       result: { action: "accept", content: { name: "Ada" } },
     },
@@ -226,6 +243,40 @@ describe("ACP Registry elicitation", () => {
       answers: { q0: "blue" },
       result: { action: "accept", content: { q0: "blue" } },
     },
+    ...[true, false].map((allowOther) => ({
+      scenario: `Devin typed choice ${allowOther ? "with" : "without"} opt-in`,
+      settings: DEVIN_SETTINGS,
+      ...(allowOther ? { meta: { "cognition.ai/allowOther": true } } : {}),
+      schema: {
+        type: "object",
+        properties: {
+          q0: {
+            type: "string",
+            title: "Fruit",
+            description: "Which fruit?",
+            oneOf: [
+              { const: "Apple", title: "Apple" },
+              { const: "Banana", title: "Banana" },
+            ],
+          },
+        },
+        required: ["q0"],
+      },
+      questions: [
+        {
+          id: "q0",
+          header: "Fruit",
+          question: "Which fruit?",
+          options: [
+            { label: "Apple", description: "Apple", value: "Apple" },
+            { label: "Banana", description: "Banana", value: "Banana" },
+          ],
+          ...(!allowOther ? { allowCustomAnswer: false } : {}),
+        },
+      ],
+      answers: { q0: "Mango" },
+      result: allowOther ? { action: "accept", content: { q0: "Mango" } } : { action: "cancel" },
+    })),
   ])("Registry elicitation $scenario", (fixture) => {
     const { schema, questions, answers, result } = fixture;
     const withAttachments = "withAttachments" in fixture && fixture.withAttachments;
@@ -309,6 +360,7 @@ describe("ACP Registry elicitation", () => {
                   sessionId: "droid-session",
                   message: "Your answer?",
                   requestedSchema: schema,
+                  ...("meta" in fixture ? { _meta: fixture.meta } : {}),
                 },
               },
             },

@@ -1,8 +1,14 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
+import { THEME_CSS_MAX_LENGTH } from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import "culori/css";
 import { converter, parse } from "culori/fn";
+import { setThemePreviewAppearance } from "./themePreviewAppearance";
+export { getThemePreviewAppearance, subscribeToThemePreview } from "./themePreviewAppearance";
+import { readEnvironmentThemeCache, writeEnvironmentThemeCache } from "./environmentThemeCache";
+import { themeIdFromName } from "./themeIdFromName";
+export { themeIdFromName } from "./themeIdFromName";
 import {
   BUILT_IN_THEMES,
   normalizeThemeId,
@@ -49,10 +55,10 @@ export type ThemeFile = Readonly<{
   variants?: ThemeVariantOverrides;
   collection?: ThemeCollection;
   managed?: boolean;
+  css?: string;
 }>;
 
-// Do not persist server-published palettes; they become stale when the environment theme changes.
-let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> = [];
+let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> | null = null;
 
 const customThemeListeners = new Set<() => void>();
 type CustomThemeLibrarySnapshot =
@@ -65,24 +71,6 @@ type CustomThemeLibrarySnapshot =
   | Readonly<{ status: "unavailable"; reason: "storage-unavailable"; cause: unknown }>;
 
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
-const themePreviewListeners = new Set<() => void>();
-let themePreviewAppearance: ThemeAppearance | null = null;
-
-export function getThemePreviewAppearance(): ThemeAppearance | null {
-  return themePreviewAppearance;
-}
-
-export function subscribeToThemePreview(listener: () => void): () => void {
-  themePreviewListeners.add(listener);
-  return () => themePreviewListeners.delete(listener);
-}
-
-function setThemePreviewAppearance(appearance: ThemeAppearance | null): void {
-  if (themePreviewAppearance === appearance) return;
-  themePreviewAppearance = appearance;
-  for (const listener of themePreviewListeners) listener();
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -153,6 +141,11 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isRecord(value)) return null;
   if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
   if (!isThemeLabel(value.label) || !isThemeAppearance(value.appearance)) return null;
+  if (
+    value.css !== undefined &&
+    (typeof value.css !== "string" || value.css.length > THEME_CSS_MAX_LENGTH)
+  )
+    return null;
   const colors = parseStoredThemeColors(value.colors, value.appearance);
   if (!colors) return null;
   const variants = parseStoredThemeVariants(value.variants, value.appearance);
@@ -166,6 +159,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
     colors,
     ...(variants ? { variants } : {}),
     ...(collection ? { collection } : {}),
+    ...(typeof value.css === "string" ? { css: value.css } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
 }
@@ -229,15 +223,19 @@ export function getCustomThemes(): ReadonlyArray<ThemeDefinition> {
 }
 
 export function getEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
+  if (environmentThemeDefinitions === null) {
+    environmentThemeDefinitions = readEnvironmentThemeCache(parseStoredThemes);
+  }
   return environmentThemeDefinitions;
 }
 
 /** Returns structural change; reconnects recreate arrays with identical colors. */
 export function setEnvironmentThemes(themes: ReadonlyArray<ThemeDefinition>): boolean {
-  if (Equal.equals(environmentThemeDefinitions, themes)) return false;
+  const changed = !Equal.equals(getEnvironmentThemes(), themes);
   environmentThemeDefinitions = themes;
-  notifyCustomThemeListeners();
-  return true;
+  writeEnvironmentThemeCache(themes);
+  if (changed) notifyCustomThemeListeners();
+  return changed;
 }
 
 export function isReservedThemeId(themeId: string): boolean {
@@ -1006,7 +1004,7 @@ export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | nu
   return (
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId) ??
     getCustomThemes().find((definition) => definition.id === themeId) ??
-    environmentThemeDefinitions.find((definition) => definition.id === themeId) ??
+    getEnvironmentThemes().find((definition) => definition.id === themeId) ??
     null
   );
 }
@@ -1035,23 +1033,6 @@ export function getThemePreferenceMode(theme: ThemePreference): ThemeAppearance 
   const legacyMode = legacyThemeMode(theme);
   if (legacyMode) return legacyMode;
   return getThemeDefinition(theme)?.appearance ?? null;
-}
-
-export function themeIdFromName(name: string): string {
-  const label = name.trim().toLowerCase();
-  const normalized = label
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  if (normalized || !label) return normalized || "custom-theme";
-
-  // Names without ASCII letters or digits still need independent, stable ids.
-  let hash = 2_166_136_261;
-  for (let index = 0; index < label.length; index += 1) {
-    hash ^= label.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return `theme-${(hash >>> 0).toString(36)}`;
 }
 
 export class ThemeLibraryStorageError extends Schema.TaggedError<ThemeLibraryStorageError>()(
@@ -1301,12 +1282,27 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
   }
 
   const overrides = parseThemeColorOverrides(rawColors);
+  if (
+    value.css !== undefined &&
+    (typeof value.css !== "string" || value.css.length > THEME_CSS_MAX_LENGTH)
+  )
+    throw new Error("Theme CSS is invalid or too large.");
   const collection = parseThemeCollection(value.collection);
   if (value.collection !== undefined && !collection) {
     throw new Error("Theme collections need a valid id and label.");
   }
 
-  const fallback = getDefaultThemeColors(appearance);
+  if (
+    value.canvas !== undefined &&
+    value.accent !== undefined &&
+    (!isThemeColor(value.canvas) || !isThemeColor(value.accent))
+  ) {
+    throw new Error("Theme canvas and accent must be literal CSS colors.");
+  }
+  const fallback =
+    typeof value.canvas === "string" && typeof value.accent === "string"
+      ? createVividThemeColors(appearance, value.canvas, value.accent)
+      : getDefaultThemeColors(appearance);
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   if (value.variants !== undefined) {
     if (!isRecord(value.variants)) throw new Error("Theme variants must be an object.");
@@ -1332,6 +1328,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     colors: { ...fallback, ...overrides },
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
     ...(collection ? { collection } : {}),
+    ...(typeof value.css === "string" ? { css: value.css } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
 }
@@ -1346,6 +1343,7 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
     colors: canonicalTheme.colors,
     ...(canonicalTheme.variants ? { variants: canonicalTheme.variants } : {}),
     ...(canonicalTheme.collection ? { collection: canonicalTheme.collection } : {}),
+    ...(canonicalTheme.css !== undefined ? { css: canonicalTheme.css } : {}),
     ...(canonicalTheme.managed ? { managed: true } : {}),
   };
   return `${JSON.stringify(file, null, 2)}\n`;

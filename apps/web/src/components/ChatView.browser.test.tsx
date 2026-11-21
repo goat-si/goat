@@ -44,6 +44,82 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
+it("opens a side chat as a full thread when its dedicated button is used", async () => {
+  const style = document.createElement("style");
+  style.textContent = "[data-base-ui-inert] { pointer-events: none; }";
+  document.head.append(style);
+  using _style = { [Symbol.dispose]: () => style.remove() };
+  const parent = threadWithHistory("side-parent", 1);
+  const side = threadWithHistory("side-child", 1);
+  using _environment = installFakeEnvironment([
+    parent,
+    { ...side, shell: { sideChatOf: parent.id } },
+  ]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${parent.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+  await page.getByRole("button", { name: "Toggle side chat" }).click();
+  const open = page.getByRole("button", { name: "Open side chat as a full thread" });
+  await expect.element(open).toBeEnabled();
+  await open.click();
+  await vi.waitFor(() =>
+    expect(router.state.location.pathname).toBe(`/${ENVIRONMENT_ID}/${side.id}`),
+  );
+});
+
+it("suppresses middle-click paste on chat space while preserving editable and link actions", async () => {
+  const thread = threadWithHistory("thread-middle-click", 1);
+  using _environment = installFakeEnvironment([thread]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using app = await render(<AppRoot router={router} />, { router: false });
+  await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+  const column = app.container.querySelector<HTMLElement>("[data-chat-column]");
+  expect(column).not.toBeNull();
+  const input = document.createElement("input");
+  const link = document.createElement("a");
+  link.href = "https://example.com";
+  column!.append(input, link);
+  const middleUp = () => new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 1 });
+  expect(column!.dispatchEvent(middleUp())).toBe(false);
+  expect(input.dispatchEvent(middleUp())).toBe(true);
+  expect(link.dispatchEvent(middleUp())).toBe(true);
+});
+
+it.each(["preparing", "starting", "queued"] as const)(
+  "shows work in progress for a persisted %s run",
+  async (status) => {
+    const thread = threadWithHistory(`thread-${status}`, 1);
+    const run = { ...thread.runs[0]!, status };
+    using _environment = installFakeEnvironment([
+      { ...thread, runs: [run], shell: { status, activeRunId: run.id } },
+    ]);
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+    );
+    await router.load();
+    await using _app = await render(<AppRoot router={router} />, { router: false });
+    await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+    expect(_app.container.innerText).toMatch(/Setting up worktree|Working/);
+  },
+);
+
 it("a new draft does not load its reserved thread before the server lists it", async () => {
   using _environment = installFakeEnvironment([]);
   using fetchSpy = vi.spyOn(globalThis, "fetch");

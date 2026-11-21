@@ -1,5 +1,5 @@
 import {
-  type AssetResource,
+  type ToolActivityNativeAppReference,
   COMPUTER_USE_PROVIDER_DRIVERS,
   type ComputerUseApp,
   TURN_CAPABILITIES,
@@ -221,7 +221,10 @@ export function composerThreadMayRunUnattended(
   );
 }
 
-type AppChipIconResource = Extract<AssetResource, { readonly _tag: "native-app-icon" }>;
+interface AppChipIconResource {
+  readonly _tag: "native-app-icon";
+  readonly app: ToolActivityNativeAppReference;
+}
 
 /**
  * The icon an `@Finder` chip shows: the host's own icon for the app its id names, as computer

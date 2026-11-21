@@ -45,6 +45,10 @@ export function changeRequestTerminologyFor(
   return sourceControlClients.get(gitStatus?.sourceControlProvider?.kind).changeRequest;
 }
 
+export function canCreateChangeRequest(gitStatus: VcsStatusResult | null): boolean {
+  return gitStatus?.sourceControlProvider?.kind !== "unknown";
+}
+
 export function buildMenuItems(
   gitStatus: VcsStatusResult | null,
   isBusy: boolean,
@@ -67,6 +71,7 @@ export function buildMenuItems(
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
+    canCreateChangeRequest(gitStatus) &&
     !isBusy &&
     hasBranch &&
     !hasOpenPr &&
@@ -134,6 +139,7 @@ export function resolveQuickAction(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isAhead = gitStatus.aheadCount > 0;
+  const hasDefaultBranchDelta = (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0;
   const isBehind = gitStatus.behindCount > 0;
   const isDiverged = isAhead && isBehind;
   const terminology = changeRequestTerminologyFor(gitStatus);
@@ -151,7 +157,7 @@ export function resolveQuickAction(
     if (isBehind || (!gitStatus.hasUpstream && !hasOriginRemote)) {
       return { label: "Commit", disabled: false, kind: "run_action", action: "commit" };
     }
-    if (hasOpenPr || isDefaultBranch) {
+    if (hasOpenPr || isDefaultBranch || !canCreateChangeRequest(gitStatus)) {
       return { label: "Commit & push", disabled: false, kind: "run_action", action: "commit_push" };
     }
     return {
@@ -185,7 +191,7 @@ export function resolveQuickAction(
         hint: "No local commits to push.",
       };
     }
-    if (hasOpenPr || isDefaultBranch) {
+    if (hasOpenPr || isDefaultBranch || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -219,7 +225,7 @@ export function resolveQuickAction(
   }
 
   if (isAhead) {
-    if (hasOpenPr || isDefaultBranch) {
+    if (hasOpenPr || isDefaultBranch || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -237,6 +243,15 @@ export function resolveQuickAction(
 
   if (hasOpenPr && gitStatus.hasUpstream) {
     return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+  }
+
+  if (hasDefaultBranchDelta && !isDefaultBranch && canCreateChangeRequest(gitStatus)) {
+    return {
+      label: `Create ${terminology.shortLabel}`,
+      disabled: false,
+      kind: "run_action",
+      action: "create_pr",
+    };
   }
 
   return {

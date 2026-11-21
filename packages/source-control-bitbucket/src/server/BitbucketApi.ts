@@ -1,7 +1,9 @@
+import { credentialDestinationDetail, originOf } from "./bitbucketOrigin.ts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { toBitbucketStates, bitbucketQueryString, bitbucketStateFilter } from "./bitbucketQuery.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -31,6 +33,7 @@ import {
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import { readSourceControlHostSettings } from "@goat/source-control-core/shared/definition";
 
 import * as BitbucketClient from "../shared/definition.ts";
@@ -104,7 +107,7 @@ export class BitbucketRequestError extends Schema.TaggedError<BitbucketRequestEr
   },
 ) {
   get detail(): string {
-    return "Failed to send the Bitbucket request.";
+    return credentialDestinationDetail(this.cause) ?? "Failed to send the Bitbucket request.";
   }
 
   override get message(): string {
@@ -412,29 +415,6 @@ function sourceWorkspace(input: {
   return SourceControlProvider.parseSourceControlOwnerRef(input.headSelector)?.owner;
 }
 
-function toBitbucketStates(state: "open" | "closed" | "merged" | "all"): ReadonlyArray<string> {
-  switch (state) {
-    case "open":
-      return ["OPEN"];
-    case "closed":
-      return ["DECLINED", "SUPERSEDED"];
-    case "merged":
-      return ["MERGED"];
-    case "all":
-      return ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"];
-  }
-}
-
-function bitbucketQueryString(filters: ReadonlyArray<string>): string {
-  return filters.join(" AND ");
-}
-
-function bitbucketStateFilter(states: ReadonlyArray<string>): string {
-  return states.length === 1
-    ? `state = "${states[0]}"`
-    : `(${states.map((state) => `state = "${state}"`).join(" OR ")})`;
-}
-
 function parseBitbucketRepositorySlug(value: string): BitbucketRepositoryLocator | null {
   const normalized = value.trim().replace(/\.git$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
@@ -605,14 +585,6 @@ function authFromCredential(credential: BitbucketCredential | null): SourceContr
   };
 }
 
-function originOf(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
-
 const responseError = Effect.fn("BitbucketApi.responseError")(function* (
   operation: BitbucketApiOperation,
   response: HttpClientResponse.HttpClientResponse,
@@ -663,24 +635,28 @@ export const make = Effect.gen(function* () {
 
   const apiUrl = (path: string) => `${config.baseUrl.replace(/\/+$/u, "")}${path}`;
 
-  const currentCredential = host.settings.getWithSecrets(BitbucketClient.definition.kind).pipe(
-    Effect.map((settings) =>
-      resolveCredential(
-        readSourceControlHostSettings(
-          BitbucketClient.settings,
-          settings.sourceControlHosts[BitbucketClient.definition.kind],
+  const currentCredential = host.settings
+    .getWithSecrets(BitbucketClient.definition.kind, URL.parse(config.baseUrl)?.host)
+    .pipe(
+      Effect.map((settings) =>
+        resolveCredential(
+          readSourceControlHostSettings(
+            BitbucketClient.settings,
+            settings.sourceControlHosts[BitbucketClient.definition.kind],
+          ),
+          config,
         ),
-        config,
       ),
-    ),
-    Effect.mapError(
-      () =>
-        new BitbucketRequestError({
-          operation: "request",
-          cause: new Error("Could not read saved credential"),
-        }),
-    ),
-  );
+      Effect.mapError(
+        (cause) =>
+          new BitbucketRequestError({
+            operation: "request",
+            cause: credentialDestinationDetail(cause)
+              ? cause
+              : new Error("Could not read saved credential"),
+          }),
+      ),
+    );
 
   const withAuth = (request: HttpClientRequest.HttpClientRequest) =>
     currentCredential.pipe(
@@ -869,8 +845,8 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((repository) => getRawPullRequestFromRepository(repository, input.reference)),
     );
 
-  const readConfigValueNullable = (cwd: string, key: string) =>
-    git.readConfigValue(cwd, key).pipe(Effect.orElseSucceed(() => null));
+  const readRemoteUrlNullable = (cwd: string, remoteName: string) =>
+    readFirstFetchUrl(git, cwd, remoteName).pipe(Effect.orElseSucceed(() => null));
 
   const resolveCheckoutRemote = Effect.fn("BitbucketApi.resolveCheckoutRemote")(function* (input: {
     readonly cwd: string;
@@ -886,8 +862,7 @@ export const make = Effect.gen(function* () {
         (yield* git.resolvePrimaryRemoteName(input.cwd).pipe(Effect.orElseSucceed(() => null)));
       if (remoteName) {
         const remoteUrl =
-          context?.remoteUrl ??
-          (yield* readConfigValueNullable(input.cwd, `remote.${remoteName}.url`));
+          context?.remoteUrl ?? (yield* readRemoteUrlNullable(input.cwd, remoteName));
         const repository =
           remoteUrl && (context || recognizeRemoteWith(definition, remoteUrl))
             ? parseBitbucketRemoteUrl(remoteUrl)
@@ -907,7 +882,7 @@ export const make = Effect.gen(function* () {
       repository: input.sourceRepositoryName,
       ...(input.context ? { context: input.context } : {}),
     }).pipe(Effect.map(normalizeRepositoryCloneUrls));
-    const originRemoteUrl = yield* readConfigValueNullable(input.cwd, "remote.origin.url");
+    const originRemoteUrl = yield* readRemoteUrlNullable(input.cwd, "origin");
     return yield* git.ensureRemote({
       cwd: input.cwd,
       preferredName: input.isCrossRepository

@@ -11,6 +11,7 @@ import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import * as Adapters from "./adapters.ts";
 import * as Material from "./DesktopWindowMaterial.ts";
+import { getWindowTitleBarOptions } from "../DesktopWindowAppearance.ts";
 
 import * as MaterialPlatform from "./materialPlatform.ts";
 export const makeFixture = Effect.fn("test.materialFixture")(function* (
@@ -137,7 +138,10 @@ export const makeFixture = Effect.fn("test.materialFixture")(function* (
       },
     ),
   );
-  yield* material.attach(window, { transparent: options.transparent ?? true });
+  yield* material.attach(window, {
+    transparent: options.transparent ?? true,
+    titleBarOverlay: !!getWindowTitleBarOptions(false, options.platform ?? "win32").titleBarOverlay,
+  });
   return {
     material,
     window,

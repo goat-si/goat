@@ -119,7 +119,7 @@ export function isSvgImagePreviewFile(path: string): boolean {
 }
 
 export function isMarkdownPreviewFile(path: string): boolean {
-  return /\.(?:md|mdx)$/i.test(path);
+  return /\.(?:md|mdx|markdown|mdown|mkd)$/i.test(path);
 }
 
 export function fileBreadcrumbs(projectName: string, relativePath: string): FileBreadcrumb[] {

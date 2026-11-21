@@ -33,6 +33,13 @@ describe("absolute paths in prose", () => {
 });
 
 describe("inline code that names a file", () => {
+  it("links absolute paths with spaces but leaves command snippets as code", () => {
+    const path = "/Users/me/Path Test/notes with spaces.md";
+    const command = "/usr/bin/python3 -m venv .venv";
+    expect(rewrite(`See \`${path}\` and run \`${command}\`.`)).toBe(
+      `See [${path}](<${path}>) and run \`${command}\`.`,
+    );
+  });
   it.each([
     [
       "file links",

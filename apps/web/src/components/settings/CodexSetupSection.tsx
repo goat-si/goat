@@ -37,6 +37,7 @@ import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
 import { getProviderSummary } from "./providerStatus";
 import {
+  codexSignInError,
   settleAuthorizationPage,
   settleHandoffAuthorizationPage,
   settleProviderInstall,
@@ -52,20 +53,7 @@ import {
 
 const noop = () => undefined;
 
-interface CodexSetupSectionProps {
-  readonly environmentId: EnvironmentId;
-  readonly instanceId: ProviderInstanceId;
-  readonly provider: ServerProvider | undefined;
-  readonly mode: "managed" | "existing";
-  readonly enabled: boolean;
-  readonly readOnly?: boolean;
-  readonly presentation?: "settings" | "onboarding";
-  readonly onModeChange: (mode: "managed" | "existing") => void;
-  readonly autoStart?: boolean;
-  readonly displayName?: string | undefined;
-  readonly onAutoStartConsumed?: () => void;
-  readonly onSignInCancelled?: (() => void) | undefined;
-}
+import type { CodexSetupSectionProps } from "./CodexSetupSection.types";
 
 export function CodexSetupSection(props: CodexSetupSectionProps) {
   const [requested, setRequested] = useState(false);
@@ -393,6 +381,7 @@ function ManagedCodexSetup({
     authorizationUrl: string,
     flowId: string | null,
     viaClientCallback: boolean,
+    canPaste: boolean,
     signal = getOrBeginOperation(),
   ) => {
     try {
@@ -408,9 +397,7 @@ function ManagedCodexSetup({
       }
     } catch {
       if (signal.aborted) return;
-      setError(
-        "Could not finish sign-in on this computer. Try again or paste the redirect URL below.",
-      );
+      setError(codexSignInError(canPaste));
     }
   };
 
@@ -444,7 +431,7 @@ function ManagedCodexSetup({
             settle: settleHandoffAuthorizationPage,
             signal,
           }).then((page) => {
-            if (page && !signal.aborted) void openPage(page, null, false, signal);
+            if (page && !signal.aborted) void openPage(page, null, false, false, signal);
           });
         },
       );
@@ -477,7 +464,8 @@ function ManagedCodexSetup({
                 signal,
               })
         ).then((page) => {
-          if (page && !signal.aborted) void openPage(page, startedFlowId, clientCallback, signal);
+          if (page && !signal.aborted)
+            void openPage(page, startedFlowId, clientCallback, true, signal);
         });
       },
     );
@@ -594,7 +582,7 @@ function ManagedCodexSetup({
       onClick={() => {
         if (handoffQuery.data?.phase === "finished")
           void transferProfile(handoffQuery.data.profile);
-        else if (url) void openPage(url, auth?.flowId ?? null, clientCallback);
+        else if (url) void openPage(url, auth?.flowId ?? null, clientCallback, !handoff);
       }}
     >
       {finishingSignIn

@@ -6,8 +6,8 @@ import {
   TIMELINE_LIST_FADE_HEADER,
 } from "./TimelineListFooter";
 import { useClientSettings } from "../../hooks/useSettings";
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useDeferredWorkLoading } from "./useDeferredWorkLoading";
+import { liveAnswerPreview, useTimelineDisplay } from "./MessagesTimeline.toolCallVisibility";
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import { TimelineHistoryControl } from "./TimelineHistoryControl";
@@ -46,8 +46,6 @@ import {
   use,
   useContext,
   useLayoutEffect,
-  useEffect,
-  useEffectEvent,
   useRef,
   useState,
   type ReactNode,
@@ -99,7 +97,6 @@ import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "@goat/contracts/settings";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
-
 import { forwardWheelToTimeline } from "./timelineMinimapWheel";
 import { TimelineMinimap } from "./TimelineMinimap";
 import {
@@ -418,7 +415,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
-  const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
   const disclosureCollapsedRef = useRef(false);
@@ -554,6 +550,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const screenReaderAnnouncements = useClientSettings(
     (settings) => settings.screenReaderAnnouncements,
   );
+  const display = useTimelineDisplay(findActive, citationRequest);
   // Imported turns and post-steer work fold under synthetic keys, not the entries' run ids.
   const findFoldRunIds = findActive
     ? timelineTurnFoldRunIdsByEntryId({
@@ -562,6 +559,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runningRunId,
         isWorking,
         runlessWorkActive,
+        ...display,
       })
     : null;
   const activeFindRunId =
@@ -603,6 +601,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runningRunId,
         isWorking,
         runlessWorkActive,
+        ...display,
       })
     ).get(citedEntry.id);
     setCitationExpandedFor(citationRequest.key);
@@ -656,6 +655,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     availableRevertTurnCounts,
     worktreeSetup,
     cloudRun,
+    ...display,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   // Run status/timestamps change per stream event; keep them out of shared row context.
@@ -754,6 +754,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           runningRunId,
           isWorking,
           runlessWorkActive,
+          ...display,
         })
       ).get(entryId),
     onNavigate: navigateTimeline,
@@ -863,10 +864,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
           firstBufferedRow.getBoundingClientRect().top
         : state.scroll;
     const visibleRange = resolveTimelineMinimapVisibleRange({ ...state, scroll });
-    for (const item of minimapItems) {
+    for (const [index, item] of minimapItems.entries()) {
       const strip = minimapStripMap.get(item.id);
       const inView = isTimelineMinimapRowVisible(
         item.rowIndex,
+        minimapItems[index + 1]?.rowIndex,
         visibleRange.start,
         visibleRange.end,
       );
@@ -1094,6 +1096,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isPreparingWorktree,
     providerStartingLabel: latestRun?.providerStartingLabel ?? null,
     latestRunId: latestRun?.runId ?? null,
+    liveAnswerPreview:
+      isWorking && display.toolCallVisibility === "zen" ? liveAnswerPreview(timelineEntries) : null,
   };
   // Mounted in both the empty and filled timeline so a thread's first turn
   // starts from a baseline instead of a fresh, silent region.
@@ -1208,6 +1212,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runningRunId,
     isWorking,
     runlessWorkActive,
+    toolCallVisibility: display.toolCallVisibility,
     rows,
     contentInsetEndAdjustment,
   });
@@ -1219,7 +1224,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     historyControls,
     entries: timelineEntries,
     container: timelineViewportElement,
-    query: normalizedFindQuery,
+    query: findQuery,
     match: activeFindMatch,
     navigationId: findNavigationId,
     rowIndex: activeFindMatch ? rows.findIndex((row) => row.id === activeFindMatch.entryId) : -1,
@@ -1397,6 +1402,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
 });
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const isAssistantMessage = row.kind === "message" && row.message.role === "assistant";
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
@@ -1415,23 +1421,19 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           ? undefined
           : row.kind === "turn-fold" || row.kind === "working"
             ? "pb-1.5"
-            : (row.kind === "message" &&
-                  row.message.role === "assistant" &&
-                  !row.showAssistantMeta) ||
+            : (isAssistantMessage && !row.showAssistantMeta) ||
                 row.kind === "worktree-setup" ||
                 row.kind === "cloud-run" ||
                 row.kind === "event" ||
                 row.kind === "thread-cards" ||
                 row.kind === "attempt-fold" ||
+                row.kind === "sent-message" ||
                 row.kind === "html-render" ||
                 row.kind === "mcp-app" ||
                 row.kind === "viewed-images"
               ? "pb-2"
               : "pb-4",
-        (row.kind === "message" && row.message.role === "assistant") ||
-          row.kind === "assistant-meta"
-          ? "group/assistant"
-          : null,
+        isAssistantMessage || row.kind === "assistant-meta" ? "group/assistant" : null,
       )}
       data-timeline-row-id={row.id}
       data-timeline-row-kind={row.kind}
@@ -1468,7 +1470,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
       {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserMessageRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "assistant" ? (
+      {isAssistantMessage || row.kind === "sent-message" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
@@ -1484,45 +1486,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
-
-function useDeferredWorkLoading(
-  row: { expanded: boolean; deferredWorkItemIds?: ReadonlyArray<string> },
-  onToggle: () => void,
-) {
-  const ctx = use(TimelineRowCtx);
-  const loadWork = useAtomCommand(threadEnvironment.loadEarlierHistory, { reportFailure: false });
-  const ref = parseScopedThreadKey(ctx.routeThreadKey);
-  const environmentId = ref?.environmentId;
-  const threadId = ref?.threadId;
-  const anchorsKey = row.deferredWorkItemIds?.join("\n") ?? "";
-  const [failed, setFailed] = useState(false);
-  const load = () => {
-    if (!anchorsKey || environmentId === undefined || threadId === undefined) return;
-    void Promise.all(
-      anchorsKey
-        .split("\n")
-        .map((workAnchorId) => loadWork({ environmentId, input: { threadId, workAnchorId } })),
-    ).then((results) =>
-      setFailed(
-        results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
-      ),
-    );
-  };
-  const loadOnExpand = useEffectEvent(load);
-  // oxlint-disable-next-line goat/react-effect-budget -- Restored expanded folds load their deferred server history on mount.
-  useEffect(() => {
-    if (row.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
-  }, [row.expanded, anchorsKey, environmentId, threadId]);
-  const error = anchorsKey && failed ? "Couldn't load work. Click to retry." : null;
-  const loading = ref !== null && row.expanded && anchorsKey !== "" && !failed;
-  const toggle = () => {
-    setFailed(false);
-    if (error && row.expanded) load();
-    else onToggle();
-  };
-
-  return { loading, error, toggle };
-}
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);

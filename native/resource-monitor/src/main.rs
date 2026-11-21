@@ -434,13 +434,12 @@ impl Collector {
             .external_processes
             .iter()
             .filter_map(|(pid, expected_start_time_ms)| {
-                let (_, _, actual_start_time_ms) = rows
-                    .iter()
-                    .find(|(candidate_pid, _, _)| candidate_pid == pid)?;
-                matches_external_identity(*actual_start_time_ms, *expected_start_time_ms).then_some(
+                let process = self.system.process(Pid::from_u32(*pid))?;
+                let actual_start_time_ms = process.start_time().saturating_mul(1_000);
+                matches_external_identity(actual_start_time_ms, *expected_start_time_ms).then_some(
                     ExternalProcess {
                         pid: *pid,
-                        start_time_ms: Some(*actual_start_time_ms),
+                        start_time_ms: Some(actual_start_time_ms),
                     },
                 )
             })

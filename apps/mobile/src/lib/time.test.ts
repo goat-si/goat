@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
-import { msUntilRelativeTimeChange, relativeTime } from "./time";
+import { byTimestamp, compareTimestamps, msUntilRelativeTimeChange, relativeTime } from "./time";
+
+it("orders offsets by instant and preserves equal instants in both directions", () => {
+  const rows = [
+    { id: "comment", date: "2026-07-05T00:30:00Z" },
+    { id: "commit", date: "2026-07-04T20:30:00-04:00" },
+    { id: "older", date: "2026-07-05T01:00:00+02:00" },
+  ];
+  expect(compareTimestamps(rows[2]!.date, rows[0]!.date)).toBeLessThan(0);
+  expect(rows.toSorted(byTimestamp(false)).map((row) => row.id)).toEqual([
+    "older",
+    "comment",
+    "commit",
+  ]);
+  expect(rows.toSorted(byTimestamp(true)).map((row) => row.id)).toEqual([
+    "comment",
+    "commit",
+    "older",
+  ]);
+});
 
 const at = "2026-10-19T12:00:00.000Z";
 const timestamp = Date.parse(at);

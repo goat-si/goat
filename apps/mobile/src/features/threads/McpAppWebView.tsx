@@ -273,6 +273,7 @@ export function ThreadMcpApp(props: {
     );
   }, [host, detailAtom]);
   const userActive = useRef(false);
+  const currentHost = useRef<McpAppHost | null>(null);
 
   // Each WebView document gets its own host: the view is keyed by document,
   // restart generation and URL, and a changed app re-attaches this callback.
@@ -408,6 +409,7 @@ export function ThreadMcpApp(props: {
           }
           if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
             await documentHost.teardown();
+            if (currentHost.current !== documentHost) return "inline";
             // Approval arrival or navigation during the wait requires reloading inline.
             const navigation = latest.current.navigation;
             if (latest.current.awaitingUser || !navigation.isFocused()) {
@@ -426,7 +428,7 @@ export function ThreadMcpApp(props: {
           }
           if (mode === "inline" && current.displayMode === "fullscreen") {
             await documentHost.teardown();
-            current.onExitFullscreen?.();
+            if (currentHost.current === documentHost) current.onExitFullscreen?.();
             return "inline";
           }
           return current.displayMode ?? "inline";
@@ -467,11 +469,11 @@ export function ThreadMcpApp(props: {
         },
         onRequestTeardown: () => {
           const current = latest.current.props;
-          if (current.displayMode === "fullscreen") {
-            void documentHost.teardown().then(() => current.onExitFullscreen?.());
-          } else {
-            void documentHost.teardown().then(() => setClosed(true));
-          }
+          void documentHost.teardown().then(() => {
+            if (currentHost.current !== documentHost) return;
+            if (current.displayMode === "fullscreen") current.onExitFullscreen?.();
+            else setClosed(true);
+          });
         },
         onSizeChanged: (size) => {
           if (latest.current.props.displayMode === "fullscreen") return;
@@ -480,7 +482,9 @@ export function ThreadMcpApp(props: {
         },
       });
       setHost(documentHost);
+      currentHost.current = documentHost;
       return () => {
+        if (currentHost.current === documentHost) currentHost.current = null;
         // An unmount cannot wait: the request goes out before the view does.
         void documentHost.teardown();
         setHost((current) => (current === documentHost ? null : current));

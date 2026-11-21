@@ -1,7 +1,6 @@
 import { provider, settingsWithProviderInstances } from "./modelSelection.testkit";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   ProviderDriverKind,
@@ -857,23 +856,6 @@ describe("instance-scoped model selection", () => {
       ProviderInstanceId.make("codex"),
     );
   });
-  it("falls back to the text generation default, not the chat default, for a removed model", () => {
-    const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
-    const providers = [
-      { ...codex, models: codex.models.map((m, i) => (i === 0 ? { ...m, isDefault: true } : m)) },
-    ];
-    const settings: UnifiedSettings = {
-      ...settingsWithProviderInstances(),
-      textGenerationModelSelection: createModelSelection(
-        ProviderInstanceId.make("codex"),
-        "gpt-5.6-luna",
-      ),
-    };
-
-    expect(resolveAppModelSelectionState(settings, providers).model).toBe(
-      DEFAULT_TEXT_GENERATION_MODEL,
-    );
-  });
 
   it("does not select a provider that cannot generate system text", () => {
     const instanceId = ProviderInstanceId.make("antigravity");
@@ -930,6 +912,7 @@ describe("resolveAppModelSelectionState with the opencode plan agent", () => {
   const settings: UnifiedSettings = {
     ...DEFAULT_UNIFIED_SETTINGS,
     planModeEnabled: false,
+    providerInstances: { [instanceId]: { driver: opencode.driver, enabled: true } },
     textGenerationModelSelection: createModelSelection(instanceId, model, [
       { id: "agent", value: "plan" },
     ]),

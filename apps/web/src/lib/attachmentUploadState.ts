@@ -23,6 +23,14 @@ export type AttachmentUploadState =
       readonly previous?: ReadyAttachmentUpload;
     };
 
+export function attachmentUploadForEnvironment(
+  upload: AttachmentUploadState | undefined,
+  environmentId: EnvironmentId,
+): AttachmentUploadState | undefined {
+  if (upload === undefined || upload.environmentId === environmentId) return upload;
+  return { status: "failed", environmentId, reason: "Upload cancelled" };
+}
+
 export function attachmentUploadBlockReason(input: {
   readonly imageIds: ReadonlyArray<string>;
   readonly uploadsByImageId: Readonly<Record<string, AttachmentUploadState>>;

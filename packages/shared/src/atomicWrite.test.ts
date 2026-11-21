@@ -269,3 +269,14 @@ it.effect("succeeds when the write lands but its temp directory cannot be remove
     assert.deepStrictEqual(removed, ["/home/settings.json.abc123"]);
   }),
 );
+
+it.effect("atomically saves a file with a 255-byte filename", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-atomic-write-" });
+    const filePath = path.join(root, `${"s".repeat(250)}.json`);
+    yield* writeFileStringAtomically({ filePath, contents: "after" });
+    assert.equal(yield* fs.readFileString(filePath), "after");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

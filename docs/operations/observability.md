@@ -105,6 +105,10 @@ Metrics are not written to a local file.
 
 If OTLP is not configured, metrics still exist in-process, but you will not have a local artifact to inspect.
 
+When OTLP is configured, `goat_otlp_export_attempt_failures_total` counts failed log, trace, and
+metric exports, including failed attempts before a successful retry. The `reason` label groups
+failures by HTTP status class, transport failure, or encoding failure.
+
 ### Event Loop Stalls
 
 `apps/server/src/observability/EventLoopMonitor.ts` samples the server's event loop every 30 s. When

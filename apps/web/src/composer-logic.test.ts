@@ -256,6 +256,16 @@ describe("composerSubmissionIntentForKey", () => {
 });
 
 describe("detectComposerTrigger", () => {
+  it("keeps brackets outside the web PR suggestion replacement", () => {
+    const text = "Compare ([#fix_123])";
+    expect(detectComposerTrigger(text, text.indexOf("]"))).toEqual({
+      kind: "pull-request",
+      query: "fix_123",
+      rangeStart: text.indexOf("#"),
+      rangeEnd: text.indexOf("]"),
+    });
+  });
+
   it.each([
     ["Run /tmp/build.sh", "Run /tmp/build.sh".length],
     ["/etc/hosts", "/etc/hosts".length],

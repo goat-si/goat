@@ -1,10 +1,12 @@
+import { DelegatedTaskCancellation } from "../orchestration-v2/goat/DelegatedTaskCancellation.ts";
+import { taskPrompt, threadTitle } from "./goat/ThreadCreationText.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
   type GoatclawCeilingAdvice,
   isOrchestrationV2WorkActive,
-  MessageId,
+  type MessageId,
   ModelSelection,
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
@@ -12,11 +14,9 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2ThreadShell,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpThreadTimelineItem,
-  type OrchestratorMcpModelOption,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpFailure,
@@ -30,7 +30,6 @@ import {
   type OrchestratorMcpThreadSendDelivered,
   type OrchestratorMcpThreadWaitResult,
   type ProjectId,
-  type ProviderInstanceId,
   type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   ProviderRequestKind,
@@ -40,11 +39,11 @@ import {
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
   type ServerProvider,
-  ThreadId,
+  type ThreadId,
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { latestProviderTurnForAttempt } from "@goat/contracts";
-import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
+import { withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as Clock from "effect/Clock";
@@ -81,7 +80,7 @@ import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTa
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { capabilityModelOption, listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 import { advertisedModel } from "./ModelSelectionValidation.ts";
@@ -97,7 +96,7 @@ import {
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import {
-  delegatedTaskAwaitsSubagents,
+  delegatedTaskAwaitsWork,
   delegatedTaskResultRun,
   delegatedTaskRuns,
   runOutcome,
@@ -128,11 +127,17 @@ import {
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
-import { stableCommandId, stablePart } from "./stableCommandId.ts";
+import {
+  stableCommandId,
+  stableMessageId,
+  stableOperationMessageId,
+  stableThreadId,
+} from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
+import { isLiveCallerShell, threadNotFound } from "./threadLookupFailure.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
 import { scheduledTaskSummary, updatedThreadMode } from "./scheduledTaskSummary.ts";
@@ -186,43 +191,6 @@ function failure(code: OrchestratorMcpFailure["code"], message: string): Orchest
   return new OrchestratorMcpFailure({ code, message });
 }
 
-/** Background subagents retain credentials until provider exit; archived threads and other instances cannot act. */
-export const isLiveCallerShell = (
-  shell: Pick<
-    OrchestrationV2ThreadShell,
-    "archivedAt" | "activeRunId" | "providerInstanceId" | "pendingBackgroundTasks"
-  > | null,
-  providerInstanceId: ProviderInstanceId | undefined,
-) =>
-  shell !== null &&
-  shell.archivedAt === null &&
-  shell.providerInstanceId === providerInstanceId &&
-  (shell.activeRunId !== null ||
-    (shell.pendingBackgroundTasks?.some(
-      (task) => task.kind === "subagent" && task.providerInstanceId === providerInstanceId,
-    ) ??
-      false));
-
-/**
- * Threads an agent starts over MCP are `mcp:<uuid>`, and agents often paste the
- * bare uuid. The id is never rewritten, so permission checks keyed on it still
- * hold; the miss only names a live thread the caller could read by its full id.
- */
-export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")(function* (
-  threads: Pick<ThreadManagementService.ThreadManagementService["Service"], "getThreadShell">,
-  threadId: ThreadId,
-  message: string,
-) {
-  const prefixed = ThreadId.make(`mcp:${threadId}`);
-  const shell = yield* threads.getThreadShell(prefixed).pipe(Effect.orElseSucceed(() => null));
-  return yield* failure(
-    "thread_not_found",
-    shell === null || shell.deletedAt !== null
-      ? message
-      : `${message} Did you mean \`${prefixed}\`?`,
-  );
-});
-
 function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
   switch (error._tag) {
@@ -232,10 +200,14 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("run_not_found", error.message);
     case "ThreadManagementReviewTaskFinishedError":
     case "ThreadManagementThreadArchivedError":
-    case "ThreadManagementNoSteerableRunError":
     case "ThreadManagementTargetStoppedError":
     case "ThreadManagementWorktreeUnrestorableError":
       return failure("thread_not_sendable", error.message);
+    case "ThreadManagementNoSteerableRunError":
+      return failure(
+        "thread_not_sendable",
+        `${error.message} Send with mode: "auto" or "queue" to start a new turn there.`,
+      );
     case "ThreadManagementThreadNotInterruptibleError":
       return failure("thread_not_interruptible", error.message);
     case "ThreadManagementProjectionLoadError":
@@ -254,17 +226,6 @@ function agentStopReason(reason: string | undefined): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
-function capabilityModelOption(descriptor: ProviderOptionDescriptor): OrchestratorMcpModelOption {
-  const defaultValue = getProviderOptionCurrentValue(descriptor);
-  return {
-    id: descriptor.id,
-    values:
-      descriptor.type === "boolean" ? [false, true] : descriptor.options.map((choice) => choice.id),
-    ...(defaultValue === undefined ? {} : { default: defaultValue }),
-  };
 }
 
 /** Reads a remote host's advertised options in either the current or the older descriptor shape. */
@@ -579,78 +540,6 @@ export function resolveInteractionMode(
     : Effect.succeed(resolved);
 }
 
-function stableThreadId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly index: number;
-}): ThreadId {
-  return ThreadId.make(
-    [
-      "thread",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.requestKey),
-      String(input.index),
-    ].join(":"),
-  );
-}
-
-function stableMessageId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly index: number;
-}): MessageId {
-  return MessageId.make(
-    [
-      "message",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.requestKey),
-      String(input.index),
-    ].join(":"),
-  );
-}
-
-function stableOperationMessageId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly operation: string;
-}): MessageId {
-  return MessageId.make(
-    [
-      "message",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.operation),
-      stablePart(input.requestKey),
-    ].join(":"),
-  );
-}
-
-function threadTitle(input: {
-  readonly parentTitle: string;
-  readonly prompt: string | undefined;
-  readonly title: string | undefined;
-  readonly index: number;
-}): string {
-  const detail = input.title?.trim() || input.prompt?.trim();
-  if (!detail) return `${input.parentTitle} thread ${input.index + 1}`;
-  if (detail.length <= 80) return detail;
-  let end = 77;
-  const previous = detail.charCodeAt(end - 1);
-  const next = detail.charCodeAt(end);
-  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-    end -= 1;
-  }
-  return `${detail.slice(0, end)}...`;
-}
-
-function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
-  return input.role === undefined || input.role === "general"
-    ? input.task
-    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
-}
-
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const fleet = yield* FleetSync.GoatclawFleetSync;
@@ -815,13 +704,20 @@ const make = Effect.gen(function* () {
         : Effect.fail(failure("target_required", missingMessage));
 
   const targetShell = Effect.fn("OrchestratorMcpService.targetShell")(function* (
+    scope: McpInvocationScope,
     threadId: ThreadId,
   ) {
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(Effect.mapError(threadManagementFailure));
     if (shell === null || shell.deletedAt !== null) {
-      return yield* threadNotFound(threadManagement, threadId, `Thread ${threadId} was not found.`);
+      return yield* threadNotFound(
+        threadManagement,
+        scope,
+        threadId,
+        `Thread ${threadId} was not found.`,
+        permissions,
+      );
     }
     return shell;
   });
@@ -834,7 +730,7 @@ const make = Effect.gen(function* () {
     const target: Pick<OrchestrationV2ThreadProjection, "thread"> =
       caller.parent !== undefined && threadId === caller.parent.thread.id
         ? caller.parent
-        : yield* targetShell(threadId).pipe(
+        : yield* targetShell(scope, threadId).pipe(
             Effect.flatMap((shell) =>
               threadManagement
                 .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
@@ -901,8 +797,10 @@ const make = Effect.gen(function* () {
     if (shell === null || shell.deletedAt !== null) {
       return yield* threadNotFound(
         threadManagement,
+        scope,
         threadId,
         `Thread ${threadId} is no longer available.`,
+        permissions,
       );
     }
     const input = { projectId: shell.projectId, threadId };
@@ -1318,7 +1216,7 @@ const make = Effect.gen(function* () {
         ? progress.state
         : !isTerminalTaskStatus(taskStatusForRun(taskResultRun))
           ? "working"
-          : delegatedTaskAwaitsSubagents(followupRuns, childControls.subagents)
+          : delegatedTaskAwaitsWork(followupRuns, childControls, taskResultRun)
             ? "waiting_for_children"
             : "result_available";
     const resultRunIds = [
@@ -1331,7 +1229,7 @@ const make = Effect.gen(function* () {
         messageRoles: ["assistant"],
         messageRunIds: resultRunIds,
         turnItemRunIds: resultRunIds,
-        turnItemTypes: ["assistant_message", "error"],
+        turnItemTypes: ["assistant_message", "error", "system_notice"],
       })
       .pipe(Effect.mapError(threadManagementFailure));
     const childProjection = {
@@ -1347,6 +1245,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(threadManagementFailure)));
     const workState =
       task.result !== null ? "result_available" : heldForRestart ? "working" : taskWorkState;
+    const runStatus = taskStatusForRun(taskResultRun ?? childRun);
     const status =
       task.result !== null
         ? taskStatusForRun(
@@ -1358,8 +1257,12 @@ const make = Effect.gen(function* () {
               : childRun,
           )
         : workState === "result_available"
-          ? taskStatusForRun(taskResultRun ?? childRun)
-          : taskStatusForRun(taskResultRun ?? childRun) === "queued"
+          ? task.cancelledRunId !== undefined &&
+            task.cancelledRunId === (taskResultRun ?? childRun)?.id &&
+            runStatus === "completed"
+            ? "interrupted"
+            : runStatus
+          : runStatus === "queued"
             ? "queued"
             : "running";
     const latestRun = ThreadManagementService.latestRun(childControls);
@@ -2925,6 +2828,16 @@ const make = Effect.gen(function* () {
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
         const reason = agentStopReason(input.reason);
+        const stopDescendants = Effect.suspend(() =>
+          threadManagement.stopDelegatedTasks({
+            threadId: childThreadId,
+            commandId,
+            reason,
+            stopCascadeFrom: scope.thread.threadId,
+          }),
+        );
+        const backgroundOnly =
+          current.workState === "waiting_for_children" && current.cloudTask === undefined;
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
@@ -2935,6 +2848,17 @@ const make = Effect.gen(function* () {
             stopCascadeFrom: scope.thread.threadId,
           })
           .pipe(
+            Effect.provideService(
+              DelegatedTaskCancellation,
+              backgroundOnly
+                ? {
+                    commandId,
+                    parentThreadId: scope.thread.threadId,
+                    taskId: input.taskId,
+                    stopDescendants,
+                  }
+                : undefined,
+            ),
             Effect.mapError((error) =>
               failure(
                 "task_not_cancellable",
@@ -2946,14 +2870,8 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
-        yield* threadManagement
-          .stopDelegatedTasks({
-            threadId: childThreadId,
-            commandId,
-            reason,
-            stopCascadeFrom: scope.thread.threadId,
-          })
-          .pipe(
+        if (!backgroundOnly)
+          yield* stopDescendants.pipe(
             Effect.mapError((error) =>
               failure(
                 "task_not_cancellable",
@@ -3138,22 +3056,38 @@ const make = Effect.gen(function* () {
                 request.interactionMode,
               );
               yield* assertTargetEnabledForProject(parent, commandId, target);
-              if (request.prompt !== undefined && !isRetryOfAcceptedCreation) {
-                yield* preflightCloudLaunch(
+              const initialMessage =
+                request.prompt === undefined
+                  ? undefined
+                  : {
+                      senderThreadId: scope.thread.threadId,
+                      messageId: stableMessageId({ scope, requestKey: key, index }),
+                      legacyCommandId: stableCommandId({
+                        scope,
+                        requestKey: key,
+                        operation: "dispatch-thread",
+                        index,
+                      }),
+                      text: request.prompt,
+                      attachments: [],
+                    };
+              const cloud =
+                initialMessage !== undefined &&
+                !isRetryOfAcceptedCreation &&
+                (yield* preflightCloudLaunch(
                   scope,
                   parent.thread.projectId,
                   target.modelSelection,
                   parent.thread.worktreePath,
                   parent.thread.branch,
-                );
-              }
+                ));
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
                 title: request.title,
                 index,
               });
-              yield* threadManagement
+              const receipt = yield* threadManagement
                 .dispatch({
                   type: "thread.create",
                   createdBy: "agent",
@@ -3175,6 +3109,7 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  ...(initialMessage === undefined || cloud ? {} : { initialMessage }),
                 })
                 .pipe(
                   Effect.mapError((error) =>
@@ -3188,27 +3123,19 @@ const make = Effect.gen(function* () {
               const resolvedModelSelection = (yield* threadManagement
                 .getThreadRecords(threadId, [])
                 .pipe(Effect.mapError(threadManagementFailure))).thread.modelSelection;
-              if (request.prompt !== undefined) {
+              if (
+                initialMessage !== undefined &&
+                !receipt.storedEvents.some(({ event }) => event.type === "run.created")
+              ) {
+                const { legacyCommandId, ...message } = initialMessage;
                 yield* threadManagement
                   .dispatch({
                     type: "message.dispatch",
                     createdBy: "agent",
                     creationSource: "mcp",
-                    commandId: stableCommandId({
-                      scope,
-                      requestKey: key,
-                      operation: "dispatch-thread",
-                      index,
-                    }),
+                    commandId: legacyCommandId,
                     threadId,
-                    senderThreadId: scope.thread.threadId,
-                    messageId: stableMessageId({
-                      scope,
-                      requestKey: key,
-                      index,
-                    }),
-                    text: request.prompt,
-                    attachments: [],
+                    ...message,
                     modelSelection: resolvedModelSelection,
                     dispatchMode: { type: "start_immediately" },
                   })
@@ -3423,6 +3350,7 @@ const make = Effect.gen(function* () {
         timeline.totalItems,
         shell,
         yield* Clock.currentTimeMillis,
+        input.afterPosition === undefined && input.itemId === undefined,
       );
       const recentRuns = target.runs
         .toSorted((left, right) => right.ordinal - left.ordinal)

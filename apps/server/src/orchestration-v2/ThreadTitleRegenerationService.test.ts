@@ -10,13 +10,16 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
+  TextGenerationError,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -286,6 +289,62 @@ describe("formatThreadTitleContext", () => {
 });
 
 describe("ThreadTitleRegenerationService", () => {
+  it.effect("keeps a title set before the first message unless it is a placeholder", () =>
+    Effect.gen(function* () {
+      const seed = "work on this and pr to dev";
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        // An MCP launch names the thread, or leaves a placeholder, and sends no message.
+        for (const [key, title, expectedTitle, generates] of [
+          ["preset", "[API] #4821 — retry webhook deliveries after a timeout", undefined, false],
+          ["placeholder", "Parent thread 1", seed, true],
+        ] as const) {
+          const threadId = ThreadId.make(`thread:title:${key}`);
+          yield* threads.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`command:title:${key}:create`),
+            threadId,
+            projectId,
+            title,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const requestId = CommandId.make(`command:title:${key}:message`);
+          yield* threads.dispatch({
+            type: "message.dispatch",
+            commandId: requestId,
+            threadId,
+            messageId: MessageId.make(`command:title:${key}:message:message`),
+            text: seed,
+            titleSeed: seed,
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: "defer_start" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+
+          const settled = yield* threads.getThreadProjection(threadId);
+          assert.equal(settled.thread.title, expectedTitle ?? title, key);
+          assert.equal(
+            (yield* outbox.listByCommandId(requestId)).some(
+              (effect) => effect.request.type === "thread-title.generate",
+            ),
+            generates,
+            key,
+          );
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect(
     "titles an image-only first message without sending bootstrap text to the title model",
     () =>
@@ -467,6 +526,7 @@ describe("ThreadTitleRegenerationService", () => {
           assistant: "Discarded.",
           status: "rolled_back",
         });
+        yield* TestClock.adjust("1 millis");
         const forkRunId = RunId.make("run:title:fork:1");
         yield* recordRun({
           threadId: sourceThreadId,
@@ -527,6 +587,51 @@ describe("ThreadTitleRegenerationService", () => {
     }),
   );
 
+  it.effect("regenerates a fresh fork title from its inherited conversation", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const sourceThreadId = yield* createThread({
+          command: "command:title:fresh-source",
+          thread: "thread:title:fresh-source",
+        });
+        const runId = RunId.make("run:title:fresh-source");
+        yield* recordRun({
+          threadId: sourceThreadId,
+          runId,
+          ordinal: 1,
+          user: "Inherited subject",
+          assistant: "Inherited answer",
+        });
+        const threadId = ThreadId.make("thread:title:fresh-fork");
+        yield* threads.dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make("command:title:fresh-fork"),
+          sourceThreadId,
+          targetThreadId: threadId,
+          sourcePoint: { type: "run", runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const requestId = yield* armRegeneration({
+          command: "command:title:fresh-regenerate",
+          threadId,
+        });
+        yield* service.execute({ threadId, requestId, kind: { type: "regenerate" } });
+        assert.include(
+          harness.generateThreadTitle.mock.calls[0]?.[0]?.forkSource?.history,
+          "Inherited subject",
+        );
+        assert.equal(
+          (yield* threads.getThreadProjection(threadId)).thread.title,
+          "Generated title",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect("clears the marker and keeps the title when generation fails", () =>
     Effect.gen(function* () {
       const harness = makeHarness({
@@ -552,6 +657,116 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Seed title");
         assert.isNotOk(projection.thread.titleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "records the outcome of a regeneration: renamed, failed without the CLI's text, unchanged",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { name: "renamed", generateTitle: () => Effect.succeed({ title: "Fresh title" }) },
+          {
+            name: "failed",
+            generateTitle: () =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation: "generateThreadTitle",
+                  detail:
+                    "Codex CLI command failed: OpenAI Codex\nuser\nConversation text\nmodel unavailable\n",
+                }),
+              ),
+          },
+          { name: "unchanged", generateTitle: () => Effect.succeed({ title: "Seed title" }) },
+        ] as const;
+        for (const testCase of cases) {
+          const harness = makeHarness({ generateTitle: testCase.generateTitle });
+          yield* Effect.gen(function* () {
+            const threads = yield* ThreadManagement.ThreadManagementService;
+            const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+            const threadId = yield* createThread({
+              command: `command:title:outcome:${testCase.name}:create`,
+              thread: `thread:title:outcome:${testCase.name}`,
+            });
+            yield* dispatchUserMessage({
+              command: `command:title:outcome:${testCase.name}:message`,
+              threadId,
+              text: "Some conversation",
+            });
+            const requestId = yield* armRegeneration({
+              command: `command:title:outcome:${testCase.name}:1`,
+              threadId,
+            });
+
+            yield* titleRegeneration.execute({ threadId, requestId, kind: { type: "regenerate" } });
+
+            const projection = yield* threads.getThreadProjection(threadId);
+            assert.isNotOk(projection.thread.titleRegeneration);
+            assert.deepInclude(
+              projection.thread.lastTitleRegeneration,
+              testCase.name === "failed"
+                ? { requestId, status: "failed", message: "Title generation failed." }
+                : { requestId, status: testCase.name },
+            );
+            // A CLI's raw output stays in the server log; the stored outcome carries none of it.
+            assert.notInclude(JSON.stringify(projection.thread), "model unavailable");
+            assert.notInclude(JSON.stringify(projection.thread), "Conversation text");
+            assert.equal(
+              projection.thread.title,
+              testCase.name === "renamed" ? "Fresh title" : "Seed title",
+            );
+          }).pipe(Effect.provide(harness.layer));
+        }
+      }),
+  );
+
+  it.effect("records no outcome for a first-message title", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({
+          command: "initial:create",
+          thread: "initial:thread",
+        });
+        yield* dispatchUserMessage({ command: "initial:message", threadId, text: "Fix the login" });
+        const requestId = yield* armRegeneration({ command: "initial:title", threadId });
+        const messageId = MessageId.make("initial:message:message");
+        yield* service.execute({ threadId, requestId, kind: { type: "initial", messageId } });
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.thread.title, "Generated title");
+        assert.isNotOk(projection.thread.lastTitleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("records a failed outcome when generation outlives its two-minute deadline", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ generateTitle: () => Effect.never });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({ command: "slow:create", thread: "slow:thread" });
+        yield* dispatchUserMessage({
+          command: "slow:message",
+          threadId,
+          text: "Some conversation",
+        });
+        const requestId = yield* armRegeneration({ command: "slow:title", threadId });
+        const running = yield* service
+          .execute({ threadId, requestId, kind: { type: "regenerate" } })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust("2 minutes");
+        yield* Fiber.join(running);
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.thread.title, "Seed title");
+        assert.deepInclude(projection.thread.lastTitleRegeneration, {
+          requestId,
+          status: "failed",
+          message: "Title generation took longer than two minutes.",
+        });
       }).pipe(Effect.provide(harness.layer));
     }),
   );

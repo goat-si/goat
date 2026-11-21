@@ -52,6 +52,8 @@ export function makeTestAdapter(input: {
   readonly injectedHistory?: Ref.Ref<ReadonlyArray<unknown>>;
   readonly failStartOnce?: Ref.Ref<boolean>;
   readonly refuseStarts?: Ref.Ref<number>;
+  readonly refuseAfterSubmitFence?: boolean;
+  readonly skipAfterFenceOnOrdinal?: number;
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
@@ -80,6 +82,7 @@ export function makeTestAdapter(input: {
   readonly backgroundTasksEndWithProcess?: true;
   readonly backgroundWork?: Ref.Ref<boolean>;
   readonly closedSessions?: Ref.Ref<ReadonlyArray<string>>;
+  readonly rollback?: "truncates" | "replaces_native_thread";
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId: input.instanceId,
@@ -111,6 +114,7 @@ export function makeTestAdapter(input: {
       };
 
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+        tracksInputDelivery: true,
         instanceId: input.instanceId,
         driver: input.driver,
         providerSessionId: sessionInput.providerSessionId,
@@ -216,7 +220,9 @@ export function makeTestAdapter(input: {
           if (
             input.refuseStarts !== undefined &&
             (yield* Ref.getAndUpdate(input.refuseStarts, (left) => Math.max(0, left - 1))) > 0
-          )
+          ) {
+            if (input.refuseAfterSubmitFence)
+              yield* turnInput.inputDelivery?.begin() ?? Effect.void;
             return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
               driver: input.driver,
               threadId: turnInput.threadId,
@@ -224,6 +230,12 @@ export function makeTestAdapter(input: {
               runId: turnInput.runId,
               cause: input.refusalCause ?? new ClaudeBackgroundWorkBlocksQueryReplacementError(),
             });
+          }
+          if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
+          if (input.skipAfterFenceOnOrdinal === turnInput.runOrdinal)
+            return yield* turnInput.inputDelivery?.skipped() ?? Effect.void;
+          yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
+          yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
           yield* Effect.yieldNow;
           yield* Ref.update(input.capturedTurns, (turns) => [
             ...turns,
@@ -397,8 +409,25 @@ export function makeTestAdapter(input: {
         respondToRuntimeRequest: () => Effect.void,
         readThreadSnapshot: () =>
           unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
-        rollbackThread: () =>
-          unimplemented(input.driver, "rollbackThread unused in provider switch test"),
+        rollbackThread: ({ providerThread }) =>
+          input.rollback === undefined
+            ? unimplemented(input.driver, "rollbackThread unused in provider switch test")
+            : Effect.succeed({
+                providerThread:
+                  input.rollback === "truncates" || providerThread.nativeThreadRef === null
+                    ? providerThread
+                    : {
+                        ...providerThread,
+                        nativeThreadRef: {
+                          ...providerThread.nativeThreadRef,
+                          nativeId: `${providerThread.nativeThreadRef.nativeId}:after-rollback`,
+                        },
+                        nativeConversationHeadRef: null,
+                      },
+                providerTurns: [],
+                messages: [],
+                runtimeRequests: [],
+              }),
         forkThread: () => unimplemented(input.driver, "forkThread unused in provider switch test"),
       };
       return runtime;

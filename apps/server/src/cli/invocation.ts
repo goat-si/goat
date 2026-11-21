@@ -10,6 +10,10 @@ import { CLI_NPM_PACKAGE_NAME, cliNpmExecCommand, cliNpmPackageUrl } from "@goat
 import { resolveCommandPath } from "@goat/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
+import { findPosixLauncher, posixLauncherTarget } from "../cloud/posixLauncher.ts";
+
+const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/goat\/versions\/[^/]+\/goat$/;
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
@@ -111,6 +115,32 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
+  const runtime = PINNED_RUNTIME_ENTRY.exec(entry);
+  if (runtime) {
+    const launchedAs = yield* resolveLauncherPath;
+    if (launchedAs === undefined) return null;
+    const environment = yield* HostProcess.Environment;
+    const cwd = yield* HostProcess.WorkingDirectory;
+    const home = yield* HostProcess.HomeDirectory;
+    const launcher = yield* Effect.promise(() =>
+      findPosixLauncher({
+        launchedAs,
+        versionsDir: path.join(runtime[1] || "/", "runtime/goat/versions"),
+        environment,
+        cwd,
+        home,
+      }),
+    );
+    if (launcher === undefined) return null;
+    const target = yield* Effect.promise(() => posixLauncherTarget(launcher));
+    const linked = target === undefined ? null : PINNED_RUNTIME_ENTRY.exec(target);
+    if (!linked || (yield* fs.realPath(linked[1] || "/")) !== (runtime[1] || "/")) return null;
+    return {
+      kind: "goat-launcher",
+      launcher,
+      baseDir: linked[1] || "/",
+    } satisfies ServerInstallation;
+  }
   if (platform === "win32") {
     const owned = yield* resolveWindowsNpmGlobal(entry);
     if (owned !== null) return owned;

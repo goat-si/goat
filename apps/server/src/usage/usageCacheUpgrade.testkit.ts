@@ -9,7 +9,7 @@ import * as ServerConfig from "../config.ts";
 import { totalOutputTokens } from "./UsageAssertions.testkit.ts";
 import * as UsageService from "./UsageService.ts";
 import type * as Main from "./UsageService.test.ts";
-import { SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
+import { encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 import { WINDOW } from "./usageUnpriced.testkit.ts";
 
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -126,7 +126,7 @@ export function registerCacheUpgradeTest(
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v15.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v17.json");
           assert.deepStrictEqual(
             (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
               .filter((name) => name.startsWith("usage-scan-cache"))
@@ -153,6 +153,84 @@ export function registerCacheUpgradeTest(
           ),
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("recovers a moved Grok transcript without inflating old or deleted turns", () =>
+    Effect.gen(function* () {
+      const { home, settings } = yield* setup;
+      const sessions = NodePath.join(home, "grok", "sessions");
+      const movedPath = NodePath.join(sessions, "moved", "updates.jsonl");
+      const removedPath = NodePath.join(sessions, "previous", "updates.jsonl");
+      const deletedPath = NodePath.join(sessions, "deleted", "updates.jsonl");
+      const firstAt = Date.parse("2026-08-01T10:00:00Z");
+      const turn = (timestampMs: number, outputTokens: number) =>
+        encodeUnknownJsonString({
+          timestamp: timestampMs / 1000,
+          method: "_x.ai/session/update",
+          params: {
+            sessionId: "resumed",
+            update: {
+              sessionUpdate: "turn_completed",
+              prompt_id: "prompt-1",
+              usage: { inputTokens: 10, outputTokens },
+            },
+          },
+        });
+      const legacy = (sessionId: string, outputTokens: number) =>
+        ({
+          size: 1,
+          mtimeMs: firstAt,
+          provider: "grok",
+          records: [
+            {
+              provider: "grok",
+              timestampMs: firstAt,
+              model: "grok",
+              sessionId,
+              totals: {
+                uncachedInputTokens: 10,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens,
+                reasoningTokens: 0,
+              },
+              speed: "standard",
+              reportedCostUsd: null,
+              dedupeKey: `${sessionId}:prompt-1:grok`,
+            },
+          ],
+          tailRecords: [],
+          malformedRecords: 0,
+          position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+        }) as const;
+      yield* Effect.gen(function* () {
+        const { stateDir } = yield* ServerConfig.ServerConfig;
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(stateDir, { recursive: true });
+          await NodeFSP.mkdir(NodePath.dirname(movedPath), { recursive: true });
+          await NodeFSP.writeFile(
+            movedPath,
+            [turn(firstAt, 5), turn(firstAt + 1000, 11), ""].join("\n"),
+          );
+          const saved = encodeScanCache(
+            new Map([
+              [removedPath, legacy("resumed", 11)],
+              [deletedPath, legacy("deleted", 3)],
+            ]),
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(stateDir, "usage-scan-cache-v15.json"),
+            encodeUnknownJsonString({ ...saved, version: 15 }),
+          );
+        });
+        const service = yield* UsageService.make;
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 19);
+        yield* service.awaitPersisted;
+        yield* Effect.promise(() => NodeFSP.unlink(movedPath));
+        const restarted = yield* UsageService.make;
+        assert.strictEqual(totalOutputTokens(yield* restarted.readSummary(WINDOW)), 19);
+      }).pipe(Effect.provide(layerService({ prefix: "grok-cache-upgrade", home, settings })));
+    }),
   );
 
   it.effect("re-prices Claude 1-hour cache writes a v12 cache saved, then drops the v12 file", () =>

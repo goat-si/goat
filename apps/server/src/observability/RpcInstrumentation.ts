@@ -3,6 +3,7 @@ import {
   GLOBAL_SKILLS_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   REMOTE_LAUNCHES_WS_METHODS,
+  SPEECH_STREAM_WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
@@ -10,6 +11,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -21,6 +23,11 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [SPEECH_STREAM_WS_METHODS.start]: "speech",
+  [SPEECH_STREAM_WS_METHODS.feed]: "speech",
+  [SPEECH_STREAM_WS_METHODS.finish]: "speech",
+  [SPEECH_STREAM_WS_METHODS.cancel]: "speech",
+  [SPEECH_STREAM_WS_METHODS.events]: "speech",
   [GLOBAL_SKILLS_WS_METHODS.globalRemove]: "skills",
   [GLOBAL_SKILLS_WS_METHODS.globalRescan]: "skills",
   [WS_METHODS.browserClaimsWindows]: "browserClaims",
@@ -300,6 +307,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.agentSessionsScan]: "workspace",
   [WS_METHODS.agentSessionsImport]: "workspace",
   [WS_METHODS.assetsCreateUrl]: "workspace",
+  [WS_METHODS.themeValidateCss]: "server",
+  [WS_METHODS.themeBackgroundUrl]: "server",
   [WS_METHODS.assetsPersistChatAttachments]: "orchestration",
   [WS_METHODS.attachmentsCreateUploadUrl]: "workspace",
   [WS_METHODS.attachmentsDelete]: "workspace",
@@ -309,6 +318,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.mcpAppsUpdateModelContext]: "provider",
   [WS_METHODS.mcpAppsReadResource]: "provider",
   [WS_METHODS.subscribeVcsStatus]: "vcs",
+  [WS_METHODS.subscribeVcsBranch]: "vcs",
+  [WS_METHODS.vcsRefreshBranch]: "vcs",
   [WS_METHODS.subscribeWorktreeSetup]: "vcs",
   [WS_METHODS.worktreeSetupCancel]: "vcs",
   [WS_METHODS.subscribeResourceTelemetry]: "server",
@@ -383,6 +394,7 @@ const DEFAULT_RPC_SPAN_ATTRIBUTES = {
   "rpc.system": "effect-rpc",
 } as const;
 const RPC_METHODS_WITH_TRACING_DISABLED: ReadonlySet<string> = new Set([
+  ...Object.values(SPEECH_STREAM_WS_METHODS),
   WS_METHODS.serverGetTraceDiagnostics,
   WS_METHODS.serverGetProcessDiagnostics,
   WS_METHODS.serverGetProcessResourceHistory,
@@ -407,13 +419,25 @@ export const rpcInstrumentationLayer = Layer.succeed(RpcInstrumentation)((effect
   if (RPC_METHODS_WITH_TRACING_DISABLED.has(method)) {
     return measured.pipe(Effect.provideService(References.TracerEnabled, false));
   }
-  return measured.pipe(
-    Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
-      attributes: {
-        ...DEFAULT_RPC_SPAN_ATTRIBUTES,
-        "rpc.method": method,
-        "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
-      },
-    }),
+  // The ambient span is the socket's `GET /ws` request, open for the whole connection. Parenting
+  // every call to it grows one trace past the collector's per-trace limit, which then drops it.
+  return Effect.currentParentSpan.pipe(
+    Effect.option,
+    Effect.flatMap((connection) =>
+      measured.pipe(
+        Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
+          root: true,
+          links: Option.match(connection, {
+            onNone: () => [],
+            onSome: (span) => [{ span, attributes: {} }],
+          }),
+          attributes: {
+            ...DEFAULT_RPC_SPAN_ATTRIBUTES,
+            "rpc.method": method,
+            "rpc.aggregate": RPC_AGGREGATES[method as WsRpcMethod],
+          },
+        }),
+      ),
+    ),
   );
 });

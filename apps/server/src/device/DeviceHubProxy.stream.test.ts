@@ -17,6 +17,7 @@ import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 it.effect("preserves binary input and admission frames through the real socket proxy", () =>
   Effect.gen(function* () {
+    const revoked = Promise.withResolvers<void>();
     const hub = yield* Effect.acquireRelease(
       Effect.sync(() => new NodeWS.WebSocketServer({ port: 0 })),
       (server) =>
@@ -39,7 +40,7 @@ it.effect("preserves binary input and admission frames through the real socket p
     const services = yield* Layer.build(
       HttpRouter.serve(DeviceHubProxy.layer, { disableListenLog: true }).pipe(
         Layer.provideMerge(layerTestLoopback),
-        Layer.provide(SessionLifetime.layerStable),
+        Layer.provide(SessionLifetime.layerRevocable(revoked.promise)),
         Layer.provide(
           Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
             authenticateWebSocketUpgrade: () =>
@@ -87,5 +88,9 @@ it.effect("preserves binary input and admission frames through the real socket p
     });
     yield* Effect.promise(() => received.promise);
     expect(frames).toEqual([[0x83], [0x03, 1], [0x03, 2]]);
+    const closed = Promise.withResolvers<void>();
+    client.addEventListener("close", () => closed.resolve(), { once: true });
+    revoked.resolve();
+    yield* Effect.promise(() => closed.promise);
   }),
 );

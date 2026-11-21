@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { SidebarProjectGroupingMode } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { sortProjectsByGroupOrder } from "@goat/client-runtime/state/project-grouping";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Platform, ScrollView } from "react-native";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
@@ -59,7 +59,11 @@ const sidebarProjectOrderFamily = Atom.family((mode: SidebarProjectGroupingMode)
       threads: get(environmentThreadShells.threadShellsAtom),
       pendingTasks: [],
       projectSortOrder: "updated_at",
-    }).map((scope) => ({ memberProjectRefs: scope.projectRefs })),
+    }).map((scope) => ({
+      memberProjectRefs: scope.projectRefs,
+      pinned: scope.pinned,
+      archived: scope.archived,
+    })),
   ).pipe(Atom.withEquality(pullRequestProjectOrderIsEqual)),
 );
 
@@ -74,6 +78,7 @@ function useProjectsInSidebarOrder<Project extends { id: string; environmentId: 
 export function PullRequestListFilters(props: {
   /** Android sidebar rows sit further in than full-width rows; the pills follow them. */
   readonly sidebar?: boolean;
+  readonly savedViewsMenu: ReactNode;
   readonly environments: readonly { id: string; label: string }[];
   readonly environmentId: string | null;
   readonly onEnvironmentChange: (id: string | null) => void;
@@ -327,6 +332,7 @@ export function PullRequestListFilters(props: {
           : ROW_STYLE
       }
     >
+      {props.savedViewsMenu}
       {Platform.OS === "android" ? null : (
         <ListFilterMenu
           label={count ? String(count) : "Filters"}

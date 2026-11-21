@@ -28,6 +28,7 @@ function presentation(): EnvironmentPresentation {
     },
     connection: { phase: "connected", error: null, traceId: null },
     serverConfig: null,
+    refusedRouteIds: [],
   };
 }
 function harness() {

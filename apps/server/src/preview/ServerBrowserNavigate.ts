@@ -1,3 +1,4 @@
+import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import type { Page } from "playwright-core";
 import type { PreviewAutomationNavigateInput } from "@goat/contracts";
 import { normalizePreviewUrl } from "@goat/shared/preview";
@@ -10,6 +11,7 @@ export const guardedNavigate = async (
     readonly page: Page;
     readonly control: Pick<SessionControl, "track">;
     pendingInitialRequestUrl?: string | null;
+    readonly dialog?: unknown;
   },
   url: string,
   readiness: "load" | "domContentLoaded" | "none",
@@ -21,9 +23,11 @@ export const guardedNavigate = async (
   // A stopped first load to the same URL must not swallow this navigation's request.
   tab.pendingInitialRequestUrl = null;
   const startedAt = performance.now();
+  const remaining = () => Math.max(1, timeout - (performance.now() - startedAt));
+  await stopUnresponsiveScript(channel, () => !tab.dialog, timeout / 2);
   const navigation = channel.call(() =>
     tab.page.goto(url, {
-      timeout,
+      timeout: remaining(),
       waitUntil: "commit",
     }),
   );
@@ -35,7 +39,7 @@ export const guardedNavigate = async (
     .then(() =>
       tab.page
         .waitForLoadState(readiness === "domContentLoaded" ? "domcontentloaded" : "load", {
-          timeout: Math.max(1, timeout - (performance.now() - startedAt)),
+          timeout: remaining(),
         })
         .catch((cause: unknown) => {
           if (!(cause instanceof Error && cause.name === "TimeoutError")) throw cause;

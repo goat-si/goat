@@ -254,7 +254,7 @@ describe("assembled material platform and window service", () => {
         assert.equal((yield* f.material.getState(1)).applied, "macos-glass");
         assert.deepEqual(f.state.tints[0], [0.96, 0.96, 0.97, 0.35 + (0.5 * (80 - 40)) / 60]);
         assert.equal(f.state.liveViews.size, 1);
-        yield* f.material.syncAppearance(f.window, true);
+        yield* f.material.syncAppearance(f.window, true, false);
         assert.deepEqual(f.state.tints.at(-1), [0.11, 0.11, 0.12, 0.35 + (0.5 * (80 - 40)) / 60]);
         const tints = yield* Queue.unbounded<void>();
         f.state.onTint = () => {
@@ -267,14 +267,14 @@ describe("assembled material platform and window service", () => {
         yield* Queue.take(tints);
         assert.deepEqual(f.state.tints.at(-1), [0.96, 0.96, 0.97, 0.35]);
         assert.equal(f.state.allocations, 1);
-        yield* f.material.syncAppearance(f.window, true);
+        yield* f.material.syncAppearance(f.window, true, false);
         f.close();
         assert.equal(f.model.backing, "#171717");
         assert.equal(f.state.liveViews.size, 0);
         assert.equal(f.state.activeConstraints.size, 0);
         const mutations = f.state.mutations;
         f.closed();
-        yield* f.material.syncAppearance(f.window, false);
+        yield* f.material.syncAppearance(f.window, false, false);
         yield* f.commit({ glassOpacity: 80 });
         assert.equal(f.state.mutations, mutations);
       }),
@@ -291,7 +291,7 @@ describe("assembled material platform and window service", () => {
           releaseBacking = f.model.backing;
         };
         f.state.fail = "tint";
-        yield* f.material.syncAppearance(f.window, true);
+        yield* f.material.syncAppearance(f.window, true, false);
         assert.equal((yield* f.material.getState(1)).reason, "native-failed");
         assert.equal(f.model.backing, "#171717");
         assert.equal(f.state.liveViews.size, 0);

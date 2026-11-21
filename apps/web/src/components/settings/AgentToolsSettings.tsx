@@ -18,7 +18,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
-import { persistScopedSettingsPatch } from "./scopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -30,6 +29,7 @@ import {
   useScopedSettingsMixed,
   useScopedSettingsWriteAllowed,
   useUpdateScopedSettings,
+  writeScopedSettings,
 } from "./useScopedSettings";
 
 const TOOL_LISTING_LABELS: Readonly<Record<AgentToolListing, string>> = {
@@ -42,6 +42,7 @@ export function AgentToolsSettings() {
   return (
     <SettingsSection id="agent-tools" title="Agent tools">
       <AgentToolListingSetting />
+      <AgentThemeWritesSetting />
       <AgentWorkspaceTerminalSettings />
       <BuiltInSkillSetting
         name="goat-discipline"
@@ -58,6 +59,31 @@ export function AgentToolsSettings() {
         environmentDescription="Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns."
       />
     </SettingsSection>
+  );
+}
+
+function AgentThemeWritesSetting() {
+  const { scope } = useSettingsScope();
+  const settings = useScopedSettings();
+  const update = useUpdateScopedSettings();
+  const allowed = useScopedSettingsWriteAllowed();
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  return (
+    <SettingsRow
+      title="Agent theme changes"
+      serverScoped
+      settingKeys={["enableAgentThemeWrites"]}
+      description="Allow agents with settings access to publish environment themes."
+      control={
+        <ScopedSwitch
+          settingKeys={["enableAgentThemeWrites"]}
+          aria-label="Agent theme changes"
+          checked={settings.enableAgentThemeWrites}
+          disabled={!allowed || projectScope}
+          onCheckedChange={(checked) => update({ enableAgentThemeWrites: Boolean(checked) })}
+        />
+      }
+    />
   );
 }
 
@@ -96,40 +122,44 @@ function BuiltInSkillSetting(props: {
   const choice = reference?.override === undefined ? "inherit" : reference.override ? "on" : "off";
   const save = async (enabled: boolean | undefined) => {
     if (!canWrite || pending || !supported || (!projectScope && enabled === undefined)) return;
-    const serverWrites = connectedEnvironments.flatMap((environment) => {
-      const previous = environment.serverConfig?.settings;
-      if (!previous) return [];
-      const projectIds = projectScope
-        ? scope.members
-            .filter((member) => member.environmentId === environment.environmentId)
-            .map((member) => member.id)
-        : [];
-      if (projectScope && projectIds.length === 0) return [];
-      return [
-        {
-          environmentId: environment.environmentId,
-          label: environment.label,
-          previous,
-          patch: projectScope
-            ? {
-                projectSettingsOverrides: builtInSkillProjectPatch(
-                  previous,
-                  projectIds,
+    const plan = (environments: Parameters<typeof writeScopedSettings>[0]) => {
+      const serverWrites = environments.flatMap((environment) => {
+        const previous = environment.serverConfig?.settings;
+        if (!previous) return [];
+        const projectIds = projectScope
+          ? scope.members
+              .filter((member) => member.environmentId === environment.environmentId)
+              .map((member) => member.id)
+          : [];
+        if (projectScope && projectIds.length === 0) return [];
+        return [
+          {
+            environmentId: environment.environmentId,
+            label: environment.label,
+            previous,
+            patch: projectScope
+              ? {
+                  projectSettingsOverrides: builtInSkillProjectPatch(
+                    previous,
+                    projectIds,
+                    props.name,
+                    enabled,
+                  ),
+                }
+              : builtInSkillEnvironmentPatch(
+                  previous.disabledBuiltInSkills,
                   props.name,
-                  enabled,
+                  enabled === true,
                 ),
-              }
-            : builtInSkillEnvironmentPatch(
-                previous.disabledBuiltInSkills,
-                props.name,
-                enabled === true,
-              ),
-        },
-      ];
-    });
+          },
+        ];
+      });
+      return { serverWrites, clientPatch: {}, hasClientWrite: false, unavailableReason: null };
+    };
     setPending(true);
-    const result = await persistScopedSettingsPatch(
-      { serverWrites, clientPatch: {}, hasClientWrite: false, unavailableReason: null },
+    const result = await writeScopedSettings(
+      connectedEnvironments,
+      plan,
       (request) =>
         readEnvironmentScope(request.environmentId, AuthSettingsWriteScope)
           ? persistServer(request)

@@ -5,6 +5,7 @@ import type {
   ThreadPullRequestLink,
 } from "@goat/contracts";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
+import { canonicalRepositoryPath } from "@goat/shared/git";
 
 import type { SourceControlDefinitionRegistry } from "./definition.ts";
 
@@ -73,7 +74,8 @@ export function makeThreadPullRequests(
     const parsed = key.url === undefined ? null : parse(key.url);
     const authority =
       key.authority ??
-      (parsed?.repository === key.repository.trim().toLowerCase() && parsed.number === key.number
+      (parsed?.repository === canonicalRepositoryPath(key.repository.trim()) &&
+      parsed.number === key.number
         ? parsed.authority
         : undefined);
     const canonical = registry.canonicalRepositoryKey(

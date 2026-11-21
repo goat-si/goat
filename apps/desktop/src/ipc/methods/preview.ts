@@ -4,6 +4,7 @@ import {
   DesktopPreviewAnnotationSendEnabledInputSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
+  DesktopPreviewFindInput,
   DesktopPreviewConfigInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
@@ -12,6 +13,7 @@ import {
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetShownInputSchema,
+  DesktopPreviewSetCaptureDrawnInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
@@ -116,9 +118,13 @@ const registerWebview = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL,
   payload: DesktopPreviewRegisterWebviewInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
+  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({
+    tabId,
+    webContentsId,
+    reportCaptureDraw,
+  }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.registerWebview(tabId, webContentsId);
+    yield* manager.registerWebview(tabId, webContentsId, reportCaptureDraw);
   }),
 });
 
@@ -169,6 +175,17 @@ const stopLoading = tabMethod(
   IpcChannels.PREVIEW_STOP_LOADING_CHANNEL,
   "desktop.ipc.preview.stopLoading",
   (manager, tabId) => manager.stopLoading(tabId),
+);
+const findInPage = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_FIND_CHANNEL,
+  payload: DesktopPreviewFindInput,
+  result: Schema.Void,
+  handler: (input) => PreviewManager.PreviewManager.use((manager) => manager.findInPage(input)),
+});
+const stopFindInPage = tabMethod(
+  IpcChannels.PREVIEW_STOP_FIND_CHANNEL,
+  "desktop.ipc.preview.stopFindInPage",
+  (manager, tabId) => manager.stopFindInPage(tabId),
 );
 const zoomIn = tabMethod(
   IpcChannels.PREVIEW_ZOOM_IN_CHANNEL,
@@ -224,6 +241,15 @@ const setShown = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setShown(tabId, shown);
+  }),
+});
+const setCaptureDrawn = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_CAPTURE_DRAWN_CHANNEL,
+  payload: DesktopPreviewSetCaptureDrawnInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setCaptureDrawn")(function* (input) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setCaptureDrawn(input);
   }),
 });
 const openDevTools = tabMethod(
@@ -496,6 +522,8 @@ export const methods = [
   goForward,
   refresh,
   stopLoading,
+  findInPage,
+  stopFindInPage,
   zoomIn,
   zoomOut,
   resetZoom,
@@ -504,6 +532,7 @@ export const methods = [
   setZoomFactor,
   setAudioMuted,
   setShown,
+  setCaptureDrawn,
   openDevTools,
   clearCookies,
   clearCache,

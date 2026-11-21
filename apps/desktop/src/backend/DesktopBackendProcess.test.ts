@@ -13,6 +13,8 @@ import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import { ChildProcessSpawner } from "effect/process";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { baseConfig, layerHttpClient, makeProcess } from "./DesktopBackendProcess.testkit.ts";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as DesktopBackendProcess from "./DesktopBackendProcess.ts";
@@ -213,4 +215,76 @@ it.effect("interrupts detached output drains when exit observation defects", () 
       assert.isTrue(yield* Deferred.isDone(drainStopped));
     }),
   ),
+);
+
+it.effect("becomes ready from the child control stream while HTTP probes stall", () =>
+  Effect.gen(function* () {
+    const probeStarted = yield* Deferred.make<void>();
+    const ready = yield* Deferred.make<void>();
+    const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+    const processLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeProcess({
+            getOutputFd: (fd) =>
+              fd === 5
+                ? Stream.encodeText(
+                    Stream.fromEffect(
+                      Deferred.await(probeStarted).pipe(
+                        Effect.as('{"version":1,"type":"serverReady"}\n'),
+                      ),
+                    ),
+                  )
+                : Stream.empty,
+            exitCode: Deferred.await(exit),
+          }),
+        ),
+      ),
+    );
+    const fiber = yield* DesktopBackendProcess.runBackendProcess({
+      ...baseConfig,
+      desktopTelemetryStream: Stream.empty,
+      onReady: () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          processLayer,
+          layerHttpClient(() =>
+            Deferred.succeed(probeStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(probeStarted);
+    yield* TestClock.adjust("1 second");
+    const wasReady = yield* Deferred.isDone(ready);
+    yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+    yield* Fiber.join(fiber);
+    assert.isTrue(wasReady);
+  }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+);
+
+it.effect(
+  "uses HTTP readiness for an older backend without a control-stream readiness record",
+  () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const processLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(makeProcess({ exitCode: Deferred.await(exit) })),
+        ),
+      );
+      const fiber = yield* DesktopBackendProcess.runBackendProcess({
+        ...baseConfig,
+        desktopTelemetryStream: Stream.empty,
+        onReady: () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      }).pipe(Effect.provide(Layer.merge(processLayer, http)), Effect.forkScoped);
+      yield* Deferred.await(ready);
+      yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+      yield* Fiber.join(fiber);
+    }).pipe(Effect.scoped),
 );

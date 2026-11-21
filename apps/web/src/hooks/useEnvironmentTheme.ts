@@ -46,6 +46,7 @@ export function environmentThemeDefinition(theme: EnvironmentTheme): ThemeDefini
     id: theme.id,
     label: theme.name,
     appearance: theme.appearance,
+    ...(theme.css !== undefined ? { css: theme.css } : {}),
     colors: publishedThemeColors(theme, theme.appearance, theme.colors),
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
     // Guided editing regenerates from seeds, so hand-tuned role overrides must use the advanced editor.
@@ -85,6 +86,7 @@ export function useEnvironmentThemeSync(): void {
   const lastPublished = useRef<ReadonlyArray<EnvironmentTheme> | null>(null);
 
   useEffect(() => {
+    if (published === null) return;
     if (lastPublished.current !== null && Equal.equals(lastPublished.current, published)) return;
     lastPublished.current = published;
 

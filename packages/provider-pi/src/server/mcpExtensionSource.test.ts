@@ -645,6 +645,11 @@ describe("Pi tool discovery permissions", () => {
     assert.equal(result?.block, true);
     assert.deepEqual(confirmations, ["Allow mcp__goat__goat_preview_snapshot?"]);
 
+    searchPath = "<builtin:tool-search>";
+    assert.isUndefined(await toolCall!({ toolName: "tool_search", input: {} }, ctx));
+    searchPath = "<builtin:tool-search>-override";
+    assert.equal((await toolCall!({ toolName: "tool_search", input: {} }, ctx))?.block, true);
+
     searchPath = "/extensions/custom-search.ts";
     const replaced = await toolCall!({ toolName: "tool_search", input: {} }, ctx);
     assert.equal(replaced?.block, true);

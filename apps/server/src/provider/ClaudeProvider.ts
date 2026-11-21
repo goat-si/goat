@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - the SDK's spawn hook returns a Node child process.
 import * as NodeChildProcess from "node:child_process";
-import { guardChild } from "@goat/shared/errorGuards";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
+import * as SpawnWorker from "../process/SpawnWorker.ts";
 import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
 import * as Schema from "effect/Schema";
 import {
@@ -182,11 +183,16 @@ function formatClaudeSubscriptionAuthLabel(subscriptionType: string): string {
   return `Claude ${subscriptionLabel} Subscription`;
 }
 
+function hasApiKey(apiKeySource: string | undefined): boolean {
+  return Boolean(apiKeySource) && apiKeySource !== "none";
+}
+
 function claudeAuthMetadata(input: {
   readonly subscriptionType: string | undefined;
   readonly authMethod: string | undefined;
+  readonly apiKeySource: string | undefined;
 }): { readonly type: string; readonly label: string } | undefined {
-  if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey") {
+  if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey" || hasApiKey(input.apiKeySource)) {
     return {
       type: "apiKey",
       label: "Claude API Key",
@@ -221,8 +227,7 @@ function claudeAuthStatus(
   }
   if (capabilities.tokenSource !== "none") return "authenticated";
   // API keys can authenticate with tokenSource: none; also check key and account fields.
-  const hasApiKey = Boolean(capabilities.apiKeySource) && capabilities.apiKeySource !== "none";
-  return hasApiKey || capabilities.email || capabilities.subscriptionType
+  return hasApiKey(capabilities.apiKeySource) || capabilities.email || capabilities.subscriptionType
     ? "authenticated"
     : "unauthenticated";
 }
@@ -258,6 +263,15 @@ export function spawnClaudeProbeThroughEnv({
   return child;
 }
 
+function spawnClaudeProbeOnWorker({ command, args, cwd, env, signal }: ClaudeSpawnOptions) {
+  const child = guardErrors(
+    SpawnWorker.spawnPiped(command, args, { cwd, env, signal, windowsHide: true }),
+    () => child.kill("SIGKILL"),
+  );
+  child.stderr.resume();
+  return child;
+}
+
 export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly executablePath: string;
   readonly abortController: AbortController;
@@ -265,9 +279,11 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly cwd: string | undefined;
   readonly managedMcpConfig: boolean;
   readonly spawnThroughEnv?: boolean;
+  readonly spawnOnWorker?: boolean;
 }): ClaudeQueryOptions {
   return {
     ...(input.spawnThroughEnv ? { spawnClaudeCodeProcess: spawnClaudeProbeThroughEnv } : {}),
+    ...(input.spawnOnWorker ? { spawnClaudeCodeProcess: spawnClaudeProbeOnWorker } : {}),
     persistSession: false,
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
@@ -497,8 +513,8 @@ const probeClaudeCapabilities = (
           ...(yield* readClaudeSettingsEnv(claudeSettings, cwd, claudeEnvironment)),
         })
       : 0;
-    const spawnThroughEnv =
-      (yield* HostProcess.Platform) === "linux" && (yield* Effect.promise(supportsEnvChdir));
+    const platform = yield* HostProcess.Platform;
+    const spawnThroughEnv = platform === "linux" && (yield* Effect.promise(supportsEnvChdir));
     return yield* Effect.tryPromise(async () => {
       const q = claudeQuery({
         // oxlint-disable-next-line require-yield -- never yields, so no prompt reaches the API
@@ -512,6 +528,7 @@ const probeClaudeCapabilities = (
           cwd,
           managedMcpConfig,
           spawnThroughEnv,
+          spawnOnWorker: platform === "win32",
         }),
       });
       const init = await q.initializationResult();
@@ -874,6 +891,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeAuthMetadata({
       subscriptionType: capabilities.subscriptionType,
       authMethod: capabilities.tokenSource,
+      apiKeySource: capabilities.apiKeySource,
     });
   const usageCheckedAt = capabilities.usageCheckedAt ?? checkedAt;
   const usageLimits = !capabilities.usage

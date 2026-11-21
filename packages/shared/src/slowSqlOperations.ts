@@ -64,6 +64,34 @@ export const connectionOwner = (fiber: Fiber.Fiber<unknown, unknown>) => {
   return { fiberId: fiber.id, name: span.name, traceId: span.traceId, spanId: span.spanId };
 };
 
+export interface Acquired {
+  readonly connection: "writer" | "reader";
+  readonly lockWaitMs: number;
+}
+
+export type ConnectionOwner = ReturnType<typeof connectionOwner>;
+
+export const annotateAcquired = (
+  fiber: Fiber.Fiber<unknown, unknown>,
+  acquired: Acquired | undefined,
+  ownerAtWaitStart?: ConnectionOwner,
+) => {
+  const span = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
+  if (span?._tag !== "Span" || acquired === undefined) return;
+  span.attribute("db.connection", acquired.connection);
+  span.attribute("db.lock_wait_ms", acquired.lockWaitMs);
+  if (ownerAtWaitStart !== undefined) {
+    span.attribute("db.lock_owner_at_start.fiber_id", ownerAtWaitStart.fiberId);
+    span.attribute("db.lock_owner_at_start.name", ownerAtWaitStart.name);
+    if (ownerAtWaitStart.traceId !== undefined) {
+      span.attribute("db.lock_owner_at_start.trace_id", ownerAtWaitStart.traceId);
+    }
+    if (ownerAtWaitStart.spanId !== undefined) {
+      span.attribute("db.lock_owner_at_start.span_id", ownerAtWaitStart.spanId);
+    }
+  }
+};
+
 export const measureWriterSql = <A>(
   operation: SlowSqlOperation["operation"],
   execute: () => A,

@@ -10,6 +10,23 @@ function spokenText() {
 }
 
 describe("announce", () => {
+  it("clears spoken announcements after expiry", () => {
+    using _timers = fakeTimers();
+    announce("Model: Claude Sonnet 5.5");
+    vi.advanceTimersByTime(250);
+    expect(spokenText()).toEqual(["Model: Claude Sonnet 5.5"]);
+    vi.advanceTimersByTime(7_000);
+    expect(spokenText()).toEqual([]);
+  });
+
+  it("clears an already spoken announcement when its source cancels", () => {
+    using _timers = fakeTimers();
+    announce("Undo available", "thread-undo-notice");
+    vi.advanceTimersByTime(250);
+    expect(spokenText()).toEqual(["Undo available"]);
+    cancelAnnouncement("thread-undo-notice");
+    expect(spokenText()).toEqual([]);
+  });
   it("waits for focus to settle, then speaks waiting messages together", () => {
     using _timers = fakeTimers();
     const composer = document.createElement("textarea");
@@ -33,10 +50,10 @@ describe("announce", () => {
       Array.from(document.querySelectorAll('[aria-live="polite"]'), (region) => region.textContent);
 
     announce("Claude");
-    vi.runAllTimers();
+    vi.advanceTimersByTime(250);
     const first = regionTexts();
     announce("Claude");
-    vi.runAllTimers();
+    vi.advanceTimersByTime(250);
 
     expect(regionTexts()).toEqual([...first].reverse());
     expect(regionTexts()).toContain("Claude");
@@ -48,14 +65,14 @@ describe("announce", () => {
     announce("Settled 1 thread, Ctrl+Z to undo", "undo");
     announce("Opening in VS Code");
     announce("Settled 2 threads, Ctrl+Z to undo", "undo");
-    vi.runAllTimers();
+    vi.advanceTimersByTime(250);
 
     expect(spokenText()).toEqual(["Opening in VS Code. Settled 2 threads, Ctrl+Z to undo"]);
 
     announce("Settled 1 thread, Ctrl+Z to undo", "undo");
     announce("Opening in Zed");
     cancelAnnouncement("undo");
-    vi.runAllTimers();
+    vi.advanceTimersByTime(250);
 
     expect(spokenText()).toEqual(["Opening in Zed"]);
   });

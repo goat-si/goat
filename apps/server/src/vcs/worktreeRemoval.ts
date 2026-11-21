@@ -10,22 +10,59 @@ import type * as GitVcsDriver from "./GitVcsDriver.ts";
 const INDEX_LIST_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
+ * git-annex replaces a linked worktree's `.git` file with a symlink to its admin
+ * directory, so its symlinks into `.git/annex` resolve. Git then refuses to remove it.
+ */
+const annexedAdminDir = Effect.fn("WorktreeRemoval.annexedAdminDir")(
+  function* (worktreePath: string) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const adminDir = path.resolve(
+      worktreePath,
+      yield* fileSystem.readLink(path.join(worktreePath, ".git")),
+    );
+    const backlink = path.resolve(
+      adminDir,
+      (yield* fileSystem.readFileString(path.join(adminDir, "gitdir"))).trim(),
+    );
+    if (path.basename(backlink) !== ".git") return Option.none<string>();
+    const pointsBackTo = path.dirname(backlink);
+    return (yield* fileSystem.realPath(pointsBackTo)) === (yield* fileSystem.realPath(worktreePath))
+      ? Option.some(adminDir)
+      : Option.none();
+  },
+  Effect.orElseSucceed(() => Option.none<string>()),
+);
+
+export const isLinkedWorktree = Effect.fn("WorktreeRemoval.isLinkedWorktree")(function* (
+  worktreePath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return (
+    (yield* fileSystem.stat(path.join(worktreePath, ".git"))).type === "File" ||
+    Option.isSome(yield* annexedAdminDir(worktreePath))
+  );
+});
+
+/**
  * Git for Windows before 2.54 follows NTFS junctions; newer Git leaves them behind.
  * On Windows, mirror Git's removal checks, then delete with Node's `rm`, which
  * unlinks junctions without following them. Git then removes the worktree metadata.
  */
-export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorktree")(function* <
-  A,
-  E,
-  R,
->(input: {
+interface WorktreeRemovalInput<A, E, R> {
   readonly operation: string;
   readonly cwd: string;
   readonly worktreePath: string;
   readonly force: boolean;
   readonly execute: GitVcsDriver.GitVcsDriver["Service"]["execute"];
   readonly run: (args: ReadonlyArray<string>) => Effect.Effect<A, E, R>;
-}) {
+}
+
+const removeLinkedWorktreeScoped = Effect.fn("WorktreeRemoval.removeScoped")(function* <A, E, R>(
+  input: WorktreeRemovalInput<A, E, R>,
+  restoration: { error: GitCommandError | undefined },
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const worktreePath = input.worktreePath;
@@ -33,6 +70,81 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
   // Git refuses to remove a worktree with untracked files unless forced, but
   // its check honors `status.showUntrackedFiles=no` and would delete them.
   const statusConfig = ["-c", "status.showUntrackedFiles=normal"];
+  // Git's own refusals, worded the way it prints them.
+  const refuse = (message: string, cause?: unknown) =>
+    new GitCommandError({
+      operation: input.operation,
+      command: "git worktree remove",
+      cwd: input.cwd,
+      detail: `fatal: ${message}`,
+      ...(cause === undefined ? {} : { cause }),
+    });
+  const annexed = yield* annexedAdminDir(worktreePath);
+  if (Option.isSome(annexed)) {
+    const adminDir = annexed.value;
+    const common = yield* input.execute({
+      operation: input.operation,
+      cwd: input.cwd,
+      args: ["rev-parse", "--git-common-dir"],
+      maxOutputBytes: INDEX_LIST_MAX_BYTES,
+    });
+    if (common.stdoutTruncated || common.stdout.trim().length === 0)
+      return yield* refuse(`could not verify '${worktreePath}'`);
+    const expectedAdminParent = path.resolve(input.cwd, common.stdout.trim(), "worktrees");
+    const belongs = yield* Effect.all([
+      fileSystem.realPath(path.dirname(adminDir)),
+      fileSystem.realPath(expectedAdminParent),
+    ]).pipe(
+      Effect.map(([actual, expected]) => actual === expected),
+      Effect.orElseSucceed(() => false),
+    );
+    if (!belongs) return yield* refuse(`'${worktreePath}' is not a working tree`);
+    const backupDir = yield* fileSystem
+      .makeTempDirectory({
+        directory: path.dirname(expectedAdminParent),
+        prefix: "goat-annex-",
+      })
+      .pipe(Effect.mapError((cause) => refuse(`failed to preserve '${gitFile}'`, cause)));
+    const backup = path.join(backupDir, "git-link");
+    let preserveBackup = false;
+    yield* Effect.addFinalizer(() =>
+      preserveBackup
+        ? Effect.void
+        : fileSystem.remove(backupDir, { recursive: true, force: true }).pipe(Effect.ignore),
+    );
+    yield* Effect.uninterruptible(
+      fileSystem.rename(gitFile, backup).pipe(
+        Effect.mapError((cause) => refuse(`failed to preserve '${gitFile}'`, cause)),
+        Effect.tap(() =>
+          Effect.addFinalizer(() =>
+            fileSystem.exists(worktreePath).pipe(
+              Effect.flatMap((kept) =>
+                kept
+                  ? fileSystem
+                      .remove(gitFile, { force: true })
+                      .pipe(Effect.andThen(fileSystem.rename(backup, gitFile)))
+                  : Effect.void,
+              ),
+              Effect.catch((cause) =>
+                Effect.sync(() => {
+                  preserveBackup = true;
+                  restoration.error = refuse(
+                    `failed to restore '${gitFile}'; original link retained at '${backup}'`,
+                    cause,
+                  );
+                }),
+              ),
+            ),
+          ),
+        ),
+        Effect.andThen(
+          fileSystem
+            .writeFileString(gitFile, `gitdir: ${adminDir}\n`)
+            .pipe(Effect.mapError((cause) => refuse(`failed to replace '${gitFile}'`, cause))),
+        ),
+      ),
+    );
+  }
   const linked =
     (yield* HostProcess.isWindows) &&
     (yield* fileSystem.stat(gitFile).pipe(
@@ -50,15 +162,6 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
     ]);
   }
 
-  // Git's own refusals, worded the way it prints them.
-  const refuse = (message: string, cause?: unknown) =>
-    new GitCommandError({
-      operation: input.operation,
-      command: "git worktree remove",
-      cwd: input.cwd,
-      detail: `fatal: ${message}`,
-      ...(cause === undefined ? {} : { cause }),
-    });
   const gitOutput = (cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
     input
       .execute({
@@ -153,4 +256,15 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
   );
   // The folder is gone, so Git only drops the worktree's metadata.
   return yield* input.run(["worktree", "remove", "--force", "--force", "--", worktreePath]);
+});
+
+export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorktree")(function* <
+  A,
+  E,
+  R,
+>(input: WorktreeRemovalInput<A, E, R>) {
+  const restoration: { error: GitCommandError | undefined } = { error: undefined };
+  const result = yield* Effect.exit(Effect.scoped(removeLinkedWorktreeScoped(input, restoration)));
+  if (restoration.error !== undefined) return yield* restoration.error;
+  return yield* result;
 });

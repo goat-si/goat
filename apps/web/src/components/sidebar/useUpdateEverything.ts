@@ -215,7 +215,7 @@ export function useUpdateEverything(
   }));
   const remoteCount = servers.length + sshRuntimes.length;
 
-  const runApp = async (rows: ReadonlyArray<UpdateDialogRow>, local: LocalUpdateActions) => {
+  const runUpdates = async (rows: ReadonlyArray<UpdateDialogRow>, local: LocalUpdateActions) => {
     const localFailures: Array<string> = [];
     const reportLocalError: ReportLocalUpdateError = (title, description) => {
       localFailures.push(`${title}: ${description}`);
@@ -226,14 +226,46 @@ export function useUpdateEverything(
       ids.has(`ssh-runtime:${runtime.environmentId}`),
     );
     const includesLocal = ids.has("local");
+    const providerIds = new Set(
+      providers.machines
+        .filter((machine) => ids.has(`providers:${machine.environmentId}`))
+        .map((machine) => machine.environmentId),
+    );
+    const opencodex = ids.has("opencodex") ? localEnvironmentId : null;
     // oxlint-disable-next-line react/purity -- This callback runs when the user confirms the update.
     const startedAt = Date.now();
     const localVersion = includesLocal && local.installLocal ? localUpdateVersion : null;
     setUpdateEverythingRun(() => ({
       localVersion,
-      phase: "servers",
+      phase: providerIds.size > 0 || opencodex !== null ? "providers" : "servers",
       restartAt: null,
       machines: [
+        ...providers.machines
+          .filter((machine) => providerIds.has(machine.environmentId))
+          .map((machine) =>
+            runMachine(
+              {
+                key: `providers:${machine.environmentId}`,
+                environmentId: machine.environmentId,
+                label: machine.label,
+                updatesProviders: true,
+              },
+              startedAt,
+            ),
+          ),
+        ...(opencodex === null
+          ? []
+          : [
+              runMachine(
+                {
+                  key: `opencodex:${opencodex}`,
+                  environmentId: opencodex,
+                  label: "OpenCodex",
+                  opencodex: true,
+                },
+                startedAt,
+              ),
+            ]),
         ...chosenServers.map((server) =>
           runMachine(
             {
@@ -275,105 +307,7 @@ export function useUpdateEverything(
       );
       finished.push({ label, outcome: result });
     };
-    try {
-      const downloaded =
-        includesLocal && local.downloadLocal
-          ? local.downloadLocal(reportLocalError)
-          : Promise.resolve(true);
-      const remote = Promise.all([
-        ...chosenServers.map(async (server) => {
-          const key = server.environmentId;
-          const outcome = runWhenIdle({
-            idle: () => waitForIdleMachine(key, server.environmentId),
-            attempt: () => updateServer(server, { quiet: true, whenIdle: true }),
-            isBusy: isBusyRefusal,
-            retryLater: () => waitToRetryBusyMachine(key, BUSY_RETRY_MS),
-          }).then((result) => {
-            settle(key, server.serverLabel, result);
-            return result;
-          });
-          // This Mac waits only for each server to start its own restart, not to come back.
-          await waitForServerUpdateHandoff(server.environmentId, outcome);
-        }),
-        ...chosenRuntimes.map(async (runtime) => {
-          settle(runtime.environmentId, runtime.label, await updateSshRuntimeWhenIdle(runtime));
-        }),
-      ]);
-      const [localReady] = await Promise.all([downloaded, remote]);
-      const result = () =>
-        collectUpdateEverythingResult({
-          localVersion: null,
-          localFailures,
-          servers: finished,
-          providers: [],
-        });
-      if (includesLocal && localReady && local.installLocal) {
-        await waitForLocalIdle(localEnvironmentId);
-        if (await waitForUpdateRestart(UPDATE_RESTART_DELAY_MS)) {
-          setUpdateEverythingRun((run) => run && { ...run, phase: "installing", restartAt: null });
-          saveUpdateEverythingResult({ ...result(), localVersion });
-          if (await local.installLocal(reportLocalError)) return;
-          clearSavedUpdateEverythingResult();
-        }
-      }
-      setUpdateEverythingRun(
-        (run) =>
-          run &&
-          closeFinishedUpdateRun({ ...run, phase: "servers", restartAt: null, localVersion: null }),
-      );
-      showUpdateEverythingResult(result());
-    } catch (error) {
-      setUpdateEverythingRun(() => null);
-      throw error;
-    }
-  };
-
-  const runRuntimes = async (
-    rows: ReadonlyArray<UpdateDialogRow>,
-    opencodexEnvironmentId: EnvironmentId | null,
-  ) => {
-    const ids = new Set(rows.map((row) => row.id));
-    const providerIds = new Set<string>(
-      providers.machines
-        .filter((machine) => ids.has(`providers:${machine.environmentId}`))
-        .map((machine) => machine.environmentId),
-    );
-    const opencodex = ids.has("opencodex") ? opencodexEnvironmentId : null;
-    const startedAt = Date.now();
-    setUpdateEverythingRun(() => ({
-      localVersion: null,
-      phase: "providers",
-      restartAt: null,
-      machines: [
-        ...providers.machines
-          .filter((machine) => providerIds.has(machine.environmentId))
-          .map((machine) =>
-            runMachine(
-              {
-                key: machine.environmentId,
-                environmentId: machine.environmentId,
-                label: machine.label,
-                updatesProviders: true,
-              },
-              startedAt,
-            ),
-          ),
-        ...(opencodex === null
-          ? []
-          : [
-              runMachine(
-                {
-                  key: `opencodex:${opencodex}`,
-                  environmentId: opencodex,
-                  label: "OpenCodex",
-                  opencodex: true,
-                },
-                startedAt,
-              ),
-            ]),
-      ],
-    }));
-    try {
+    const runProviders = async () => {
       const runs =
         providerIds.size === 0 ? [] : await providers.updateAll({ quiet: true, only: providerIds });
       const outcomes = runs.map(getProviderUpdateRunOutcome);
@@ -383,11 +317,10 @@ export function useUpdateEverything(
           if (run.environmentId !== environmentId || outcome.status === "updated") return [];
           return [outcome.status === "failed" ? outcome.line : "Provider update interrupted"];
         })[0];
-        settleUpdateRunMachine(environmentId, failure ?? null);
+        settleUpdateRunMachine(`providers:${environmentId}`, failure ?? null);
       }
       const notes: Array<string> = [];
       if (opencodex !== null) {
-        setUpdateEverythingRun((run) => run && { ...run, phase: "servers" });
         const checked = await checkOpenCodexUpdate.run(appAtomRegistry, {
           environmentId: opencodex,
           input: {},
@@ -411,14 +344,100 @@ export function useUpdateEverything(
           notes.push(...openCodexSyncNotes(checked.value.sync));
         }
       }
-      setUpdateEverythingRun((run) => run && closeFinishedUpdateRun({ ...run, phase: "servers" }));
-      const result = collectUpdateEverythingResult({
-        localVersion: null,
-        localFailures: [],
-        servers: [],
-        providers: outcomes,
+      return { outcomes, notes };
+    };
+    try {
+      const downloaded =
+        includesLocal && local.downloadLocal
+          ? local.downloadLocal(reportLocalError)
+          : Promise.resolve(true);
+      const stagingFailed = (error: unknown): ServerUpdateOutcome => ({
+        status: "failed",
+        message:
+          error instanceof Error
+            ? `Could not stage the server update: ${error.message}`
+            : "Could not stage the server update.",
       });
-      showUpdateEverythingResult({ ...result, notes });
+      const staged = new Map(
+        chosenServers.map((server) => {
+          const key = server.environmentId;
+          const stage =
+            server.selfUpdate === "boot-service" &&
+            (providerIds.size > 0 || (runningThreads.get(key) ?? 0) > 0) &&
+            machines.find((machine) => machine.environmentId === key)?.serverConfig?.environment
+              .capabilities.serverUpdateStaging === true
+              ? serverEnvironment.stageServerUpdate
+                  .run(appAtomRegistry, {
+                    environmentId: key,
+                    input: { targetVersion: server.targetVersion, stageOnly: true },
+                  })
+                  .then(
+                    (result) =>
+                      result._tag === "Failure"
+                        ? stagingFailed(squashAtomCommandFailure(result))
+                        : undefined,
+                    stagingFailed,
+                  )
+              : undefined;
+          return [key, stage] as const;
+        }),
+      );
+      const providerWork = runProviders().then((result) => {
+        setUpdateEverythingRun((run) => run && { ...run, phase: "servers" });
+        return result;
+      });
+      const remote = Promise.all([
+        ...chosenServers.map(async (server) => {
+          const key = server.environmentId;
+          const stagingFailure = staged.get(key);
+          const outcome = runWhenIdle({
+            beforeIdle: providerWork,
+            ...(stagingFailure === undefined ? {} : { stagingFailure }),
+            idle: () => waitForIdleMachine(key, server.environmentId),
+            attempt: () => updateServer(server, { quiet: true, whenIdle: true }),
+            isBusy: isBusyRefusal,
+            retryLater: () => waitToRetryBusyMachine(key, BUSY_RETRY_MS),
+          }).then((result) => {
+            settle(key, server.serverLabel, result);
+            return result;
+          });
+          // This Mac waits only for each server to start its own restart, not to come back.
+          await waitForServerUpdateHandoff(server.environmentId, outcome);
+        }),
+        ...chosenRuntimes.map(async (runtime) => {
+          await providerWork;
+          settle(runtime.environmentId, runtime.label, await updateSshRuntimeWhenIdle(runtime));
+        }),
+      ]);
+      const [localReady, , { outcomes, notes }] = await Promise.all([
+        downloaded,
+        remote,
+        providerWork,
+      ]);
+      const result = () => ({
+        ...collectUpdateEverythingResult({
+          localVersion: null,
+          localFailures,
+          servers: finished,
+          providers: outcomes,
+        }),
+        notes,
+      });
+      if (includesLocal && localReady && local.installLocal) {
+        await waitForLocalIdle(localEnvironmentId);
+        if (await waitForUpdateRestart(UPDATE_RESTART_DELAY_MS)) {
+          setUpdateEverythingRun((run) => run && { ...run, phase: "installing", restartAt: null });
+          saveUpdateEverythingResult({ ...result(), localVersion });
+          if (await local.installLocal(reportLocalError)) return;
+          clearSavedUpdateEverythingResult();
+        }
+      }
+      setUpdateEverythingRun(
+        (run) =>
+          run &&
+          closeFinishedUpdateRun({ ...run, phase: "servers", restartAt: null, localVersion: null }),
+      );
+      showUpdateEverythingResult(result());
     } catch (error) {
       setUpdateEverythingRun(() => null);
       throw error;
@@ -433,8 +452,7 @@ export function useUpdateEverything(
     appTab,
     providerMachines,
     localEnvironmentId,
-    runApp,
-    runRuntimes,
+    runUpdates,
   };
 }
 

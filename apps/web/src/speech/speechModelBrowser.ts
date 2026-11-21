@@ -1,4 +1,5 @@
 import type { SpeechBenchmarkTier, SpeechModelList } from "@goat/contracts";
+import { recommendSpeechModel } from "@goat/shared/speechRecommendation";
 
 type Model = (typeof SpeechModelList.Type.models)[number];
 export function filterSpeechModels(
@@ -7,8 +8,10 @@ export function filterSpeechModels(
   installedOnly: boolean,
   sort: "recommended" | "size" | "name" | "speed",
   tier?: SpeechBenchmarkTier,
+  language?: string,
 ) {
   const query = search.trim().toLocaleLowerCase();
+  const recommended = recommendSpeechModel(models, language ?? "", tier);
   return models
     .filter(
       (model) =>
@@ -27,6 +30,7 @@ export function filterSpeechModels(
       return (
         Number(b.selected) - Number(a.selected) ||
         Number(b.installed) - Number(a.installed) ||
+        (recommended ? Number(b.id === recommended) - Number(a.id === recommended) : 0) ||
         Number(b.recommended === true) - Number(a.recommended === true) ||
         a.name.localeCompare(b.name)
       );

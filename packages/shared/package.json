@@ -3,6 +3,38 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./themeCssErrors": {
+      "types": "./src/themeCssErrors.ts",
+      "import": "./src/themeCssErrors.ts"
+    },
+    "./themeCssSanitizer": {
+      "types": "./src/themeCssSanitizer.ts",
+      "import": "./src/themeCssSanitizer.ts"
+    },
+    "./pairingCode": {
+      "types": "./src/pairingCode.ts",
+      "import": "./src/pairingCode.ts"
+    },
+    "./png": {
+      "types": "./src/png.ts",
+      "import": "./src/png.ts"
+    },
+    "./parseUrl": {
+      "types": "./src/parseUrl.ts",
+      "import": "./src/parseUrl.ts"
+    },
+    "./speechRecommendation": {
+      "types": "./src/speechRecommendation.ts",
+      "import": "./src/speechRecommendation.ts"
+    },
+    "./pullRequestAnchor": {
+      "types": "./src/pullRequestAnchor.ts",
+      "import": "./src/pullRequestAnchor.ts"
+    },
+    "./memoryGenerationCapabilities": {
+      "types": "./src/memoryGenerationCapabilities.ts",
+      "import": "./src/memoryGenerationCapabilities.ts"
+    },
     "./forkInScope": {
       "types": "./src/forkInScope.ts",
       "import": "./src/forkInScope.ts"
@@ -258,6 +290,10 @@
     "./commandActions": {
       "types": "./src/commandActions.ts",
       "import": "./src/commandActions.ts"
+    },
+    "./commandOutput": {
+      "types": "./src/commandOutput.ts",
+      "import": "./src/commandOutput.ts"
     },
     "./terminalOutput": {
       "types": "./src/terminalOutput.ts",
@@ -635,6 +671,10 @@
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
     },
+    "./officeCjkFontAssets": {
+      "types": "./src/officeCjkFontAssets.ts",
+      "import": "./src/officeCjkFontAssets.ts"
+    },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"
@@ -642,6 +682,10 @@
     "./runtimeManifest": {
       "types": "./src/runtimeManifest.ts",
       "import": "./src/runtimeManifest.ts"
+    },
+    "./diffCutLines": {
+      "types": "./src/diffCutLines.ts",
+      "import": "./src/diffCutLines.ts"
     },
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",
@@ -686,6 +730,10 @@
     "./markdownListIndentation": {
       "types": "./src/markdownListIndentation.ts",
       "import": "./src/markdownListIndentation.ts"
+    },
+    "./markdownLeadingWhitespace": {
+      "types": "./src/markdownLeadingWhitespace.ts",
+      "import": "./src/markdownLeadingWhitespace.ts"
     },
     "./proposedPlanText": {
       "types": "./src/proposedPlanText.ts",
@@ -784,12 +832,15 @@
     "@goat/contracts": "workspace:*",
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
+    "css-tree": "3.2.1",
     "effect": "catalog:",
+    "get-east-asian-width": "^1.6.0",
     "jose": "catalog:",
     "mdast-util-directive": "catalog:",
     "mdast-util-to-hast": "^13.2.1",
     "micromark-extension-directive": "catalog:",
     "micromark-util-character": "catalog:",
+    "micromark-util-decode-string": "2.0.1",
     "property-information": "^7.2.0",
     "rehype-raw": "catalog:",
     "rehype-sanitize": "catalog:",
@@ -805,6 +856,7 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@types/css-tree": "3.2.0",
     "@types/mdast": "^4.0.4",
     "@types/node": "catalog:",
     "micromark-util-types": "catalog:",

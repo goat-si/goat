@@ -1,3 +1,4 @@
+import { PROVIDER_STOP_REASON_SIGNAL } from "@goat/provider-core/server/subagentProjection";
 import type {
   OrchestrationV2ExecutionNode,
   OrchestrationV2ProviderThread,
@@ -7,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
 import { CommandPolicyCapabilityUnsupportedError } from "./CommandPolicy.ts";
@@ -154,3 +156,48 @@ export function makeInterruptResultTurnItem(input: {
     message: input.reason ?? "Stopped by the provider",
   };
 }
+
+export const terminalRunNoticeEvents = Effect.fn("RunExecution.terminalRunNoticeEvents")(function* (
+  input: Parameters<typeof makeInterruptResultTurnItem>[0] & { readonly terminal: Terminal },
+) {
+  const terminal = input.terminal;
+  const completedStop = terminal.status === "completed" ? terminal.reason : undefined;
+  if (terminal.status !== "interrupted" && completedStop === undefined) return [];
+  const payload: OrchestrationV2TurnItem =
+    completedStop === undefined
+      ? makeInterruptResultTurnItem(input)
+      : {
+          id: input.idAllocator.derive.runSignalTurnItem({
+            runId: input.run.id,
+            signal: PROVIDER_STOP_REASON_SIGNAL,
+          }),
+          threadId: input.run.threadId,
+          runId: input.run.id,
+          nodeId: input.rootNode.id,
+          providerThreadId: input.providerThread.id,
+          providerTurnId: input.rootNode.providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: input.run.ordinal * 100 + 98,
+          status: "completed",
+          title: "Stopped by the provider",
+          startedAt: input.completedAt,
+          completedAt: input.completedAt,
+          updatedAt: input.completedAt,
+          type: "system_notice",
+          severity: "warning",
+          message: completedStop,
+        };
+  return [
+    {
+      id: yield* input.idAllocator.allocate.event({ threadId: input.run.threadId }),
+      type: "turn-item.updated" as const,
+      threadId: input.run.threadId,
+      runId: input.run.id,
+      nodeId: input.rootNode.id,
+      providerInstanceId: input.run.providerInstanceId,
+      occurredAt: input.completedAt,
+      payload,
+    },
+  ];
+});

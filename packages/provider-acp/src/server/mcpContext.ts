@@ -5,6 +5,7 @@ import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntim
 export interface AcpMcpContext {
   readonly servers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly endpoint?: string;
   readonly authorization?: string;
@@ -22,6 +23,7 @@ export interface AcpMcpContext {
 export function acpMcpContext(
   session: McpProviderSession.McpProviderSessionConfig | undefined,
   self: SelfInvocation,
+  preferHttp = false,
 ): AcpMcpContext {
   if (session === undefined) {
     return {
@@ -35,11 +37,12 @@ export function acpMcpContext(
   }
   // Agents that advertise optional http support still routinely fail to wire
   // injected http servers through to their backend (codex-acp 1.2.0 and pi-acp
-  // both drop them), so every ACP session gets the `goat acp-mcp-bridge` stdio
+  // both drop them), so ACP sessions default to the `goat acp-mcp-bridge` stdio
   // server, which forwards JSON-RPC to GOAT's authenticated MCP endpoint. The
   // managed Cua Driver is already a stdio server, so it is listed in both
   // forms: an agent with MCP-over-ACP receives only `acpServers`.
   const cua = McpProviderSession.cuaAcpMcpServers(session);
+  const managedServers = [...cua, ...McpProviderSession.goatAcpServers(session.goatMcpServers)];
   return {
     servers: [
       {
@@ -52,14 +55,22 @@ export function acpMcpContext(
           { name: "GOAT_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
-      ...cua,
-      ...McpProviderSession.goatAcpServers(session.goatMcpServers),
+      ...managedServers,
     ],
-    acpServers: [
-      { type: "acp", name: "goat", serverId: "goat" },
-      ...cua,
-      ...McpProviderSession.goatAcpServers(session.goatMcpServers),
-    ],
+    acpServers: [{ type: "acp", name: "goat", serverId: "goat" }, ...managedServers],
+    ...(preferHttp
+      ? {
+          httpServers: [
+            {
+              type: "http",
+              name: "goat",
+              url: session.endpoint,
+              headers: [{ name: "Authorization", value: session.authorizationHeader }],
+            },
+            ...managedServers,
+          ],
+        }
+      : {}),
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     computerUse: cua.length > 0,
@@ -84,7 +95,11 @@ export function acpMcpContext(
 }
 
 export function acpMcpActivation(context: AcpMcpContext) {
-  return { mcpServers: context.servers, acpMcpServers: context.acpServers };
+  return {
+    mcpServers: context.servers,
+    acpMcpServers: context.acpServers,
+    ...(context.httpServers === undefined ? {} : { httpMcpServers: context.httpServers }),
+  };
 }
 
 export const acpMcpCredentialsMatch = (

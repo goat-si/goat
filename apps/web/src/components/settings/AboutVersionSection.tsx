@@ -1,18 +1,21 @@
-import { useGT, useMessages } from "gt-react";
+import { useGT } from "gt-react";
 import { type DesktopUpdateChannel } from "@goat/contracts";
 import { useState } from "react";
 
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
-import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
+import { downloadLocalUpdate } from "../desktopUpdate.toast";
 import {
   canCheckForUpdate,
+  getDesktopUpdateDisabledReason,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleDescription,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
   getDesktopUpdateStatusText,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
+  translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -28,7 +31,6 @@ import { ensureLocalApi } from "../../localApi";
 export function AboutVersionSection() {
   const setting = useTranslatedSearchableSetting();
   const gt = useGT();
-  const m = useMessages();
   const updateState = useDesktopUpdateState();
   const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
@@ -70,7 +72,7 @@ export function AboutVersionSection() {
     if (!bridge) return;
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
     if (action === "download") {
-      void downloadLocalUpdate(bridge, { notifyDownloaded: false });
+      void downloadLocalUpdate(bridge, gt, { notifyDownloaded: false });
       return;
     }
     if (action === "install") {
@@ -81,6 +83,7 @@ export function AboutVersionSection() {
         confirmed = await ensureLocalApi().dialogs.confirm(
           getDesktopUpdateInstallConfirmationMessage(
             updateState ?? { availableVersion: null, downloadedVersion: null },
+            gt,
           ),
           { initialFocus: "confirm" },
         );
@@ -101,6 +104,10 @@ export function AboutVersionSection() {
       }
       void bridge
         .installUpdate()
+        .then((result) => {
+          const message = getDesktopUpdateInstallError(result);
+          if (message) throw new Error(message);
+        })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
@@ -124,7 +131,9 @@ export function AboutVersionSection() {
               type: "error",
               title: gt("Could not check for updates"),
               description:
-                result.state.message ?? gt("Automatic updates are not available in this build."),
+                getDesktopUpdateDisabledReason(result.state, gt) ??
+                result.state.message ??
+                gt("Automatic updates are not available in this build."),
             }),
           );
         }
@@ -140,7 +149,7 @@ export function AboutVersionSection() {
       });
   };
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
+  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, gt) : null;
   const buttonDisabled =
     action === "none"
       ? !canCheckForUpdate(updateState)
@@ -154,17 +163,19 @@ export function AboutVersionSection() {
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? gt("Check for Updates");
   const description =
-    updateState?.installationNotice ??
+    (updateState?.installationNotice
+      ? translateDesktopUpdateMessage(updateState.installationNotice, gt)
+      : null) ??
     (action === "download" || action === "install"
       ? gt("Update available.")
-      : getDesktopUpdateIdleDescription(updateState));
+      : getDesktopUpdateIdleDescription(updateState, gt));
 
   return (
     <>
       <SettingsRow
         id={setting("app-version").id}
         title={<AboutVersionTitle />}
-        description={m(description)}
+        description={description}
         control={
           <Tooltip>
             <TooltipTrigger
@@ -179,7 +190,7 @@ export function AboutVersionSection() {
                 </Button>
               }
             />
-            {buttonTooltip ? <TooltipPopup>{m(buttonTooltip)}</TooltipPopup> : null}
+            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
           </Tooltip>
         }
       />
@@ -189,7 +200,7 @@ export function AboutVersionSection() {
         <SettingsRow
           id={setting("update-install-policy").id}
           title={gt("Update installation")}
-          description={m(getDesktopUpdateStatusText(updateState))}
+          description={getDesktopUpdateStatusText(updateState, gt)}
           control={
             <Select
               value={updateState.installPolicy}

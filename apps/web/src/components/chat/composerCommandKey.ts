@@ -19,7 +19,7 @@ import {
 import { type PendingUserInput } from "../../session-logic";
 import { type PreviewAnnotationPayload } from "@goat/contracts";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
-import { composerTargetKey } from "../../composerDraftStore";
+import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
 import {
   type ComposerListEdit,
   listContinuationForEnter,
@@ -175,6 +175,9 @@ export function composerCommandKeyHandler(input: {
     promptHistoryPositionRef.current = step.position
       ? { targetKey: promptHistoryTargetKey, position: step.position }
       : null;
+    useComposerDraftStore
+      .getState()
+      .setThreadContexts(composerDraftTarget, [...(step.threadContexts ?? [])]);
     replacePromptFromHistory(step.prompt);
     return true;
   };

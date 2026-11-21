@@ -49,6 +49,7 @@ import {
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 import { EVENT_SETTLE, feedsToFollow } from "./goat/PullRequestEventFeeds.ts";
+import { makeWatchSweepCursor, watchSweepPage } from "./goat/PullRequestWatchPage.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
@@ -85,10 +86,21 @@ interface WatchTarget {
   readonly watch: ThreadPullRequestWatch;
 }
 
+/** A wake a pass holds back so each thread wakes once for everything the pass found. */
+interface HeldWake {
+  readonly groupKey: string;
+  readonly target: WatchTarget;
+  readonly next: ThreadPullRequestWatch | null;
+  readonly wake: PullRequestWatchWake;
+  readonly endedWatch?: ThreadPullRequestWatch | undefined;
+  readonly dropQueuedWakes?: true;
+  /** Bookkeeping that follows a sent wake. */
+  readonly after: Effect.Effect<void>;
+}
+
 interface WatchGroup {
   readonly key: string;
-  readonly targets: ReadonlyArray<WatchTarget>;
-  readonly fingerprint: string;
+  readonly targets: readonly [WatchTarget, ...Array<WatchTarget>];
 }
 
 interface LastRead {
@@ -96,7 +108,6 @@ interface LastRead {
   readonly fingerprint: string;
   readonly inFlight: boolean;
   readonly remarksComplete: boolean;
-  readonly watches: ReadonlySet<string>;
   readonly status: string | null;
   readonly remarks: string | null;
 }
@@ -105,8 +116,6 @@ interface ReadPlan {
   readonly detail: boolean;
   readonly activity: boolean;
 }
-
-const watchKey = ({ thread, watch }: WatchTarget) => `${thread.id} ${watch.startedAt}`;
 
 type WatchEndReason =
   | "merged"
@@ -128,8 +137,15 @@ interface WatchLife {
   readonly reads: number;
 }
 
-const lifeKey = ({ thread, link, watch }: WatchTarget) =>
-  `${thread.id} ${threadPullRequestKeyOf(link)} ${watch.startedAt}`;
+const lifeKeyOf = (threadId: string, link: ThreadPullRequestLink, watch: ThreadPullRequestWatch) =>
+  `${threadPullRequestKeyOf(link)} ${threadId} ${watch.startedAt}`;
+const lifeKey = ({ thread, link, watch }: WatchTarget) => lifeKeyOf(thread.id, link, watch);
+
+// Checkout access differs by project.
+const groupKeyOf = ({ thread, link }: WatchTarget) =>
+  `${thread.projectId} ${threadPullRequestKeyOf(link)}`;
+
+const readKey = (target: WatchTarget) => `${target.thread.projectId} ${lifeKey(target)}`;
 
 const minutes = (ms: number) => Math.max(0, Math.round(ms / 60_000));
 
@@ -142,31 +158,31 @@ const snapshotFingerprint = ({ link }: WatchTarget) => {
         snapshot.updatedAt,
         snapshot.checksState,
         snapshot.mergeability,
+        snapshot.rebaseRequired,
         snapshot.reviewDecision,
         snapshot.isDraft,
       ].join(" ");
 };
 
 function planRead(
-  group: WatchGroup,
+  watch: ThreadPullRequestWatch,
   last: LastRead | undefined,
   fingerprint: ProviderChangeRequestWatchFingerprint | null,
+  snapshot: string,
   now: number,
 ): ReadPlan {
-  if (last === undefined || group.targets.some((target) => !last.watches.has(watchKey(target)))) {
-    return { detail: true, activity: true };
-  }
-  // Nothing on the host changes when the no-checks deadline passes, so it alone prompts a read.
-  const checksDue = group.targets.some(
-    ({ watch }) =>
-      watch.checksAwaitedSince != null &&
-      now - Date.parse(watch.checksAwaitedSince) >= PULL_REQUEST_WATCH_NO_CHECKS_MS,
-  );
+  if (last === undefined) return { detail: true, activity: true };
+  // Nothing on the host changes when the no-checks deadline passes, or when a push to another
+  // branch clears a watch's answer, so either alone prompts a read.
+  const checksDue =
+    watch.checksPending === undefined ||
+    (watch.checksAwaitedSince != null &&
+      now - Date.parse(watch.checksAwaitedSince) >= PULL_REQUEST_WATCH_NO_CHECKS_MS);
   if (fingerprint === null) {
     const read =
       last.inFlight ||
       !last.remarksComplete ||
-      last.fingerprint !== group.fingerprint ||
+      last.fingerprint !== snapshot ||
       now - last.at >= QUIET_REREAD_MS;
     return { detail: read || checksDue, activity: read };
   }
@@ -175,10 +191,18 @@ function planRead(
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
   return {
-    detail: activity || checksDue || last.status !== fingerprint.status || last.inFlight,
+    detail:
+      activity ||
+      checksDue ||
+      last.status !== fingerprint.status ||
+      (last.inFlight && fingerprint.coversDetail !== true),
     activity,
   };
 }
+
+// Lets the orchestrator tell that a push cleared the answer while this read was in flight.
+const checksPendingBeforeOf = ({ watch }: WatchTarget) =>
+  watch.checksPending === undefined ? {} : { checksPendingBefore: watch.checksPending };
 
 function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatch): boolean {
   return (
@@ -193,9 +217,12 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarksThrough === right.remarksThrough &&
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
+    left.rebaseRequired === right.rebaseRequired &&
     left.mergeQueueRemovalId === right.mergeQueueRemovalId &&
     left.wakes === right.wakes &&
+    left.awaitingBaseline === right.awaitingBaseline &&
     left.checksAwaitedSince === right.checksAwaitedSince &&
+    left.checksPending === right.checksPending &&
     // Kept context is merged by the orchestrator; a pass sends only what it kept itself.
     left.automatic === right.automatic
   );
@@ -268,10 +295,9 @@ export const make = Effect.gen(function* () {
 
   /** Consecutive failed reads by watch and pull request, so each watch has its own limit. */
   const readFailures = new Map<string, number>();
-  /** When a failing group reads again, and the watches it held when it last failed. */
-  const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
-  /** The last sweep's groups, whose pull requests get host change feeds. */
-  let currentGroups: ReadonlyArray<WatchGroup> = [];
+  const readRetryAt = new Map<string, number>();
+  let feedCandidates: ReadonlyArray<readonly [string, PullRequestRef]> = [];
+  const sweepCursor = yield* makeWatchSweepCursor;
   // A pass reads watches and records new ones, so passes must not overlap.
   const passes = Semaphore.makeUnsafe(1);
   const lastReads = new Map<string, LastRead>();
@@ -313,6 +339,7 @@ export const make = Effect.gen(function* () {
       ...identityOf(target.link),
       startedAt: target.watch.startedAt,
       watch: next,
+      ...checksPendingBeforeOf(target),
       ...(endedWatch === undefined ? {} : { endedWatch }),
       ...(wake === undefined
         ? {}
@@ -320,7 +347,7 @@ export const make = Effect.gen(function* () {
             wake: {
               text: wake.text,
               notification: wake.notification,
-              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn),
+              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn, next === null),
             },
           }),
       ...(note === undefined ? {} : { note }),
@@ -433,11 +460,92 @@ export const make = Effect.gen(function* () {
       ),
   );
 
-  const closed = (target: WatchTarget) =>
+  const sendOne = (item: HeldWake) =>
     record(
+      item.target,
+      item.next,
+      item.wake,
+      undefined,
+      item.endedWatch,
+      item.dropQueuedWakes,
+    ).pipe(
+      Effect.andThen(item.after),
+      Effect.catchCause((cause) => {
+        lastReads.delete(readKey(item.target));
+        return logFailure("pull request watch update failed", {
+          threadId: item.target.thread.id,
+          pullRequest: item.groupKey,
+        })(cause);
+      }),
+    );
+
+  const sendTogether = Effect.fn("PullRequestWatchReactor.sendTogether")(function* (
+    items: readonly [HeldWake, ...ReadonlyArray<HeldWake>],
+  ) {
+    const [first, ...rest] = items;
+    const uuid = yield* random.uuidV4();
+    const entry = (item: HeldWake, index: number) => ({
+      ...identityOf(item.target.link),
+      startedAt: item.target.watch.startedAt,
+      watch: item.next,
+      ...checksPendingBeforeOf(item.target),
+      ...(item.endedWatch === undefined ? {} : { endedWatch: item.endedWatch }),
+      ...(item.dropQueuedWakes === undefined ? {} : { dropQueuedWakes: item.dropQueuedWakes }),
+      wake: {
+        text: item.wake.text,
+        notification: item.wake.notification,
+        messageId: pullRequestWakeMessageId(
+          item.target.link,
+          `${uuid}-${index}`,
+          item.wake.checksOn,
+          item.next === null,
+        ),
+      },
+    });
+    yield* engine.dispatch({
+      type: "thread.pull-request-watch.sync",
+      commandId: CommandId.make(`server:pr-watch:${first.target.thread.id}:${uuid}`),
+      threadId: first.target.thread.id,
+      ...entry(first, 0),
+      others: rest.map((item, index) => entry(item, index + 1)),
+    });
+    yield* Effect.forEach(items, (item) => item.after, { discard: true });
+  });
+
+  /** One wake per thread for the pass; a refused batch sends each on its own, as a watch that ended decides alone. */
+  const sendHeld = (items: ReadonlyArray<HeldWake>) => {
+    const byThread = new Map<string, [HeldWake, ...Array<HeldWake>]>();
+    for (const item of items) {
+      const threadId = item.target.thread.id;
+      const batch = byThread.get(threadId);
+      if (batch === undefined) byThread.set(threadId, [item]);
+      else batch.push(item);
+    }
+    return Effect.forEach(
+      byThread.values(),
+      (batch) =>
+        batch.length === 1
+          ? sendOne(batch[0])
+          : sendTogether(batch).pipe(
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                () => Effect.forEach(batch, sendOne, { discard: true }),
+              ),
+            ),
+      { discard: true },
+    );
+  };
+
+  const closed = (
+    groupKey: string,
+    target: WatchTarget,
+    holdWake: (item: HeldWake) => Effect.Effect<void>,
+  ) =>
+    holdWake({
+      groupKey,
       target,
-      null,
-      {
+      next: null,
+      wake: {
         text: `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
         notification: {
           source: { kind: "monitor" },
@@ -445,13 +553,9 @@ export const make = Effect.gen(function* () {
           summary: `#${target.link.number}: closed, stopped watching`,
         },
       },
-      undefined,
-      undefined,
-      true,
-    ).pipe(
-      Effect.tap(() => woke(target)),
-      Effect.tap(() => ended(target, "closed")),
-    );
+      dropQueuedWakes: true,
+      after: woke(target).pipe(Effect.andThen(ended(target, "closed"))),
+    });
 
   const endsWithoutRead = ({ thread, link }: WatchTarget): WatchEndReason | undefined =>
     link.snapshot?.state === "merged"
@@ -463,29 +567,30 @@ export const make = Effect.gen(function* () {
           : undefined;
 
   const eachTarget = <E>(
-    group: WatchGroup,
+    key: string,
+    targets: ReadonlyArray<WatchTarget>,
     step: (target: WatchTarget) => Effect.Effect<void, E>,
   ) =>
-    Effect.forEach(group.targets, (target) =>
+    Effect.forEach(targets, (target) =>
       step(target).pipe(
         Effect.as(true),
         Effect.catchCause((cause) => {
-          lastReads.delete(group.key);
+          lastReads.delete(readKey(target));
           return logFailure("pull request watch update failed", {
             threadId: target.thread.id,
-            pullRequest: group.key,
+            pullRequest: key,
           })(cause).pipe(Effect.as(false));
         }),
       ),
     ).pipe(Effect.map((landed) => landed.every(Boolean)));
 
-  const referenceOf = (group: WatchGroup) => {
-    const first = group.targets[0]!;
-    return { projectId: first.thread.projectId, ...identityOf(first.link) };
-  };
+  const referenceOf = ({ thread, link }: WatchTarget) => ({
+    projectId: thread.projectId,
+    ...identityOf(link),
+  });
 
   const fingerprintOf = (group: WatchGroup) =>
-    pullRequests.watchFingerprint(referenceOf(group)).pipe(
+    pullRequests.watchFingerprint(referenceOf(group.targets[0])).pipe(
       Effect.catchCause(
         (cause): Effect.Effect<ProviderChangeRequestWatchFingerprint | null | "paused"> =>
           Cause.hasInterruptsOnly(cause)
@@ -502,54 +607,60 @@ export const make = Effect.gen(function* () {
   const readGroup = Effect.fn("PullRequestWatchReactor.readGroup")(function* (
     group: WatchGroup,
     fingerprint: ProviderChangeRequestWatchFingerprint | null,
+    holdWake: (item: HeldWake) => Effect.Effect<void>,
   ) {
     const now = yield* Clock.currentTimeMillis;
-    const last = lastReads.get(group.key);
-    const plan = planRead(group, last, fingerprint, now);
-    if (!plan.detail) return;
+    const reads = group.targets.map((target) => {
+      const key = readKey(target);
+      const last = lastReads.get(key);
+      const snapshot = snapshotFingerprint(target);
+      return {
+        key,
+        target,
+        last,
+        snapshot,
+        plan: planRead(target.watch, last, fingerprint, snapshot, now),
+      };
+    });
+    if (!reads.some(({ plan }) => plan.detail)) return;
+    const readActivity = reads.some(({ plan }) => plan.activity);
     // Read before anything is recorded: a failed read must leave the pass to run again.
     // Groups are per project, so one policy covers every thread in the group.
     const policy = resolveProjectSettings(
       yield* settingsService.getSettings,
-      group.targets[0]!.thread.projectId,
+      group.targets[0].thread.projectId,
     ).settings.pullRequestWatchPolicy;
     if (
-      last === undefined ||
-      group.targets.some((target) => !last.watches.has(watchKey(target))) ||
-      (fingerprint !== null && last.remarks !== fingerprint.remarks)
+      reads.some(
+        ({ last }) =>
+          last === undefined || (fingerprint !== null && last.remarks !== fingerprint.remarks),
+      )
     ) {
       // A new watch or changed host remarks needs a fresh view of every tail.
       threadTails.delete(group.key);
     }
-    const reference = referenceOf(group);
+    const reference = referenceOf(group.targets[0]);
     // Invalidate cached reads before using the newer fingerprint; clients receive no notification.
     if (fingerprint !== null) yield* pullRequests.invalidate({ reference });
     const [detailRead, activityRead] = yield* Effect.all(
       [
         Effect.exit(pullRequests.detail({ ...reference, allowStale: false })),
-        plan.activity ? Effect.exit(pullRequests.activity(reference)) : Effect.succeed(null),
+        readActivity ? Effect.exit(pullRequests.activity(reference)) : Effect.succeed(null),
       ],
       { concurrency: 2 },
     );
-    const read = Exit.isFailure(detailRead)
-      ? Exit.failCause(detailRead.cause)
-      : activityRead === null || detailRead.value.state !== "open"
-        ? Exit.succeed([detailRead.value, Option.none<PullRequestActivity>()] as const)
-        : Exit.isFailure(activityRead)
-          ? Exit.failCause(activityRead.cause)
-          : Exit.succeed([detailRead.value, Option.some(activityRead.value)] as const);
-    if (Exit.isFailure(read)) {
-      if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
-      lastReads.delete(group.key);
-      const reason = providerFailureReason(read.cause);
+    if (Exit.isFailure(detailRead)) {
+      if (Cause.hasInterruptsOnly(detailRead.cause))
+        return yield* Effect.failCause(detailRead.cause);
+      for (const { key } of reads) lastReads.delete(key);
+      const reason = providerFailureReason(detailRead.cause);
       if (reason === "rate-limited") return;
       if (reason === "failed") {
-        for (const target of group.targets) readFailures.delete(lifeKey(target));
-        readRetryAt.set(group.key, {
-          at: now + SWEEP_MINUTES * 60_000,
-          watches: new Set(group.targets.map(watchKey)),
-        });
-        return yield* Effect.failCause(read.cause);
+        for (const { key, target } of reads) {
+          readFailures.delete(lifeKey(target));
+          readRetryAt.set(key, now + SWEEP_MINUTES * 60_000);
+        }
+        return yield* Effect.failCause(detailRead.cause);
       }
       const counts = group.targets.map((target) => {
         const count = (readFailures.get(lifeKey(target)) ?? 0) + 1;
@@ -558,21 +669,35 @@ export const make = Effect.gen(function* () {
       });
       // The newest watch sets the pace, so it is not held back by older watches' failures.
       const fewest = Math.min(...counts.map(({ count }) => count));
-      readRetryAt.set(group.key, {
-        at: now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (fewest - 1), READ_RETRY_MAX_MS),
-        watches: new Set(group.targets.map(watchKey)),
-      });
+      const retryAt = now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (fewest - 1), READ_RETRY_MAX_MS);
+      for (const { key } of reads) readRetryAt.set(key, retryAt);
       const spent = counts.flatMap(({ target, count }) =>
         count >= READ_FAILURE_LIMIT ? [target] : [],
       );
-      if (spent.length > 0 && (yield* eachTarget({ ...group, targets: spent }, giveUp))) {
+      if (spent.length > 0 && (yield* eachTarget(group.key, spent, giveUp))) {
         for (const target of spent) readFailures.delete(lifeKey(target));
       }
-      return yield* Effect.failCause(read.cause);
+      return yield* Effect.failCause(detailRead.cause);
     }
-    for (const target of group.targets) readFailures.delete(lifeKey(target));
-    readRetryAt.delete(group.key);
-    const [detail, activity] = read.value;
+    for (const { key, target } of reads) {
+      readFailures.delete(lifeKey(target));
+      readRetryAt.delete(key);
+    }
+    const detail = detailRead.value;
+    if (activityRead !== null && Exit.isFailure(activityRead)) {
+      if (Cause.hasInterruptsOnly(activityRead.cause))
+        return yield* Effect.failCause(activityRead.cause);
+      threadTails.delete(group.key);
+      if (providerFailureReason(activityRead.cause) !== "rate-limited") {
+        yield* logFailure("pull request watch activity read failed", { pullRequest: group.key })(
+          activityRead.cause,
+        );
+      }
+    }
+    const activity =
+      activityRead !== null && Exit.isSuccess(activityRead)
+        ? Option.some(activityRead.value)
+        : Option.none<PullRequestActivity>();
     for (const target of group.targets) {
       const life = lifeOf(target);
       const headSha = detail.headSha ?? life.headSha;
@@ -587,10 +712,10 @@ export const make = Effect.gen(function* () {
       });
     }
     if (detail.state !== "open") {
-      lastReads.delete(group.key);
-      return yield* eachTarget(group, (target) =>
+      for (const { key } of reads) lastReads.delete(key);
+      return yield* eachTarget(group.key, group.targets, (target) =>
         detail.state === "closed"
-          ? closed(target)
+          ? closed(group.key, target, holdWake)
           : record(target, null, undefined, undefined, undefined, true).pipe(
               Effect.tap(() => ended(target, "merged")),
             ),
@@ -607,23 +732,23 @@ export const make = Effect.gen(function* () {
           fingerprint === null ? QUIET_REREAD_MS : FINGERPRINT_REREAD_MS,
         )
       : null;
-    lastReads.set(group.key, {
-      at:
-        plan.activity || last === undefined
-          ? (threadTails.get(group.key)?.fetchedAt ?? now)
-          : last.at,
-      fingerprint: group.fingerprint,
-      inFlight:
-        detail.mergeability === "unknown" ||
-        detail.checks.some(
-          (check) => check.status === "pending" || check.status === "action-required",
-        ),
-      remarksComplete: plan.activity ? remarks !== null : (last?.remarksComplete ?? false),
-      watches: new Set(group.targets.map(watchKey)),
-      status: fingerprint?.status ?? null,
-      remarks: fingerprint?.remarks ?? null,
-    });
-    yield* eachTarget(group, (target) => {
+    const inFlight =
+      detail.mergeability === "unknown" ||
+      detail.checks.some(
+        (check) => check.status === "pending" || check.status === "action-required",
+      );
+    const remarksAt = threadTails.get(group.key)?.fetchedAt ?? now;
+    for (const { key, last, snapshot } of reads) {
+      lastReads.set(key, {
+        at: readActivity && remarks !== null ? remarksAt : (last?.at ?? now),
+        fingerprint: snapshot,
+        inFlight,
+        remarksComplete: readActivity ? remarks !== null : (last?.remarksComplete ?? false),
+        status: fingerprint?.status ?? null,
+        remarks: fingerprint?.remarks ?? null,
+      });
+    }
+    yield* eachTarget(group.key, group.targets, (target) => {
       const report = evaluatePullRequestWatch(target.watch, detail, remarks, {
         policy,
         threadActiveAt: DateTime.toEpochMillis(target.thread.updatedAt),
@@ -636,10 +761,16 @@ export const make = Effect.gen(function* () {
         report,
       });
       if (outcome.wake !== undefined) {
-        return record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch).pipe(
-          Effect.tap(() => woke(target)),
-          Effect.tap(() => (report.exhausted ? ended(target, "comment-limit") : Effect.void)),
-        );
+        return holdWake({
+          groupKey: group.key,
+          target,
+          next: outcome.next,
+          wake: outcome.wake,
+          endedWatch: outcome.endedWatch,
+          after: woke(target).pipe(
+            Effect.andThen(report.exhausted ? ended(target, "comment-limit") : Effect.void),
+          ),
+        });
       }
       if (outcome.note !== undefined) return record(target, outcome.next, undefined, outcome.note);
       return outcome.next !== null && watchesEqual(outcome.next, target.watch)
@@ -651,6 +782,8 @@ export const make = Effect.gen(function* () {
   /** Every watch, or with `changed`, only that pull request's after its host reported a change. */
   // The sweep and change reads each name their own span.
   const pass = Effect.fnUntraced(function* (changed: string | undefined) {
+    const held: Array<HeldWake> = [];
+    const holdWake = (item: HeldWake) => Effect.sync(() => void held.push(item));
     const threads = yield* projections.getThreadsWithPullRequests();
     const targets = threads.flatMap((thread) =>
       visibleThreadPullRequests(thread.pullRequests ?? []).flatMap((link) =>
@@ -668,35 +801,43 @@ export const make = Effect.gen(function* () {
         { discard: true },
       );
     }
-    for (const target of targets) lifeOf(target);
-    const byPullRequest = new Map<string, Array<WatchTarget>>();
-    const ending: Array<readonly [WatchTarget, WatchEndReason]> = [];
-    for (const target of targets) {
-      const reason = endsWithoutRead(target);
-      if (reason !== undefined) {
-        ending.push([target, reason]);
-        continue;
-      }
-      // Group by project because checkout access differs; one failure must not end another project's watches.
-      const key = `${target.thread.projectId} ${threadPullRequestKeyOf(target.link)}`;
-      byPullRequest.set(key, [...(byPullRequest.get(key) ?? []), target]);
-    }
-    const groups = [...byPullRequest].map(([key, members]): WatchGroup => ({
-      key,
-      targets: members,
-      fingerprint: [...new Set(members.map(snapshotFingerprint))].toSorted().join("\n"),
+    const work = targets.map((target) => ({
+      key: lifeKey(target),
+      groupKey: groupKeyOf(target),
+      target,
+      reason: endsWithoutRead(target),
     }));
     if (changed === undefined) {
-      currentGroups = groups;
-      for (const cache of [readRetryAt, lastReads, threadTails]) {
-        for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
+      const feeds: Array<readonly [string, PullRequestRef]> = [];
+      const activeGroups = new Set<string>();
+      const activeReads = new Set<string>();
+      for (const { groupKey, target, reason } of work) {
+        if (reason !== undefined) continue;
+        activeReads.add(readKey(target));
+        if (activeGroups.has(groupKey)) continue;
+        activeGroups.add(groupKey);
+        feeds.push([threadPullRequestKeyOf(target.link), referenceOf(target)]);
+      }
+      feedCandidates = feeds;
+      for (const key of threadTails.keys()) if (!activeGroups.has(key)) threadTails.delete(key);
+      for (const cache of [readRetryAt, lastReads]) {
+        for (const key of cache.keys()) if (!activeReads.has(key)) cache.delete(key);
       }
       for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     }
+    const page = watchSweepPage(work, changed === undefined ? sweepCursor.after : undefined);
+    const groups = new Map<string, [WatchTarget, ...Array<WatchTarget>]>();
     yield* Effect.forEach(
-      ending,
-      ([target, reason]) =>
-        record(
+      page.items,
+      ({ target, reason, groupKey }) => {
+        if (reason === undefined) {
+          const members = groups.get(groupKey);
+          if (members === undefined) groups.set(groupKey, [target]);
+          else members.push(target);
+          lifeOf(target);
+          return Effect.void;
+        }
+        return record(
           target,
           null,
           undefined,
@@ -711,54 +852,51 @@ export const make = Effect.gen(function* () {
               pullRequest: threadPullRequestKeyOf(target.link),
             }),
           ),
-        ),
+        );
+      },
       { discard: true },
     );
     const now = yield* Clock.currentTimeMillis;
-    for (const group of groups) {
-      const retry = readRetryAt.get(group.key);
-      // A watch started since the last failure reads at once.
-      if (retry && group.targets.some((target) => !retry.watches.has(watchKey(target)))) {
-        readRetryAt.delete(group.key);
-      }
-    }
-    const due = groups.filter((group) => (readRetryAt.get(group.key)?.at ?? 0) <= now);
-    const reads = yield* Semaphore.make(4);
+    // A watch started since the last failure reads at once and shares the read.
+    const due = [...groups].flatMap(([key, targets]): ReadonlyArray<WatchGroup> =>
+      targets.some((target) => (readRetryAt.get(readKey(target)) ?? 0) <= now)
+        ? [{ key, targets }]
+        : [],
+    );
     yield* Effect.forEach(
       due,
-      (group) =>
+      (group) => {
+        const reference = referenceOf(group.targets[0]);
         // The host just reported a change, so a cached fingerprint may predate it.
-        (changed === undefined
-          ? Effect.void
-          : pullRequests.invalidate({ reference: referenceOf(group) })
-        ).pipe(
+        return (changed === undefined ? Effect.void : pullRequests.invalidate({ reference })).pipe(
           Effect.andThen(fingerprintOf(group)),
           Effect.tap((fingerprint) => {
-            const last = lastReads.get(group.key);
             // Open pull request views refresh only when the host state moved.
             return changed !== undefined &&
               fingerprint !== null &&
               fingerprint !== "paused" &&
-              (last === undefined ||
-                last.status !== fingerprint.status ||
-                last.remarks !== fingerprint.remarks)
-              ? pullRequests.invalidate({ reference: referenceOf(group) }, { notifyReaders: true })
+              group.targets.some((target) => {
+                const last = lastReads.get(readKey(target));
+                return last?.status !== fingerprint.status || last.remarks !== fingerprint.remarks;
+              })
+              ? pullRequests.invalidate({ reference }, { notifyReaders: true })
               : Effect.void;
           }),
           Effect.flatMap((fingerprint) =>
             fingerprint === "paused"
               ? Effect.void
-              : reads.withPermits(1)(
-                  readGroup(group, fingerprint).pipe(
-                    Effect.catchCause(
-                      logFailure("pull request watch check failed", { pullRequest: group.key }),
-                    ),
+              : readGroup(group, fingerprint, holdWake).pipe(
+                  Effect.catchCause(
+                    logFailure("pull request watch check failed", { pullRequest: group.key }),
                   ),
                 ),
           ),
-        ),
-      { concurrency: "unbounded", discard: true },
+        );
+      },
+      { concurrency: 4, discard: true },
     );
+    yield* sendHeld(held);
+    if (changed === undefined) yield* sweepCursor.complete(page.after);
   }, passes.withPermit);
 
   const sweep = pass(undefined).pipe(
@@ -767,6 +905,7 @@ export const make = Effect.gen(function* () {
   );
 
   const readOnChange = (pullRequest: string) =>
+    // Watches beyond the event read's budget still advance on the periodic sweep.
     NodeSqliteClient.backgroundReads(pass(pullRequest)).pipe(
       Effect.catchCause(logFailure("pull request watch change read failed", { pullRequest })),
       Effect.withSpan("PullRequestWatchReactor.readOnChange"),
@@ -776,10 +915,8 @@ export const make = Effect.gen(function* () {
   const follow = Effect.fnUntraced(function* (feeds: FiberMap.FiberMap<string>) {
     // Only pull requests whose host has a feed take one of the capped slots.
     const candidates = yield* Effect.filter(
-      currentGroups.flatMap((group) =>
-        group.targets.slice(0, 1).map(({ link }) => [threadPullRequestKeyOf(link), group] as const),
-      ),
-      ([, group]) => pullRequests.followsChanges(referenceOf(group)),
+      feedCandidates,
+      ([, reference]) => pullRequests.followsChanges(reference),
       { concurrency: 8 },
     );
     const wanted = feedsToFollow(candidates);
@@ -790,10 +927,10 @@ export const make = Effect.gen(function* () {
       concurrency: "unbounded",
       discard: true,
     });
-    for (const [pullRequest, group] of wanted) {
+    for (const [pullRequest, reference] of wanted) {
       // An ended feed restarts here, so a host that refused it is asked again each sweep.
       yield* FiberMap.run(feeds, pullRequest, { onlyIfMissing: true })(
-        pullRequests.changes(referenceOf(group)).pipe(
+        pullRequests.changes(reference).pipe(
           Stream.debounce(EVENT_SETTLE),
           // Events that settle during a read queue one more.
           Stream.buffer({ capacity: 1, strategy: "sliding" }),
@@ -807,6 +944,21 @@ export const make = Effect.gen(function* () {
     "PullRequestWatchReactor.start",
   )(function* () {
     const feeds = yield* FiberMap.make<string>();
+    yield* forkParked(
+      Stream.runForEach(engine.streamDomainEvents, (event) => {
+        if (event.type !== "thread.pull-request-synced") return Effect.void;
+        const unread = visibleThreadPullRequests(event.payload.pullRequests ?? []).flatMap(
+          (link) =>
+            link.watch === undefined || lives.has(lifeKeyOf(event.threadId, link, link.watch))
+              ? []
+              : [threadPullRequestKeyOf(link)],
+        );
+        if (unread.length === 0) return Effect.void;
+        return hold.awaitRelease.pipe(
+          Effect.andThen(Effect.forEach(new Set(unread), readOnChange, { discard: true })),
+        );
+      }).pipe(Effect.catchCause(logFailure("pull request watch event stream failed", {}))),
+    );
     yield* forkParked(
       hold.awaitRelease.pipe(
         Effect.andThen(

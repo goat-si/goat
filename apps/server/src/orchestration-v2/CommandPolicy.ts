@@ -1,3 +1,4 @@
+import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -193,10 +194,7 @@ export function resolveMessageDispatchIntent(
     target === undefined || !isActiveRun(target)
       ? undefined
       : providerTurnCapabilities(projection, target);
-  return turns !== undefined &&
-    !turns.supportsActiveSteering &&
-    !(turns.supportsInterrupt && turns.supportsSteeringByInterruptRestart) &&
-    turns.supportsQueuedMessages
+  return turns !== undefined && !turns.supportsActiveSteering && providerSwitchWaitsForTurn(turns)
     ? { type: "queue_after_active" }
     : mode;
 }
@@ -210,7 +208,7 @@ function isActiveRun(run: OrchestrationV2Run): boolean {
   );
 }
 
-function providerTurnCapabilities(
+export function providerTurnCapabilities(
   projection: Pick<OrchestrationV2ThreadProjection, "providerThreads" | "providerSessions">,
   run: OrchestrationV2Run,
 ) {
@@ -318,6 +316,7 @@ export interface CommandPolicyV2Shape {
       readonly fromSpecificTurn: boolean;
       /** The fork works in another checkout than its source. */
       readonly crossWorkspace: boolean;
+      readonly sourceBusy?: boolean;
     },
   ) => Effect.Effect<ForkExecutionPolicyV2, CommandPolicyV2Error>;
   readonly ensureRollback: (
@@ -429,7 +428,8 @@ const ensureNativeFork: CommandPolicyV2Shape["ensureNativeFork"] = (input) => {
 const ensureRollback: CommandPolicyV2Shape["ensureRollback"] = (input) => {
   if (
     !input.capabilities.threads.canRollbackThread ||
-    !input.capabilities.checkpointing.providerCanRollbackConversation
+    (!input.capabilities.checkpointing.providerCanRollbackConversation &&
+      !input.capabilities.context.canConsumeHandoffSummaries)
   ) {
     return Effect.fail(
       unsupported(input, "rollback", "providerInstanceId conversation rollback is unavailable"),
@@ -491,6 +491,9 @@ const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input)
     (input.sourceRunStatus === "completed" || input.sourceRunStatus === "waiting") &&
     input.sameProvider &&
     input.hasStrongNativeSource &&
+    (!input.sourceBusy ||
+      (input.sourceRunStatus === "completed" &&
+        input.capabilities.threads.canForkWhileSourceRunning === true)) &&
     input.capabilities.threads.canForkThread &&
     (!input.fromSpecificTurn || input.capabilities.threads.canForkFromTurn) &&
     input.capabilities.identity.nativeThreadIds === "strong" &&

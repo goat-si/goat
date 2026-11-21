@@ -1,3 +1,4 @@
+import type { AcpRegistryLiveConfiguration } from "@goat/provider-acp-registry/testing";
 import {
   CLAUDE_ROOT_SESSION,
   claudeFrames,
@@ -5,7 +6,6 @@ import {
   claudeMarker,
   claudeChild,
 } from "./AcpClaudeReplay.testkit.ts";
-import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ModelSelection,
@@ -25,25 +25,15 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
-
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { makeProviderReplayGate } from "@goat/provider-testing/replayGate";
-import * as ServerSettings from "../../serverSettings.ts";
-import type { AcpRegistryLiveConfiguration } from "@goat/provider-acp-registry/testing";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import { ACP_SESSION_MODE_OPTION_ID } from "@goat/provider-acp/server/sessionConfig";
 import { goatAcpPromptWithInstructions } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-
 import {
   decodeAcpReplayTranscript,
   makeAcpReplayCompletenessAssertion,
@@ -51,68 +41,17 @@ import {
   makeTurnInput,
 } from "./AcpAdapterV2.testkit.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import { AcpRegistryAdapterV2Driver } from "@goat/provider-acp-registry/server";
 import {
   ACP_REGISTRY_PROVIDER,
   makeAcpRegistryAdapterV2,
   acpRegistryPromptFailure,
   acpRegistryProbeResult,
 } from "@goat/provider-acp-registry/testing";
-
-const decodeAcpRegistryAdapterSettings = Schema.decodeUnknownEffect(
-  AcpRegistryAdapterV2Driver.configSchema,
-);
-
-const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
-
-const layerRegistry = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        Response.json({
-          version: "1.0.0",
-          agents: [
-            {
-              id: "fixture-agent",
-              name: "Fixture Agent",
-              version: "1.0.0",
-              description: "ACP V2 adapter fixture",
-              distribution: {
-                binary: {
-                  "darwin-aarch64": {
-                    archive: "https://registry.test/unused",
-                    cmd: "fixture-agent",
-                    args: [],
-                  },
-                  "linux-x86_64": {
-                    archive: "https://registry.test/unused",
-                    cmd: "fixture-agent",
-                    args: [],
-                  },
-                },
-              },
-            },
-          ],
-        }),
-      ),
-    ),
-  ),
-);
-
-const layerInjectedRuntimeCatalog = Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
-  resolve: () => Effect.die("the runtime is injected"),
-});
-
-const layerTest = Layer.mergeAll(
-  NodeServices.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  layerHost,
-  layerRegistry,
-  ServerSettings.layerTest(),
-);
+import {
+  decodeAcpRegistryAdapterSettings,
+  layerInjectedRuntimeCatalog,
+  layerTest,
+} from "./AcpRegistryAdapterV2.host.testkit.ts";
 
 const claudeUnrelatedChildren = [
   claudeFrames.childState("unknown-parent", "unrelated-child", "running"),
@@ -932,41 +871,6 @@ describe("AcpRegistryAdapterV2", () => {
   );
 
   // regression: #26695 cancelling a Copilot prompt kills its background agents
-  it.effect("never steers Copilot by cancelling its prompt", () =>
-    Effect.gen(function* () {
-      const steering = Effect.fn("steering")(function* (config: Record<string, unknown>) {
-        const instanceId = ProviderInstanceId.make("acp-registry-steering");
-        const adapter = yield* makeAcpRegistryAdapterV2({
-          selfInvocation: yield* resolveSelfInvocation(),
-          instanceId,
-          settings: yield* decodeAcpRegistryAdapterSettings(config),
-          environment: {},
-        }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
-        const { turns } = yield* adapter.getCapabilities();
-        return {
-          supportsInterrupt: turns.supportsInterrupt,
-          supportsActiveSteering: turns.supportsActiveSteering,
-          supportsSteeringByInterruptRestart: turns.supportsSteeringByInterruptRestart,
-        };
-      });
-      const copilot = {
-        supportsInterrupt: true,
-        supportsActiveSteering: false,
-        supportsSteeringByInterruptRestart: false,
-      };
-
-      assert.deepEqual(yield* steering({ agentId: "github-copilot-cli" }), copilot);
-      assert.deepEqual(
-        yield* steering({ source: "local", commandPath: "C:\\tools\\copilot.cmd" }),
-        copilot,
-      );
-      assert.deepEqual(yield* steering({ agentId: "gemini" }), {
-        ...copilot,
-        supportsSteeringByInterruptRestart: true,
-      });
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it.effect.each(["before", "after"] as const)(
     "reconciles a full prompt echo %s acknowledgment",
     (ordering) =>
@@ -1265,93 +1169,6 @@ describe("AcpRegistryAdapterV2", () => {
 
   // Copilot holds session/prompt while an attached async shell runs (github/copilot-cli#5293);
   // its documented foreground-done signal is the opt-in assistant.idle session event.
-  it.effect("settles Copilot's reply on assistant.idle while an async shell holds the prompt", () =>
-    Effect.gen(function* () {
-      const sessionId = "copilot-session";
-      const sessionEvent = (type: string) => ({
-        type: "emit_inbound",
-        frame: {
-          kind: "notification",
-          method: "github.com/copilot/sessionEvent",
-          params: { sessionId, type, data: {} },
-        },
-      });
-      const update = (sessionUpdate: Record<string, unknown>) =>
-        claudeFrames.update(sessionId, sessionUpdate);
-      const session = yield* openClaudeReplaySession(
-        [
-          {
-            type: "expect_outbound",
-            frame: { kind: "request", method: "initialize", params: "<any>" },
-          },
-          {
-            type: "emit_inbound",
-            frame: {
-              kind: "response",
-              method: "initialize",
-              result: {
-                protocolVersion: 1,
-                agentInfo: { name: "Copilot", version: "1.0.110" },
-                agentCapabilities: { loadSession: true },
-                authMethods: [],
-              },
-            },
-          },
-          {
-            type: "expect_outbound",
-            frame: { kind: "request", method: "session/new", params: "<any>" },
-          },
-          {
-            type: "emit_inbound",
-            frame: { kind: "response", method: "session/new", result: { sessionId } },
-          },
-          {
-            type: "expect_outbound",
-            frame: { kind: "request", method: "session/prompt", params: "<any>" },
-          },
-          // A previous prompt's idle can land before this prompt's turn starts.
-          sessionEvent("assistant.idle"),
-          update({ sessionUpdate: "session_info_update", title: "after stale idle" }),
-          sessionEvent("assistant.turn_start"),
-          update({
-            sessionUpdate: "tool_call",
-            toolCallId: "shell-1",
-            title: "sleep 120",
-            kind: "execute",
-            status: "completed",
-            rawInput: { command: "sleep 120", mode: "async", detach: false },
-          }),
-          update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ok" } }),
-          sessionEvent("assistant.idle"),
-          update({ sessionUpdate: "session_info_update", title: "after foreground idle" }),
-          // The shell never exits, so the first session/prompt is never answered.
-          {
-            type: "expect_outbound",
-            frame: { kind: "request", method: "session/prompt", params: "<any>" },
-          },
-          sessionEvent("assistant.turn_start"),
-          update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "two" } }),
-          sessionEvent("assistant.idle"),
-          update({ sessionUpdate: "session_info_update", title: "after second idle" }),
-        ],
-        undefined,
-        false,
-        "github-copilot-cli",
-      );
-      yield* session.runtime.startTurn(session.turnInput(1));
-      const stale = yield* session.throughMarker("after stale idle");
-      assert.isFalse(stale.some((event) => event.type === "turn.terminal"));
-      const foreground = yield* session.throughMarker("after foreground idle");
-      const terminal = foreground.find((event) => event.type === "turn.terminal");
-      assert.isDefined(terminal, "the run settles once Copilot's foreground work is idle");
-      assert.equal(terminal?.type === "turn.terminal" ? terminal.status : null, "completed");
-      yield* session.runtime.startTurn(session.turnInput(2));
-      const second = yield* session.throughMarker("after second idle");
-      const secondTerminal = second.find((event) => event.type === "turn.terminal");
-      assert.equal(secondTerminal?.type === "turn.terminal" ? secondTerminal.runOrdinal : null, 2);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
   it.effect.each([
     { kind: "approval", stopReason: "end_turn", status: "completed" },
     { kind: "question", stopReason: "error", status: "failed" },
@@ -1794,6 +1611,42 @@ describe("AcpRegistryAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("writes a child's coalesced text before a restart resets it", () =>
+    Effect.gen(function* () {
+      const { update, childState, idle, prompt } = claudeFrames;
+      const reply = (text: string) =>
+        update("child-1", {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "reply",
+          content: { type: "text", text },
+        });
+      const session = yield* openClaudeReplaySession([
+        ...claudeFrames.open,
+        ...prompt(1),
+        ...claudeChild.slice(0, -1),
+        reply("Review "),
+        reply("done."),
+        // A working grandchild keeps the idle child from publishing (and flushing) its status.
+        childState("child-1", "grandchild", "running"),
+        childState(CLAUDE_ROOT_SESSION, "child-1", "idle"),
+        childState(CLAUDE_ROOT_SESSION, "child-1", "running"),
+        idle("end_turn"),
+        claudeFrames.closeRequest,
+        claudeFrames.closed,
+      ]);
+      yield* session.runtime.startTurn(session.turnInput(1));
+      const events = yield* session.until((event) => event.type === "turn.terminal");
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "message.updated" &&
+            event.message.role === "assistant" &&
+            event.message.text === "Review done.",
+        ),
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("fails active Claude work and releases its children when the process exits", () =>
     Effect.gen(function* () {
       const session = yield* openClaudeReplaySession([
@@ -1864,121 +1717,169 @@ describe("AcpRegistryAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("keeps Claude activity after a refused Stop and closes it on retry", () =>
+  it.effect.each([
+    { stopReason: "refusal", childUpdate: "state_update" },
+    { stopReason: "max_tokens", childUpdate: "subagent_update" },
+    { stopReason: "max_turn_requests", childUpdate: "state_update" },
+  ])(
+    "fails Claude's turn and child and closes its running tool when they stop with $stopReason via $childUpdate",
+    ({ stopReason, childUpdate }) =>
+      Effect.gen(function* () {
+        const { update, idle, prompt } = claudeFrames;
+        const session = yield* openClaudeReplaySession([
+          ...claudeFrames.open,
+          ...prompt(1),
+          ...claudeChild,
+          update(CLAUDE_ROOT_SESSION, {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "root-tool",
+            name: "Bash",
+            title: "Read package",
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command: "cat package.json" },
+          }),
+          update("child-1", { sessionUpdate: "state_update", state: "running" }),
+          childUpdate === "state_update"
+            ? update("child-1", { sessionUpdate: "state_update", state: "idle", stopReason })
+            : update(CLAUDE_ROOT_SESSION, {
+                sessionUpdate: "subagent_update",
+                sessionId: "child-1",
+                state: { state: "idle", stopReason },
+              }),
+          idle(stopReason),
+        ]);
+        yield* session.runtime.startTurn(session.turnInput(1));
+        const events = yield* session.until((event) => event.type === "turn.terminal");
+        const terminal = events.at(-1)!;
+        if (terminal.type !== "turn.terminal") throw new Error("Missing root terminal");
+        assert.equal(terminal.status, "failed");
+        assert.equal(terminal.failure?.code, stopReason);
+        const child = events.findLast((event) => event.type === "subagent.updated");
+        if (child?.type !== "subagent.updated") throw new Error("Missing child update");
+        assert.equal(child.subagent.status, "failed");
+        assert.isNotNull(child.subagent.result, "the child shows why it stopped");
+        assert.isFalse(
+          events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.threadId === child.subagent.childThreadId &&
+              event.message.role === "assistant",
+          ),
+          "the child's conversation has no reply it didn't send",
+        );
+        const tool = events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+        );
+        if (tool?.type !== "turn_item.updated") throw new Error("Missing tool update");
+        assert.equal(tool.turnItem.status, "failed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([false, true])("filters Devin plan bypass, bypass only=%s", (bypassOnly) =>
     Effect.gen(function* () {
-      const gate = makeProviderReplayGate(["close-response", "queued-close-response"]);
       const session = yield* openClaudeReplaySession(
         [
-          ...claudeFrames.open,
-          ...claudeFrames.prompt(1),
-          ...claudeChild,
-          claudeMarker("before Stop"),
-          claudeFrames.closeRequest,
-          claudeFrames.update("child-1", {
-            sessionUpdate: "agent_message_chunk",
-            messageId: "closing-reply",
-            content: { type: "text", text: "Finished during close." },
-          }),
-          claudeFrames.childState(CLAUDE_ROOT_SESSION, "child-1", "idle"),
-          claudeFrames.idle("end_turn"),
-          claudeMarker("idle during close"),
-          {
-            type: "emit_inbound",
-            label: "close-response",
-            frame: {
-              kind: "response",
-              method: "session/close",
-              error: { code: -32603, message: "Close refused" },
-            },
-          },
-          ...claudeFrames.prompt(2),
-          claudeMarker("before retry"),
-          claudeFrames.closeRequest,
-          claudeFrames.idle("cancelled"),
-          claudeFrames.closed,
-        ],
-        gate,
-      );
-      yield* session.runtime.startTurn(session.turnInput(1));
-      const started = yield* session.throughMarker("before Stop");
-      const running = started.findLast((event) => event.type === "provider_turn.updated");
-      if (running?.type !== "provider_turn.updated") throw new Error("Missing active turn");
-      const stop = {
-        providerThread: session.providerThread,
-        providerTurnId: running.providerTurn.id,
-        requestRuntimeRestart: true,
-      };
-      const closing = yield* session.runtime
-        .interruptTurn(stop)
-        .pipe(Effect.exit, Effect.forkScoped);
-      yield* Effect.addFinalizer(() => Effect.sync(() => gate.releaseAll()));
-      const idle = yield* session.throughMarker("idle during close");
-      gate.release("close-response");
-      const refused = yield* Fiber.join(closing);
-      assert.isTrue(Exit.isFailure(refused), "a refused close must not report a successful Stop");
-      const terminal = idle.findLast((event) => event.type === "turn.terminal");
-      assert.equal(
-        terminal?.type === "turn.terminal" ? terminal.status : null,
-        "completed",
-        "idle during a refused close must settle the foreground turn",
-      );
-      const result = idle.findLast((event) => event.type === "subagent.updated");
-      if (result?.type !== "subagent.updated") throw new Error("Missing child close-time result");
-      assert.equal(result.subagent.status, "completed");
-      assert.equal(result.subagent.result, "Finished during close.");
-      assert.isFalse(yield* session.runtime.hasPendingBackgroundWork!);
-      yield* session.runtime.startTurn(session.turnInput(2));
-      const retry = yield* session.throughMarker("before retry");
-      const retryRunning = retry.findLast((event) => event.type === "provider_turn.updated");
-      if (retryRunning?.type !== "provider_turn.updated")
-        throw new Error("Missing active retry turn");
-      yield* session.runtime.interruptTurn({
-        ...stop,
-        providerTurnId: retryRunning.providerTurn.id,
-      });
-      assert.equal((yield* session.terminal).status, "interrupted");
-      assert.isFalse(yield* session.runtime.hasPendingBackgroundWork!);
-
-      const queued = yield* openClaudeReplaySession(
-        [
-          ...claudeFrames.open,
+          ...claudeFrames.open.map((entry) =>
+            entry.frame.method === "initialize" && entry.type === "emit_inbound"
+              ? {
+                  ...entry,
+                  frame: {
+                    ...entry.frame,
+                    result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
+                  },
+                }
+              : entry,
+          ),
           {
             type: "expect_outbound",
             frame: { kind: "request", method: "session/prompt", params: "<any>" },
           },
-          claudeMarker("before queued Stop"),
-          claudeFrames.closeRequest,
+          claudeFrames.update(CLAUDE_ROOT_SESSION, {
+            sessionUpdate: "tool_call",
+            toolCallId: "exit-plan",
+            title: "Exit plan mode",
+            kind: "switch_mode",
+            status: "pending",
+          }),
+          {
+            type: "emit_inbound",
+            frame: {
+              kind: "request",
+              method: "session/request_permission",
+              params: {
+                sessionId: CLAUDE_ROOT_SESSION,
+                toolCall: { toolCallId: "exit-plan" },
+                // Devin gives both plan approvals allow_once and does not promise their order.
+                options: [
+                  {
+                    optionId: "plan_bypass",
+                    name: "Yes, implement plan and bypass permissions",
+                    kind: "allow_once",
+                  },
+                  ...(bypassOnly
+                    ? []
+                    : [
+                        {
+                          optionId: "plan_accept_edits",
+                          name: "Yes, implement plan and accept edits",
+                          kind: "allow_once",
+                        },
+                      ]),
+                  { optionId: "reject_once", name: "No, plan needs changes", kind: "reject_once" },
+                ],
+              },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              kind: "response",
+              method: "session/request_permission",
+              result: "<any>",
+            },
+          },
           {
             type: "emit_inbound",
             frame: {
               kind: "response",
               method: "session/prompt",
-              error: { code: -32800, message: "Request cancelled" },
+              result: { stopReason: "end_turn" },
             },
           },
-          { ...claudeFrames.closed, label: "queued-close-response" },
+          claudeFrames.closeRequest,
+          claudeFrames.closed,
         ],
-        gate,
+        undefined,
+        false,
+        "devin",
       );
-      yield* queued.runtime.startTurn(queued.turnInput(3));
-      const pending = yield* queued.throughMarker("before queued Stop");
-      const queuedRunning = pending.findLast((event) => event.type === "provider_turn.updated");
-      if (queuedRunning?.type !== "provider_turn.updated")
-        throw new Error("Missing queued provider turn");
-      const queuedClosing = yield* queued.runtime
-        .interruptTurn({
-          providerThread: queued.providerThread,
-          providerTurnId: queuedRunning.providerTurn.id,
-          requestRuntimeRestart: true,
-        })
-        .pipe(Effect.forkScoped);
-      const queuedTerminal = yield* queued.terminal;
-      gate.release("queued-close-response");
-      yield* Fiber.join(queuedClosing);
-      assert.equal(queuedTerminal.providerTurnId, queuedRunning.providerTurn.id);
-      assert.equal(queuedTerminal.status, "interrupted");
-      assert.isNull(queuedTerminal.failure);
-      assert.isFalse(yield* queued.runtime.hasPendingBackgroundWork!);
+      yield* session.runtime.startTurn(session.turnInput(1)).pipe(Effect.forkScoped);
+      const seen = yield* session.until(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      const request = seen.at(-1)!;
+      if (request.type !== "runtime_request.updated") throw new Error("Missing request");
+      yield* session.runtime.respondToRuntimeRequest({
+        requestId: request.runtimeRequest.id,
+        decision: "accept",
+      });
+      let answer: unknown;
+      while (answer === undefined) {
+        const frame = (yield* Queue.take(session.outgoing)) as {
+          readonly result?: { readonly outcome?: { readonly optionId?: string } };
+        };
+        answer = frame.result?.outcome;
+      }
+      assert.deepEqual(
+        answer,
+        bypassOnly
+          ? { outcome: "cancelled" }
+          : { outcome: "selected", optionId: "plan_accept_edits" },
+      );
+      assert.equal((yield* session.terminal).status, "completed");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

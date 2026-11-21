@@ -148,17 +148,22 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
         }
         // A sparse checkout flags paths outside its patterns skip-worktree, which hides their
         // deletion; before cleanup they were unflagged, so the deletion shows and verify stages it.
+        // Lowercase tags (s, h) add assume-unchanged, which git add skips as well.
         if (deletedNames.length) {
           const removed = new Set(deletedNames);
           const flagged = (await git(cwd, ["ls-files", "-v", "-z"]))
             .toString()
             .split("\0")
-            .filter((entry) => entry.startsWith("S ") && removed.has(entry.slice(2)))
-            .map((entry) => entry.slice(2));
-          if (flagged.length)
-            await git(cwd, ["update-index", "--no-skip-worktree", "-z", "--stdin"], {
-              input: Buffer.from(flagged.join("\0") + "\0"),
-            });
+            .filter((entry) => /^[Ssh] /.test(entry) && removed.has(entry.slice(2)));
+          const clear = async (flag: string, tags: string) => {
+            const names = flagged.filter((entry) => tags.includes(entry[0] ?? ""));
+            if (names.length)
+              await git(cwd, ["update-index", flag, "-z", "--stdin"], {
+                input: Buffer.from(names.map((entry) => entry.slice(2)).join("\0") + "\0"),
+              });
+          };
+          await clear("--no-skip-worktree", "Ss");
+          await clear("--no-assume-unchanged", "sh");
         }
         const changed = await git(cwd, [
           "diff",
@@ -201,12 +206,41 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
 
 const isRestoreSnapshotError = Schema.is(RestoreSnapshotError);
 
+export const verifyWorktreeRegistration = Effect.fn("restoreSnapshot.verifyWorktreeRegistration")(
+  (input: { projectCwd: string; worktreePath: string }) =>
+    Effect.tryPromise({
+      try: async () => {
+        const { projectCwd, worktreePath } = input;
+        const common = (cwd: string) =>
+          text(cwd, "rev-parse", "--git-common-dir").then((dir) =>
+            NodeFSP.realpath(NodePath.resolve(cwd, dir)),
+          );
+        const projectGit = await common(projectCwd);
+        const checkoutGit = await common(worktreePath);
+        const admin = await NodeFSP.realpath(
+          await text(worktreePath, "rev-parse", "--absolute-git-dir"),
+        );
+        const registrations = NodePath.join(projectGit, "worktrees");
+        if (checkoutGit !== projectGit || NodePath.dirname(admin) !== registrations)
+          throw new RestoreSnapshotError({ detail: "repository or worktree registration" });
+        const pointer = await NodeFSP.readFile(NodePath.join(admin, "gitdir"), "utf8");
+        const backlink = await NodeFSP.realpath(NodePath.resolve(admin, pointer.trim()));
+        if (backlink !== (await NodeFSP.realpath(NodePath.join(worktreePath, ".git"))))
+          throw new RestoreSnapshotError({ detail: "worktree registration" });
+      },
+      catch: (cause) =>
+        isRestoreSnapshotError(cause)
+          ? cause
+          : new RestoreSnapshotError({ detail: "worktree registration", cause }),
+    }),
+);
+
 export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredWorktree")(
   (input: {
     cwd: string;
     expectedPath?: string;
     branch: string;
-    expectedHead: string;
+    expectedHead?: string | undefined;
     snapshot?: string;
   }) =>
     Effect.tryPromise({
@@ -222,7 +256,8 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
           "toplevel",
         );
         check((await text(cwd, "symbolic-ref", "HEAD")) === `refs/heads/${input.branch}`, "branch");
-        check((await text(cwd, "rev-parse", "HEAD")) === input.expectedHead, "head");
+        if (input.expectedHead !== undefined)
+          check((await text(cwd, "rev-parse", "HEAD")) === input.expectedHead, "head");
         if (input.snapshot) {
           const snapshot = input.snapshot;
           // Capture adds files outside a sparse checkout's patterns too, so the check must as well.
@@ -248,12 +283,24 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
     }),
 );
 
-export const pathExists = async (path: string) => {
-  try {
-    await NodeFSP.lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-};
+export interface ManagedCheckoutIdentity {
+  readonly projectCwd: string;
+  readonly worktreePath: string;
+  readonly expectedPath?: string | undefined;
+  readonly branch: string;
+  readonly expectedHead?: string | undefined;
+}
+
+export const verifyManagedCheckout = Effect.fn("restoreSnapshot.verifyManagedCheckout")(
+  (input: ManagedCheckoutIdentity) =>
+    verifyWorktreeRegistration(input).pipe(
+      Effect.andThen(
+        verifyRestoredWorktree({
+          cwd: input.worktreePath,
+          expectedPath: input.expectedPath ?? input.worktreePath,
+          branch: input.branch,
+          expectedHead: input.expectedHead,
+        }),
+      ),
+    ),
+);

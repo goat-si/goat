@@ -312,6 +312,7 @@ it("retries a failed route add against the same machine and offers fingerprint r
     displayUrl: null,
     relayManaged: false,
     serverConfig: null,
+    refusedRouteIds: [],
     entry: {
       enabled: true,
       target: new SshConnectionTarget({

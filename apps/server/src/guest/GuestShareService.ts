@@ -16,6 +16,7 @@ import {
   type OrchestrationV2CommandOutputFrame,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2GetTurnItemResult,
+  type ThreadGuestShare,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -30,6 +31,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { base64UrlDecodeUtf8, base64UrlEncode, timingSafeEqualBase64Url } from "../auth/utils.ts";
@@ -44,7 +47,10 @@ import {
 import * as ServerConfig from "../config.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
+import {
+  GUEST_FAILURE,
+  guestSubmissionQuotaFailure,
+} from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoalescer.ts";
 import { buildBoundedThreadStreamSnapshot } from "../orchestration-v2/ThreadStream.ts";
@@ -53,6 +59,7 @@ import {
   projectTurnItemForWire,
   threadStreamEventItem,
 } from "../orchestration-v2/WireProjection.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -155,6 +162,8 @@ export class GuestShareService extends Context.Service<
     >;
     /** Succeeds while the session can still open its share. */
     readonly check: (session: string) => Effect.Effect<void, GuestShareAccessError>;
+    /** Holds the host's guest upload slot until staging and cleanup finish. */
+    readonly acquireUploadSlot: Effect.Effect<void, GuestShareAccessError, Scope.Scope>;
     /** Stores the guest's files as the thread's attachments and records the message with them. */
     readonly submit: (
       session: string,
@@ -214,6 +223,9 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const analytics = yield* AnalyticsService.AnalyticsService;
+  const documents = yield* DocumentText.DocumentText;
+  // Reserve the other document worker slot for owner uploads.
+  const uploadSlot = yield* Semaphore.make(1);
   const signingKey = yield* Effect.cached(
     secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32).pipe(Effect.orDie),
   );
@@ -364,6 +376,16 @@ const make = Effect.gen(function* () {
     yield* authorize(session, "session");
   });
 
+  const acquireUploadSlot = Effect.acquireRelease(
+    uploadSlot.takeIfAvailable(1).pipe(
+      Effect.filterOrFail(
+        (acquired) => acquired,
+        () => new GuestShareAccessError({ reason: "files_busy" }),
+      ),
+    ),
+    () => uploadSlot.release(1),
+  ).pipe(Effect.asVoid);
+
   const uploadFailed = new GuestShareAccessError({ reason: "rejected" });
   const removeStored = (attachments: ReadonlyArray<ChatAttachment>) =>
     Effect.forEach(
@@ -372,7 +394,11 @@ const make = Effect.gen(function* () {
         const path = resolveAttachmentPath({ attachmentsDir, attachment });
         return path === null
           ? Effect.void
-          : fileSystem.remove(path, { force: true }).pipe(Effect.ignore);
+          : Effect.forEach(
+              [path, `${path}.txt`],
+              (file) => fileSystem.remove(file, { force: true }).pipe(Effect.ignore),
+              { discard: true },
+            );
       },
       { discard: true },
     );
@@ -384,6 +410,7 @@ const make = Effect.gen(function* () {
    */
   const storeUploads = Effect.fn("GuestShareService.storeUploads")(function* (
     threadId: ThreadId,
+    share: ThreadGuestShare,
     uploads: ReadonlyArray<GuestUpload>,
   ) {
     const inspected = yield* Effect.forEach(uploads, (upload) =>
@@ -402,6 +429,10 @@ const make = Effect.gen(function* () {
     );
     const classified = classifyGuestUploads(inspected);
     if (!classified.ok) return yield* new GuestShareAccessError({ reason: classified.reason });
+    const quotaFailure = guestSubmissionQuotaFailure(share, classified.attachments);
+    if (quotaFailure !== undefined) {
+      return yield* new GuestShareAccessError({ reason: guestFailureReason(quotaFailure) });
+    }
     const stored: Array<ChatAttachment> = [];
     yield* Effect.forEach(
       classified.attachments,
@@ -416,8 +447,10 @@ const make = Effect.gen(function* () {
           const path = resolveAttachmentPath({ attachmentsDir, attachment });
           if (path === null) return yield* uploadFailed;
           yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
-          yield* fileSystem.copyFile(uploads[index]!.path, path);
           stored.push(attachment);
+          // The filesystem callback can finish after interruption, so rollback must wait for it.
+          yield* fileSystem.copyFile(uploads[index]!.path, path).pipe(Effect.uninterruptible);
+          yield* documents.ensure(path);
         }).pipe(Effect.mapError(() => uploadFailed)),
       { discard: true },
     ).pipe(Effect.onError(() => removeStored(stored)));
@@ -436,16 +469,23 @@ const make = Effect.gen(function* () {
     if (request.text === "" && uploads.length === 0) {
       return yield* new GuestShareAccessError({ reason: "empty" });
     }
-    const attachments = yield* storeUploads(thread.id, uploads);
-    yield* dispatchGuestCommand({
-      type: "thread.guest-message.submit",
-      commandId: yield* commandId("submit"),
-      threadId: thread.id,
-      shareId: share.id,
-      guestMessageId: GuestMessageId.make(yield* random.uuidV4()),
-      text: request.text,
-      ...(attachments.length === 0 ? {} : { attachments }),
-    }).pipe(Effect.onError(() => removeStored(attachments)));
+    const id = yield* commandId("submit");
+    const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
+    const attachments = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const attachments = yield* restore(storeUploads(thread.id, share, uploads));
+        yield* dispatchGuestCommand({
+          type: "thread.guest-message.submit",
+          commandId: id,
+          threadId: thread.id,
+          shareId: share.id,
+          guestMessageId,
+          text: request.text,
+          ...(attachments.length === 0 ? {} : { attachments }),
+        }).pipe(Effect.onError(() => removeStored(attachments)));
+        return attachments;
+      }),
+    );
     yield* analytics.record("feature.used", {
       feature: "guest_message.submit",
       variant: attachments.length === 0 ? "text_only" : "with_files",
@@ -558,17 +598,25 @@ const make = Effect.gen(function* () {
     itemId: string,
   ) {
     const { thread } = yield* authorize(session, "session");
-    const item = yield* orchestrator
-      .getTurnItem({ threadId: thread.id, itemId: TurnItemId.make(itemId) })
-      .pipe(Effect.mapError(() => unavailable));
+    const id = TurnItemId.make(itemId);
+    const item =
+      (yield* orchestrator
+        .getTurnItem({ threadId: thread.id, itemId: id })
+        .pipe(Effect.mapError(() => unavailable))) ??
+      (thread.forkedFrom == null
+        ? null
+        : yield* orchestrator.getTimelinePage(thread.id, { itemId: id, limit: 1 }).pipe(
+            Effect.map((page) => page.items.find((entry) => entry.item.id === id)?.item ?? null),
+            Effect.mapError(() => unavailable),
+          ));
     return item === null ? yield* unavailable : { thread, item };
   });
 
   const render = Effect.fn("GuestShareService.render")(function* (session: string, itemId: string) {
-    const { thread, item } = yield* threadItem(session, itemId);
+    const { item } = yield* threadItem(session, itemId);
     if (item.type !== "dynamic_tool") return yield* unavailable;
     const reference = htmlRenderFromToolItem(item);
-    const [attachmentId] = threadHtmlRenderAttachmentIds(thread.id, [item]);
+    const [attachmentId] = threadHtmlRenderAttachmentIds(item.threadId, [item]);
     const path =
       attachmentId === undefined
         ? null
@@ -589,9 +637,9 @@ const make = Effect.gen(function* () {
     session: string,
     itemId: string,
   ) {
-    const { thread, item } = yield* threadItem(session, itemId);
+    const { item } = yield* threadItem(session, itemId);
     if (item.type !== "command_execution") return yield* unavailable;
-    return commandOutputs.subscribe({ threadId: thread.id, itemId: item.id }).pipe(
+    return commandOutputs.subscribe({ threadId: item.threadId, itemId: item.id }).pipe(
       // A lost hub stream ends the output; the row reloads it when reopened.
       Stream.catchCause(() => Stream.empty),
       Stream.interruptWhen(untilRevoked(session)),
@@ -638,6 +686,7 @@ const make = Effect.gen(function* () {
     create,
     redeem,
     check,
+    acquireUploadSlot,
     submit,
     stream,
     render,

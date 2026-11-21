@@ -1,9 +1,17 @@
-import { OrchestrationV2AppThreadJson, type ThreadId } from "@goat/contracts";
+import {
+  OrchestrationV2AppThreadJson,
+  ThreadLinkedPullRequest,
+  type ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
+
+export const threadPullRequestLinksEqual = Schema.toEquivalence(
+  Schema.NullOr(ThreadLinkedPullRequest),
+);
 
 const PullRequestThread = OrchestrationV2AppThreadJson.mapFields(
   ({
@@ -11,6 +19,7 @@ const PullRequestThread = OrchestrationV2AppThreadJson.mapFields(
     projectId,
     lineage,
     createdAt,
+    updatedAt,
     branch,
     worktreePath,
     archivedAt,
@@ -24,6 +33,7 @@ const PullRequestThread = OrchestrationV2AppThreadJson.mapFields(
     projectId,
     lineage,
     createdAt,
+    updatedAt,
     branch,
     worktreePath,
     archivedAt,

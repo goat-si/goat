@@ -31,6 +31,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ThemeImportDialog } from "./ThemeImportDialog";
+import { ThemeBackgroundNotice } from "./ThemeBackgroundNotice";
 import { ThemePickerMenu, type ThemeChoice } from "./ThemePickerMenu";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -314,6 +315,7 @@ export function ThemeLibrary({
 
   return (
     <>
+      <ThemeBackgroundNotice />
       <SettingsRow
         {...searchableSetting("color-scheme")}
         description="Follow the system appearance, or stay in light or dark mode."

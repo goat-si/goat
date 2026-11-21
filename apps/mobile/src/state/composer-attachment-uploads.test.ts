@@ -1,4 +1,4 @@
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import { CommandId, EnvironmentId, MessageId, ProjectId, ThreadId } from "@goat/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 type UploadOptions = {
@@ -189,12 +189,14 @@ import {
 } from "./composer-attachment-uploads";
 import {
   enqueueThreadOutboxMessage,
+  flattenQueuedThreadMessages,
   flushThreadOutbox,
   threadOutboxManager,
 } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import * as drafts from "./use-composer-drafts";
 import { prepareQueuedMessageAttachments } from "./threadOutboxDeliverySupport";
+import { expoThreadOutboxStorage } from "./thread-outbox-storage";
 
 const environmentId = EnvironmentId.make("environment-1");
 const draftKey = "environment-1:thread-1";
@@ -401,4 +403,94 @@ it("does not upload a disconnected colon environment's draft to its connected pr
     serverConfigs: new Map([[connected, config]]),
   });
   expect(requests).toEqual([]);
+});
+
+it("keeps an upload running when its message is sent mid-upload and records it on the message", async () => {
+  const transferStarted = Promise.withResolvers<void>();
+  const finishTransfer = Promise.withResolvers<{ status: number }>();
+  native.transfer.mockImplementationOnce(async (uri, url) => {
+    native.server.set(url.split("/").at(-1)!, native.files.get(uri)!);
+    transferStarted.resolve();
+    return finishTransfer.promise;
+  });
+  const queue = worker();
+  await transferStarted.promise;
+  await enqueueThreadOutboxMessage(queuedMessage());
+  drafts.clearComposerDraftContent(draftKey, { deferAttachmentCleanup: true });
+  finishTransfer.resolve({ status: 204 });
+  await queue.settled();
+  expect(native.transfer).toHaveBeenCalledOnce();
+  expect(native.deleted).toEqual([]);
+  const [queued] = flattenQueuedThreadMessages(
+    appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+  );
+  expect(queued?.attachments[0]?.uploadedAttachmentId).toBe("pending-1");
+});
+
+it("retains the project stamp and avoids another upload after outbox storage reload", async () => {
+  const other = EnvironmentId.make("other");
+  const stamped = {
+    environmentId,
+    projectId: ProjectId.make("project"),
+    createdAt: "2026-10-17T00:00:00.000Z",
+  };
+  const requests = composerAttachmentUploadRequests({
+    drafts: { "new-task:other:wrong-project": { attachments: [image], project: stamped } },
+    queuedMessagesByThreadKey: {},
+    knownEnvironmentIds: [environmentId, other],
+    connectedEnvironmentIds: new Set([environmentId, other]),
+    operableEnvironmentIds: new Set([environmentId, other]),
+    serverConfigs: new Map([
+      [environmentId, config],
+      [other, config],
+    ]),
+  });
+  expect(requests).toEqual([{ environmentId, attachment: image }]);
+  await enqueueThreadOutboxMessage(queuedMessage());
+  appAtomRegistry.set(drafts.composerDraftsAtom, {});
+  const queue = worker();
+  await queue.settled();
+  await flushThreadOutbox();
+  const loaded = await expoThreadOutboxStorage.load();
+  expect(loaded.errors).toEqual([]);
+  expect(loaded.messages[0]?.attachments[0]?.uploadedAttachmentId).toBe("pending-1");
+  const afterRestart = composerAttachmentUploadRequests({
+    drafts: {},
+    queuedMessagesByThreadKey: { [draftKey]: loaded.messages },
+    knownEnvironmentIds: [environmentId],
+    connectedEnvironmentIds: new Set([environmentId]),
+    operableEnvironmentIds: new Set([environmentId]),
+    serverConfigs: new Map([[environmentId, config]]),
+  });
+  expect(afterRestart).toEqual([]);
+  expect(native.transfer).toHaveBeenCalledOnce();
+});
+
+it("joins queued delivery to the in-flight draft upload and preserves its command on retry", async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  native.transfer.mockImplementation(async (uri, url) => {
+    started.resolve();
+    await release.promise;
+    native.server.set(url.split("/").at(-1)!, native.files.get(uri)!);
+    return { status: 204 };
+  });
+  const queue = worker();
+  await started.promise;
+  const message = queuedMessage();
+  await enqueueThreadOutboxMessage(message);
+  const preparing = prepareQueuedMessageAttachments(message, true);
+  release.resolve();
+  await preparing;
+  await queue.settled();
+  const [persisted] = flattenQueuedThreadMessages(
+    appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+  );
+  expect(persisted?.commandId).toBe(message.commandId);
+  expect(persisted?.attachments[0]?.uploadedAttachmentId).toBe("pending-1");
+  expect(native.transfer).toHaveBeenCalledTimes(1);
+  if (!persisted) throw new Error("Queued message missing");
+  const retry = await prepareQueuedMessageAttachments(persisted, true);
+  expect(retry.status).toBe("ready");
+  expect(native.transfer).toHaveBeenCalledTimes(1);
 });

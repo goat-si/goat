@@ -23,17 +23,39 @@ export const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export function parseReviewNumstat(stdout: string): ReviewDiffFileStat[] {
   const fields = stdout.split("\0");
+  const changeTypes = new Map<string, string>();
   const files: ReviewDiffFileStat[] = [];
   for (let index = 0; index < fields.length; index++) {
     const field = fields[index] ?? "";
+    if (field.startsWith(":")) {
+      const status = field.slice(field.lastIndexOf(" ") + 1);
+      if (/^[RC]/.test(status)) index++;
+      const path = fields[++index];
+      if (path !== undefined)
+        changeTypes.set(
+          path,
+          status.startsWith("A")
+            ? "new"
+            : status.startsWith("D")
+              ? "deleted"
+              : status.startsWith("R")
+                ? status === "R100"
+                  ? "rename-pure"
+                  : "rename-changed"
+                : "change",
+        );
+      continue;
+    }
     const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(field);
     if (!match) continue;
     const previousPath = match[3] === "" ? fields[++index] : null;
     const path = previousPath !== null ? fields[++index] : match[3];
     if (previousPath === undefined || path === undefined) continue;
+    const changeType = changeTypes.get(path);
     files.push({
       path,
       previousPath,
+      ...(changeType === undefined ? {} : { changeType }),
       additions: match[1] === "-" ? 0 : Number(match[1]),
       deletions: match[2] === "-" ? 0 : Number(match[2]),
     });

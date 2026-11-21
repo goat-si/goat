@@ -40,6 +40,8 @@ export const makeWakeHarnessWithOptions = (options?: {
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   readonly freshQueueOnReopen?: boolean;
   readonly setPermissionMode?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["setPermissionMode"];
+  readonly renameSession?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["renameSession"];
+  readonly onSessionInit?: (cwd: string) => Effect.Effect<void>;
   readonly forkSession?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["forkSession"];
   readonly allocateSessionId?: Effect.Effect<string>;
 }) =>
@@ -89,6 +91,7 @@ export const makeWakeHarnessWithOptions = (options?: {
     const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
       instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
       settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
+      ...(options?.onSessionInit === undefined ? {} : { onSessionInit: options.onSessionInit }),
       ...(options?.modelCatalog ? { modelCatalog: options.modelCatalog } : {}),
       environment: options?.environment ?? {},
       attachmentsDir,
@@ -102,7 +105,7 @@ export const makeWakeHarnessWithOptions = (options?: {
             .observe(() => {
               continuationRequests.push(request);
             })
-            .pipe(Effect.andThen(Queue.offer(continuationReceipts, request))),
+            .pipe(Effect.andThen(Queue.offer(continuationReceipts, request)), Effect.asVoid),
       },
       queryRunner: {
         allocateSessionId:
@@ -121,6 +124,7 @@ export const makeWakeHarnessWithOptions = (options?: {
                     offeredMessages.push(message);
                   }),
                 setModel: () => Effect.void,
+                renameSession: options?.renameSession ?? (() => Effect.void),
                 applyFlagSettings: () => Effect.void,
                 setPermissionMode: (mode) =>
                   observations
@@ -149,6 +153,7 @@ export const makeWakeHarnessWithOptions = (options?: {
                 Effect.sync(() => {
                   liveSelectionChanges.push({ model });
                 }),
+              renameSession: options?.renameSession ?? (() => Effect.void),
               applyFlagSettings: (settings) =>
                 Effect.sync(() => {
                   liveSelectionChanges.push(settings);

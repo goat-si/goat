@@ -28,6 +28,7 @@ import { SearchMatchHintLine, ThreadSearchMatchExcerpt } from "./ThreadSearchMat
 
 interface CommandPaletteResultsProps {
   emptyStateMessage?: string;
+  searchFailed?: boolean;
   groups: ReadonlyArray<CommandPaletteGroup>;
   highlightedItemValue?: string | null;
   isActionsOnly: boolean;
@@ -54,6 +55,11 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
 
   return (
     <CommandList>
+      {props.searchFailed ? (
+        <div role="status" className="px-4 py-3 text-sm text-muted-foreground">
+          Couldn't search thread messages.
+        </div>
+      ) : null}
       {props.groups.map((group) => (
         <CommandGroup items={group.items} key={group.value}>
           {group.label ? <CommandGroupLabel>{group.label}</CommandGroupLabel> : null}
@@ -128,6 +134,11 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
 
   return (
     <CommandListVirtualized>
+      {props.searchFailed ? (
+        <div role="status" className="px-4 py-3 text-sm text-muted-foreground">
+          Couldn't search thread messages.
+        </div>
+      ) : null}
       <LegendList<CommandPaletteRow>
         ref={listRef}
         data={props.rows}

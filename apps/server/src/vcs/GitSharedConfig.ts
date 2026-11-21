@@ -42,14 +42,22 @@ export const runSharedConfigCommand = Effect.fnUntraced(function* <
     }
   });
   if (!input.write) return yield* attempt;
-  const key = yield* input.repository;
-  if (key === null) return yield* attempt;
+  return yield* withSharedConfigWrite(input.repository, attempt);
+});
+
+// Callers own the Git operation span.
+export const withSharedConfigWrite = Effect.fnUntraced(function* <A, E, R>(
+  repository: Effect.Effect<string | null, E>,
+  effect: Effect.Effect<A, E, R>,
+) {
+  const key = yield* repository;
+  if (key === null) return yield* effect;
   let lock = locks.get(key);
   if (!lock) {
     lock = Semaphore.makeUnsafe(1);
     locks.set(key, lock);
   }
-  return yield* lock.withPermit(attempt);
+  return yield* lock.withPermit(effect);
 });
 
 export const recordPushedUpstream = Effect.fn("GitSharedConfig.recordPushedUpstream")(

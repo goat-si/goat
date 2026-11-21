@@ -39,6 +39,7 @@ export const toPullRequestSummary = (
     : { reviewDecision: changeRequest.reviewDecision }),
   ...(changeRequest.checksState === undefined ? {} : { checksState: changeRequest.checksState }),
   ...(changeRequest.mergeability === undefined ? {} : { mergeability: changeRequest.mergeability }),
+  ...(changeRequest.rebaseRequired == null ? {} : { rebaseRequired: changeRequest.rebaseRequired }),
   ...(changeRequest.stack === undefined ? {} : { stack: changeRequest.stack }),
   ...(changeRequest.headSha?.trim() ? { headSha: changeRequest.headSha.trim() } : {}),
   ...(changeRequest.autoMergeEnabled === undefined

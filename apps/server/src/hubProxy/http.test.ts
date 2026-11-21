@@ -23,6 +23,7 @@ import {
   AuthStandardClientScopes,
   EnvironmentAuthorizationError,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  HUB_PROXY_VCS_BRANCH_HEADER,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -98,6 +99,21 @@ const ticketUrl = Effect.fnUntraced(function* (
   const ticket = yield* hub.auth.issueWebSocketTicket(session);
   return `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}&orchestrationProtocol=1001`;
 });
+
+it.effect("advertises branch relay support on the authenticated node descriptor", () =>
+  Effect.gen(function* () {
+    const hub = yield* startHub();
+    const session = yield* hub.auth.issueSession({ scopes: phoneScopes });
+    const url = `${hub.baseUrl}hub/nodes/node-1/.well-known/goat/environment`;
+    const response = yield* fetchResponse(url, session.token);
+    expect(response.status).toBe(200);
+    expect(response.headers[HUB_PROXY_VCS_BRANCH_HEADER]).toBe("1");
+    expect(response.headers["access-control-expose-headers"]).toContain(
+      HUB_PROXY_VCS_BRANCH_HEADER,
+    );
+    expect((yield* fetchResponse(url)).headers[HUB_PROXY_VCS_BRANCH_HEADER]).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);
 
 it.effect(
   "T1/T2/T8: refuses unauthenticated, unscoped, unknown and malformed node requests without dialing",
@@ -915,4 +931,26 @@ it.effect(
       );
       yield* accepted.opened;
     }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);
+
+it.effect("a forwarded shell resume probe preserves the last full offline snapshot", () =>
+  Effect.gen(function* () {
+    const hub = yield* startHub();
+    const session = yield* hub.auth.issueSession({ scopes: phoneScopes });
+    const path = `${hub.baseUrl}hub/nodes/node-1/`;
+    const full = yield* fetchResponse(`${path}api/orchestration/shell`, session.token);
+    expect(full.status).toBe(200);
+    const before = yield* fetchResponse(`${path}snapshot`, session.token);
+    expect(before.status).toBe(200);
+
+    const resumed = yield* fetchResponse(
+      `${path}api/orchestration/shell?resumeFrom=1`,
+      session.token,
+    );
+    expect(resumed.status).toBe(200);
+    expect(JSON.parse(resumed.text)).toEqual({ resumable: true });
+    const after = yield* fetchResponse(`${path}snapshot`, session.token);
+    expect(after.status).toBe(200);
+    expect(JSON.parse(after.text)).toEqual(JSON.parse(before.text));
+  }).pipe(Effect.scoped, Effect.provide(authLayer)),
 );

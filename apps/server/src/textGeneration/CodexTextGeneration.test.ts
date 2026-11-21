@@ -162,6 +162,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
         },
         (generation) =>
           Effect.gen(function* () {
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated =
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!(memoryConflict)
@@ -270,6 +271,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             : generation.generateMemorySummary!(memorySummary)
         ).pipe(Effect.flip);
         expect(error.detail).toContain("could not isolate");
+        expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect(spawns).toBe(0);
       }).pipe(Effect.scoped),
   );
@@ -363,6 +365,23 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             { id: "reasoningEffort", value: "none" },
             { id: "serviceTier", value: "priority" },
           ]),
+        }),
+    ),
+  );
+
+  it.effect("dispatches the text generation default for a removed model", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Live title" }),
+        models: ["gpt-6-astra", "gpt-6-luna"],
+        defaultModel: "gpt-6-astra",
+        requireArg: "--model gpt-6-luna",
+      },
+      (textGeneration) =>
+        textGeneration.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "Describe this change",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),
   );
@@ -470,6 +489,41 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             modelSelection: DEFAULT_TEST_MODEL_SELECTION,
           });
           expect(result.title).toBe("Remove default shapes");
+        }),
+    ),
+  );
+
+  it.effect("keeps user hooks off over launch args that turn them on", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Hookless title" }),
+        launchArgs: "--config features.hooks=true --enable hooks",
+        requireArg: "--config features.codex_hooks=false --config features.hooks=false",
+        forbidArg: "--enable",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Describe this change",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Hookless title");
+        }),
+    ),
+  );
+
+  it.effect("identifies codex exec with GOAT's existing originator", () =>
+    withFakeCodexEnv(
+      { output: JSON.stringify({ title: "Live title" }), requireOriginator: "T3 Code" },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Name this thread",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Live title");
         }),
     ),
   );

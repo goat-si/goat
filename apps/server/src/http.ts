@@ -17,6 +17,7 @@ import { isDevProxiedPath } from "@goat/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@goat/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@goat/shared/observability";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as ByteSize from "effect/ByteSize";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { cast } from "effect/Function";
 import {
   HttpClient,
@@ -42,6 +44,10 @@ import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveVerifiedAsset } from "./assets/AssetAccess.ts";
+import {
+  resolveThemeBackgroundAsset,
+  THEME_BACKGROUND_TOKEN_PREFIX,
+} from "./assets/themeBackgroundAsset.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -64,6 +70,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   DESKTOP_RENDERER_ORIGINS,
+  MCP_HTTP_PATH,
 } from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
 
@@ -228,7 +235,9 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
-  const contentType = headers["Content-Type"] ?? "";
+  const contentType =
+    headers["Content-Type"] ??
+    (mediaFile ? Option.getOrElse(Mime.getType(asset.path), () => "application/octet-stream") : "");
   const isMedia = /^(?:audio|video)\//i.test(contentType);
   let status = 200;
   let offset = 0n;
@@ -352,7 +361,7 @@ export const layerBrowserApiCors = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
     // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    return HttpRouter.cors({
+    const cors = HttpMiddleware.cors({
       ...(devOrigin
         ? {
             allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
@@ -363,6 +372,15 @@ export const layerBrowserApiCors = Layer.unwrap(
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
+    return HttpRouter.middleware(
+      (httpEffect) => {
+        const withCors = cors(httpEffect);
+        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          request.url.split("?", 1)[0] === MCP_HTTP_PATH ? httpEffect : withCors,
+        );
+      },
+      { global: true },
+    );
   }),
 );
 
@@ -543,6 +561,16 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(u
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 
+export const withRootRequestSpans = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
+  Layer.fromBuild((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.updateContext(
+        (context: Context.Context<R>) =>
+          Context.omit(Tracer.ParentSpan)(context) as Context.Context<R>,
+      ),
+    ),
+  );
+
 export const layerAssetRoute = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -557,6 +585,36 @@ export const layerAssetRoute = HttpRouter.add(
     const separatorIndex = suffix.indexOf("/");
     if (separatorIndex <= 0) {
       return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const assetToken = suffix.slice(0, separatorIndex);
+    if (assetToken.startsWith(THEME_BACKGROUND_TOKEN_PREFIX)) {
+      const background = yield* resolveThemeBackgroundAsset(
+        assetToken,
+        suffix.slice(separatorIndex + 1),
+      );
+      if (background?.kind === "busy")
+        return HttpServerResponse.empty({
+          status: 503,
+          headers: { "retry-after": "1", "cache-control": "no-store" },
+        });
+      if (!background)
+        return HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } });
+      const headers = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
+      if (request.method === "HEAD")
+        return HttpServerResponse.empty({
+          status: 200,
+          headers: {
+            ...headers,
+            "content-type": background.mimeType,
+            "content-length": String(background.bytes.byteLength),
+          },
+        });
+      return HttpServerResponse.stream(Stream.make(background.bytes), {
+        contentType: background.mimeType,
+        contentLength: background.bytes.byteLength,
+        headers,
+      });
     }
 
     const verified = yield* resolveVerifiedAsset(
@@ -592,7 +650,11 @@ export const layerAssetRoute = HttpRouter.add(
       );
     }
     return yield* assetFileResponse(
-      { ...asset, expiresAt: verified.expiresAt },
+      {
+        ...asset,
+        ...(verified.file ? { file: verified.file } : {}),
+        expiresAt: verified.expiresAt,
+      },
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",
@@ -713,6 +775,12 @@ const streamStaticFile = (file: FileSystem.File, size: bigint) =>
     }),
   );
 
+// The app can approve agents and start threads in one click, so no other site may frame it.
+const SPA_FRAME_HEADERS = {
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+};
+
 const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
   function* (immutableBuildAssets: ReadonlySet<string>) {
     const request = yield* HttpServerRequest.HttpServerRequest;
@@ -813,6 +881,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     };
     const headers: Record<string, string> = {
       "Cache-Control": cacheControl,
+      ...(isHtml ? SPA_FRAME_HEADERS : {}),
       ...validators(fileInfo),
     };
     const etag = headers.ETag;
@@ -849,6 +918,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       return HttpServerResponse.uint8Array(bytes, {
         headers: {
           "Cache-Control": cacheControl,
+          ...(isHtml ? SPA_FRAME_HEADERS : {}),
           ...validators({ ...info, size: ByteSize.bytes(bytes.byteLength) }),
         },
         contentType,

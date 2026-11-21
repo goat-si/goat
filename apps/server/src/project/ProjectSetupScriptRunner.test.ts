@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- These tests execute bounded POSIX shell submissions.
+import * as NodeChildProcess from "node:child_process";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
@@ -180,7 +183,66 @@ describe("ProjectSetupScriptRunner", () => {
 
       yield* emit({ ...event, type: "activity", hasRunningSubprocess: false, label: "zsh" });
       yield* emit({ ...event, type: "output", data: "\r\n% \x1b[?2004h" });
-      expect(yield* Queue.take(writes)).toMatch(/^ \( vp i\r\);/);
+      expect(yield* Queue.take(writes)).toContain("vp i");
+    }),
+  );
+
+  // quarantine: #3700 POSIX command execution requires /bin/sh.
+  describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("POSIX submissions", () => {
+    it.effect("submits exactly the setup command as one POSIX line", () =>
+      Effect.gen(function* () {
+        const { writes, emit } = yield* setup();
+        yield* emit({ ...event, type: "output", data: "\x1b[?2004h" });
+        const submitted = yield* Queue.take(writes);
+        expect(submitted.endsWith("\r")).toBe(true);
+        expect(submitted.slice(0, -1)).not.toMatch(/[\r\n]/);
+        const output = NodeChildProcess.execFileSync(
+          "/bin/sh",
+          ["-c", `vp() { printf 'invoked:%s\\n' "$*"; }; ${submitted.trim()}`],
+          { encoding: "utf8" },
+        );
+        expect(output).toMatch(/^invoked:i\n\n__GOAT_SETUP_DONE___[0-9a-f]{32}:0\n$/);
+      }),
+    );
+
+    it.effect("encodes long multiline POSIX scripts in bounded terminal lines", () =>
+      Effect.gen(function* () {
+        const command = Array.from(
+          { length: 160 },
+          (_, i) => `printf '%s\\n' "line-${i} café"`,
+        ).join("\n");
+        const { writes, emit } = yield* setup({ command });
+        yield* emit({ ...event, type: "output", data: "\x1b[?2004h" });
+        const submitted = yield* Queue.take(writes);
+        expect(submitted.endsWith("\r")).toBe(true);
+        expect(submitted).not.toContain("\n");
+        for (const line of submitted.slice(0, -1).split("\r")) {
+          expect(Buffer.byteLength(line)).toBeLessThan(1024);
+        }
+        const output = NodeChildProcess.execFileSync(
+          "/bin/sh",
+          ["-c", submitted.replaceAll("\r", "\n")],
+          {
+            encoding: "utf8",
+          },
+        );
+        const expected = Array.from({ length: 160 }, (_, i) => `line-${i} café`).join("\n");
+        expect(output).toMatch(
+          new RegExp(`^${expected}\\n\\n__GOAT_SETUP_DONE___[0-9a-f]{32}:0\\n$`),
+        );
+      }),
+    );
+  });
+
+  it.effect("drops whole escape sequences from output lines", () =>
+    Effect.gen(function* () {
+      const { outputLines, emit } = yield* setup();
+      yield* emit({
+        ...event,
+        type: "output",
+        data: "\x1b7\x1b[24;0fProgress: [ 40%]\x1b8\r\n\x1b%G\x1b#8\x1b[4:3mdone\x1bM\r\n",
+      });
+      expect(yield* Queue.takeAll(outputLines)).toEqual(["Progress: [ 40%]", "done"]);
     }),
   );
 
@@ -188,7 +250,7 @@ describe("ProjectSetupScriptRunner", () => {
     Effect.gen(function* () {
       const { writes } = yield* setup();
       yield* TestClock.adjust("3 seconds");
-      expect(yield* Queue.take(writes)).toMatch(/^ \( vp i\r\);/);
+      expect(yield* Queue.take(writes)).toContain("vp i");
     }),
   );
 
@@ -210,7 +272,7 @@ describe("ProjectSetupScriptRunner", () => {
       yield* emit({ ...event, type: "restarted", snapshot: openSnapshot("") });
       // The restart lands inside a quiet window, so the next full window decides.
       yield* TestClock.adjust("6 seconds");
-      expect(yield* Queue.take(writes)).toMatch(/^ \( vp i\r\);/);
+      expect(yield* Queue.take(writes)).toContain("vp i");
     }),
   );
 

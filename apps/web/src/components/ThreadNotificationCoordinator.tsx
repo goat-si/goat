@@ -1,4 +1,8 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import {
+  parseScopedThreadKey,
+  scopeThreadRef,
+  scopedThreadKey,
+} from "@goat/client-runtime/environment";
 import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import {
@@ -54,6 +58,7 @@ import {
   feedOwnedApprovalThreads,
   notificationAttention,
   createThreadNotificationGate,
+  isSnoozedForNotification,
   type ThreadNotificationKind,
   type ThreadNotificationObservation,
 } from "./ThreadNotificationCoordinator.logic";
@@ -516,6 +521,7 @@ export function startThreadNotifications(
     for (const [prior, state] of changed) {
       entry.gate.observe(state.thread.id, prior, state, {
         archived: state.thread.archivedAt !== null,
+        snoozed: isSnoozedForNotification(state.thread, state.completedAt, Date.now()),
         quiet:
           state.raw.latestRunStopRequested === true ||
           state.thread.latestRun?.completionNotification === "silent",
@@ -605,6 +611,12 @@ export function startThreadNotifications(
 
   const pruneRemovedEnvironments = () => {
     const activeIds = new Set(registry.get(environmentSummaries.environmentIdsAtom));
+    for (const [id, key] of toasts) {
+      const threadRef = parseScopedThreadKey(key);
+      if (threadRef === null || activeIds.has(threadRef.environmentId)) continue;
+      toasts.delete(id);
+      toastManager.close(id);
+    }
     const count = pending.size;
     for (const [tag, entry] of pending) {
       if (activeIds.has(entry.environmentId)) continue;

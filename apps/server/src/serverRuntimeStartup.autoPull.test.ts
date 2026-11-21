@@ -136,6 +136,7 @@ it.effect.each([
             importPendingTranscripts: Effect.succeed(importSummary),
           }),
           Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
+            drainDeferredResends: () => Effect.void,
             recover: Effect.succeed(recovery),
             prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
             prepareForShutdownWithStopKind: () => Effect.succeed({ candidates: 0, continued: 0 }),

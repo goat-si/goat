@@ -163,6 +163,15 @@ describe("Forgejo CLI commands", () => {
 });
 
 describe("Forgejo change request host", () => {
+  it("uses the web authority when SSH runs on a different host", () => {
+    expect(
+      definition.changeRequestHost?.(
+        identity("ssh://git@ssh.forge.example:2222/git/team/repo.git", {
+          webUrl: "http://forge.example:3000/git/team/repo",
+        }),
+      ),
+    ).toBe("forge.example:3000");
+  });
   it("keeps an HTTP remote's port, because a server's identity includes it", () => {
     const project = identity("http://forge.example:3000/git/team/repo.git");
     expect(definition.changeRequestHost?.(project)).toBe("forge.example:3000");

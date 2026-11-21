@@ -67,6 +67,7 @@ export function useChangesTotals(input: {
     resolveChangesTotals(
       status,
       preview.data?.sources.find((source) => source.kind === "branch-range"),
+      true,
     ) ?? { insertions: 0, deletions: 0, baseRef: null }
   );
 }

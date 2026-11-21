@@ -1,3 +1,4 @@
+import { parsePullRequestAnchor } from "@goat/shared/pullRequestAnchor";
 import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -69,6 +70,7 @@ export function useOpenChangeRequestLink(
     });
     if (target === null) return false;
     const { project, repository, number, host } = target;
+    const revealUrl = parsePullRequestAnchor(targetUrl) === null ? undefined : targetUrl;
     event.preventDefault();
     event.stopPropagation();
     const pullRequestsSearch = {
@@ -88,6 +90,7 @@ export function useOpenChangeRequestLink(
         ...(host === undefined ? {} : { host }),
         repository,
         url: targetUrl,
+        ...(revealUrl === undefined ? {} : { revealUrl }),
         number,
       });
       if (!resolvedThreadRef) {
@@ -106,7 +109,12 @@ export function useOpenChangeRequestLink(
     }
     void navigate({
       to: "/pull-requests",
-      search: { involvement: "all", state: "all", ...pullRequestsSearch },
+      search: {
+        involvement: "all",
+        state: "all",
+        ...pullRequestsSearch,
+        ...(revealUrl === undefined ? {} : { selectedUrl: revealUrl }),
+      },
     });
     return true;
   };

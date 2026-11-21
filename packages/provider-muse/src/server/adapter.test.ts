@@ -39,6 +39,7 @@ import {
   makeHarness,
   preallocatedProviderThread,
   turnInput,
+  captureWakeOffer,
   startConversation,
 } from "./test/adapterHelpers.ts";
 const SUBSCRIPTION_USAGE = {
@@ -49,7 +50,6 @@ const SUBSCRIPTION_USAGE = {
 } satisfies MuseSubscriptionUsage;
 const RELAYED_QUOTA_MESSAGE =
   "API error 429: All credentials for model muse-wonder-1.0-contributor are cooling down (last error: rate_limit_exceeded: Subscription quota exhausted. Your usage window resets at 2026-10-13T10:45:52Z.) (after 10 provider attempts)";
-
 const approval = (turnId: string) => ({
   approvalId: "approval-1",
   turnId,
@@ -144,7 +144,7 @@ describe("MuseAdapterV2", () => {
           undefined,
           undefined,
           runtimePolicy,
-          { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+          { continuationRequests: captureWakeOffer(offered) },
         );
         if (work === "held wake") {
           yield* fake.emit("turn/started", { turnId: "held-turn" });
@@ -875,7 +875,7 @@ describe("MuseAdapterV2", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Effect.sync(() => offers.push(request)) } },
+        { continuationRequests: captureWakeOffer(offers) },
       );
       yield* fake.emit("turn/started", { turnId: "report-1" });
       yield* Effect.yieldNow;
@@ -1271,7 +1271,7 @@ describe("MuseAdapterV2", () => {
         recovery,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       yield* fake.emit("turn/started", { turnId: "dead-host-report" });
       const continuation = yield* Deferred.await(offered);

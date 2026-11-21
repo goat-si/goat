@@ -18,6 +18,7 @@ import {
   removeEnvironmentSpeechModelEffect,
 } from "@goat/client-runtime/voice-input";
 import * as Option from "effect/Option";
+import { recommendSpeechModel } from "@goat/shared/speechRecommendation";
 import { useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -185,6 +186,25 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const active = useRef<AbortController | null>(null);
+  const tier =
+    config?.acceleration === "cpu"
+      ? "cpu"
+      : config?.acceleration.startsWith("gpu:")
+        ? "accelerated"
+        : undefined;
+  const recommendation = recommendSpeechModel(
+    models,
+    new Intl.DateTimeFormat().resolvedOptions().locale.split("-")[0] ?? "",
+    tier,
+  );
+  const sortedModels = recommendation
+    ? [...models].sort(
+        (a, b) =>
+          Number(b.selected) - Number(a.selected) ||
+          Number(b.installed) - Number(a.installed) ||
+          Number(b.id === recommendation) - Number(a.id === recommendation),
+      )
+    : models;
   // oxlint-disable-next-line goat/react-effect-budget -- Model requests belong to the selected environment and stop when it changes.
   useEffect(() => {
     if (!context || !canManage || context.prepared.target._tag === "HubProxyConnectionTarget")
@@ -294,7 +314,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
         </SettingsSection>
       ) : null}
       <SettingsSection title="Voice models">
-        {models.map((model) => (
+        {sortedModels.map((model) => (
           <View key={model.id}>
             <SettingsActionRow
               label={model.name}

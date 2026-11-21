@@ -10,6 +10,24 @@ const plugins = [
   ["prose paths", remarkKeepWindowsProsePaths],
 ] as const;
 
+it.each([
+  [String.raw`C:\R&D folder\.t3\shot.png`, String.raw`C:\R&D folder\.t3\shot.png`],
+  [String.raw`C:\R&amp;D folder\.t3\shot.png`, String.raw`C:\R&D folder\.t3\shot.png`],
+  [String.raw`C:\work\&#x26;foo\.t3\shot.png`, String.raw`C:\work\&foo\.t3\shot.png`],
+  [String.raw`C:\work\&bad;\a\.t3\shot.png`, String.raw`C:\work\&bad;\a\.t3\shot.png`],
+  ["https://example.com/a&amp;b", "https://example.com/a&b"],
+])("preserves Windows separators and decodes entities exactly once: %s", (authored, expected) => {
+  const parser = unified().use(remarkParse).use(remarkKeepWindowsPaths);
+  for (const prefix of ["", "!"]) {
+    expect(parser.parse(`${prefix}[shot](<${authored}>)`)).toMatchObject({
+      children: [{ children: [{ url: expected }] }],
+    });
+  }
+  expect(parser.parse(`[shot]: <${authored}>`)).toMatchObject({
+    children: [{ type: "definition", url: expected }],
+  });
+});
+
 // GFM task items remove their "[ ] " marker from a text node the escape scan already saw.
 it.each(plugins)("%s keeps drive-path escapes in GFM task list items", (_, plugin) => {
   const processor = unified().use(remarkParse).use(remarkGfm).use(plugin);

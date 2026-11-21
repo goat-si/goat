@@ -3,7 +3,7 @@
  * diagnostics, unless the original is still on disk. Returns whether the cache changed.
  */
 export function dropArchivedOriginals(
-  cache: Map<string, unknown>,
+  cache: { delete(path: string): boolean },
   livePaths: ReadonlyArray<string>,
   read: ReadonlyArray<{ readonly path: string; readonly failed?: boolean | undefined }>,
 ): boolean {

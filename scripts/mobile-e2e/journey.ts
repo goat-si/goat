@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Host-side device automation.
 
+import { MOBILE_APP_IDENTITY } from "@goat/shared/mobileAppIdentity";
 import * as NodePath from "node:path";
 
 import {
@@ -157,7 +158,7 @@ export async function runJourney(
   let threads: Snapshot | null = null;
   for (let attempt = 1; attempt <= 2 && !threads; attempt++) {
     const pairing = new URLSearchParams({ pairingUrl: await pair(), autoConnect: "1" });
-    await device.openUrl(`t3code-dev://connections/new?${pairing}`);
+    await device.openUrl(`${MOBILE_APP_IDENTITY.development.scheme}://connections/new?${pairing}`);
     threads = await settle(
       (snapshot) => threadRow(snapshot) !== undefined,
       "the paired thread list",

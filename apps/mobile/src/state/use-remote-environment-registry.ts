@@ -94,6 +94,14 @@ export function useRemoteEnvironmentRuntime(
   );
 }
 
+/** Whether an environment is connected now, for an action that runs outside render. */
+export function isEnvironmentConnected(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(remoteEnvironmentProjections.runtimeStateAtom(environmentId))
+      ?.connectionState === "connected"
+  );
+}
+
 export function useRemoteConnectionStatus() {
   const state = useWorkspaceConnectionState();
   const connectedEnvironments: ReadonlyArray<ConnectedEnvironmentSummary> =

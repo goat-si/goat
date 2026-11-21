@@ -1,5 +1,6 @@
 import { toLabels, type LabelFields } from "./gitHubPullRequestLabels.ts";
 import { toMergeMethod } from "./gitHubMergeMethod.ts";
+import { toFileViewedState } from "./gitHubFileViewedState.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -35,7 +36,10 @@ import type {
 } from "@goat/contracts";
 import { gitRenameHeaders, quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
-import { dedupeChecks } from "@goat/source-control-core/server/pullRequestChecks";
+import {
+  dedupeChecks,
+  rollupCheckStatuses,
+} from "@goat/source-control-core/server/pullRequestChecks";
 
 import { REACTION_CONTENT_BY_GITHUB } from "./gitHubReactionContent.ts";
 import type {
@@ -351,11 +355,7 @@ export interface GitHubPullRequestHead {
   readonly headRepositoryOwner: string | null;
 }
 
-export interface GitHubPullRequestActivity {
-  readonly author: PullRequestActor | null;
-  readonly comments: ReadonlyArray<PullRequestComment>;
-  readonly commits: ReadonlyArray<PullRequestCommit>;
-}
+export type { GitHubPullRequestActivity } from "./gitHubPullRequestActivity.ts";
 
 export function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim() ?? "";
@@ -571,14 +571,10 @@ function toCheckEntries(raw: ReadonlyArray<CheckFields> | null | undefined): Rea
 function rollupChecksState(
   raw: ReadonlyArray<CheckFields> | null | undefined,
 ): PullRequestChecksState | null {
-  const statuses = [
+  return rollupCheckStatuses([
     ...toChecks(raw).map((check) => check.status),
     ...(raw ?? []).filter(isNamelessCheck).map((check) => toCheckStatus(check)),
-  ];
-  if (statuses.length === 0) return null;
-  if (statuses.includes("failure") || statuses.includes("cancelled")) return "failing";
-  if (statuses.includes("pending") || statuses.includes("action-required")) return "pending";
-  return statuses.includes("success") ? "passing" : null;
+  ]);
 }
 
 function toChecks(
@@ -1280,6 +1276,7 @@ export function toReviewDismissalsPage(result: ReviewDismissals.Result): {
 }
 
 function toThreadComment(comment: ThreadComment, viewer: string | null): PullRequestThreadComment {
+  const reviewUrl = trimmed(comment.pullRequestReview?.url);
   return {
     id: comment.id,
     author: toActor(comment.author),
@@ -1287,6 +1284,7 @@ function toThreadComment(comment: ThreadComment, viewer: string | null): PullReq
     createdAt: comment.createdAt,
     editedAt: comment.lastEditedAt,
     url: trimmed(comment.url),
+    ...(reviewUrl === null ? {} : { reviewUrl }),
     reactions: toReactions(comment.reactionGroups, viewer),
   };
 }
@@ -1663,17 +1661,6 @@ export interface GitHubPullRequestFilesViewedPage {
     readonly state: PullRequestFileViewedState;
   }>;
   readonly nextCursor: string | null;
-}
-
-function toFileViewedState(raw: string): PullRequestFileViewedState {
-  switch (raw.trim().toUpperCase()) {
-    case "VIEWED":
-      return "viewed";
-    case "DISMISSED":
-      return "dismissed";
-    default:
-      return "unviewed";
-  }
 }
 
 export function toPullRequestFilesViewedPage(

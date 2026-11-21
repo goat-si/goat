@@ -1,21 +1,22 @@
 import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { pullRequestCommentPreview } from "./pullRequestMarkdown.logic";
+import { usePullRequestSummaryReveal } from "./usePullRequestSummaryReveal";
 import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useAtomCommand } from "~/state/use-atom-command";
-import type {
-  EnvironmentId,
-  PullRequestComment,
-  PullRequestDetailView,
-  PullRequestRef,
-  PullRequestReviewThread,
-  ScopedThreadRef,
+import {
+  type EnvironmentId,
+  type PullRequestComment,
+  type PullRequestDetailView,
+  type PullRequestRef,
+  type PullRequestConversationThread,
+  type ScopedThreadRef,
+  pullRequestConversationThreads,
 } from "@goat/contracts";
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
   HammerIcon,
   ListFilterIcon,
   TagIcon,
@@ -89,9 +90,11 @@ import {
   type PullRequestCompletionScope,
   pullRequestCompletionScope,
 } from "./PullRequestMarkdownTextarea";
+import { canReactPullRequestComment } from "@goat/client-runtime/pull-request-reactions";
 import { PullRequestReactionBar } from "./PullRequestReactions";
+import { PullRequestResolveThreadButton } from "./PullRequestResolveThreadButton";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
-import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import { Section } from "./PullRequestSummarySection";
 
 function reviewerKey(login: string): string {
   return login.toLowerCase();
@@ -145,7 +148,7 @@ function CommentLocation({
   thread,
 }: {
   comment: PullRequestComment;
-  thread: PullRequestReviewThread | undefined;
+  thread: PullRequestConversationThread | undefined;
 }) {
   const path = thread?.path ?? comment.path;
   if (!path) return null;
@@ -226,6 +229,7 @@ function CollapsedComment({
   label,
   body,
   reactionBar,
+  resolveButton,
   detail,
   thread,
   replyCount = 0,
@@ -238,8 +242,9 @@ function CollapsedComment({
   label: string;
   body: string | null;
   reactionBar: ReactNode;
+  resolveButton: ReactNode;
   detail: PullRequestDetailView;
-  thread: PullRequestReviewThread | undefined;
+  thread: PullRequestConversationThread | undefined;
   replyCount?: number;
   replies?: ReactNode;
   moreReplies?: ReactNode;
@@ -268,6 +273,8 @@ function CollapsedComment({
                 className={cn("size-3.5 transition-transform", open && "rotate-180")}
               />
             </CollapsibleTrigger>
+            {/* Collapsed, the status label already says "Resolved". */}
+            {open ? resolveButton : null}
             {onAddToChat ? <AddToChatButton onClick={onAddToChat} /> : null}
             {reactionBar}
           </div>
@@ -317,69 +324,6 @@ function MetaRow({
   );
 }
 
-function Section({
-  title,
-  defaultOpen = true,
-  keepMounted = false,
-  actions,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  keepMounted?: boolean;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const headingRef = useRef<HTMLDivElement>(null);
-  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      const heading = headingRef.current;
-      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
-      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
-      if (heading && section && scroller) {
-        const target = sectionCollapseAnchorScrollTop({
-          scrollTop: scroller.scrollTop,
-          viewportTop: scroller.getBoundingClientRect().top,
-          sectionTop: section.getBoundingClientRect().top,
-          headingTop: heading.getBoundingClientRect().top,
-        });
-        // Adjust before paint to keep the collapsed heading in place.
-        if (target !== null) scroller.scrollTop = target;
-      }
-    }
-    setOpen(nextOpen);
-  };
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpenWithScrollAnchor}
-      render={<section aria-label={title} />}
-      data-pull-request-summary-section
-    >
-      <div
-        ref={headingRef}
-        className="sticky top-0 z-10 flex w-full items-center bg-background pr-4"
-      >
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-xs font-medium text-muted-foreground hover:text-foreground">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground/60 transition-transform",
-              open && "rotate-90",
-            )}
-          />
-        </CollapsibleTrigger>
-        {actions}
-      </div>
-      <CollapsiblePanel keepMounted={keepMounted}>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
-
 const COMMENT_PAGE = 10;
 
 const COMMENT_FILTER_STORAGE_KEY = "goat:pull-request-comment-filter:v1";
@@ -387,6 +331,8 @@ const CommentFilterSchema = Schema.Struct({ bots: Schema.Boolean, resolved: Sche
 const DEFAULT_COMMENT_FILTER: typeof CommentFilterSchema.Type = { bots: false, resolved: false };
 
 export function PullRequestSummaryTab({
+  revealUrl,
+  onRevealSettled,
   scrollerRef,
   environmentId,
   threadRef,
@@ -403,6 +349,9 @@ export function PullRequestSummaryTab({
   onRefresh,
   onRefreshChecks = onRefresh,
 }: {
+  /** A clicked link to scroll to, until onRevealSettled reports it shown. */
+  revealUrl?: string | undefined;
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
@@ -428,7 +377,10 @@ export function PullRequestSummaryTab({
     DEFAULT_COMMENT_FILTER,
     CommentFilterSchema,
   );
-  const items = pullRequestConversationItems(detail.comments, detail.reviewThreads);
+  const items = pullRequestConversationItems(
+    detail.comments,
+    pullRequestConversationThreads(detail),
+  );
   const filteredItems = filterPullRequestConversationItems(items, commentFilter);
   const commentCount = items.reduce(
     (count, item) => count + pullRequestConversationItemComments(item).length,
@@ -527,6 +479,13 @@ export function PullRequestSummaryTab({
   const [commentSaving, setCommentSaving] = useState(false);
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
+  const editingDescription = bodyScope?.url === detail.url;
+  const { scrollRef, checksReveals, descriptionReveals } = usePullRequestSummaryReveal({
+    revealUrl,
+    onRevealSettled,
+    description,
+    editingDescription,
+  });
   // Checkbox ticks and the editor share one draft, so each starts from the other's latest body.
   const saveDescription = async (body: string) => {
     const key = detail.url;
@@ -581,7 +540,7 @@ export function PullRequestSummaryTab({
     <PullRequestReactionBar
       className="ml-auto justify-end"
       reactions={comment.reactions ?? []}
-      canReact={detail.capabilities.reactions === true}
+      canReact={canReactPullRequestComment(detail, comment)}
       subjectId={comment.id}
       environmentId={environmentId}
       reference={reference}
@@ -589,9 +548,20 @@ export function PullRequestSummaryTab({
     />
   );
 
+  const resolveButtonFor = (thread: PullRequestConversationThread | undefined) =>
+    thread === undefined ? null : (
+      <PullRequestResolveThreadButton
+        environmentId={environmentId}
+        reference={reference}
+        detail={detail}
+        thread={thread}
+        onRefresh={onRefresh}
+      />
+    );
+
   const renderCommentCard = (
     comment: PullRequestComment,
-    thread: PullRequestReviewThread | undefined,
+    thread: PullRequestConversationThread | undefined,
     { reply = false }: { reply?: boolean } = {},
   ) => {
     const body = visibleBody(comment.body);
@@ -601,7 +571,7 @@ export function PullRequestSummaryTab({
       (comment.kind !== "review" && comment.kind !== "review-comment") ||
       outcome === "approved"
         ? null
-        : thread === undefined
+        : thread === undefined || thread.path === null
           ? body === null
             ? null
             : { kind: "comment", comment }
@@ -640,6 +610,7 @@ export function PullRequestSummaryTab({
               </span>
             </Button>
           ) : null}
+          {resolveButtonFor(thread)}
           {onAddToChat && chat !== null ? (
             <AddToChatButton onClick={() => onAddToChat(chat)} />
           ) : null}
@@ -684,6 +655,7 @@ export function PullRequestSummaryTab({
           moreReplies={moreReplies}
           onAddToChat={onAddToChat && chat !== null ? () => onAddToChat(chat) : undefined}
           reactionBar={reactionBarFor(comment)}
+          resolveButton={resolveButtonFor(thread)}
         />
       );
     }
@@ -698,7 +670,14 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div ref={scrollerRef} className="h-full overflow-y-auto" data-pull-request-summary-scroll>
+    <div
+      ref={(node) => {
+        scrollRef.current = node;
+        scrollerRef(node);
+      }}
+      className="h-full overflow-y-auto"
+      data-pull-request-summary-scroll
+    >
       <section className="px-4 pt-2.5 pb-1">
         <div className="space-y-2">
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -798,9 +777,14 @@ export function PullRequestSummaryTab({
         </div>
       </section>
 
-      <Section key={`description:${detail.url}`} title="Description" keepMounted>
+      <Section
+        key={`description:${detail.url}`}
+        title="Description"
+        keepMounted
+        revealCount={descriptionReveals}
+      >
         <div className="group">
-          {bodyScope?.url === detail.url ? (
+          {editingDescription ? (
             <PullRequestMarkdownEditor
               allowEmpty
               value={bodyScope.body}
@@ -815,7 +799,7 @@ export function PullRequestSummaryTab({
               onCancel={() => setBodyScope(null)}
             />
           ) : (
-            <div className="flex items-start gap-1">
+            <div className="flex items-start gap-1" data-pr-description>
               <PullRequestMarkdown
                 className="min-w-0 flex-1"
                 text={description.trim().length > 0 ? description : "_No description provided._"}
@@ -835,7 +819,12 @@ export function PullRequestSummaryTab({
         </div>
       </Section>
 
-      <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>
+      <Section
+        key={`checks:${detail.url}`}
+        title="Checks"
+        defaultOpen={false}
+        revealCount={checksReveals}
+      >
         {checksStale ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>Check details are out of date.</span>

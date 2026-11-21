@@ -44,8 +44,8 @@ import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
-import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { buildHomeProjectScopes } from "../home/homeThreadList";
+import { homeListFilterEnvironments, buildHomeListFilterMenu } from "../home/home-list-filter-menu";
+import { buildHomeProjectScopes, homeProjectFilterOptions } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -184,12 +184,7 @@ function ThreadNavigationSidebarPane(
   const { confirmDeletePendingTask } = usePendingTaskListActions((params) =>
     selectDetail({ name: "Thread", params }),
   );
-  const environments = Object.values(savedConnectionsById)
-    .map((connection) => ({
-      environmentId: connection.environmentId,
-      label: connection.environmentLabel,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
+  const environments = homeListFilterEnvironments(workspaceEnvironments);
   const availableEnvironmentIds = new Set(
     environments.map((environment) => environment.environmentId),
   );
@@ -226,10 +221,10 @@ function ThreadNavigationSidebarPane(
       }),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode],
   );
-  const projectFilterOptions = pickableProjectGroups(projectScopes).map((scope) => ({
-    key: scope.key,
-    label: scope.title,
-  }));
+  const projectFilterOptions = useMemo(
+    () => homeProjectFilterOptions(projectScopes, threads),
+    [projectScopes, threads],
+  );
   const projectTitleByProjectKey = useMemo(
     () =>
       new Map(
@@ -758,6 +753,7 @@ function ThreadNavigationSidebarPane(
       catalogState={catalogState}
       searchQuery={props.searchQuery}
       searchPending={threadSearch.isPending}
+      searchFailed={threadSearch.failed}
       projectScopeTitle={selectedProjectScope?.title ?? null}
       onOpenEnvironmentSettings={props.onOpenEnvironmentSettings}
     />
@@ -794,7 +790,7 @@ function ThreadNavigationSidebarPane(
           }}
         />
         <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+          <SwipeableScrollGateProvider listAnimatesLayout enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               <AnimatedLegendList
                 renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
@@ -868,7 +864,7 @@ function ThreadNavigationSidebarPane(
             <View className="flex-1 items-center justify-center">{listEmpty}</View>
           </View>
         ) : (
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+          <SwipeableScrollGateProvider listAnimatesLayout enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               {/* oxlint-disable-next-line goat/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
               <AnimatedLegendList

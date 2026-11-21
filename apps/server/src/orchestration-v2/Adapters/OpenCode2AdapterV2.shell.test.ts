@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
-import type { ProviderReplayEntry } from "@goat/contracts";
+import { RunId, type ProviderReplayEntry } from "@goat/contracts";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -47,6 +48,89 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
       );
       return { attached: Deferred.await(attached), terminal: Fiber.join(terminal) };
     });
+  it.effect.each(["owned", "mixed"] as const)("attributes the %s shell completion batch", (batch) =>
+    Effect.gen(function* () {
+      const gate = makeProviderReplayGate(["shell-report"]);
+      const offered =
+        yield* Deferred.make<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const shellID = "sh_tracked";
+      const tool = { sessionID: SESSION, assistantMessageID: "msg_shell", id: "call-shell" };
+      const report = (id: string, label: string | undefined) =>
+        event(
+          "session.inbox.enqueued",
+          {
+            inboxID: `msg_${id}`,
+            sessionID: SESSION,
+            item: {
+              type: "synthetic",
+              delivery: "steer",
+              payload: {
+                text: `Shell ${id} finished`,
+                metadata: { source: "shell", shellID: id, state: "completed" },
+              },
+            },
+          },
+          label,
+        );
+      const output = [
+        out("shell.output", "<any>"),
+        reply("shell.output", {
+          location: { directory: WORK },
+          data: { output: "", cursor: 0, size: 0, truncated: false },
+        }),
+      ] as const;
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.started", { sessionID: SESSION }),
+          event("session.tool.input.started", { ...tool, name: "shell" }),
+          event("session.tool.called", {
+            ...tool,
+            name: "shell",
+            input: { command: "echo tracked", background: true },
+            executed: false,
+          }),
+          event(
+            "session.tool.success",
+            {
+              ...tool,
+              content: [{ type: "text", text: "Launched" }],
+              metadata: { shellID },
+              executed: false,
+            },
+            undefined,
+            2,
+          ),
+          ...output,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          report(shellID, "shell-report"),
+          ...output,
+          ...(batch === "mixed" ? [report("sh_untracked", undefined)] : []),
+          event("session.execution.started", { sessionID: SESSION }),
+        ],
+        { replayGate: gate },
+      ).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: (request) => Deferred.succeed(offered, request).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      const runId = RunId.make("run:shell-launcher");
+      const terminal = yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn({ ...withLineage(thread), runId });
+      yield* Fiber.join(terminal);
+      gate.release("shell-report");
+      const wake = yield* Deferred.await(offered);
+      assert.equal(wake.notification?.source.kind, "command");
+      assert.equal(wake.notification?.aboutRunId, batch === "owned" ? runId : undefined);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each([false, true, "thread", "failed", "burst", "poll"] as const)(
     "tracks native background shells through launch, retained output, stop=%s",
     (stop) =>
@@ -154,6 +238,33 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
         }
         yield* Fiber.join(terminal);
         assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+        if (stop === false) {
+          const awaitTasks = runtime.awaitBackgroundTasks;
+          assert.isFunction(awaitTasks);
+          if (awaitTasks === undefined) return;
+          for (const awaited of [true, false]) {
+            const roster = yield* runtime.events.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "provider_thread.updated" &&
+                  event.providerThread.pendingBackgroundTasks?.some(
+                    (task) => task.taskId === shellID && (task.awaited === true) === awaited,
+                  ) === true,
+              ),
+              Stream.runHead,
+              Effect.forkScoped,
+            );
+            assert.deepEqual(
+              yield* awaitTasks({
+                providerThread: thread,
+                taskIds: [shellID, shellID, "sh_unknown"],
+                awaited,
+              }),
+              { matched: [shellID] },
+            );
+            assert.isTrue(Option.isSome(yield* Fiber.join(roster)));
+          }
+        }
         const settled = yield* runtime.events.pipe(
           Stream.tap((e) =>
             Effect.sync(() => {
@@ -196,6 +307,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
     "settled",
     "exited",
     "anchored",
+    "awaited",
   ] as const)("recovers only owned native shells using %s inventory", (discovery) =>
     Effect.gen(function* () {
       const idAllocator = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
@@ -278,6 +390,18 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
           shellRecovery: inventory,
           external: true,
           ...(discovery === "anchored" ? { lastRunOrdinal: 7 } : {}),
+          ...(discovery === "awaited"
+            ? {
+                pendingBackgroundTasks: [
+                  {
+                    taskId: id,
+                    kind: "command" as const,
+                    description: info.command,
+                    awaited: true,
+                  },
+                ],
+              }
+            : {}),
           replayGate: gate,
         },
       );
@@ -303,7 +427,16 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
       );
       assert.deepEqual(
         thread.pendingBackgroundTasks ?? [],
-        discovery === "settled" ? [] : [{ taskId: id, kind: "command", description: info.command }],
+        discovery === "settled"
+          ? []
+          : [
+              {
+                taskId: id,
+                kind: "command",
+                description: info.command,
+                ...(discovery === "awaited" ? { awaited: true } : {}),
+              },
+            ],
       );
       assert.equal(
         yield* runtime.hasPendingBackgroundWorkForThread!(thread),

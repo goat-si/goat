@@ -28,7 +28,9 @@ import { isHostedStaticApp } from "./hostedPairing";
 import { openLaunchRoute } from "./launchRoute";
 import { isLocalEnvironmentDisabled } from "./localEnvironment";
 import { useComposerDraftStore } from "./composerDraftStore";
+import { startHostEnvironmentLookup } from "./state/desktopHostEnvironment";
 import { startDefaultThemeAdoption } from "./hooks/useDefaultTheme";
+import { startThemeBackground } from "./themeBackground";
 import {
   getClientSettings,
   startModelPreferencesMigration,
@@ -154,7 +156,9 @@ export function startAppServices(): AppRouter {
   startClientAppearance();
   startI18n();
   startDocumentTitle(router);
+  startHostEnvironmentLookup();
   startDefaultThemeAdoption();
+  startThemeBackground();
   startModelPreferencesMigration();
   startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();

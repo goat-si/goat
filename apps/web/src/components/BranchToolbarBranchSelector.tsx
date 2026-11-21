@@ -20,8 +20,11 @@ import {
 import { ChevronDownIcon, GitBranchIcon } from "~/components/solar";
 import {
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
+  useLayoutEffect,
   useOptimistic,
+  useRef,
   useState,
   useTransition,
   type MouseEvent as ReactMouseEvent,
@@ -32,6 +35,7 @@ import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
+import { useProjectClone } from "../state/projectClones";
 import { usePaginatedBranches } from "../state/queries";
 import { readThreadShell, useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
@@ -46,11 +50,14 @@ import { parsePullRequestReference } from "@goat/client-runtime/pull-request-lin
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
+  type BranchHold,
   deriveLocalBranchNameFromRemoteRef,
+  isBranchHoldCurrent,
   isWorktreeChangeBlocked,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
+  resolveDefaultWorktreeBaseBranch,
   shouldReuseSelectedWorktree,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
@@ -132,6 +139,7 @@ export function BranchToolbarBranchSelector({
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, {
     reportFailure: false,
   });
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const refreshLocalStatusForPicker = useAtomCommand(vcsEnvironment.refreshLocalStatusForPicker, {
     reportFailure: false,
   });
@@ -185,6 +193,7 @@ export function BranchToolbarBranchSelector({
     branch: string | null,
     worktreePath: string | null,
     automatic = false,
+    onMetadataFailure?: () => void,
   ) => {
     if (sshSelected) return false;
     if (
@@ -222,6 +231,8 @@ export function BranchToolbarBranchSelector({
           worktreePath,
           ...(automatic ? { expectedEmpty: true } : {}),
         },
+      }).then((result) => {
+        if (result._tag !== "Success") onMetadataFailure?.();
       });
     }
     if (hasServerThread) {
@@ -303,7 +314,6 @@ export function BranchToolbarBranchSelector({
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
-  const defaultBranchName = refs.find((refName) => refName.isDefault)?.name ?? null;
   const pickerCreateBranchItemValue = hasExactBranchMatch ? null : createBranchItemValue;
   const branchPickerItems = [
     ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
@@ -337,8 +347,17 @@ export function BranchToolbarBranchSelector({
     activeThreadBranch,
     currentGitBranch,
   });
+  const [branchHold, setBranchHold] = useState<BranchHold | null>(null);
+  const branchHoldCurrent =
+    branchHold !== null &&
+    isBranchHoldCurrent(branchHold, {
+      canonicalBranch: canonicalActiveBranch,
+      environmentId,
+      cwd: branchCwd,
+    });
+  if (branchHold !== null && !branchHoldCurrent) setBranchHold(null);
   const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
-    canonicalActiveBranch,
+    branchHoldCurrent ? branchHold.branch : canonicalActiveBranch,
     (_currentBranch: string | null, optimisticBranch: string | null) => optimisticBranch,
   );
   const listedActiveBranch =
@@ -365,6 +384,23 @@ export function BranchToolbarBranchSelector({
         ? queriedActiveBranch.isRemote === true
         : null;
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
+  const selectionId = useRef(0);
+  const selectionContext = useRef("");
+  const contextKey = JSON.stringify([
+    environmentId,
+    threadId,
+    draftId,
+    activeProjectCwd,
+    branchCwd,
+  ]);
+  // oxlint-disable-next-line goat/react-effect-budget -- cancel pending ref reads when the selection context changes.
+  useLayoutEffect(() => {
+    selectionContext.current = contextKey;
+    return () => {
+      selectionId.current++;
+      selectionContext.current = "";
+    };
+  }, [contextKey]);
   const totalBranchCount = branchRefState.data?.totalCount ?? 0;
   const branchStatusText = isInitialBranchesLoadPending
     ? "Loading refs..."
@@ -428,21 +464,39 @@ export function BranchToolbarBranchSelector({
     startBranchActionTransition(async () => {
       await action();
       branchRefState.refresh();
-      branchStatusQuery.refresh();
     });
   };
 
-  const selectBranch = (refName: VcsRef) => {
+  const selectBranch = async (listedRef: VcsRef) => {
     if (sshSelected) return;
     if (!canUpdateThreadBranch || !branchCwd || !activeProjectCwd || isBranchActionPending) return;
 
-    const latest = readLatestThreadState();
+    const id = ++selectionId.current;
+    const context = selectionContext.current;
+    let latest = readLatestThreadState();
     if (isSelectingWorktreeBase) {
       if (latest.worktreePath) return;
-      setThreadBranch(refName.name, null);
+      setThreadBranch(listedRef.name, null);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
       return;
+    }
+    setIsBranchMenuOpen(false);
+    onComposerFocusRequest?.();
+    let refName = listedRef;
+    if (listedRef.worktreePath) {
+      const result = await readRefs({
+        environmentId,
+        input: { cwd: listedRef.worktreePath, query: listedRef.name, refKind: "local", limit: 1 },
+      });
+      if (id !== selectionId.current || context !== selectionContext.current) return;
+      const confirmed =
+        result._tag === "Success" &&
+        result.value.refs.some(
+          (ref) => ref.name === listedRef.name && !ref.isRemote && ref.current,
+        );
+      if (!confirmed) refName = { ...listedRef, worktreePath: null };
+      latest = readLatestThreadState();
     }
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
@@ -462,17 +516,12 @@ export function BranchToolbarBranchSelector({
 
     if (shouldReuseSelectedWorktree(selectionTarget, canWriteSourceControl)) {
       setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
-      setIsBranchMenuOpen(false);
-      onComposerFocusRequest?.();
       return;
     }
 
     const selectedBranchName = refName.isRemote
       ? deriveLocalBranchNameFromRemoteRef(refName.name)
       : refName.name;
-
-    setIsBranchMenuOpen(false);
-    onComposerFocusRequest?.();
 
     runBranchAction(async () => {
       const previousBranch = resolvedActiveBranch;
@@ -488,11 +537,37 @@ export function BranchToolbarBranchSelector({
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
           : selectedBranchName;
-        setOptimisticBranch(
-          setThreadBranch(nextBranchName, selectionTarget.nextWorktreePath)
-            ? nextBranchName
-            : previousBranch,
+        const movesCheckout = selectionTarget.checkoutCwd !== branchCwd;
+        let hold: BranchHold | null = null;
+        const applied = setThreadBranch(
+          nextBranchName,
+          selectionTarget.nextWorktreePath,
+          false,
+          // A failed move leaves the thread in its old checkout, which never had the new branch.
+          movesCheckout
+            ? () => setBranchHold((current) => (current === hold ? null : current))
+            : undefined,
         );
+        if (applied) {
+          hold = {
+            branch: nextBranchName,
+            environmentId,
+            // The thread keeps its old checkout until the metadata update moves it to the new one.
+            checkouts: [
+              { cwd: branchCwd, replaces: canonicalActiveBranch },
+              ...(movesCheckout
+                ? [
+                    {
+                      cwd: selectionTarget.checkoutCwd,
+                      replaces: projectStatusQuery.data?.refName ?? null,
+                    },
+                  ]
+                : []),
+            ],
+          };
+          setBranchHold(hold);
+        }
+        setOptimisticBranch(applied ? nextBranchName : previousBranch);
         return;
       }
       setOptimisticBranch(previousBranch);
@@ -512,6 +587,7 @@ export function BranchToolbarBranchSelector({
     if (!canChangeThreadBranch) return;
     const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
+    selectionId.current++;
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -529,9 +605,15 @@ export function BranchToolbarBranchSelector({
       });
       if (createBranchResult._tag === "Success") {
         const nextBranchName = createBranchResult.value.refName;
-        setOptimisticBranch(
-          setThreadBranch(nextBranchName, activeWorktreePath) ? nextBranchName : previousBranch,
-        );
+        const applied = setThreadBranch(nextBranchName, activeWorktreePath);
+        if (applied) {
+          setBranchHold({
+            branch: nextBranchName,
+            environmentId,
+            checkouts: [{ cwd: branchCwd, replaces: canonicalActiveBranch }],
+          });
+        }
+        setOptimisticBranch(applied ? nextBranchName : previousBranch);
         return;
       }
       setOptimisticBranch(previousBranch);
@@ -549,7 +631,26 @@ export function BranchToolbarBranchSelector({
 
   const worktreeBaseBranchCandidate = isInitialBranchesLoadPending
     ? null
-    : (defaultBranchName ?? currentGitBranch);
+    : resolveDefaultWorktreeBaseBranch(refs);
+  const cloneDone = useProjectClone(activeProjectRef)?.phase === "done";
+  const statusBranch = branchStatusQuery.data?.refName ?? null;
+  const refreshStaleRefs = useEffectEvent(
+    (cwd: string | null, environment: EnvironmentId, cloneDone: boolean, branch: string | null) => {
+      if (
+        cwd === null ||
+        (!cloneDone && (branch === null || branchByName.get(branch)?.current === true))
+      )
+        return;
+      void refreshLocalStatusForPicker({
+        environmentId: environment,
+        input: { cwd, localOnly: true },
+      });
+    },
+  );
+  // oxlint-disable-next-line goat/react-effect-budget -- refresh refs left stale by a clone or external checkout
+  useEffect(() => {
+    refreshStaleRefs(branchCwd, environmentId, cloneDone, statusBranch);
+  }, [branchCwd, environmentId, cloneDone, statusBranch]);
 
   // The server sets started threads' branches; defaulting here would detach the agent from its worktree.
   const threadStarted = serverSession !== null;
@@ -661,6 +762,7 @@ export function BranchToolbarBranchSelector({
   function selectPickerItem(itemValue: string) {
     if (sshSelected) return;
     if (itemValue === checkoutPullRequestItemValue && prReference && onCheckoutPullRequestRequest) {
+      selectionId.current++;
       handleOpenChange(false);
       onComposerFocusRequest?.();
       onCheckoutPullRequestRequest(prReference);
@@ -668,7 +770,7 @@ export function BranchToolbarBranchSelector({
       createRef(trimmedBranchQuery);
     } else {
       const refName = branchByName.get(itemValue);
-      if (refName) selectBranch(refName);
+      if (refName) void selectBranch(refName);
     }
   }
 
@@ -816,6 +918,8 @@ export function BranchToolbarBranchSelector({
             }
             className="min-w-0 max-w-full active:scale-100"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
+            // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
+            aria-label={`Branch: ${triggerLabel}`}
           >
             <GitBranchIcon
               className={cn(
@@ -828,6 +932,7 @@ export function BranchToolbarBranchSelector({
                 value={triggerLabel}
                 variant={displayMode === "panel" ? "cap-aligned" : "default"}
                 className="w-full"
+                aria-hidden
               />
             </ComposerContextLabel>
             {displayMode !== "panel" ? <ChevronDownIcon className="size-3 shrink-0" /> : null}

@@ -1,6 +1,15 @@
+import {
+  PreviewAutomationRemoteDiagnosticFields,
+  PreviewAutomationSnapshotStages,
+  PreviewAutomationOptionalRemoteDiagnosticFields,
+} from "./previewAutomationDiagnostics.ts";
 import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 import { PreviewAutomationOperation } from "./previewAutomationOperations.ts";
 export * from "./previewAutomationOperations.ts";
+export {
+  PreviewAutomationSnapshotStages,
+  type PreviewAutomationSnapshotStage,
+} from "./previewAutomationDiagnostics.ts";
 import { Schema } from "effect";
 import { DiagnosticFilter, DiagnosticSince } from "./previewLogsFilters.ts";
 import {
@@ -630,6 +639,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
   screenExpectation: Schema.optional(Screen.PreviewAutomationScreenExpectation),
+  measureSnapshotFrame: Schema.optional(Schema.Boolean),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   /** The caller's active run, supplied by the server. */
@@ -722,24 +732,6 @@ const PreviewAutomationRequestErrorFields = {
   dispatched: Schema.optional(Schema.Boolean),
 };
 
-const PreviewAutomationRemoteDiagnosticFields = {
-  remoteTag: TrimmedNonEmptyString,
-  remoteMessageLength: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  remoteDetailKind: Schema.optional(
-    Schema.Literals(["null", "array", "object", "string", "number", "boolean"]),
-  ),
-  cause: Schema.Defect(),
-};
-
-const PreviewAutomationOptionalRemoteDiagnosticFields = {
-  remoteTag: Schema.optional(TrimmedNonEmptyString),
-  remoteMessageLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  remoteDetailKind: Schema.optional(
-    Schema.Literals(["null", "array", "object", "string", "number", "boolean"]),
-  ),
-  cause: Schema.optional(Schema.Defect()),
-};
-
 export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<PreviewAutomationNoAvailableHostError>()(
   "PreviewAutomationNoAvailableHostError",
   {
@@ -806,11 +798,15 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
     interceptedBy: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
     reason: Schema.optional(Schema.String),
+    pendingStages: Schema.optional(PreviewAutomationSnapshotStages),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return [summary, this.reason, this.interceptedBy].filter(Boolean).join(" ");
+    const waiting = this.pendingStages?.length
+      ? `Waiting for: ${this.pendingStages.join(", ")}.`
+      : "";
+    return [summary, waiting, this.reason, this.interceptedBy].filter(Boolean).join(" ");
   }
 }
 

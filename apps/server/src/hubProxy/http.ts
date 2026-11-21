@@ -15,6 +15,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   authScopeResponse,
   hubProxyEffectiveScopes,
+  HUB_PROXY_VCS_BRANCH_HEADER,
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import * as NodeWS from "@effect/platform-node/NodeWS";
@@ -327,8 +328,15 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
         if (value !== undefined) headers[name] = value;
       }
       Object.assign(headers, proxiedDocumentPolicy(headers["content-type"]));
+      if (response.status === 200 && DESCRIPTOR_PATHS.has(path)) {
+        headers[HUB_PROXY_VCS_BRANCH_HEADER] = "1";
+        headers["access-control-expose-headers"] = HUB_PROXY_VCS_BRANCH_HEADER;
+      }
       const stream =
-        path === SHELL_PATH && request.method === "GET" && response.status === 200
+        path === SHELL_PATH &&
+        request.method === "GET" &&
+        response.status === 200 &&
+        !url.searchParams.has("resumeFrom")
           ? Stream.suspend(() => {
               const buffer = makeSnapshotBuffer(SNAPSHOT_MAX_BYTES);
               return response.stream.pipe(

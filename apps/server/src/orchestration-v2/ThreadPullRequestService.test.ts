@@ -131,6 +131,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               }),
           }),
           Layer.mock(PullRequestService.PullRequestService)({
+            subscribeRefreshes: Stream.never,
             notifyLinkedThreadsChanged: Effect.void,
           }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -270,6 +271,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               }),
           }),
           Layer.mock(PullRequestService.PullRequestService)({
+            subscribeRefreshes: Stream.never,
             notifyLinkedThreadsChanged: Effect.void,
           }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -394,6 +396,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 }),
             }),
             Layer.mock(PullRequestService.PullRequestService)({
+              subscribeRefreshes: Stream.never,
               notifyLinkedThreadsChanged: Effect.void,
             }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -507,6 +510,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               }),
           }),
           Layer.mock(PullRequestService.PullRequestService)({
+            subscribeRefreshes: Stream.never,
             notifyLinkedThreadsChanged: Effect.void,
           }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -556,7 +560,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           yield* Deferred.await(childLookup);
           yield* service.drain;
 
-          expect(sweepLookups).toEqual([parent.branch, parent.branch]);
+          expect(sweepLookups).toEqual([parent.branch]);
           expect(lookups.slice(sweepLookups.length)).toEqual([
             { branch: child.branch, refresh: true },
           ]);
@@ -635,6 +639,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               checkedOutPullRequest: () => Effect.succeed(checkedOut),
             }),
             Layer.mock(PullRequestService.PullRequestService)({
+              subscribeRefreshes: Stream.never,
               summary: () =>
                 Effect.succeed({
                   ...detected,
@@ -802,6 +807,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 }),
             }),
             Layer.mock(PullRequestService.PullRequestService)({
+              subscribeRefreshes: Stream.never,
               notifyLinkedThreadsChanged: Effect.void,
             }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -909,6 +915,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               branchPullRequest: () => Effect.succeed(null),
             }),
             Layer.mock(PullRequestService.PullRequestService)({
+              subscribeRefreshes: Stream.never,
               summary: () =>
                 Effect.succeed({
                   ...savedReference,

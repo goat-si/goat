@@ -1,0 +1,207 @@
+import {
+  PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+  pullRequestViewNameError,
+} from "@goat/client-runtime/pull-request-saved-views";
+import { useState } from "react";
+import { Alert } from "react-native";
+import { I18nProvider, useGT } from "../../i18n/I18nProvider";
+
+import {
+  confirm as showConfirmation,
+  prompt as showTextInputDialog,
+} from "../../components/ui/Dialog";
+import type { MenuProps } from "../../components/ui/Menu.types";
+import { uuidv4 } from "../../lib/uuid";
+import type { PullRequestSavedView } from "../../persistence/mobile-preferences";
+import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { pullRequestViewMatches, type PullRequestSavedViewScope } from "./pullRequestSavedViews";
+import { usePullRequestSavedViews } from "./usePullRequestListControls";
+
+export function PullRequestSavedViewsMenu(props: {
+  scope: PullRequestSavedViewScope;
+  onApply: (view: PullRequestSavedView) => Promise<void>;
+}) {
+  return (
+    <I18nProvider>
+      <TranslatedSavedViewsMenu {...props} />
+    </I18nProvider>
+  );
+}
+
+function TranslatedSavedViewsMenu({
+  scope,
+  onApply,
+}: {
+  scope: PullRequestSavedViewScope;
+  onApply: (view: PullRequestSavedView) => Promise<void>;
+}) {
+  const gt = useGT();
+  const { views, ready, update, status } = usePullRequestSavedViews();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const selectedView =
+    views.find((view) => view.id === selectedId) ??
+    views.find((view) => pullRequestViewMatches(view, scope));
+  if (selectedId === null && selectedView) setSelectedId(selectedView.id);
+  const modified = selectedView !== undefined && !pullRequestViewMatches(selectedView, scope);
+
+  // These avoid `finally`, which the React Compiler cannot lower; every path clears `busy`.
+  async function applyView(view: PullRequestSavedView) {
+    setBusy(true);
+    try {
+      await onApply(view);
+      setSelectedId(view.id);
+    } catch {
+      Alert.alert(
+        gt("Could not apply PR view"),
+        gt("The device could not save your filters. Try again."),
+      );
+    }
+    setBusy(false);
+  }
+
+  async function persist(
+    transform: (
+      current: ReadonlyArray<PullRequestSavedView>,
+    ) => ReadonlyArray<PullRequestSavedView>,
+  ) {
+    setBusy(true);
+    let saved = true;
+    try {
+      await update(transform);
+    } catch {
+      Alert.alert(
+        gt("Could not save PR views"),
+        gt("The device could not save your views. Try again."),
+      );
+      saved = false;
+    }
+    setBusy(false);
+    return saved;
+  }
+
+  function editName(view?: PullRequestSavedView) {
+    showTextInputDialog({
+      title: view ? gt("Rename PR view") : gt("Save PR view"),
+      initialValue:
+        view?.name ??
+        (scope.controls.involvement === "reviewing" ? gt("PRs Requesting My Review") : ""),
+      confirmText: gt("Save"),
+      onConfirm: (value) => {
+        const error = pullRequestViewNameError(value, views, view?.id);
+        if (error) {
+          Alert.alert(
+            gt("Could not save view"),
+            error === "Enter a name for this view."
+              ? gt("Enter a name for this view.")
+              : error === "Use 80 characters or fewer."
+                ? gt("Use 80 characters or fewer.")
+                : gt("A view with this name already exists."),
+          );
+          return;
+        }
+        const id = view?.id ?? uuidv4();
+        const name = value.trim();
+        void persist((current) =>
+          view
+            ? current.map((item) => (item.id === view.id ? { ...item, name } : item))
+            : [...current, { ...scope, id, name }],
+        ).then((saved) => {
+          if (saved) setSelectedId(id);
+        });
+      },
+    });
+  }
+
+  const actions: MenuProps["actions"] = [
+    ...(status === "overflow"
+      ? [
+          {
+            id: "overflow-notice",
+            title: gt("Some saved views are not shown."),
+            attributes: { disabled: true },
+          },
+        ]
+      : []),
+    ...(status === "unreadable"
+      ? [
+          {
+            id: "unreadable-notice",
+            title: gt("Saved views could not be read."),
+            attributes: { disabled: true },
+          },
+          { id: "clear", title: gt("Clear saved views"), attributes: { destructive: true } },
+        ]
+      : []),
+    ...views.map((view) => ({
+      id: `apply:${view.id}`,
+      title: view.name,
+      state: selectedView?.id === view.id && !modified ? ("on" as const) : ("off" as const),
+    })),
+    {
+      id: "save",
+      title:
+        views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
+          ? gt("Limit reached, delete a view first")
+          : gt("Save current view…"),
+      attributes: {
+        disabled: status === "unreadable" || views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+      },
+    },
+    ...(selectedView
+      ? [
+          ...(modified ? [{ id: "update", title: gt("Update saved view") }] : []),
+          { id: "rename", title: gt("Rename view…") },
+          { id: "delete", title: gt("Delete view"), attributes: { destructive: true } },
+        ]
+      : []),
+  ];
+
+  return (
+    <ListFilterMenu
+      label={selectedView ? `${selectedView.name}${modified ? " *" : ""}` : gt("Views")}
+      active={selectedView !== undefined}
+      accessibilityLabel={gt("Saved pull request views")}
+      actions={actions.map((action) => ({
+        ...action,
+        attributes: {
+          ...action.attributes,
+          disabled: !ready || busy || action.attributes?.disabled === true,
+        },
+      }))}
+      onSelect={(id) => {
+        if (!ready || busy) return;
+        const view = views.find((item) => `apply:${item.id}` === id);
+        if (view) {
+          void applyView(view);
+          return;
+        }
+        if (id === "clear")
+          showConfirmation({
+            title: gt("Clear saved views?"),
+            message: gt("This removes the unreadable saved views."),
+            cancelText: gt("Cancel"),
+            confirmText: gt("Clear saved views"),
+            destructive: true,
+            onConfirm: () => {
+              void persist(() => []).then((saved) => {
+                if (saved) setSelectedId(null);
+              });
+            },
+          });
+        else if (id === "save") editName();
+        else if (id === "rename" && selectedView) editName(selectedView);
+        else if (id === "update" && selectedView)
+          void persist((current) =>
+            current.map((item) => (item.id === selectedView.id ? { ...item, ...scope } : item)),
+          );
+        else if (id === "delete" && selectedView)
+          void persist((current) => current.filter((item) => item.id !== selectedView.id)).then(
+            (saved) => {
+              if (saved) setSelectedId(null);
+            },
+          );
+      }}
+    />
+  );
+}

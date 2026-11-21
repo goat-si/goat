@@ -17,6 +17,7 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import * as EventStore from "./EventStore.ts";
 import { trimHistoryItem } from "./historyTrim.ts";
+import { isInlineWorkOutput } from "./turnItemProjectionPayload.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 export interface ProjectionVerificationV2 {
@@ -270,7 +271,11 @@ export const layer: Layer.Layer<
       "thread.guest-share-updated",
     ];
     // Read-state events preserve updatedAt and supersede only each other. Activity events supersede both groups.
-    const READ_STATE_THREAD_EVENT_TYPES = ["thread.visited", "thread.marked-unread"];
+    const READ_STATE_THREAD_EVENT_TYPES = [
+      "thread.visited",
+      "thread.visit-recorded",
+      "thread.marked-unread",
+    ];
 
     const supersedableThreadEventTypes = new Set(SUPERSEDABLE_THREAD_EVENT_TYPES);
     const readStateThreadEventTypes = new Set(READ_STATE_THREAD_EVENT_TYPES);
@@ -597,7 +602,7 @@ export const layer: Layer.Layer<
                 readonly payload_json: string;
               }>`SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${id}`,
             (id, payload) =>
-              sql`UPDATE orchestration_v2_projection_turn_items SET payload_json = ${payload} WHERE turn_item_id = ${id}`,
+              sql`UPDATE orchestration_v2_projection_turn_items SET payload_json = ${payload}, inline_work_output = CASE WHEN type = 'dynamic_tool' THEN ${isInlineWorkOutput(payload) ? 1 : 0} ELSE 0 END WHERE turn_item_id = ${id}`,
           );
           saved += result.saved;
           trimmed += result.trimmed;

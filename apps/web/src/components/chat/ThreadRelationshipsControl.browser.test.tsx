@@ -23,7 +23,7 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
 vi.mock(import("../../state/entities"), () => ({
   useThreadShells: (() => []) as never,
   useQuietThreadShell: (() => null) as never,
-  useThreadProjection: ((ref: unknown) =>
+  useQuietThreadProjection: ((ref: unknown) =>
     ref === null ? null : { projection: state.projection }) as never,
   useThreadRelationshipShells: (() =>
     state.projection === null
@@ -70,6 +70,7 @@ vi.mock(import("../../lib/useThreadContextHosts"), async () => {
 
 import { render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
+import { ScrollArea } from "../ui/scroll-area";
 import { ToastProvider } from "../ui/toast";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -97,6 +98,26 @@ function setup() {
     providerSessions: [{ id: "session", status: "ready" }],
   };
 }
+
+it("explains unavailable merge back without executing it", async () => {
+  setup();
+  state.projection = { ...(state.projection as Record<string, unknown>), runs: [] };
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={threadId} />,
+    { router: "/environment/fork" },
+  );
+  const merge = screen.getByRole("button", { name: "Merge back to source conversation" });
+  await expect.element(merge).toHaveAttribute("aria-disabled", "true");
+  await userEvent.hover(merge);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+      "Complete a run in this fork before merging it back",
+    ),
+  );
+  state.commandSucceeds = true;
+  await merge.click({ force: true });
+  expect(screen.router?.state.location.pathname).toBe("/environment/fork");
+});
 
 it.each([
   ["merge", "Could not merge back"],
@@ -229,6 +250,25 @@ it("shows the full lineage title in its tooltip", async () => {
   );
 });
 
+it("opens a related side chat through its owner when it is absent from the global shell list", async () => {
+  setup();
+  state.relatedShells = [
+    {
+      ...(state.projection as { thread: Record<string, unknown> }).thread,
+      id: ThreadId.make("source"),
+      title: "Related side chat",
+      sideChatOf: ThreadId.make("owner"),
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    },
+  ];
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={threadId} />,
+    { router: "/environment/fork" },
+  );
+  await screen.getByText("Related side chat", { exact: true }).click();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/environment/owner"));
+});
+
 it("hides a verified deleted fork while retaining omitted and archived forks", async () => {
   setup();
   const projection = makeThreadProjectionFixture();
@@ -351,4 +391,40 @@ it("keeps a remote lineage title at full width under a long environment name", a
   expect(
     page.getByText(title, { exact: true }).element().getBoundingClientRect().width,
   ).toBeGreaterThan(0);
+});
+
+it.each([1, 18])("continues scrolling the panel past a list of %i subagents", async (count) => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  state.projection = projection;
+  state.relatedShells = Array.from({ length: count }, (_, index) => ({
+    id: ThreadId.make(`subagent-${index}`),
+    title: `Subagent ${index}`,
+    forkedFrom: null,
+    lineage: { parentThreadId: projection.thread.id, relationshipToParent: "subagent" },
+    activityRunStatus: "running",
+    status: "running",
+  }));
+  await using screen = await render(
+    <div data-testid="panel" style={{ height: 320, width: 280 }}>
+      <ScrollArea>
+        <ThreadRelationshipsPanel environmentId={environmentId} threadId={projection.thread.id} />
+        <div style={{ height: 600 }} />
+      </ScrollArea>
+    </div>,
+  );
+  if (count > 6) {
+    await screen.getByRole("button", { name: "Show 12 more" }).click();
+    await expect.element(screen.getByText("Subagent 17", { exact: true })).toBeInTheDocument();
+  }
+  const list = screen.getByRole("list", { name: "Related threads" }).element();
+  const viewport = screen
+    .getByTestId("panel")
+    .element()
+    .querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")!;
+  list.scrollTop = list.scrollHeight;
+  if (count > 6) expect(list.scrollTop).toBeGreaterThan(0);
+  viewport.scrollTop = 0;
+  await userEvent.wheel(list, { delta: { y: 300 } });
+  await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(0));
 });

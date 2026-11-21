@@ -31,9 +31,9 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import {
   checkCodexProviderStatus,
   makePendingCodexProvider,
-  probeCodexSkillsForCwd,
   withCodexAppServerClient,
 } from "../CodexProvider.ts";
+import { makeCodexSkillsProbe } from "../CodexSkillsProbe.ts";
 import { resolveCodexLaunchArgs } from "../codexLaunchArgs.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as ModelCatalog from "@goat/provider-core/server/ModelCatalog";
@@ -522,6 +522,11 @@ export const CodexDriver: ProviderDriver<
       },
       currentEnvironment,
     );
+    const probeSkills = yield* makeCodexSkillsProbe().pipe(
+      provideHomeRoute,
+      Effect.provideService(Path.Path, pathService),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
         ? snapshot.getSnapshot
@@ -538,7 +543,7 @@ export const CodexDriver: ProviderDriver<
                     environment: processEnv,
                     configArgv: [],
                   });
-                  return yield* probeCodexSkillsForCwd({
+                  return yield* probeSkills({
                     binaryPath: effectiveConfig.binaryPath,
                     homePath: effectiveConfig.homePath,
                     launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
@@ -549,7 +554,6 @@ export const CodexDriver: ProviderDriver<
                 }).pipe(
                   provideHomeRoute,
                   Effect.provideService(Path.Path, pathService),
-                  Effect.scoped,
                   Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv)),
                   Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                 ),

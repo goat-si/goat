@@ -1,3 +1,13 @@
+import {
+  DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
+  BackgroundActivityProfile,
+  BackgroundActivityProfileSelection,
+  BackgroundActivitySettings,
+  BackgroundActivityOverrides,
+  DEFAULT_BACKGROUND_ACTIVITY_PROFILE,
+} from "./backgroundActivitySettings.ts";
+export * from "./backgroundActivitySettings.ts";
 import { TextGeneratorConfig, TextGenerators } from "./textGenerators.ts";
 export * from "./textGenerators.ts";
 import { GoatSettingsFields, GoatSettingsPatchFields } from "./goatSettingsFields.ts";
@@ -76,7 +86,12 @@ import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } fro
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { UsageModelFilter } from "./usage.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
-import { KeybindingShortcut } from "./keybindings.ts";
+import {
+  DEFAULT_SNAP_SHOT_SHORTCUT,
+  DEFAULT_SNAP_SHOT_SOUND,
+  SnapShotShortcut,
+  SnapShotSound,
+} from "./snapShotShortcut.ts";
 import {
   CustomModelSetting,
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -142,61 +157,9 @@ const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
-export const SnapShotKeyChord = KeybindingShortcut.check(
-  Schema.makeFilter(
-    (shortcut) =>
-      shortcut.metaKey ||
-      shortcut.ctrlKey ||
-      shortcut.shiftKey ||
-      shortcut.altKey ||
-      shortcut.modKey ||
-      "Snapshot shortcut requires a modifier.",
-  ),
-);
-export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
-export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
-export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
-export type SnapShotModifier = typeof SnapShotModifier.Type;
-export const SnapShotShortcut = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
-  Schema.Struct({ kind: Schema.Literal("modifier-pair"), modifier: SnapShotModifier }),
-  SnapShotKeyChord,
-]);
-export type SnapShotShortcut = typeof SnapShotShortcut.Type;
-export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
-export type SnapShotSound = typeof SnapShotSound.Type;
-const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
-export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
-export function isModifierPairShortcut(
-  shortcut: SnapShotShortcut,
-): shortcut is SnapShotModifierPairShortcut {
-  return "kind" in shortcut;
-}
-export function snapShotShortcutModifierPair(
-  shortcut: SnapShotModifierPairShortcut,
-): SnapShotModifier {
-  return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
-}
-const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Command",
-  control: "Control",
-  alt: "Option",
-};
-const OTHER_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Super",
-  control: "Ctrl",
-  alt: "Alt",
-};
-
-export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boolean): string {
-  const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
-  return `${label} + ${label}`;
-}
-const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
-  kind: "both-shift-keys",
-};
+export * from "./snapShotShortcut.ts";
+export * from "./toolCallVisibility.ts";
+import { ToolCallVisibility, ToolCallVisibilitySetting } from "./toolCallVisibility.ts";
 
 export const NotificationMode = Schema.Literals([
   "off",
@@ -306,6 +269,7 @@ export const DestinationRailPreferences = Schema.Struct({
 export type DestinationRailPreferences = typeof DestinationRailPreferences.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
+  speechTranscribeAfterStop: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   goatBotTaskThreadsBesideChat: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -319,6 +283,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
+  toolCallVisibility: ToolCallVisibilitySetting,
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -1010,48 +975,6 @@ export interface BranchNamingOptions {
   instructions: string;
 }
 
-export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
-export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
-
-export const BackgroundActivityProfile = Schema.Literals([
-  "balanced",
-  "performance",
-  "battery-saver",
-]);
-export type BackgroundActivityProfile = typeof BackgroundActivityProfile.Type;
-export const DEFAULT_BACKGROUND_ACTIVITY_PROFILE: BackgroundActivityProfile = "balanced";
-
-export const BackgroundActivityProfileSelection = Schema.Literals([
-  "balanced",
-  "performance",
-  "battery-saver",
-  "custom",
-]);
-export type BackgroundActivityProfileSelection = typeof BackgroundActivityProfileSelection.Type;
-
-export const BackgroundActivityOverrides = Schema.Struct({
-  automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  hostPowerMonitorActiveInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  hostPowerMonitorIdleInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  idleClientTtl: Schema.optionalKey(Schema.DurationFromMillis),
-  pauseWhenHostLocked: Schema.optionalKey(Schema.Boolean),
-  pauseWhenHostLowPower: Schema.optionalKey(Schema.Boolean),
-  pauseWhenClientLowPower: Schema.optionalKey(Schema.Boolean),
-  pauseWhenOnBattery: Schema.optionalKey(Schema.Boolean),
-});
-export type BackgroundActivityOverrides = typeof BackgroundActivityOverrides.Type;
-
-export const BackgroundActivitySettings = Schema.Struct({
-  schemaVersion: Schema.Literal(1).pipe(Schema.withDecodingDefault(Effect.succeed(1 as const))),
-  profile: BackgroundActivityProfileSelection.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BACKGROUND_ACTIVITY_PROFILE)),
-  ),
-  baseProfile: Schema.optionalKey(BackgroundActivityProfile),
-  overrides: BackgroundActivityOverrides.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
-export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
-
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
@@ -1178,49 +1101,7 @@ export function shouldRecommendDatabaseCompaction(status: DatabaseStorageStatus)
 }
 
 /** Why the configured `worktreesDirectory` cannot hold new worktrees right now. */
-export const WorktreesDirectoryUnavailableReason = Schema.Literals([
-  "invalid",
-  "unmounted",
-  "missing",
-  "not-a-directory",
-  "not-writable",
-]);
-export type WorktreesDirectoryUnavailableReason = typeof WorktreesDirectoryUnavailableReason.Type;
-
-/**
- * Where this server creates new worktrees right now. `unavailable` is set
- * when a custom location is configured but cannot be used, in which case
- * `directory` is the default `<GOAT home>/worktrees` fallback.
- */
-export const WorktreesDirectoryStatus = Schema.Struct({
-  configured: Schema.String,
-  directory: Schema.String,
-  unavailable: Schema.NullOr(
-    Schema.Struct({
-      reason: WorktreesDirectoryUnavailableReason,
-      /** The resolved configured path, or null when the setting is not a usable absolute path. */
-      path: Schema.NullOr(Schema.String),
-    }),
-  ),
-});
-export type WorktreesDirectoryStatus = typeof WorktreesDirectoryStatus.Type;
-
-export function describeWorktreesDirectoryUnavailable(
-  reason: WorktreesDirectoryUnavailableReason,
-): string {
-  switch (reason) {
-    case "invalid":
-      return "is not an absolute folder on this machine";
-    case "unmounted":
-      return "is on a drive that is not connected";
-    case "missing":
-      return "does not exist and its parent folder is missing";
-    case "not-a-directory":
-      return "is not a folder";
-    case "not-writable":
-      return "is not writable";
-  }
-}
+export * from "./worktreesDirectoryStatus.ts";
 
 /**
  * Which machine GOAT Bot runs on in a cluster of connected environments. A server whose claim
@@ -1274,6 +1155,11 @@ export function newGoatBotHomeClaim({
     claimId: randomId(),
   };
 }
+const UsageHistoryRetentionDays = Schema.Union([
+  Schema.Int.check(Schema.isGreaterThan(0)),
+  Schema.Literal("unlimited"),
+]);
+
 export const ServerSettings = Schema.Struct({
   ...GoatSettingsFields,
   ...SpeechSettingsFields,
@@ -1327,6 +1213,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  keepAwakeWhileAgentsWork: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticServerUpdates: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   ...Restart.RestartSettingsFields,
   ...Restart.CodexAppServerSettingsFields,
@@ -1402,6 +1289,11 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BACKGROUND_ACTIVITY_PROFILE)),
   ),
   defaultTheme: DefaultThemePreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  enableAgentThemeWrites: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  defaultAppearance: DefaultThemePreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  defaultAppearanceSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
   /** Distinguishes repeated sets of the same theme so clients apply each one. */
   defaultThemeSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
@@ -1480,6 +1372,10 @@ export const ServerSettings = Schema.Struct({
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  usageHistoryRetentionDays: UsageHistoryRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(92)),
+  ),
+
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1778,6 +1674,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   channelAutoPlacement: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   ...Restart.RestartSettingsPatchFields,
   ...Restart.CodexAppServerSettingsPatchFields,
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
@@ -1808,6 +1705,7 @@ const ServerSettingsPatchFields = Schema.Struct({
     ),
   ),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
+  enableAgentThemeWrites: Schema.optionalKey(Schema.Boolean),
   agentToolListing: Schema.optionalKey(AgentToolListing),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
   ...CuaSettingsPatchFields,
@@ -1922,6 +1820,8 @@ const ServerSettingsPatchFields = Schema.Struct({
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 
+  usageHistoryRetentionDays: Schema.optionalKey(UsageHistoryRetentionDays),
+
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
@@ -1966,12 +1866,14 @@ export function requiredScopesForProjectMutation(
 }
 
 export const ClientSettingsPatch = Schema.Struct({
+  speechTranscribeAfterStop: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreadsBesideChat: Schema.optionalKey(Schema.Boolean),
   goatBotSuggestedHidden: Schema.optionalKey(Schema.Boolean),
   notificationMode: Schema.optionalKey(NotificationMode),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
+  toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),

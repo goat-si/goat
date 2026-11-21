@@ -1,3 +1,7 @@
+import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { compareSemverVersions } from "@goat/shared/semver";
+import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
+import { runPiVersionCommand } from "./status.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -13,6 +17,7 @@ import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 
 const PI_TIMEOUT_MS = 180_000;
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -36,6 +41,22 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   const runPiJson: TextGenerationOperations.Runner = Effect.fn("PiTextGeneration.runPiJson")(
     function* (request) {
       const { operation, cwd, prompt, modelSelection } = request;
+      const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+      const probeEnvironment = yield* currentEnvironment;
+      let supportsThinking = false;
+      if (profile.driver === "pi" && thinking !== undefined && THINKING_LEVELS.has(thinking)) {
+        const version = yield* runPiVersionCommand(piSettings, probeEnvironment, cwd, profile).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.timeoutOption(4_000),
+          Effect.map((output) =>
+            Option.isSome(output) && output.value.code === 0
+              ? parseGenericCliVersion(`${output.value.stdout}\n${output.value.stderr}`)
+              : null,
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+        supportsThinking = version !== null && compareSemverVersions(version, "0.84.3") >= 0;
+      }
 
       const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs, profile);
       if (!resolvedLaunchArgs.ok) {
@@ -46,7 +67,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       }
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment: yield* currentEnvironment,
+        environment: probeEnvironment,
         mcpSession: undefined,
         extensionPath: undefined,
         ephemeral: true,
@@ -95,6 +116,8 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           );
       }
 
+      if (supportsThinking && thinking !== undefined)
+        yield* connection.request({ type: "set_thinking_level", level: thinking });
       yield* connection.request({ type: "prompt", message: prompt });
       // Provider failures (bad key, rate limit, 5xx) arrive on the assistant
       // `message_end`. Keep only the latest, since Pi can retry and still answer.
@@ -160,5 +183,6 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   return TextGenerationOperations.fromRunner(
     "PiTextGeneration",
     TextGenerationOperations.withoutInvestigation(profile.displayName, runPiJson),
+    { memory: false },
   );
 });

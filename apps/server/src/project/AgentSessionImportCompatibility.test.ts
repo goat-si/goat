@@ -24,6 +24,8 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -145,6 +147,8 @@ const fixture = Effect.gen(function* () {
     AgentSessionImporter.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+          ThreadCommandExecutor.layer,
           Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
           Layer.mock(ProjectService.ProjectService)({
             getById: () =>
@@ -213,12 +217,12 @@ it.effect.each([
         includePi: true,
       }),
     );
-    expect(modern).toEqual({ importedCount: 102, skippedCount: 0 });
+    expect(modern).toEqual({ importedCount: 100, skippedCount: 0 });
     const imported = yield* runtimes.list();
     expect(imported.filter((row) => row.providerInstanceId === "pi")).toHaveLength(100);
     expect(imported).toHaveLength(102);
     expect(yield* importer.importRecentAgentThreads(legacyInput)).toEqual({
-      importedCount: 2,
+      importedCount: 0,
       skippedCount: 0,
     });
   }).pipe(Effect.scoped, Effect.provide(testLayer)),

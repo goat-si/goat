@@ -179,8 +179,11 @@ it.effect("a failed restore puts the set-aside folder back", () =>
       setupFails: true,
     });
     assert.equal(prepared._tag, "Failed");
+    if (prepared._tag === "Failed") assert.include(prepared.error.detail, siblings[1] ?? "missing");
     assert.isFalse(linked);
-    assert.deepEqual(siblings, ["feature"]);
+    assert.equal(siblings.length, 2);
+    assert.equal(siblings[0], "feature");
+    assert.match(siblings[1] ?? "", /^feature-set-aside-/);
     assert.deepEqual(inPlace, ["node_modules"]);
   }),
 );

@@ -209,7 +209,7 @@ describe("DesktopWindowMaterial", () => {
       Effect.gen(function* () {
         const f = yield* makeFixture();
         yield* f.material.afterReveal(f.window);
-        yield* f.material.syncAppearance(f.window, true);
+        yield* f.material.syncAppearance(f.window, true, true);
         assert.equal(f.model.backing, "#00000000");
         assert.propertyVal(f.model.overlay, "color", "#00000000");
         assert.propertyVal(f.model.overlay, "symbolColor", "#f8fafc");

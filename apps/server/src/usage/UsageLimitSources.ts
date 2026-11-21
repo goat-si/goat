@@ -12,6 +12,7 @@ import {
   type QuotaPool,
   type ServerProvider,
 } from "@goat/contracts";
+import { makeUnavailableUsageLimits } from "@goat/provider-core/server/usageLimits";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +24,8 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Mac from "effect/crypto/Mac";
+import * as Hex from "effect/encoding/Hex";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
@@ -52,6 +55,7 @@ export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
   {
     readonly current: Effect.Effect<ReadonlyArray<UsageLimitSourceSnapshot>>;
+    readonly currentForReset: Effect.Effect<UsageSourceRoutingState>;
     readonly streamChanges: Stream.Stream<ReadonlyArray<UsageLimitSourceSnapshot>>;
     readonly refresh: Effect.Effect<void>;
     readonly quotaPool: Effect.Effect<QuotaPool | undefined>;
@@ -74,6 +78,56 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   }
 }
 
+function keepLastGoodReadings(
+  source: UsageLimitSourceSnapshot,
+  previous: UsageLimitSourceSnapshot,
+) {
+  const lastById = new Map(previous.accounts.map((account) => [account.id, account]));
+  const refusals = new Set<string>();
+  const refusedAccountIds = new Set<string>();
+  const accounts = source.accounts.map((account) => {
+    const refusal = account.usageLimits.unavailable;
+    if (refusal?.reason !== "probeFailed") return account;
+    // An auth file name can be reused, and fingerprinted accounts omit their listed identity.
+    if (account.email === undefined && account.workspaceId === undefined) return account;
+    const last = lastById.get(account.id);
+    if (
+      !last ||
+      last.driver !== account.driver ||
+      last.email !== account.email ||
+      last.workspaceId !== account.workspaceId ||
+      last.usageLimits.credentialFingerprint !== undefined ||
+      last.usageLimits.unavailable
+    ) {
+      return account;
+    }
+    refusals.add(refusal.message ?? "An account's usage could not be read.");
+    refusedAccountIds.add(account.id);
+    return { ...last, ...account, usageLimits: last.usageLimits };
+  });
+  return refusals.size > 0
+    ? {
+        snapshot: {
+          ...source,
+          accounts,
+          error: `${[...refusals].join(" ")} Showing the last reading.`,
+        },
+        refusedAccountIds,
+      }
+    : undefined;
+}
+
+type RefusedAccounts = ReadonlyMap<UsageLimitSourceId, ReadonlySet<string>>;
+
+interface UsageSourceRoutingState {
+  readonly snapshots: ReadonlyArray<UsageLimitSourceSnapshot>;
+  readonly refusedAccounts: RefusedAccounts;
+}
+
+interface UsageSourceState extends UsageSourceRoutingState {
+  readonly reuseKeys: ReadonlyMap<string, string>;
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
@@ -81,7 +135,13 @@ export const make = Effect.gen(function* () {
   const poolRef = yield* Ref.make<Effect.Success<ReturnType<typeof opencodex.read>>>(undefined);
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-  const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
+  const stateRef = yield* Ref.make<UsageSourceState>({
+    snapshots: [],
+    refusedAccounts: new Map(),
+    reuseKeys: new Map(),
+  });
+  const mac = yield* Mac.Mac;
+  const fingerprintKey = yield* mac.generateKey(Mac.hmacSha256).pipe(Effect.orDie);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
     PubSub.shutdown,
@@ -98,39 +158,51 @@ export const make = Effect.gen(function* () {
       id,
       kind: config.kind,
       label: sourceLabel(id, config),
-      ...(url && /^https?:$/.test(url.protocol) ? { origin: url.origin } : {}),
+      ...(url && /^https?:$/.test(url.protocol)
+        ? {
+            origin: url.origin,
+            endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
+          }
+        : {}),
       checkedAt,
     } as const;
+    const unreadable = (error: string) => ({
+      snapshot: { ...base, accounts: [], error },
+      reuseKey: undefined,
+    });
     const resolved = yield* Effect.tryPromise(() =>
       resolveUsageManagementKey(settings, config),
     ).pipe(Effect.result);
     if (resolved._tag === "Failure") {
-      return {
-        ...base,
-        accounts: [],
-        error: "Could not read the management key from its secret provider.",
-      };
+      return unreadable("Could not read the management key from its secret provider.");
     }
     const managementKey = resolved.success;
     if (managementKey.length === 0) {
-      return { ...base, accounts: [], error: "No management key configured." };
+      return unreadable("No management key configured.");
     }
     const accounts = yield* api.readAccounts({ ...config, managementKey }).pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
-      return { ...base, accounts: [], error: accounts.failure.detail };
+      return unreadable(accounts.failure.detail);
     }
-    return { ...base, accounts: accounts.success };
+    const fingerprint = yield* mac
+      .sign(fingerprintKey, new TextEncoder().encode(managementKey))
+      .pipe(Effect.orDie);
+    return {
+      snapshot: { ...base, accounts: accounts.success },
+      reuseKey: `${Hex.encode(fingerprint)}:${config.url}`,
+    };
   });
 
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
-    next: ReadonlyArray<UsageLimitSourceSnapshot>,
+    next: UsageSourceState,
     poolChanged = false,
   ) {
-    const changed = yield* Ref.modify(stateRef, (previous) =>
-      !poolChanged && Equal.equals(previous, next) ? [false, previous] : [true, next],
-    );
-    if (changed) yield* PubSub.publish(changes, next);
+    const changed = yield* Ref.modify(stateRef, (previous) => [
+      poolChanged || !Equal.equals(previous.snapshots, next.snapshots),
+      next,
+    ]);
+    if (changed) yield* PubSub.publish(changes, next.snapshots);
   });
 
   // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
@@ -142,7 +214,13 @@ export const make = Effect.gen(function* () {
     const entries = Object.entries(settings?.usageLimitSources ?? {}).filter(
       ([, config]) => config.enabled,
     );
-    const snapshots =
+    const current = yield* Ref.get(stateRef);
+    const previousById = new Map(
+      current.snapshots
+        .filter((source) => source.kind === "cliproxy")
+        .map((source) => [source.id, source]),
+    );
+    const reads =
       settings === null
         ? []
         : yield* Effect.forEach(
@@ -150,12 +228,29 @@ export const make = Effect.gen(function* () {
             ([id, config]) => readSource(id as UsageLimitSourceId, config, settings),
             { concurrency: 4 },
           );
+    const reuseKeys = new Map<string, string>();
+    const refusedAccounts = new Map<UsageLimitSourceId, ReadonlySet<string>>();
+    const snapshots = reads.map(({ snapshot, reuseKey }) => {
+      if (reuseKey === undefined) return snapshot;
+      reuseKeys.set(snapshot.id, reuseKey);
+      const previous = previousById.get(snapshot.id);
+      if (!previous || current.reuseKeys.get(snapshot.id) !== reuseKey) return snapshot;
+      const retained = keepLastGoodReadings(snapshot, previous);
+      if (!retained) return snapshot;
+      refusedAccounts.set(snapshot.id, retained.refusedAccountIds);
+      return retained.snapshot;
+    });
     const pool = yield* opencodex.read();
     const previous = yield* Ref.getAndSet(poolRef, pool);
     yield* publish(
-      pool?.pool === undefined
-        ? snapshots
-        : [...snapshots, { ...quotaPoolSource(pool.pool), origin: pool.origin }],
+      {
+        snapshots:
+          pool?.pool === undefined
+            ? snapshots
+            : [...snapshots, { ...quotaPoolSource(pool.pool), origin: pool.origin }],
+        reuseKeys,
+        refusedAccounts,
+      },
       !Equal.equals(previous, pool),
     );
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
@@ -185,14 +280,51 @@ export const make = Effect.gen(function* () {
     );
     if (!managementKey)
       return yield* new UsageLimitSourceError({ detail: "No management key configured." });
+    const previous = yield* Ref.get(stateRef);
+    const reuseKeys = new Map(previous.reuseKeys);
+    reuseKeys.delete(input.sourceId);
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    // Even an interrupted redemption can change quota before the next poll.
+    yield* publish({
+      ...previous,
+      reuseKeys,
+      snapshots: previous.snapshots.map((source) =>
+        source.kind === "cliproxy" && source.id === input.sourceId
+          ? {
+              ...source,
+              accounts: source.accounts.map((account) =>
+                account.id === input.accountId
+                  ? {
+                      ...account,
+                      usageLimits: makeUnavailableUsageLimits({
+                        checkedAt,
+                        reason: "probeFailed",
+                        message: "Waiting for fresh usage after a reset credit redemption attempt.",
+                      }),
+                    }
+                  : account,
+              ),
+            }
+          : source,
+      ),
+    }).pipe(Effect.uninterruptible);
     const result = yield* api.consume(
       { ...config, managementKey },
       input.accountId,
       input.creditId,
     );
-    const snapshot = yield* readSource(input.sourceId, config, settings);
-    const previous = yield* Ref.get(stateRef);
-    yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
+    const { snapshot, reuseKey } = yield* readSource(input.sourceId, config, settings);
+    const nextReuseKeys = new Map(reuseKeys);
+    if (reuseKey !== undefined) nextReuseKeys.set(input.sourceId, reuseKey);
+    const refusedAccounts = new Map(previous.refusedAccounts);
+    refusedAccounts.delete(input.sourceId);
+    yield* publish({
+      snapshots: previous.snapshots.map((source) =>
+        source.kind === "cliproxy" && source.id === input.sourceId ? snapshot : source,
+      ),
+      reuseKeys: nextReuseKeys,
+      refusedAccounts,
+    });
     return result;
   }, refreshLock.withPermits(1));
 
@@ -230,7 +362,10 @@ export const make = Effect.gen(function* () {
   yield* refresh.pipe(Effect.forkScoped);
 
   return {
-    current: Ref.get(stateRef),
+    current: Ref.get(stateRef).pipe(Effect.map((state) => state.snapshots)),
+    currentForReset: Ref.get(stateRef).pipe(
+      Effect.map(({ snapshots, refusedAccounts }) => ({ snapshots, refusedAccounts })),
+    ),
     quotaPool: Ref.get(poolRef).pipe(Effect.map((snapshot) => snapshot?.pool)),
     projectProviders: Effect.fn("UsageLimitSources.projectProviders")(function* (providers) {
       const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
@@ -247,9 +382,9 @@ export const make = Effect.gen(function* () {
       return Stream.unwrap(
         Effect.gen(function* () {
           const subscription = yield* PubSub.subscribe(changes);
-          const snapshot = yield* Ref.get(stateRef);
+          const { snapshots } = yield* Ref.get(stateRef);
           // The raw pool can change without changing its legacy account projection.
-          return Stream.concat(Stream.make(snapshot), Stream.fromSubscription(subscription));
+          return Stream.concat(Stream.make(snapshots), Stream.fromSubscription(subscription));
         }),
       );
     },
@@ -264,13 +399,16 @@ export function hubPoolResetAt(
   driver: ProviderDriverKind,
   model: string | null,
   now: number,
+  refusedAccounts?: RefusedAccounts,
 ): string | null {
   let earliest: number | null = null;
   for (const source of sources) {
+    const refused = source.kind === "cliproxy" ? refusedAccounts?.get(source.id) : undefined;
     for (const account of source.accounts) {
       if (account.driver !== driver) continue;
       // An unread account may be the one still blocked, so its refill is unknown.
-      if (account.usageLimits.unavailable) return null;
+      if ((source.error && !refused) || refused?.has(account.id) || account.usageLimits.unavailable)
+        return null;
       const spent = account.usageLimits.windows.filter(
         (window) => window.usedPercent >= 100 && windowLimitsModel(window, model),
       );
@@ -308,10 +446,11 @@ export const layerResetFallback = Layer.effect(
         if ((yield* atEndpoint).length === 0) return null;
         // The pool usually ran out after the last poll, so the cached accounts still show room.
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
-        const serving = yield* atEndpoint;
+        const { snapshots, refusedAccounts } = yield* sources.currentForReset;
+        const serving = snapshots.filter((source) => servesEndpoint(source, endpoint));
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         return poolFirstResetAt(serving, model, now, (from) =>
-          hubPoolResetAt(from, driver, model, now),
+          hubPoolResetAt(from, driver, model, now, refusedAccounts),
         );
       }),
     };

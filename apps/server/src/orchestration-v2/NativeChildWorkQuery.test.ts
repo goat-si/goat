@@ -61,6 +61,9 @@ const records = (olderRun: string) => ({
     { id: "run-root-earlier", providerThreadId: "provider-root" },
     { id: "run-other", providerThreadId: "provider-other" },
   ],
+  attempts: [],
+  nodes: [],
+  providerTurns: [],
   providerThreads: [
     { id: "provider-root", providerInstanceId: instanceId, nativeThreadRef: { nativeId: ROOT } },
     {

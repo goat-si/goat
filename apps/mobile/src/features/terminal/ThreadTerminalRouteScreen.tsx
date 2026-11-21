@@ -1,3 +1,4 @@
+import { useRetryEnvironment } from "../connection/useRetryEnvironment";
 import {
   firstRouteParam,
   inferHostPlatform,
@@ -44,7 +45,6 @@ import { LoadingScreen } from "../../components/LoadingScreen";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { Button } from "../../components/ui/Button";
 import { IconButton } from "../../components/ui/IconButton";
-import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { terminalEnvironment } from "../../state/terminal";
 import { environmentSession, readEnvironmentScope } from "../../state/session";
@@ -344,7 +344,7 @@ function ThreadTerminal(props: {
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const clearTerminal = useAtomCommand(terminalEnvironment.clear, "terminal clear");
-  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, "environment retry");
+  const retryEnvironment = useRetryEnvironment();
   const selectedThreadDetail = useSelectedThreadProjection();
   const selectedThreadDetailWorktreePath =
     selectedThreadDetail?.projection.thread.worktreePath ?? null;
@@ -877,7 +877,7 @@ function ThreadTerminal(props: {
               title="No terminal sessions"
               detail="Existing terminals will appear here when another client opens one."
             />
-          ) : !canOperateTerminal && terminal.error !== null ? (
+          ) : terminal.error !== null && (!canOperateTerminal || terminal.status === "error") ? (
             <EmptyState title="Terminal unavailable" detail={terminal.error} />
           ) : (
             <>

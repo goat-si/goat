@@ -2035,7 +2035,7 @@ export { resolveSshCliRunner };
 const layerManager = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    const runner = yield* resolveSshCliRunner(config.baseDir);
+    const runner = yield* resolveSshCliRunner(config.baseDir, config.staticDir);
     return SshTunnel.SshEnvironmentManager.layer({
       // Share only the GOAT runner under the tunnel's ~/.goat/ssh-launch. Do not
       // import/reuse an upstream ~/.t3 runner or server home. Local

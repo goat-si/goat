@@ -1,4 +1,4 @@
-import type { PullRequestReviewThread } from "@goat/contracts";
+import type { PullRequestConversationThread } from "@goat/contracts";
 import type {
   GitLabDiffRefs,
   GitLabMergeRequestListItem,
@@ -6,7 +6,7 @@ import type {
 } from "./gitLabMergeRequestJson.ts";
 
 export interface GitLabDiscussionThreads {
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
+  readonly threads: ReadonlyArray<PullRequestConversationThread>;
   readonly diffRefsByThreadId: ReadonlyMap<string, GitLabDiffRefs>;
   readonly overviewFindingIds: ReadonlyArray<string>;
   readonly truncated: boolean;

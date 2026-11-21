@@ -23,13 +23,13 @@ import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoat
 import {
   currentRow,
   fresh,
-  laterGoatRows,
-  shiftedGoatNames,
   history,
   isDatabaseNewerThanBuildError,
+  laterGoatRows,
   schema,
   seedOldGoatLedger,
   seedUserData,
+  shiftedGoatNames,
   snapshot,
   UPSTREAM_80S,
   userData,
@@ -233,7 +233,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       const before = yield* history;
-      yield* killWhenRecording(shiftedGoatNames.at(-1) ?? "");
+      yield* killWhenRecording("DisposableMachineEnrollment");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
       assert.deepStrictEqual(yield* history, before);
       yield* reviveAfterKill;
@@ -391,7 +391,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      currentRow("MemorySuggestionQuota")[0],
+      migrationEntries.at(-1)?.[0],
     ],
     [
       "a ledger from before the shift that lost row 72",

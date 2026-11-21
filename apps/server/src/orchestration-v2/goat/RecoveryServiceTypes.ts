@@ -1,0 +1,42 @@
+import type { ThreadCommandExecutor } from "../ThreadCommandExecutor.ts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import type * as ProviderRuntimeShutdown from "../ProviderRuntimeShutdown.ts";
+import type { ProviderRuntimeRecoveryError } from "../ProviderRuntimeRecoveryErrors.ts";
+
+export interface ProviderRuntimeRecoverySummary {
+  readonly terminalizedRuns: number;
+  readonly stoppedSessions: number;
+  readonly closedRequests: number;
+  readonly retiredEffects: number;
+  readonly requeuedEffects: number;
+}
+
+export interface ProviderRuntimeReconciliationSummary {
+  readonly terminalizedRuns: number;
+  readonly stoppedSessions: number;
+  readonly closedRequests: number;
+  readonly retiredEffects: number;
+  readonly requeuedEffects: number;
+}
+
+type ShutdownPreparation = Effect.Effect<
+  ProviderRuntimeShutdown.ShutdownContinuationSummary,
+  ProviderRuntimeRecoveryError
+>;
+
+export class ProviderRuntimeRecoveryService extends Context.Service<
+  ProviderRuntimeRecoveryService,
+  {
+    readonly reconcile: (
+      trigger: "startup" | "shutdown",
+    ) => Effect.Effect<ProviderRuntimeReconciliationSummary, ProviderRuntimeRecoveryError>;
+    readonly prepareForShutdown: ShutdownPreparation;
+    readonly prepareForShutdownWithStopKind: (stopKind: "restart" | "quit") => ShutdownPreparation;
+    readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
+    readonly drainDeferredResends: (
+      locks: ThreadCommandExecutor["Service"],
+    ) => Effect.Effect<void, ProviderRuntimeRecoveryError>;
+  }
+  // @effect-diagnostics-next-line deterministicKeys:off -- Preserve the service key across the move.
+>()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}

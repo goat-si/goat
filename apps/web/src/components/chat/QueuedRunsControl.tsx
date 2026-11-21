@@ -1,4 +1,8 @@
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
 import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
@@ -24,7 +28,7 @@ import { useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
-import { useQuietThreadShell, useThreadProjection } from "../../state/entities";
+import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -32,7 +36,9 @@ import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { openExpandedImagePreview } from "./ExpandedImageDialog";
 
 export interface EditQueuedRunRequest {
   readonly runId: RunId;
@@ -118,12 +124,12 @@ export function QueuedRunsControl({
   readonly onEditQueuedRun: (request: EditQueuedRunRequest) => void;
   readonly onCancelEdit: () => void;
 }) {
-  const projection = useThreadProjection(
+  const projection = useQuietThreadProjection(
     scopeThreadRef(props.environmentId, props.threadId),
   )?.projection;
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
-  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
-  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
+  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, { reportFailure: false });
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, { reportFailure: false });
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
@@ -221,19 +227,27 @@ export function QueuedRunsControl({
     if (!canSend || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
-    if (workflow?.canSendNow) {
-      await resume({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId: queuedRunId },
-      });
-    } else if (activeRun !== null) {
-      await promote({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
-      });
-    }
+    const result = workflow?.canSendNow
+      ? await resume({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, runId: queuedRunId },
+        })
+      : activeRun !== null
+        ? await promote({
+            environmentId: props.environmentId,
+            input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
+          })
+        : null;
     steerInFlightRef.current = false;
     setBusyRunId(null);
+    if (result?._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not send queued message",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+    }
   };
 
   useImperativeHandle(ref, () => ({
@@ -412,8 +426,32 @@ export function QueuedRunsControl({
                     {item.thumbnails.length > 0 ? (
                       <span className="flex shrink-0 items-center gap-0.5">
                         {item.thumbnails.map((thumbnail) => (
-                          <span
+                          <button
                             key={thumbnail.key}
+                            type="button"
+                            aria-label={`Preview ${thumbnail.name}`}
+                            disabled={!thumbnail.url}
+                            onClick={() => {
+                              const available = item.thumbnails.filter(
+                                (image) => image.url !== null,
+                              );
+                              const index = available.findIndex(
+                                (image) => image.key === thumbnail.key,
+                              );
+                              if (index < 0) return;
+                              openExpandedImagePreview(
+                                scopedThreadKey(
+                                  scopeThreadRef(props.environmentId, props.threadId),
+                                ),
+                                {
+                                  images: available.map((image) => ({
+                                    src: image.url,
+                                    name: image.name,
+                                  })),
+                                  index,
+                                },
+                              );
+                            }}
                             className="size-4 overflow-hidden rounded border border-border/70 bg-background"
                           >
                             {thumbnail.url ? (
@@ -428,7 +466,7 @@ export function QueuedRunsControl({
                                 className="block size-full bg-muted/60"
                               />
                             )}
-                          </span>
+                          </button>
                         ))}
                       </span>
                     ) : null}

@@ -147,9 +147,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     }
     if (result.value.type === "granted") {
       setNotificationStatus("enabled");
-      if (getAgentAwarenessRegistrationStatus() === "registered") {
-        Dialog.alert("Notifications enabled", "Agent notifications are enabled for this device.");
-      } else {
+      if (getAgentAwarenessRegistrationStatus() !== "registered") {
         Dialog.alert(
           "Couldn't finish enabling notifications",
           "Notification access was granted, but this device could not be registered with GOAT Connect. Notifications will start once registration succeeds.",

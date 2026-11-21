@@ -196,7 +196,7 @@ const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   worker: 133,
   manager: 147,
   "merge-manager": 149,
-  owner: 187,
+  owner: 188,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {

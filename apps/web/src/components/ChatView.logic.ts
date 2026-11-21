@@ -1,3 +1,5 @@
+import { toServerClock } from "@goat/client-runtime/clock";
+import { threadHasStarted } from "../lib/chatThreadActions";
 import type { MessagesTimeline } from "./chat/MessagesTimeline";
 import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@goat/contracts";
 import {
@@ -82,9 +84,7 @@ import {
   terminalContextReference,
 } from "../lib/composerContextRecords";
 import { serializeLegacyContextMessage } from "@goat/shared/composerContextLegacySend";
-import type { ComposerDispatchMode } from "@goat/client-runtime/state/composer-dispatch";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
-import { collapseExpandedComposerCursor, type ComposerSubmissionIntent } from "../composer-logic";
+import { type ComposerSubmissionIntent } from "../composer-logic";
 import type { ReviewCommentContext } from "../reviewCommentContext";
 import { derivePhase, type TimelineEntry } from "../session-logic";
 import type { PreviewMiniPlayerSource } from "../previewMiniPlayerStore";
@@ -871,7 +871,6 @@ export function shouldShowPlanFollowUpPrompt(input: {
 
 // A typed `/compact`, with or without instructions, is already the compaction. Queueing a
 // bare one ahead of it would run an uninstructed compaction first and charge for two.
-const COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
 
 const sessionDismissedBranchMismatchKeys = new Set<string>();
 
@@ -905,10 +904,6 @@ export function recallCheckoutIsRepo(
   return cwd === null
     ? undefined
     : sessionCheckoutIsRepo.get(checkoutIsRepoKey(environmentId, cwd));
-}
-
-export function threadHasStarted(thread: Thread | null | undefined): boolean {
-  return Boolean(thread && (thread.latestRun !== null || thread.itemCount > 0 || thread.runtime));
 }
 
 // Imported history lacks a session until its first prompt; resolve its instance before locking the driver.
@@ -1016,6 +1011,7 @@ export interface LocalDispatchSnapshot {
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
   options?: {
+    environmentId?: import("@goat/contracts").EnvironmentId;
     preparingWorktree?: boolean;
     latestUserMessageId?: ChatMessage["id"] | null;
     submissionIntent?: ComposerSubmissionIntent;
@@ -1024,7 +1020,11 @@ export function createLocalDispatchSnapshot(
   const latestRun = activeThread?.latestRun ?? null;
   const runtime = activeThread?.runtime ?? null;
   return {
-    startedAt: new Date().toISOString(),
+    startedAt: new Date(
+      options?.environmentId === undefined
+        ? Date.now()
+        : toServerClock(options.environmentId, Date.now()),
+    ).toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
     submissionIntent: options?.submissionIntent ?? "foreground",
     latestUserMessageId: options?.latestUserMessageId ?? null,
@@ -1046,6 +1046,25 @@ export function deriveCommittedServerUserMessageIds(
     visibleTurnItems.flatMap((row) =>
       row.item.type === "user_message" ? [row.item.messageId] : [],
     ),
+  );
+}
+
+/**
+ * The server checks the full history, but the first page of an
+ * agent-started thread or a long turn can hold no user message.
+ */
+export function hasCompactableConversation(input: {
+  readonly visibleTurnItems: ReadonlyArray<ThreadStructureRow>;
+  readonly hasMoreHistory: boolean;
+  readonly latestUserMessageAt: string | null;
+}): boolean {
+  return (
+    input.visibleTurnItems.some(
+      ({ item }) =>
+        item.type === "user_message" &&
+        (item.text.trim().toLowerCase() !== "/compact" || item.attachments.length > 0),
+    ) ||
+    (input.hasMoreHistory && input.latestUserMessageAt !== null)
   );
 }
 
@@ -1115,7 +1134,9 @@ export function shouldRefocusComposerOnWindowFocus(
   activeElement:
     | (Pick<Element, "tagName" | "closest" | "getAttribute"> & { isContentEditable?: boolean })
     | null,
+  selection: Pick<Selection, "isCollapsed"> | null = null,
 ): boolean {
+  if (selection !== null && !selection.isCollapsed) return false;
   if (activeElement === null || activeElement.tagName === "BODY") return true;
   if (
     activeElement.tagName === "INPUT" ||
@@ -1135,46 +1156,10 @@ export function shouldRefocusComposerOnWindowFocus(
   );
 }
 
-export interface PlanFollowUpComposerSnapshot {
-  readonly prompt: string;
-  readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
-  readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
-  readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
-  readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
-}
-
-// A draft typed while the send was in flight is newer and stays. Composer refs and the cursor
-// belong to the thread on screen, so they follow only while the follow-up's route is current.
-export function restorePlanFollowUpComposer(input: {
-  readonly snapshot: PlanFollowUpComposerSnapshot;
-  readonly draftHasUserContent: boolean;
-  readonly routeIsCurrent: boolean;
-  readonly writeComposerRefs: (snapshot: PlanFollowUpComposerSnapshot) => void;
-  readonly writePrompt: (prompt: string) => void;
-  readonly writeTerminalContexts: (contexts: ReadonlyArray<TerminalContextDraft>) => void;
-  readonly writeReviewComments: (comments: ReadonlyArray<ReviewCommentContext>) => void;
-  readonly writePreviewAnnotations: (annotations: ReadonlyArray<PreviewAnnotationPayload>) => void;
-  readonly writeThreadContexts: (records: ReadonlyArray<ThreadContextRecord>) => void;
-  readonly resetCursor: (options: {
-    cursor: number;
-    prompt: string;
-    detectTrigger: boolean;
-  }) => void;
-}): void {
-  if (input.draftHasUserContent) return;
-  if (input.routeIsCurrent) input.writeComposerRefs(input.snapshot);
-  input.writePrompt(input.snapshot.prompt);
-  input.writeTerminalContexts(input.snapshot.terminalContexts);
-  input.writeReviewComments(input.snapshot.reviewComments);
-  input.writePreviewAnnotations(input.snapshot.previewAnnotations);
-  input.writeThreadContexts(input.snapshot.threadContexts);
-  if (!input.routeIsCurrent) return;
-  input.resetCursor({
-    cursor: collapseExpandedComposerCursor(input.snapshot.prompt, input.snapshot.prompt.length),
-    prompt: input.snapshot.prompt,
-    detectTrigger: true,
-  });
-}
+export {
+  restorePlanFollowUpComposer,
+  type PlanFollowUpComposerSnapshot,
+} from "./ChatView.planFollowUp";
 
 export { isDraftContentUnchanged, snapshotDraftContent } from "./composerDraftContent";
 
@@ -1373,51 +1358,6 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
 
 export type ComposerSendSnapshot = ReturnType<typeof snapshotComposerSend>;
 
-/** How a composer send dispatches: where it runs and whether it waits behind other work. */
-export function planComposerTurn(input: {
-  readonly messageText: string;
-  readonly sendQueuesBehindSetup: boolean;
-  readonly isServerThread: boolean;
-  /** A cloud thread runs in the provider's own workspace, so it never gets a local worktree. */
-  readonly isCloudThread?: boolean;
-  readonly activeMessageCount: number;
-  readonly sendEnvMode: DraftThreadEnvMode;
-  readonly worktreePath: string | null;
-  readonly activeThreadBranch: string | null;
-  readonly resumeCompactionTokens: number | null;
-  readonly keepFullHistory: boolean;
-  readonly phase: SessionPhase;
-  readonly dispatchMode: ComposerDispatchMode;
-}) {
-  const isFirstMessage =
-    !input.sendQueuesBehindSetup && (!input.isServerThread || input.activeMessageCount === 0);
-  const shouldCreateWorktree =
-    input.isCloudThread !== true &&
-    isFirstMessage &&
-    input.sendEnvMode === "worktree" &&
-    !input.worktreePath;
-  // A stale Claude session compacts before this message so the turn does not re-read the
-  // old history. The message queues behind the /compact run, since steering into it is
-  // rejected.
-  const compactBeforeSend =
-    input.resumeCompactionTokens !== null &&
-    !input.keepFullHistory &&
-    !COMPACT_COMMAND_PATTERN.test(input.messageText);
-  return {
-    // In worktree mode, require an explicit base branch so we don't silently
-    // fall back to local execution when branch selection is missing.
-    missingWorktreeBaseBranch: shouldCreateWorktree && !input.activeThreadBranch,
-    baseBranchForWorktree: shouldCreateWorktree ? input.activeThreadBranch : null,
-    compactBeforeSend,
-    turnDispatchMode:
-      compactBeforeSend || input.sendQueuesBehindSetup ? ("queue" as const) : input.dispatchMode,
-    shouldQueueBehindActiveRun:
-      compactBeforeSend ||
-      input.sendQueuesBehindSetup ||
-      (input.phase === "running" && input.dispatchMode === "queue"),
-  };
-}
-
 /**
  * The attachment ids a message's context records bind to: the upload id the
  * server returned, or the local id on the data-URL path.
@@ -1584,3 +1524,10 @@ export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | nu
 }
 
 export { deriveWorkspaceMutationId } from "@goat/client-runtime/state/threads";
+
+export const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+
+export const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
+export const noopHeldRevert = (_targetTurnCount: number) => {};
+export const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
+export const ignoreComposerFocus = () => {};

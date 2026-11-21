@@ -1,6 +1,7 @@
 import { parseThreadKey, threadKey } from "@goat/client-runtime/state/entities";
 import { createThreadVisitTracker } from "@goat/client-runtime/state/thread-visits";
 import { threadWokeAt } from "@goat/client-runtime/state/thread-settled";
+import { environmentCatalog } from "../../connection/catalog";
 import { Atom } from "effect/reactivity";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 
@@ -27,5 +28,6 @@ const wakeAwareVisitShell = Atom.family((key: string) => {
 });
 export const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
+  sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
   visit: threadEnvironment.visit,
 });

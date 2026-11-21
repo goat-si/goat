@@ -3,6 +3,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   attachmentUploadBlockReason,
+  attachmentUploadForEnvironment,
   type AttachmentUploadState,
 } from "../../lib/attachmentUploadState";
 import { toastManager } from "../ui/toast";
@@ -18,9 +19,21 @@ export function attachmentUploadGate(input: {
   readonly answering: boolean;
   readonly uploadsSupported: boolean;
 }) {
-  const blockReason = attachmentUploadBlockReason(input);
+  const hasDisplacedUpload = input.imageIds.some((id) => {
+    const upload = input.uploadsByImageId[id];
+    return upload !== undefined && upload.environmentId !== input.environmentId;
+  });
+  const uploadsByImageId = hasDisplacedUpload
+    ? Object.fromEntries(
+        Object.entries(input.uploadsByImageId).map(([id, upload]) => [
+          id,
+          attachmentUploadForEnvironment(upload, input.environmentId) ?? upload,
+        ]),
+      )
+    : input.uploadsByImageId;
+  const blockReason = attachmentUploadBlockReason({ ...input, uploadsByImageId });
   const uploadsPending = input.uploadsSupported && blockReason !== null;
-  const uploadFailed = input.imageIds.some((id) => input.uploadsByImageId[id]?.status === "failed");
+  const uploadFailed = input.imageIds.some((id) => uploadsByImageId[id]?.status === "failed");
   const plainSend = !input.answering && !uploadFailed;
   return {
     blockReason,

@@ -54,6 +54,9 @@ describe("Windows host paths", () => {
 });
 
 describe("path helpers", () => {
+  it("folds Vietnamese d-stroke and German sharp s in project names", () => {
+    expect(newProjectFolderName("Đường Straße")).toBe("duong-strasse");
+  });
   // regression: #17923 literal colons in names are kept, not parsed as positions
   it.each([
     ["report:123", "/workspace", "/workspace/report:123"],

@@ -967,3 +967,18 @@ it("formats selected text as inline code when typed backticks surround it", asyn
   await act(async () => editor.commands.setTextSelection(editor.state.doc.content.size - 1));
   expect(textWithMark(editor, "code")).toEqual(["hello"]);
 });
+
+it("reopens a long draft scrolled to its caret without taking focus", async () => {
+  const style = document.head.appendChild(document.createElement("style"));
+  style.textContent =
+    ".composer-tiptap { max-height: 120px; overflow-y: auto; padding-bottom: 48px; }";
+  using _style = { [Symbol.dispose]: () => style.remove() };
+  const value = Array.from({ length: 40 }, (_, line) => `line ${line + 1}`).join("\n");
+  await using screen = await mountEditor(value);
+  const { editor } = screen;
+  const scroller = editor.view.dom;
+  await vi.waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
+  expect(document.activeElement).not.toBe(scroller);
+  const caret = editor.view.coordsAtPos(editor.state.selection.head);
+  expect(caret.bottom).toBeLessThanOrEqual(scroller.getBoundingClientRect().bottom - 48 + 1);
+});

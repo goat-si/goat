@@ -46,8 +46,20 @@ it.layer(layerTest)("untracked size limit", (it) => {
       assert.deepStrictEqual(
         preview.sources.find((source) => source.kind === "working-tree")?.files,
         [
-          { path: "asset.data", previousPath: null, additions: 0, deletions: 1 },
-          { path: "ordinary.txt", previousPath: null, additions: 1, deletions: 0 },
+          {
+            path: "asset.data",
+            previousPath: null,
+            additions: 0,
+            deletions: 1,
+            changeType: "deleted",
+          },
+          {
+            path: "ordinary.txt",
+            previousPath: null,
+            additions: 1,
+            deletions: 0,
+            changeType: "new",
+          },
         ],
       );
     }),

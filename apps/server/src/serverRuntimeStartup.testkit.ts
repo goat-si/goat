@@ -139,6 +139,7 @@ export const bootstrapScenario = (
           importPendingTranscripts: Effect.succeed(imports),
         }),
         Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
+          drainDeferredResends: () => Effect.void,
           recover: Effect.sync(() => {
             ordering?.log.push("recovery");
             return recovery;

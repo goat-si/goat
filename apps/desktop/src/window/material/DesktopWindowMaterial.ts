@@ -37,10 +37,14 @@ export class DesktopWindowMaterial extends Context.Service<
     readonly windowOptions: Effect.Effect<{ readonly transparent?: true }>;
     readonly attach: (
       window: Electron.BrowserWindow,
-      options?: { readonly transparent?: boolean },
+      options?: { readonly transparent?: boolean; readonly titleBarOverlay?: boolean },
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly afterReveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
-    readonly syncAppearance: (window: Electron.BrowserWindow, dark: boolean) => Effect.Effect<void>;
+    readonly syncAppearance: (
+      window: Electron.BrowserWindow,
+      dark: boolean,
+      titleBarOverlay: boolean,
+    ) => Effect.Effect<void>;
     readonly getState: (
       senderWebContentsId: number,
     ) => Effect.Effect<DesktopWindowMaterialState, WindowMaterialSenderError>;
@@ -52,6 +56,7 @@ type WindowRecord = {
   readonly semaphore: Semaphore.Semaphore;
   readonly removeListeners: () => void;
   readonly transparent: boolean;
+  readonly titleBarOverlay: boolean;
   state: DesktopWindowMaterialState;
   generation: number;
   revealed: boolean;
@@ -115,7 +120,7 @@ export const make = Effect.gen(function* () {
 
   const updateOverlay = (entry: WindowRecord, active: boolean) => {
     const { titleBarOverlay } = getWindowTitleBarOptions(dark, environment.platform);
-    if (typeof titleBarOverlay === "object")
+    if (entry.titleBarOverlay && typeof titleBarOverlay === "object")
       entry.window.setTitleBarOverlay({
         ...titleBarOverlay,
         ...(environment.platform === "win32" && active ? { color: "#00000000" } : {}),
@@ -282,6 +287,7 @@ export const make = Effect.gen(function* () {
         window,
         semaphore,
         transparent: options?.transparent === true,
+        titleBarOverlay: options?.titleBarOverlay === true,
         generation: 0,
         revealed: false,
         closing: false,
@@ -323,7 +329,7 @@ export const make = Effect.gen(function* () {
       yield* request(entry);
     }),
     syncAppearance: Effect.fn("desktop.windowMaterial.syncAppearance")(
-      function* (window, shouldUseDarkColors) {
+      function* (window, shouldUseDarkColors, titleBarOverlay) {
         if (window.isDestroyed()) return;
         dark = shouldUseDarkColors;
         const entry = windows.get(window.webContents.id);
@@ -336,6 +342,7 @@ export const make = Effect.gen(function* () {
           dark,
           environment.platform,
           entry?.attachment !== undefined,
+          titleBarOverlay,
         );
       },
     ),

@@ -1,3 +1,4 @@
+import { gtFallback, useGT } from "gt-react";
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { TriangleAlertIcon } from "~/components/solar";
 import { type ComponentProps, useId, useRef, useState } from "react";
@@ -12,8 +13,10 @@ import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   canCheckForUpdate,
+  getDesktopUpdateDisabledReason,
+  type DesktopUpdateTranslate,
   getArm64IntelBuildWarningDescription,
-  getDesktopUpdateActionError,
+  getDesktopUpdateInstallError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
@@ -22,9 +25,13 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
-  shouldToastDesktopUpdateActionResult,
+  translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
+import {
+  downloadLocalUpdate,
+  showDesktopUpdateDownloadedToast,
+  toastUpdateError,
+} from "../desktopUpdate.toast";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -121,45 +128,45 @@ function resolveSidebarUpdatePresentation({
   } as const;
 }
 
-function joinRemoteKinds(providers: boolean, servers: boolean, provider: string, server: string) {
-  if (providers && !servers) return provider;
-  if (servers && !providers) return server;
-  return `${provider} and ${server.toLowerCase()}`;
-}
-
 /**
  * The first tooltip line, naming what the button updates: this GOAT app, the
  * providers and servers on connected machines, or both. One button covers all
  * of them, so the icon alone cannot say which.
  */
-export function resolveSidebarUpdateHeading({
-  local,
-  remote,
-  run,
-  checking,
-}: {
-  /** This app has an update to download, downloading, or to install. */
-  readonly local: boolean;
-  /** Remote work the button would run now, or null when none. */
-  readonly remote: { readonly providers: boolean; readonly servers: boolean } | null;
-  readonly run: Pick<UpdateEverythingRun, "localVersion" | "machines"> | null;
-  readonly checking: boolean;
-}): string {
+export function resolveSidebarUpdateHeading(
+  {
+    local,
+    remote,
+    run,
+    checking,
+  }: {
+    /** This app has an update to download, downloading, or to install. */
+    readonly local: boolean;
+    /** Remote work the button would run now, or null when none. */
+    readonly remote: { readonly providers: boolean; readonly servers: boolean } | null;
+    readonly run: Pick<UpdateEverythingRun, "localVersion" | "machines"> | null;
+    readonly checking: boolean;
+  },
+  gt: DesktopUpdateTranslate = gtFallback,
+): string {
   if (run !== null) {
-    if (run.localVersion !== null) return "Updating everything";
-    return `Updating ${joinRemoteKinds(
-      run.machines.some((machine) => machine.updatesProviders),
-      run.machines.some((machine) => machine.server !== null || machine.sshRuntime !== null),
-      "providers",
-      "servers",
-    )}`;
+    if (run.localVersion !== null) return gt("Updating everything");
+    const providers = run.machines.some((machine) => machine.updatesProviders);
+    const servers = run.machines.some(
+      (machine) => machine.server !== null || machine.sshRuntime !== null,
+    );
+    if (providers && !servers) return gt("Updating providers");
+    if (servers && !providers) return gt("Updating servers");
+    return gt("Updating providers and servers");
   }
   if (remote !== null) {
-    if (local) return "Update everything";
-    return `${joinRemoteKinds(remote.providers, remote.servers, "Provider", "Server")} updates`;
+    if (local) return gt("Update everything");
+    if (remote.providers && !remote.servers) return gt("Provider updates");
+    if (remote.servers && !remote.providers) return gt("Server updates");
+    return gt("Provider and server updates");
   }
-  if (local) return "GOAT app update";
-  return checking ? "Checking for GOAT app updates…" : "Check for GOAT app updates";
+  if (local) return gt("GOAT app update");
+  return checking ? gt("Checking for GOAT app updates…") : gt("Check for GOAT app updates");
 }
 
 export type SidebarUpdatePlacement = "footer" | "rail";
@@ -169,71 +176,40 @@ export function SidebarUpdateArchitectureWarning() {
 }
 
 function SidebarUpdateArchitectureWarningContent() {
+  const gt = useGT();
   const state = useDesktopUpdateState();
   const visible = shouldShowArm64IntelBuildWarning(state);
-  const description = state && visible ? getArm64IntelBuildWarningDescription(state) : null;
+  const description = state && visible ? getArm64IntelBuildWarningDescription(state, gt) : null;
 
   if (!visible || !description) return null;
 
   return (
     <Alert variant="warning">
       <TriangleAlertIcon />
-      <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+      <AlertTitle>{gt("Intel build on Apple Silicon")}</AlertTitle>
       <AlertDescription>{description}</AlertDescription>
     </Alert>
   );
 }
 
-const toastUpdateError: ReportLocalUpdateError = (title, description) => {
-  toastManager.add(stackedThreadToast({ type: "error", title, description }));
-};
-
-export async function downloadLocalUpdate(
+export async function installLocalUpdate(
   bridge: DesktopBridge,
-  {
-    notifyDownloaded,
-    reportError = toastUpdateError,
-  }: { readonly notifyDownloaded: boolean; readonly reportError?: ReportLocalUpdateError },
-): Promise<boolean> {
-  try {
-    const result = await bridge.downloadUpdate();
-    if (result.completed && notifyDownloaded) {
-      showDesktopUpdateDownloadedToast(bridge, result.state);
-    }
-    const actionError = shouldToastDesktopUpdateActionResult(result)
-      ? getDesktopUpdateActionError(result)
-      : null;
-    if (actionError) reportError("Could not download update", actionError);
-    return result.completed;
-  } catch (error) {
-    reportError(
-      "Could not start update download",
-      error instanceof Error ? error.message : "An unexpected error occurred.",
-    );
-    return false;
-  }
-}
-
-async function installLocalUpdate(
-  bridge: DesktopBridge,
+  gt: DesktopUpdateTranslate,
   reportError: ReportLocalUpdateError = toastUpdateError,
 ): Promise<boolean> {
   try {
     const result = await bridge.installUpdate();
-    if (!result.accepted) {
-      showDesktopUpdateDownloadedToast(bridge, result.state);
+    const actionError = getDesktopUpdateInstallError(result);
+    if (actionError) {
+      reportError(gt("Could not install update"), actionError);
       return false;
     }
-    const actionError = shouldToastDesktopUpdateActionResult(result)
-      ? getDesktopUpdateActionError(result)
-      : null;
-    if (!actionError) return true;
-    reportError("Could not install update", actionError);
-    return false;
+    if (!result.accepted) showDesktopUpdateDownloadedToast(bridge, result.state, gt);
+    return result.accepted;
   } catch (error) {
     reportError(
-      "Could not install update",
-      error instanceof Error ? error.message : "An unexpected error occurred.",
+      gt("Could not install update"),
+      error instanceof Error ? error.message : gt("An unexpected error occurred."),
     );
     return false;
   }
@@ -248,6 +224,7 @@ export function SidebarUpdatePill({
 }
 
 function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement }) {
+  const gt = useGT();
   const inRail = placement === "rail";
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
@@ -303,27 +280,39 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   });
   const idleTooltip =
     !showUpdateDetails && !showCheckIcon && !runsEverything && !run
-      ? getDesktopUpdateIdleTooltip(state)
+      ? getDesktopUpdateIdleTooltip(state, gt)
       : null;
   const heading =
     idleTooltip?.title ??
-    resolveSidebarUpdateHeading({
-      local: action !== "none" || isDownloading,
-      remote: runsEverything ? everything.remote : null,
-      run,
-      checking: showCheckIcon,
-    });
+    resolveSidebarUpdateHeading(
+      {
+        local: action !== "none" || isDownloading,
+        remote: runsEverything ? everything.remote : null,
+        run,
+        checking: showCheckIcon,
+      },
+      gt,
+    );
   const detail = runsEverything
     ? describeUpdateTabs(everything.counts)
     : showUpdateDetails
       ? state
-        ? getDesktopUpdateButtonTooltip(state)
-        : "Update available"
+        ? getDesktopUpdateButtonTooltip(state, gt)
+        : gt("Update available")
       : null;
   const installationDetail =
-    state?.installationNotice ?? idleTooltip?.detail ?? (!state?.enabled ? state?.message : null);
+    (state?.installationNotice
+      ? translateDesktopUpdateMessage(state.installationNotice, gt)
+      : null) ??
+    idleTooltip?.detail ??
+    (state && !state.enabled && state.message
+      ? translateDesktopUpdateMessage(state.message, gt)
+      : null);
   // A failed automatic download raises no toast, so the button is where its reason shows.
-  const downloadError = state?.enabled && state.errorContext === "download" ? state.message : null;
+  const downloadError =
+    state?.enabled && state.errorContext === "download" && state.message
+      ? translateDesktopUpdateMessage(state.message, gt)
+      : null;
   const tooltip = [
     heading,
     detail,
@@ -377,7 +366,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     setIsActionPending(true);
 
     if (action === "download") {
-      void downloadLocalUpdate(bridge, { notifyDownloaded: true }).finally(() =>
+      void downloadLocalUpdate(bridge, gt, { notifyDownloaded: true }).finally(() =>
         setIsActionPending(false),
       );
       return;
@@ -387,7 +376,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       let confirmed = false;
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
+          getDesktopUpdateInstallConfirmationMessage(state, gt),
           { initialFocus: "confirm" },
         );
       } catch (error) {
@@ -395,8 +384,8 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
+            title: gt("Could not confirm update"),
+            description: error instanceof Error ? error.message : gt("Update confirmation failed."),
           }),
         );
         return;
@@ -405,7 +394,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         setIsActionPending(false);
         return;
       }
-      void installLocalUpdate(bridge).finally(() => setIsActionPending(false));
+      void installLocalUpdate(bridge, gt).finally(() => setIsActionPending(false));
       return;
     }
 
@@ -420,9 +409,11 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
+            title: gt("Could not check for updates"),
             description:
-              result.state.message ?? "Automatic updates are not available in this build.",
+              getDesktopUpdateDisabledReason(result.state, gt) ??
+              result.state.message ??
+              gt("Automatic updates are not available in this build."),
           }),
         );
       })
@@ -430,8 +421,8 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
+            title: gt("Could not check for updates"),
+            description: error instanceof Error ? error.message : gt("Update check failed."),
           }),
         );
       });
@@ -440,32 +431,30 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     void Promise.allSettled([appCheck, providersChecked]).then(() => setIsActionPending(false));
   };
 
-  const runEverything = async ({ tab, rows }: UpdateDialogSelection) => {
+  const runEverything = async ({ rows }: UpdateDialogSelection) => {
     const bridge = window.desktopBridge;
     setIsConfirmingEverything(false);
     setIsActionPending(true);
     const result = await settlePromise(() =>
-      tab === "runtimes"
-        ? everything.runRuntimes(rows, everything.localEnvironmentId)
-        : everything.runApp(rows, {
-            ...(bridge && action === "download"
-              ? {
-                  downloadLocal: (reportError) =>
-                    downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
-                }
-              : {}),
-            ...(bridge && action !== "none"
-              ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
-              : {}),
-          }),
+      everything.runUpdates(rows, {
+        ...(bridge && action === "download"
+          ? {
+              downloadLocal: (reportError) =>
+                downloadLocalUpdate(bridge, gt, { notifyDownloaded: false, reportError }),
+            }
+          : {}),
+        ...(bridge && action !== "none"
+          ? { installLocal: (reportError) => installLocalUpdate(bridge, gt, reportError) }
+          : {}),
+      }),
     );
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not update everything",
-          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          title: gt("Could not update everything"),
+          description: error instanceof Error ? error.message : gt("An unexpected error occurred."),
         }),
       );
     }
@@ -497,7 +486,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const controlIcon = inRail ? renderStatusIcon("md") : statusIcon;
   // An icon alone read as "check for updates" while a downloaded update waited for
   // busy backends, so the footer names the action. The rail has no room for text.
-  const restartLabel = !inRail && iconStatus === "downloaded" ? "Restart to update" : null;
+  const restartLabel = !inRail && iconStatus === "downloaded" ? gt("Restart to update") : null;
   const confirmDialog = (
     <UpdateEverythingDialog
       open={isConfirmingEverything}
@@ -532,7 +521,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
                     failures: [],
                     restarting: [],
                   });
-                  if (!(await installLocalUpdate(window.desktopBridge!))) {
+                  if (!(await installLocalUpdate(window.desktopBridge!, gt))) {
                     clearSavedUpdateEverythingResult();
                   }
                 },

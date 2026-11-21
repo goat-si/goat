@@ -46,7 +46,7 @@ import {
   memoryReportTarget,
   MEMORY_FORGET_NOTICE,
 } from "@goat/client-runtime/memory-presentation";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
   memoryMoveCandidate,
@@ -324,7 +324,7 @@ function MemoryConnected({
   const memoryModel = config
     ? JSON.stringify([
         config.settings.memoryEnabled,
-        resolveMemoryModelSelection(config.settings, undefined),
+        configuredMemoryModelSelection(config.settings),
       ])
     : null;
   const seenModel = useRef(memoryModel);

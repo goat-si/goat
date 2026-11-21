@@ -13,6 +13,28 @@ import * as DateTime from "effect/DateTime";
 
 /** Bounds consecutive comment-only wakes to stop bot reply loops; check, conflict, or push news resets it. */
 export const PULL_REQUEST_WATCH_WAKE_LIMIT = 10;
+const EXHAUSTED_LINE = `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row.`;
+// The close and unreadable endings the reactor writes carry no news of their own, only kept context.
+const BARE_ENDING =
+  /^(Pull request #\d+ .*was closed, so GOAT stopped watching it\.|GOAT stopped watching pull request #\d+ )/u;
+const HELD_CONTEXT = "Also kept as context without waking you: ";
+
+/**
+ * The ending wake a watch left queued, as a new watch on the pull request tells it: a comment-limit
+ * ending keeps its news with the watching close instead of its stop line; a bare close or
+ * unreadable ending keeps only the context it carried, or has nothing left to tell (undefined).
+ */
+export function resumedWakeText(text: string): string | undefined {
+  const lines = text.split("\n");
+  const stop = lines.findIndex((line) => line.startsWith(EXHAUSTED_LINE));
+  if (stop !== -1) return lines.with(stop, watchingClosing()).join("\n");
+  if (!BARE_ENDING.test(text)) return text;
+  const kept = text.indexOf(`\n\n${HELD_CONTEXT}`);
+  return kept === -1 ? undefined : `${text.slice(kept + 2)}\n\n${watchingClosing()}`;
+}
+
+const watchingClosing = () =>
+  `Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and GOAT wakes you on the next change. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`;
 /** How long a head may go without any check before the agent is told none reported. */
 export const PULL_REQUEST_WATCH_NO_CHECKS_MS = 15 * 60_000;
 const LISTED_ITEMS = 10;
@@ -28,6 +50,7 @@ export type PullRequestWatchChange =
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
   | { readonly kind: "conflicting" }
+  | { readonly kind: "needs-rebase" }
   | { readonly kind: "merge-queue-removed"; readonly reason: string | null };
 
 export interface PullRequestWatchReport {
@@ -83,6 +106,7 @@ export function evaluatePullRequestWatch(
     | "headSha"
     | "checks"
     | "mergeability"
+    | "rebaseRequired"
     | "viewer"
     | "author"
     | "workflowApprovalsRequired"
@@ -98,14 +122,27 @@ export function evaluatePullRequestWatch(
     if (mode === "react") changes.push(change);
     else if (mode === "keep_as_context") held.push(change);
   };
+  // A read without a head says nothing about pushes, so it keeps the last known one.
   const headSha = detail.headSha ?? watch.headSha;
-  const headMoved = headSha !== watch.headSha;
+  const headMoved = watch.headSha !== null && headSha !== watch.headSha;
+  // An approval placeholder leaves the check clock running until a read shows real checks.
+  // Once a head has checks, a failed approval lookup suppresses only approval notices.
+  const approvalBaseline = watch.awaitingBaseline !== undefined && !headMoved;
+  const checksBaseline =
+    approvalBaseline &&
+    (watch.awaitingBaseline === "all" ||
+      watch.headSha === null ||
+      watch.checksAwaitedSince != null);
+  const checksMode = (mode: PullRequestWatchWakeMode) => (checksBaseline ? "ignore" : mode);
 
   // Hosts can return no checks on read failure; preserve prior state.
   let failedChecks = headMoved ? [] : watch.failedChecks;
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
+  // A watch with no answer (saved before the field, or since a push) waits only while the clock
+  // below runs.
+  let checksPending = headMoved ? false : (watch.checksPending ?? watch.checksAwaitedSince != null);
   const unread = detail.checks.some((check) => check.placeholder === true);
   const checks = detail.checks.filter((check) => check.placeholder !== true);
   const awaiting = checks.filter((check) => check.status === "action-required");
@@ -128,7 +165,10 @@ export function evaluatePullRequestWatch(
   const announced = new Set(awaitingApproval);
   const newlyAwaiting = awaiting.filter((check) => !announced.has(approvalKey(check)));
   if (newlyAwaiting.length > 0) {
-    sort({ kind: "checks-awaiting-approval", checks: newlyAwaiting }, policy.checksFailed);
+    sort(
+      { kind: "checks-awaiting-approval", checks: newlyAwaiting },
+      approvalBaseline ? "ignore" : policy.checksFailed,
+    );
   }
   awaitingApproval = [...new Set([...awaitingApproval, ...newlyAwaiting.map(approvalKey)])].slice(
     -PULL_REQUEST_WATCH_APPROVAL_LIMIT,
@@ -137,10 +177,12 @@ export function evaluatePullRequestWatch(
     ? !headMoved && (watch.approvalAnnounced ?? false)
     : awaiting.length > 0;
   if (checks.length > 0) {
+    // A run awaiting approval waits on a person, like a review, so only running checks count.
+    checksPending = checks.some((check) => check.status === "pending");
     const failed = checks.filter(isFailedCheck);
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
     if (newlyFailed.length > 0) {
-      sort({ kind: "checks-failed", failed: newlyFailed }, policy.checksFailed);
+      sort({ kind: "checks-failed", failed: newlyFailed }, checksMode(policy.checksFailed));
     }
     failedChecks = failed.map((check) => check.name);
 
@@ -171,7 +213,7 @@ export function evaluatePullRequestWatch(
     if (passedNow && (!passed || gateGrew)) {
       sort(
         { kind: "checks-passed", count: gate.length, required: required.length > 0 },
-        policy.checksPassed,
+        checksMode(policy.checksPassed),
       );
       owedChecks =
         required.length > 0
@@ -180,30 +222,41 @@ export function evaluatePullRequestWatch(
               .map((check) => check.name)
           : [];
     } else if (settled && owed.length > 0) {
-      sort({ kind: "checks-passed", count: checks.length, required: false }, policy.checksPassed);
+      sort(
+        { kind: "checks-passed", count: checks.length, required: false },
+        checksMode(policy.checksPassed),
+      );
       owedChecks = [];
     }
     passed = passedNow;
     passedChecks = passedNow ? gateNames : [];
   }
 
-  // Only a head never read with checks waits for them: an empty read after checks were seen is
-  // the failed read above. A watch saved before this field may have seen pending checks on its
-  // head, so its clock starts only at the next push. Where a host's empty list can mean the
-  // repository runs no checks at all, nothing waits.
-  let checksAwaitedSince = watch.checksAwaitedSince;
-  if (detail.capabilities.checksAlwaysReport === true) {
-    const awaitedBefore = headMoved
-      ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
-      : (watch.checksAwaitedSince ?? null);
-    checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
-    const awaitedMs =
-      checksAwaitedSince === null ? 0 : context.now - Date.parse(checksAwaitedSince);
-    if (!unread && awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
+  // Only a head never read with checks waits for them; a legacy watch's clock starts at its next
+  // push. CI can register late on any host, so every host waits, but running out of time is news
+  // only where a host always reports checks: elsewhere an empty list can mean there are none.
+  const newBaseline = headMoved || watch.awaitingBaseline === "all";
+  // With approval data missing, only checks read together with their head settle the baseline.
+  const partialBaseline =
+    checksBaseline && unread && (detail.headSha === undefined || checks.length === 0);
+  const awaitedBefore = newBaseline ? null : watch.checksAwaitedSince;
+  let checksAwaitedSince =
+    checks.length > 0 && !partialBaseline
+      ? null
+      : (awaitedBefore ??
+        (newBaseline || partialBaseline
+          ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
+          : null));
+  const awaitedMs = checksAwaitedSince === null ? 0 : context.now - Date.parse(checksAwaitedSince);
+  if (!unread && awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
+    if (detail.capabilities.checksAlwaysReport === true) {
       // Check news, so the failed-check mode decides whether it wakes.
       sort({ kind: "no-checks", minutes: Math.round(awaitedMs / 60_000) }, policy.checksFailed);
-      checksAwaitedSince = null;
     }
+    checksAwaitedSince = null;
+    checksPending = false;
+  } else if (checksAwaitedSince !== null) {
+    checksPending = true;
   }
 
   const own = (detail.viewer ?? detail.author?.login)?.toLowerCase();
@@ -238,8 +291,22 @@ export function evaluatePullRequestWatch(
     const idle =
       policy.conflictMaxIdleDays !== null &&
       context.now - context.threadActiveAt > policy.conflictMaxIdleDays * DAY_MS;
-    sort({ kind: "conflicting" }, idle ? "ignore" : policy.conflicts);
+    sort(
+      { kind: "conflicting" },
+      idle || watch.awaitingBaseline === "all" ? "ignore" : policy.conflicts,
+    );
   }
+  const toldRebase = !headMoved && watch.rebaseRequired === true;
+  if (detail.rebaseRequired === true && !toldRebase) {
+    const idle =
+      policy.conflictMaxIdleDays !== null &&
+      context.now - context.threadActiveAt > policy.conflictMaxIdleDays * DAY_MS;
+    sort(
+      { kind: "needs-rebase" },
+      idle || watch.awaitingBaseline === "all" ? "ignore" : policy.conflicts,
+    );
+  }
+  const rebaseRequired = detail.rebaseRequired ?? watch.rebaseRequired;
   // "unknown" is a host still computing after a push; only a clean answer clears a conflict.
   const conflicting =
     detail.mergeability === "unknown" ? toldConflict : detail.mergeability === "conflicting";
@@ -280,18 +347,112 @@ export function evaluatePullRequestWatch(
       remarksThrough,
       remarkIds,
       conflicting,
+      ...(rebaseRequired === undefined ? {} : { rebaseRequired }),
       mergeQueueRemovalId,
       wakes,
       ...(watch.automatic === true ? { automatic: true } : {}),
+      // Only a read that cannot be trusted to show the checks leaves the baseline to the next one.
+      ...(approvalBaseline &&
+        (unread || (detail.headSha === undefined && checks.length === 0)) && {
+          awaitingBaseline: "checks" as const,
+        }),
       checksAwaitedSince,
+      checksPending,
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
   };
 }
 
+// GitHub renders these, so in a remark's prose they are presentation, not what the reviewer said.
+// Lowercase only: `Promise<T>` is a type argument.
+const TAG_NAMES =
+  "a|abbr|b|blockquote|br|caption|cite|code|dd|del|details|div|dl|dt|em|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|picture|pre|q|s|samp|small|source|span|strike|strong|sub|summary|sup|table|tbody|td|tfoot|th|thead|tr|tt|ul|var";
+// A code span comes first so its tags stay literal; it cannot cross a blank line. A tag stops at
+// the next `<`, which keeps unclosed openers from rescanning the rest of the body.
+const PROSE_MARKUP = new RegExp(
+  "(?<!`)(?<ticks>`+)(?!`)(?:(?!\\n[ \\t\\r]*\\n)[\\s\\S])*?(?<!`)\\k<ticks>(?!`)" +
+    `|<(?<closing>/?)(?<name>${TAG_NAMES})(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`,
+  "g",
+);
+
+const PROSE_ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&#39;": "'",
+};
+const decodeProseEntities = (value: string) =>
+  value.replace(/&(?:amp|lt|gt|quot|apos|#39);/g, (entity) => PROSE_ENTITIES[entity] ?? entity);
+
+function withoutTags(prose: string): string {
+  // An opener glued to an identifier is a type argument (`Vec<code>`); it and its closer stay.
+  const kept = new Map<string, number>();
+  let text = "";
+  let from = 0;
+  for (const match of prose.matchAll(PROSE_MARKUP)) {
+    const name = match.groups?.name;
+    if (name === undefined) {
+      text += decodeProseEntities(prose.slice(from, match.index)) + match[0];
+      from = match.index + match[0].length;
+      continue;
+    }
+    const held = kept.get(name) ?? 0;
+    if (match.groups?.closing === "/") {
+      if (held > 0) {
+        kept.set(name, held - 1);
+        continue;
+      }
+    } else if (/\w/.test(prose.charAt(match.index - 1))) {
+      kept.set(name, held + 1);
+      continue;
+    }
+    text += `${decodeProseEntities(prose.slice(from, match.index))} `;
+    from = match.index + match[0].length;
+  }
+  return text + decodeProseEntities(prose.slice(from));
+}
+
+// Drops HTML tags from Markdown prose. Fenced and indented code blocks pass through untouched.
+function withoutMarkup(body: string): string {
+  const parts: Array<string> = [];
+  let prose: Array<string> = [];
+  let fence: string | undefined;
+  let afterText = false;
+  const code = (line: string) => {
+    if (prose.length > 0) parts.push(withoutTags(prose.join("\n")));
+    prose = [];
+    parts.push(line);
+    afterText = false;
+  };
+  for (const line of body.split("\n")) {
+    if (fence !== undefined) {
+      const closer = line.trim();
+      if (closer.length >= fence.length && closer.replaceAll(fence.charAt(0), "") === "") {
+        fence = undefined;
+      }
+      code(line);
+      continue;
+    }
+    const opener = /^ {0,3}(`{3,}|~{3,})([\s\S]*)$/.exec(line);
+    if (opener?.[1] !== undefined && !(opener[1].startsWith("`") && opener[2]?.includes("`"))) {
+      fence = opener[1];
+      code(line);
+    } else if (!afterText && /^(?: {4}| {0,3}\t)\s*\S/.test(line)) {
+      // Indented code needs a blank line before it; after text the indent is a continuation.
+      code(line);
+    } else {
+      prose.push(line);
+      afterText = line.trim() !== "";
+    }
+  }
+  if (prose.length > 0) parts.push(withoutTags(prose.join("\n")));
+  return parts.join("\n");
+}
+
 function snippet(body: string): string {
-  const text = body
-    .replaceAll(/<!--[\s\S]*?-->/g, " ")
+  const text = withoutMarkup(body.replaceAll(/<!--[\s\S]*?-->/g, " "))
     .replaceAll(/\s+/g, " ")
     .trim();
   if (text.length <= SNIPPET_LENGTH) return text;
@@ -345,6 +506,8 @@ function changeLines(
       ];
     case "conflicting":
       return [`- The branch now conflicts with ${context.baseBranch}.`];
+    case "needs-rebase":
+      return [`- The branch requires a rebase onto ${context.baseBranch}.`];
     case "merge-queue-removed":
       return [
         `- It was removed from the merge queue without merging${change.reason === null ? "" : `: ${change.reason}`}.`,
@@ -359,6 +522,7 @@ const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   remarks: "new comments",
   "no-checks": "no checks reported",
   conflicting: "merge conflict",
+  "needs-rebase": "rebase required",
   "merge-queue-removed": "removed from merge queue",
 };
 
@@ -390,6 +554,8 @@ function heldFragment(
       return `no checks reported${context.commit} after ${change.minutes} minutes`;
     case "conflicting":
       return `conflicts with ${context.baseBranch}`;
+    case "needs-rebase":
+      return `requires rebase onto ${context.baseBranch}`;
     case "merge-queue-removed":
       return `removed from the merge queue without merging${change.reason === null ? "" : `: ${change.reason}`}`;
   }
@@ -406,6 +572,7 @@ const HELD_KINDS = [
   ["checks", /^(checks failed|all \d+ (required )?checks? passed|no checks reported)/],
   ["approval", /^checks await approval/],
   ["conflict", /^conflicts with /],
+  ["rebase", /^requires rebase onto /],
   ["queue", /^removed from the merge queue/],
   ["comments", /^\d+ new comments?[,:]/],
 ] as const;
@@ -459,7 +626,7 @@ export function settleHeldContext(
   heldContext: ReadonlyArray<string> | undefined,
   state: Pick<
     ThreadPullRequestWatch,
-    "conflicting" | "failedChecks" | "passed" | "approvalAnnounced"
+    "conflicting" | "rebaseRequired" | "failedChecks" | "passed" | "approvalAnnounced"
   > & {
     readonly headMoved: boolean;
   },
@@ -468,6 +635,8 @@ export function settleHeldContext(
     switch (heldKind(fragment)) {
       case "conflict":
         return state.conflicting ? [fragment] : [];
+      case "rebase":
+        return state.rebaseRequired === true ? [fragment] : [];
       case "approval":
         return !state.headMoved && state.approvalAnnounced ? [fragment] : [];
       case "checks": {
@@ -499,7 +668,7 @@ export function keptAfterPass(
   kept: ReadonlyArray<string> | undefined,
   state: Pick<
     ThreadPullRequestWatch,
-    "conflicting" | "failedChecks" | "passed" | "approvalAnnounced"
+    "conflicting" | "rebaseRequired" | "failedChecks" | "passed" | "approvalAnnounced"
   > & {
     readonly headMoved: boolean;
   },
@@ -523,7 +692,7 @@ export function withHeldContext(
 ): string {
   return heldContext === undefined || heldContext.length === 0
     ? text
-    : `${text}\n\nAlso kept as context without waking you: ${heldContext.join("; ")}`;
+    : `${text}\n\n${HELD_CONTEXT}${heldContext.join("; ")}`;
 }
 
 function pullRequestWatchMessage(input: {
@@ -543,13 +712,14 @@ function pullRequestWatchMessage(input: {
     ...changes.flatMap((change) => changeLines(change, context)),
     "",
     exhausted
-      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call ${goatCallText("pull_request.watch")} to watch it again.`
-      : `Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and GOAT wakes you on the next change. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`,
+      ? `${EXHAUSTED_LINE} Call ${goatCallText("pull_request.watch")} to watch it again.`
+      : watchingClosing(),
   ].join("\n");
   const failed = changes.some(
     (change) =>
       change.kind === "checks-failed" ||
       change.kind === "conflicting" ||
+      change.kind === "needs-rebase" ||
       change.kind === "merge-queue-removed",
   );
   const summary = changes.map((change) => SUMMARY[change.kind]);

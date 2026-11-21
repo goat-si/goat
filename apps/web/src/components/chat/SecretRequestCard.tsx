@@ -12,11 +12,16 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import {
+  AuthProvidersManageScope,
+  type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@goat/contracts";
 import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "~/components/solar";
 import { useId, useRef, useState, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -96,9 +101,11 @@ function PendingSecretRequestForm(props: {
   });
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
-  const providers = config?.secretRequestReferences
-    ? secretRequestProviders(settings?.secretProviders)
-    : [];
+  const canManageProviders = useEnvironmentScope(props.environmentId, AuthProvidersManageScope);
+  const providers =
+    config?.secretRequestReferences && canManageProviders
+      ? secretRequestProviders(settings?.secretProviders)
+      : [];
   const [providerId, setProviderId] = useState("");
   const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");

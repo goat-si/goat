@@ -1,3 +1,5 @@
+import * as Clock from "effect/Clock";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
@@ -44,8 +46,13 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
  * host bridge such as `br0` or Proxmox's `vmbr0` carries the LAN address, so
  * it stays listed.
  */
-export const VIRTUAL_INTERFACE =
+const VIRTUAL_INTERFACE =
   /^(docker|br-|veth|virbr|vmnet|vboxnet|vEthernet|podman|cni|flannel|cali|lxcbr|lxdbr|bridge[1-9]\d\d)/;
+
+const LINUX_CONTAINER_INTERFACE = /^(ve-|vb-|vz-)/;
+
+export const isVirtualInterface = (name: string, platform: NodeJS.Platform): boolean =>
+  VIRTUAL_INTERFACE.test(name) || (platform === "linux" && LINUX_CONTAINER_INTERFACE.test(name));
 
 /**
  * Loopback or private-range IPv4 (LAN, tailnet, CGNAT), not link-local, in
@@ -70,6 +77,34 @@ export const acceptsPrivateNetworkConnection = (socket: {
     (address) => address !== undefined && isPrivateNetworkAddress(address),
   );
 
+const CONNECTION_REJECTION_LOG_INTERVAL = 60_000_000_000n;
+
+export const makePrivateNetworkConnectionHandler = Effect.gen(function* () {
+  const clock = yield* Clock.Clock;
+  const log = Effect.runSyncExitWith(yield* Effect.context<never>());
+  let nextLogAt: bigint | undefined;
+  let closedSinceLastLog = 0;
+  return (socket: Parameters<typeof acceptsPrivateNetworkConnection>[0] & { destroy(): void }) => {
+    if (acceptsPrivateNetworkConnection(socket)) return;
+    const { localAddress, remoteAddress } = socket;
+    socket.destroy();
+    const now = clock.monotonicTimeNanosUnsafe();
+    if (nextLogAt !== undefined && now < nextLogAt) {
+      closedSinceLastLog = Math.min(Number.MAX_SAFE_INTEGER, closedSinceLastLog + 1);
+      return;
+    }
+    nextLogAt = now + CONNECTION_REJECTION_LOG_INTERVAL;
+    log(
+      Effect.logWarning("closed a connection outside the private network", {
+        localAddress,
+        remoteAddress,
+        ...(closedSinceLastLog > 0 ? { closedSinceLastLog } : {}),
+      }),
+    );
+    closedSinceLastLog = 0;
+  };
+});
+
 export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): string =>
   NetAddress.isUnspecified(address.address)
     ? "127.0.0.1"
@@ -86,6 +121,7 @@ const resolveHeadlessConnectionHost = (
   host: string | undefined,
   interfaces: NetworkInterfacesMap,
   privateNetworkOnly: boolean,
+  platform: NodeJS.Platform,
 ): string => {
   if (!host) {
     return "localhost";
@@ -96,7 +132,7 @@ const resolveHeadlessConnectionHost = (
   }
 
   const interfaceEntries = Object.entries(interfaces).flatMap(([name, entries]) =>
-    privateNetworkOnly && VIRTUAL_INTERFACE.test(name) ? [] : (entries ?? []),
+    privateNetworkOnly && isVirtualInterface(name, platform) ? [] : (entries ?? []),
   );
   const externalIpv4Entries = interfaceEntries.filter(
     (entry) =>
@@ -127,6 +163,7 @@ export const resolveHeadlessConnectionString = (
   port: number,
   options: {
     readonly interfaces?: NetworkInterfacesMap;
+    readonly platform?: NodeJS.Platform;
     readonly privateNetworkOnly?: boolean | undefined;
   } = {},
 ): string => {
@@ -134,6 +171,7 @@ export const resolveHeadlessConnectionString = (
     host,
     options.interfaces ?? NodeOS.networkInterfaces(),
     options.privateNetworkOnly === true,
+    options.platform ?? HostProcess.Platform.defaultValue(),
   );
   return `http://${formatHostForUrl(connectionHost)}:${port}`;
 };
@@ -200,7 +238,7 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
   const connectionString = resolveHeadlessConnectionString(
     serverConfig.host,
     resolveListeningPort(httpServer.address, serverConfig.port),
-    { privateNetworkOnly: serverConfig.privateNetworkOnly },
+    { privateNetworkOnly: serverConfig.privateNetworkOnly, platform: yield* HostProcess.Platform },
   );
   const issued = yield* serverAuth.issueStartupPairingCredential();
 

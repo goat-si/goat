@@ -1,4 +1,5 @@
 import { parse, type ParseError } from "jsonc-parser";
+import { renameTheme } from "./themeCopy";
 
 import {
   createVividThemeColors,
@@ -412,17 +413,26 @@ export function pairVsCodeThemes(
 
   const paired: Array<{ theme: ThemeDefinition; order: number }> = [];
   for (const [key, group] of groups) {
-    if (group.light.length === 1 && group.dark.length === 1) {
+    const [light] = group.light;
+    const [dark] = group.dark;
+    if (
+      light &&
+      dark &&
+      group.light.length === 1 &&
+      group.dark.length === 1 &&
+      (!light.css || !dark.css || light.css === dark.css)
+    ) {
       try {
         paired.push({
           order: group.order,
           theme: parseThemeFile({
             version: THEME_FILE_VERSION,
-            ...(options?.pairedId ? { id: options.pairedId(group.light[0]!, group.dark[0]!) } : {}),
+            ...(options?.pairedId ? { id: options.pairedId(light, dark) } : {}),
             name: key,
             appearance: "light",
-            colors: group.light[0]!.colors,
-            variants: { dark: group.dark[0]!.colors },
+            colors: light.colors,
+            variants: { dark: dark.colors },
+            ...((light.css ?? dark.css) ? { css: light.css ?? dark.css } : {}),
           }),
         });
         continue;
@@ -441,14 +451,7 @@ export function resolveThemeLabelCollisions(
 ): ReadonlyArray<ThemeDefinition> {
   const rename = (theme: ThemeDefinition, name: string): ThemeDefinition | null => {
     try {
-      return parseThemeFile({
-        version: THEME_FILE_VERSION,
-        name: name.slice(0, 48),
-        appearance: theme.appearance,
-        colors: theme.colors,
-        ...(theme.variants ? { variants: theme.variants } : {}),
-        ...(theme.managed ? { managed: true } : {}),
-      });
+      return renameTheme(theme, name.slice(0, 48));
     } catch {
       return null;
     }

@@ -13,6 +13,7 @@ const project = { id: projectId, title: "Plain folder", workspaceRoot: "/work/pl
 
 const preflight = (repositoryRoot: GitWorkflow.GitWorkflowService["Service"]["repositoryRoot"]) =>
   makeWorktreePreflight({
+    startWorktreesFromOrigin: () => Effect.succeed(false),
     projects: {
       getById: () => Effect.succeedSome(project),
     } as unknown as ProjectService.ProjectService["Service"],

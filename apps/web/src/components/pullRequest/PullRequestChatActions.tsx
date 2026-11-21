@@ -1,4 +1,4 @@
-import type { PullRequestComment, PullRequestReviewThread } from "@goat/contracts";
+import type { PullRequestComment, PullRequestConversationThread } from "@goat/contracts";
 import { MessageSquareIcon } from "~/components/solar";
 import { Button } from "../ui/button";
 import { visibleBody, type PullRequestChatSubject } from "./pullRequestDetail.logic";
@@ -9,9 +9,10 @@ import { visibleBody, type PullRequestChatSubject } from "./pullRequestDetail.lo
  */
 export function chatSubject(
   comment: PullRequestComment,
-  thread: PullRequestReviewThread | undefined,
+  thread: PullRequestConversationThread | undefined,
 ): PullRequestChatSubject | null {
-  if (thread !== undefined) {
+  // An overview thread has no line to attach, so it goes as its opening remark, as fixing it does.
+  if (thread !== undefined && thread.path !== null) {
     return thread.comments.some((entry) => visibleBody(entry.body) !== null)
       ? { kind: "thread", thread }
       : null;

@@ -44,6 +44,10 @@ export interface ProviderInstanceEntry {
 
 export type ProviderCatalogAvailability = "loading" | "ready" | "unavailable" | "unconfigured";
 
+export function hasInstanceBadge(entries: ReadonlyArray<ProviderInstanceEntry>): boolean {
+  return entries.some((entry) => shouldShowInstanceBadge(entry, entries));
+}
+
 /** Initial null config is still loading; treating it as empty would strand recoverable threads. */
 export function resolveProviderCatalogAvailability(input: {
   readonly catalogLoaded: boolean;

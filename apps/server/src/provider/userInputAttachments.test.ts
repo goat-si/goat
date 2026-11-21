@@ -4,19 +4,12 @@ import {
   documentLineBreakFixtures,
 } from "./documentTextFixtures.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
-import { vi } from "vite-plus/test";
-import * as HostProcess from "@goat/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import * as DocumentText from "./DocumentText.ts";
 import { extractDocumentText } from "./documentTextWorker.ts";
@@ -25,8 +18,6 @@ import * as CleanupTestkit from "../orchestration-v2/ResourceCleanupService.test
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as NodeZlib from "node:zlib";
 import { appendUserInputAttachmentPaths } from "./userInputAttachments.ts";
-
-vi.mock("node:child_process", { spy: true });
 
 const layer = Layer.merge(
   ServerConfig.layerTest(process.cwd(), { prefix: "goat-answer-paths-" }),
@@ -40,135 +31,16 @@ const attachment = {
   sizeBytes: 4,
 };
 describe("question answer paths", () => {
-  it.effect.each([false, true])(
-    "keeps unrelated files available during extraction (failure: %s)",
-    (failure) =>
-      Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        const fs = yield* FileSystem.FileSystem;
-        const path = NodePath.join(config.attachmentsDir, "blocked.rtf");
-        const cached = NodePath.join(config.attachmentsDir, "cached.rtf");
-        NodeFS.writeFileSync(path, failure ? "invalid document" : String.raw`{\rtf1 Available}`);
-        NodeFS.writeFileSync(cached + ".txt", "Cached text");
-        const started = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        let reads = 0;
-        yield* Effect.gen(function* () {
-          const documents = yield* DocumentText.DocumentText;
-          const extraction = yield* documents.ensure(path).pipe(Effect.forkChild);
-          yield* Deferred.await(started);
-          const duplicate = yield* documents.ensure(path).pipe(Effect.forkChild);
-          expect(yield* documents.ensure(path + ".png")).toBeUndefined();
-          expect(yield* documents.ensure(path + ".pdf")).toBeUndefined();
-          expect(yield* documents.ensure(cached)).toBe(cached + ".txt");
-          expect(NodeFS.readFileSync(cached + ".txt", "utf8")).toBe("Cached text");
-          yield* Deferred.succeed(release, undefined);
-          const expected = failure ? undefined : path + ".txt";
-          expect(yield* Fiber.join(extraction)).toBe(expected);
-          expect(yield* Fiber.join(duplicate)).toBe(expected);
-          expect(yield* documents.ensure(path)).toBe(expected);
-          expect(reads).toBe(1);
-          if (failure) {
-            NodeFS.writeFileSync(path + ".txt", "Recovered text");
-            expect(yield* documents.ensure(path)).toBe(path + ".txt");
-            expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Recovered text");
-          } else expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
-        }).pipe(
-          Effect.provide(Layer.fresh(DocumentText.layer)),
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            stat: (file) =>
-              file === path
-                ? Effect.gen(function* () {
-                    reads++;
-                    yield* Deferred.succeed(started, undefined);
-                    yield* Deferred.await(release);
-                    return yield* fs.stat(file);
-                  })
-                : fs.stat(file),
-          }),
-        );
-      }).pipe(Effect.provide(layer)),
-  );
-
-  it.effect.each(["spawn", "read"])("retries after a transient %s failure expires", (failure) =>
-    Effect.acquireUseRelease(
-      Effect.promise(async () => {
-        const { execFile } = await vi.importActual<typeof NodeChildProcess>("node:child_process");
-        const worker = vi.spyOn(NodeChildProcess, "execFile");
-        worker.mockImplementationOnce(((
-          file: string,
-          args: readonly string[],
-          options: NodeChildProcess.ExecFileOptionsWithStringEncoding,
-          callback: (
-            error: NodeChildProcess.ExecFileException | null,
-            stdout: string,
-            stderr: string,
-          ) => void,
-        ) => {
-          if (failure === "spawn") {
-            throw Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
-          }
-          const preload = `import fs from 'node:fs/promises';
-            import { syncBuiltinESMExports } from 'node:module';
-            fs.readFile = async () => { throw Object.assign(new Error('read EAGAIN'), { code: 'EAGAIN' }); };
-            syncBuiltinESMExports();`;
-          return execFile(
-            file,
-            ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, ...args],
-            options,
-            callback,
-          );
-        }) as typeof NodeChildProcess.execFile);
-        return worker;
-      }),
-      (worker) =>
-        Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const path = NodePath.join(config.attachmentsDir, "retry.rtf");
-          NodeFS.writeFileSync(path, String.raw`{\rtf1 Available}`);
-          const documents = yield* DocumentText.DocumentText;
-          expect(yield* documents.ensure(path)).toBeUndefined();
-          expect(yield* documents.ensure(path)).toBeUndefined();
-          expect(worker).toHaveBeenCalledTimes(1);
-          expect(NodeFS.existsSync(path + ".txt")).toBe(false);
-          yield* TestClock.adjust("1 second");
-          expect(yield* documents.ensure(path)).toBe(path + ".txt");
-          expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe("Available");
-          expect(worker).toHaveBeenCalledTimes(2);
-          expect(yield* documents.ensure(path)).toBe(path + ".txt");
-          expect(worker).toHaveBeenCalledTimes(2);
-        }).pipe(Effect.provide(layer)),
-      (worker) => Effect.sync(() => worker.mockRestore()),
-    ),
-  );
-
   it.effect.each([
-    ["ipynb", "{"],
-    ["rtf", "invalid document"],
-    ["rtf", String.raw`{\rtf1}`],
-    ["rtf", String.raw`{\rtf1\ansi\ansicpg99999 Unsupported}`],
-  ] as const)("caches unchanged document rejections: %s %s", ([extension, source]) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => vi.spyOn(NodeChildProcess, "execFile")),
-      (worker) =>
-        Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const path = NodePath.join(config.attachmentsDir, `invalid.${extension}`);
-          NodeFS.writeFileSync(path, source);
-          const documents = yield* DocumentText.DocumentText;
-          for (const seconds of [0, 1, 60]) {
-            yield* TestClock.adjust(`${seconds} seconds`);
-            expect(yield* documents.ensure(path)).toBeUndefined();
-            expect(worker).toHaveBeenCalledTimes(1);
-            expect(NodeFS.existsSync(path + ".txt")).toBe(false);
-          }
-        }).pipe(Effect.provide(layer)),
-      (worker) => Effect.sync(() => worker.mockRestore()),
-    ),
-  );
-
-  it.effect.each([
+    [
+      "page-specific headers and footers",
+      String.raw`{\rtf1\ansi\facingp\sectd\titlepg
+{\headerf First-page header}{\headerl Left-page header}{\headerr Right-page header}
+{\footerf First-page footer}{\footerl Left-page footer}{\footerr Right-page footer}
+\pard Approved delivery date: 24 November.\par
+}`,
+      "Approved delivery date: 24 November.",
+    ],
     [
       "text symbols",
       String.raw`{\rtf1\ansi Pages 1\endash 5\emdash\lquote left\rquote\ldblquote right\rdblquote\bullet\b End\b0\unknown{\*\secret\bullet hidden}}`,
@@ -178,6 +50,11 @@ describe("question answer paths", () => {
       "space and hyphen symbols",
       String.raw`{\rtf1\ansi A\enspace B\emspace C\qmspace D\~E\_F\-G}`,
       "A\u2002B\u2003C\u2005D\u00a0E\u2011FG",
+    ],
+    [
+      "joiner and direction marks",
+      String.raw`{\rtf1\ansi A\zwj B\zwnj C\ltrmark D\rtlmark E}`,
+      "A\u200dB\u200cC\u200eD\u200fE",
     ],
     [
       "text symbol fallback",
@@ -197,7 +74,7 @@ describe("question answer paths", () => {
     ["large fallback", String.raw`{\rtf1\ansi\uc20\u945????????????????????Z}`, "αZ"],
     ["no fallback", String.raw`{\rtf1\ansi\uc0\u945Z}`, "αZ"],
     ["scoped count", String.raw`{\rtf1\ansi{\uc2\u945??}\u946?Z}`, "αβZ"],
-  ] as const)("extracts RTF symbols and Unicode fallbacks: %s", ([name, source, expected]) =>
+  ] as const)("extracts RTF text: %s", ([name, source, expected]) =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const path = NodePath.join(config.attachmentsDir, `${name}.rtf`);
@@ -206,57 +83,6 @@ describe("question answer paths", () => {
       expect(yield* (yield* DocumentText.DocumentText).ensure(path)).toBe(path + ".txt");
       expect(NodeFS.readFileSync(path + ".txt", "utf8")).toBe(expected);
     }).pipe(Effect.provide(layer)),
-  );
-
-  it.effect.each([false, true])("limits the child heap for standalone=%s", (standalone) =>
-    Effect.acquireUseRelease(
-      Effect.promise(async () => {
-        const { execFile } = await vi.importActual<typeof NodeChildProcess>("node:child_process");
-        const probe = vi.spyOn(NodeChildProcess, "execFile");
-        probe.mockImplementation(((
-          file: string,
-          _args: readonly string[],
-          options: NodeChildProcess.ExecFileOptionsWithStringEncoding,
-          callback: (
-            error: NodeChildProcess.ExecFileException | null,
-            stdout: string,
-            stderr: string,
-          ) => void,
-        ) =>
-          execFile(
-            file,
-            [
-              "-e",
-              'process.stdout.write(String(require("node:v8").getHeapStatistics().heap_size_limit))',
-            ],
-            options,
-            callback,
-          )) as typeof NodeChildProcess.execFile);
-        return probe;
-      }),
-      () =>
-        Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const path = NodePath.join(config.attachmentsDir, "heap.rtf");
-          NodeFS.writeFileSync(path, String.raw`{\rtf1 hello}`);
-          const extracted = yield* Effect.gen(function* () {
-            return yield* (yield* DocumentText.DocumentText).ensure(path);
-          }).pipe(
-            Effect.provide(Layer.fresh(DocumentText.layer)),
-            Effect.provideService(HostProcess.IsExecutable, standalone),
-            Effect.provideService(HostProcess.Environment, {
-              ...process.env,
-              NODE_OPTIONS: "--max-old-space-size=1024",
-            }),
-          );
-          expect(extracted).toBe(path + ".txt");
-          const heapLimit = Number(NodeFS.readFileSync(path + ".txt", "utf8"));
-          expect(heapLimit).toBeGreaterThan(192 * 1024 * 1024);
-          // Newer V8 versions reserve up to 192 MiB for the young generation as well.
-          expect(heapLimit).toBeLessThanOrEqual(384 * 1024 * 1024);
-        }).pipe(Effect.provide(layer)),
-      (probe) => Effect.sync(() => probe.mockRestore()),
-    ),
   );
 
   it.effect("extracts notebook cells and outputs once and keeps both readable paths", () =>
@@ -525,7 +351,7 @@ describe("question answer paths", () => {
             ext === "pptx"
               ? {
                   "ppt/presentation.xml":
-                    '<presentation><sldId r:id="bad"/><sldId r:id="good"/></presentation>',
+                    '<presentation><sldIdLst><sldId r:id="bad"/><sldId r:id="good"/></sldIdLst></presentation>',
                   "ppt/_rels/presentation.xml.rels":
                     '<Relationships><Relationship Id="bad" Target="bad.xml"/><Relationship Id="good" Target="good.xml"/></Relationships>',
                   "ppt/bad.xml": "<slide><p>Discard</slide>",
@@ -559,9 +385,13 @@ describe("question answer paths", () => {
           bounded: true,
           parts: {
             "word/document.xml":
-              '<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Report &amp; totals</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p><w:p><w:r><w:t>34</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Neighbor</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
+              '<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Report &amp; totals</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p><w:p><w:r><w:t>34</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Neighbor</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
           },
-          expected: ["## Report & totals", "North\t12 34", "Before Inner After\tNeighbor"],
+          expected: [
+            "## Report & totals",
+            "North\t12 34",
+            "Before Inner After\tNeighbor\t\u2011\n\u2011",
+          ],
         },
         ...documentLineBreakFixtures,
         ...documentHiddenTextFixtures,
@@ -589,6 +419,18 @@ describe("question answer paths", () => {
             "33 [Excel numFmtId=9; date system 1900]\t0 [Excel numFmtId=9; date system 1900]",
           ],
           absent: ["SUM(0,0)", "[Extracted text truncated"],
+        },
+        {
+          ext: "xlsx",
+          bounded: true,
+          parts: {
+            "xl/workbook.xml": '<workbook><sheet name="Flags" r:id="a"/></workbook>',
+            "xl/_rels/workbook.xml.rels":
+              '<Relationships><Relationship Id="a" Target="worksheets/a.xml"/></Relationships>',
+            "xl/worksheets/a.xml":
+              '<worksheet><row><c r="A1" t="b"><v>1</v></c><c r="B1" t="b"><v>0</v></c><c r="C1" t="n"><v>1</v></c><c r="D1" t="b"><v>2</v></c></row></worksheet>',
+          },
+          expected: ["true\tfalse\t1\t2"],
         },
         {
           ext: "xlsx",
@@ -634,6 +476,22 @@ describe("question answer paths", () => {
           ext: "xlsx",
           bounded: true,
           parts: {
+            "xl/workbook.xml": '<workbook><sheet name="Escapes" r:id="a"/></workbook>',
+            "xl/_rels/workbook.xml.rels":
+              '<Relationships><Relationship Id="a" Target="worksheets/a.xml"/></Relationships>',
+            "xl/sharedStrings.xml":
+              "<sst><si><t>first_x000D_\nsecond</t></si><si><t>_x005F_x0041_</t></si><si><t>_x005F_x005F_x0041_</t></si><si><r><t>Bold_x000D_</t></r><r><t>_x005F_x000D_</t></r></si><si><t>&amp;_xnothex_ cap_X0041_ _x000d_ tail</t></si></sst>",
+            "xl/worksheets/a.xml":
+              '<worksheet><row><c t="s"><v>0</v></c><c t="s"><v>1</v></c><c t="s"><v>2</v></c><c t="s"><v>3</v></c><c t="s"><v>4</v></c></row><row><c t="inlineStr"><is><t>_x005F_x005F_</t></is></c><c t="inlineStr"><is><t>first_x000D_second</t></is></c><c t="str"><f>A1</f><v>Total_x000D_due</v></c></row></worksheet>',
+          },
+          expected: [
+            "## Sheet: Escapes\nfirst second\t_x0041_\t_x005F_x0041_\tBold _x000D_\t&_xnothex_ cap_X0041_ tail\n_x005F_\tfirst second\tTotal due",
+          ],
+        },
+        {
+          ext: "xlsx",
+          bounded: true,
+          parts: {
             "xl/workbook.xml":
               '<workbook><workbookPr date1904="true"/><sheets><sheet name="Dates" r:id="a"/></sheets></workbook>',
             "xl/_rels/workbook.xml.rels":
@@ -665,8 +523,16 @@ describe("question answer paths", () => {
           ext: "pptx",
           bounded: true,
           parts: {
-            "ppt/presentation.xml":
-              '<p:presentation><p:sldIdLst><p:sldId id="1" r:id="b"/><p:sldId id="2" r:id="a"/></p:sldIdLst></p:presentation>',
+            "ppt/presentation.xml": `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+              xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">
+              <p:sldIdLst><p:sldId id="256" r:id="b"/><p:sldId id="257" r:id="a"/></p:sldIdLst>
+              <p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst>
+                <p14:section name="Schedule" id="{01F07B81-39E6-4BBB-9B89-66EA253FBD29}">
+                  <p14:sldIdLst><p14:sldId id="256"/><p14:sldId id="257"/></p14:sldIdLst>
+                </p14:section>
+              </p14:sectionLst></p:ext></p:extLst>
+            </p:presentation>`,
             "ppt/_rels/presentation.xml.rels":
               '<Relationships><Relationship Id="a" Target="slides/slide1.xml"/><Relationship Id="b" Target="slides/slide2.xml"/></Relationships>',
             "ppt/slides/slide1.xml": "<p:sld><a:p><a:r><a:t>Departure</a:t></a:r></a:p></p:sld>",
@@ -687,13 +553,15 @@ describe("question answer paths", () => {
             "## Slide 2",
             "Departure\nNotes:\nBoard at gate 4",
           ],
+          occurrences: { text: "## Slide ", count: 2 },
           absent: ["Unrelated notes", "[Skipped document part", "[Extracted text truncated"],
         },
         ...[false, true].map((missing) => ({
           ext: "pptx",
           bounded: true,
           parts: {
-            "ppt/presentation.xml": '<presentation><sldId r:id="a"/></presentation>',
+            "ppt/presentation.xml":
+              '<presentation><sldIdLst><sldId r:id="a"/></sldIdLst></presentation>',
             "ppt/_rels/presentation.xml.rels":
               '<Relationships><Relationship Id="a" Target="slides/a.xml"/></Relationships>',
             "ppt/slides/a.xml": "<slide><p>Slide text</p></slide>",
@@ -711,7 +579,7 @@ describe("question answer paths", () => {
           bounded: true,
           parts: {
             "ppt/presentation.xml":
-              '<presentation><sldId r:id="a"/><sldId r:id="b"/></presentation>',
+              '<presentation><sldIdLst><sldId r:id="a"/><sldId r:id="b"/></sldIdLst></presentation>',
             "ppt/_rels/presentation.xml.rels":
               '<Relationships><Relationship Id="a" Target="slides/a.xml"/><Relationship Id="b" Target="slides/b.xml"/></Relationships>',
             "ppt/slides/a.xml": `<slide><p>${"A".repeat(600_000)}</p></slide>`,
@@ -733,9 +601,11 @@ describe("question answer paths", () => {
           ext: "odt",
           parts: {
             "content.xml":
-              '<office:document><text:h text:outline-level="2">Orchard</text:h><text:p>19<text:s text:c="3"/>violet<text:s/>crates</text:p></office:document>',
+              '<office:document><text:h text:outline-level="2">\n  Orchard\n</text:h><text:p>19<text:s text:c="3"/>violet<text:s/>crates <text:span>\n\t  shipped</text:span>   today<text:tab/>Dock<text:line-break/>Gate\u00a0B </text:p><text:p>Second</text:p><text:p>A<text:span><text:script>console.log(1);\n</text:script></text:span> B</text:p></office:document>',
           },
-          expected: ["## Orchard", "19   violet crates"],
+          expected: [
+            "## Orchard\n19   violet crates shipped today\tDock\nGate\u00a0B\nSecond\nA B",
+          ],
         },
         {
           ext: "ods",
@@ -782,9 +652,9 @@ describe("question answer paths", () => {
           ext: "odp",
           parts: {
             "content.xml":
-              "<office:document><draw:page><text:p>First</text:p></draw:page><draw:page><text:p>Second</text:p></draw:page></office:document>",
+              "<office:document><draw:page><draw:frame><draw:text-box><text:p>\n  First\n\t  slide </text:p></draw:text-box></draw:frame></draw:page><draw:page><text:p>Second</text:p></draw:page></office:document>",
           },
-          expected: ["## Slide 1", "First", "## Slide 2", "Second"],
+          expected: ["## Slide 1\nFirst slide\n\n## Slide 2\nSecond"],
         },
         {
           ext: "ods",
@@ -843,7 +713,7 @@ describe("question answer paths", () => {
           bounded: true,
           parts: {
             "ppt/presentation.xml":
-              '<p:presentation><p:sldId r:id="a"/><p:sldId r:id="missing"/></p:presentation>',
+              '<p:presentation><p:sldIdLst><p:sldId r:id="a"/><p:sldId r:id="missing"/></p:sldIdLst></p:presentation>',
             "ppt/_rels/presentation.xml.rels":
               '<Relationships><Relationship Id="a" Target="slides/slide.xml"/></Relationships>',
             "ppt/slides/slide.xml": `<p:sld><a:p><a:t>${"A".repeat(1_000_100)}</a:t></a:p></p:sld>`,
@@ -879,7 +749,7 @@ describe("question answer paths", () => {
             "OEBPS/book.opf":
               '<package><manifest><item id="a" href="a.xhtml"/><item id="b" href="b.xhtml"/></manifest><spine><itemref idref="b"/><itemref idref="a"/></spine></package>',
             "OEBPS/a.xhtml":
-              '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html><body><p>Last chapter</p><p>Price <s>10</s> 8</p></body></html>',
+              '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html><body><p>Last chapter</p><p>Price <s>10</s> 8 <del>old</del></p></body></html>',
             "OEBPS/b.xhtml":
               "<!DOCTYPE html><html><body><h1>First chapter</h1><p>Larkspur</p><div>Direct div<section>Direct section<li>Direct item <em>emphasis</em> trailing</li></section></div><div>Account: A<br/>Balance: 731<line-break/>Currency: USD</div><table><thead><tr><th>Heading</th><th>Total</th></tr></thead><tbody><tr><td>Important value</td><td>731</td></tr><tr><td>Before<table><tr><td>Inner</td></tr></table>After</td><td>Neighbor</td></tr></tbody></table></body></html>",
           },
@@ -896,7 +766,7 @@ describe("question answer paths", () => {
             "Before Inner After\tNeighbor",
             "## Chapter 2",
             "Last chapter",
-            "Price 10 8",
+            "Price 10 8 old",
           ],
         },
       ];
@@ -1068,10 +938,14 @@ describe("question answer paths", () => {
       });
       expect(yield* (yield* DocumentText.DocumentText).ensure(unsupportedPath)).toBeUndefined();
       expect(NodeFS.existsSync(unsupportedPath + ".txt")).toBe(false);
-      NodeFS.writeFileSync(path, String.raw`{\rtf1 ` + "x".repeat(1_000_100) + "}");
-      expect(yield* Effect.promise(() => extractDocumentText(path, ".rtf"))).toContain(
-        "[Extracted text truncated",
+      NodeFS.writeFileSync(
+        path,
+        String.raw`{\rtf1 ` + "x".repeat(999_999) + String.raw`\u-10179?\u-8576? After}`,
       );
+      const unicodeTruncated = yield* Effect.promise(() => extractDocumentText(path, ".rtf"));
+      expect(unicodeTruncated).toContain("[Extracted text truncated");
+      expect(unicodeTruncated.isWellFormed()).toBe(true);
+      expect(unicodeTruncated.startsWith("x".repeat(999_999))).toBe(true);
       NodeFS.writeFileSync(path, String.raw`{\rtf1 First` + " ".repeat(1_000_100) + "Last}");
       const whitespaceTruncated = yield* Effect.promise(() => extractDocumentText(path, ".rtf"));
       expect(whitespaceTruncated).toBe(

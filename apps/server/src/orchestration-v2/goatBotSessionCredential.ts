@@ -1,4 +1,9 @@
-import { isGoatBotSessionThreadId, type RunId, type ThreadId } from "@goat/contracts";
+import {
+  isGoatBotSessionThreadId,
+  type ProviderDriverKind,
+  type RunId,
+  type ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { goatBotSessionSharingFor } from "../channels/channelIds.ts";
@@ -19,7 +24,7 @@ export const driverOf = <D, E, R>(adapter: Effect.Effect<{ readonly driver: D },
  */
 export const sessionRunScope = (
   threadId: ThreadId,
-  driver: string | undefined,
+  driver: ProviderDriverKind | undefined,
   runId: RunId | undefined,
 ) => {
   const perRun =
@@ -28,6 +33,6 @@ export const sessionRunScope = (
     /** Whether a credential issued for `credentialRun` may serve this turn. */
     serves: (credentialRun: RunId | undefined) => !perRun || credentialRun === runId,
     /** Stamps this turn's run on a new credential when the session needs one per run. */
-    issue: perRun && runId !== undefined ? { runId } : {},
+    issue: { providerDriver: driver, ...(perRun && runId !== undefined ? { runId } : {}) },
   };
 };

@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { movedSourceScenario } from "./testkit/MovedSourceScenario.ts";
 import { availableSourceReply } from "./testkit/MemoryHubProtocolFixtures.ts";
 import { assert, it } from "@effect/vitest";
@@ -168,12 +169,11 @@ const environment = (label: "H" | "A" | "B", resolve?: Resolve) =>
         Effect.gen(function* () {
           const identity = Context.get(baseContext, Environment.ServerEnvironmentIdentity);
           const environmentId = yield* identity.getEnvironmentId;
-          const textGeneration = Generation.TextGeneration.of({
-            generateCommitMessage: () => Effect.die("unexpected provider operation"),
-            generatePrContent: () => Effect.die("unexpected provider operation"),
-            generateBranchName: () => Effect.die("unexpected provider operation"),
-            generateThreadTitle: () => Effect.die("unexpected provider operation"),
-            generateReviewGuide: () => Effect.die("unexpected provider operation"),
+          const textGeneration: ProviderInstance["textGeneration"] = {
+            ...fromRunner("fixture", () => Effect.die("unexpected provider operation"), {
+              memory: false,
+            }),
+            memoryCapabilities: Effect.succeed({ summary: false, conflict: true }),
             resolveMemoryConflict: (request) =>
               Effect.gen(function* () {
                 generated++;
@@ -195,7 +195,7 @@ const environment = (label: "H" | "A" | "B", resolve?: Resolve) =>
                   },
                 };
               }),
-          });
+          };
           return {
             instanceId: input.instanceId,
             driverKind: M.ProviderDriverKind.make("codex"),

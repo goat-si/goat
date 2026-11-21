@@ -11,6 +11,13 @@ import { definition } from "./definition.ts";
 const parse = (url: string) => definition.parseChangeRequestUrl(new URL(url));
 
 describe("Azure DevOps change request URLs", () => {
+  it("matches encoded repository names across saved keys and links", () => {
+    const registry = makeSourceControlDefinitionRegistry([definition]);
+    const a = "dev.azure.com/org/my%20project/_git/r%C3%A9sum%C3%A9";
+    const b = "dev.azure.com/org/My Project/_git/Résumé";
+    expect(registry.canonicalRepositoryKey(a)).toBe(registry.canonicalRepositoryKey(b));
+    expect(registry.findByRepositoryKey(b)).toBe(definition);
+  });
   it("reads both hosted URL forms", () => {
     expect(parse("https://dev.azure.com/acme/platform/_git/t3code/pullrequest/17")).toEqual({
       host: "dev.azure.com",
@@ -135,6 +142,32 @@ describe("Azure DevOps repository keys", () => {
         "dev.azure.com/t3tools/platform/_git/t3code",
       );
     }
+  });
+
+  it.each([
+    "git@ssh.dev.azure.com:v3/acme/platform/tool.git",
+    "https://dev.azure.com/acme/platform/_git/tool.git",
+  ])("preserves a literal .git in an Azure repository name: %s", (remoteUrl) => {
+    const canonicalKey = registry.repositoryKeyFromRemote(remoteUrl);
+    expect(canonicalKey).toBe("dev.azure.com/acme/platform/_git/tool.git");
+    const identity: ChangeRequestProjectIdentity = {
+      canonicalKey,
+      locator: { source: "git-remote", remoteName: "origin", remoteUrl },
+    };
+    const link = parse("https://dev.azure.com/acme/platform/_git/tool.git/pullrequest/7")!;
+    expect(definition.isChangeRequestInRepository(identity, link)).toBe(true);
+    expect(
+      definition.isChangeRequestInRepository(identity, {
+        ...link,
+        repository: "acme/platform/_git/tool",
+      }),
+    ).toBe(false);
+  });
+
+  it("still drops .git from other hosts' repository keys", () => {
+    expect(registry.repositoryKeyFromRemote("git@github.com:acme/tool.git")).toBe(
+      "github.com/acme/tool",
+    );
   });
 
   it("keeps the organization in the host for the legacy visualstudio.com remotes", () => {

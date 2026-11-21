@@ -20,6 +20,7 @@ import * as Option from "effect/Option";
 import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
+import { isLiveCallerShell, threadNotFound } from "./threadLookupFailure.ts";
 import * as OrchestrationMcp from "./OrchestratorMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -130,7 +131,7 @@ export const assertTargetWithinLimits = (
 /** Thread callers need a live run or its background subagent in an unarchived thread. OAuth clients rely on their session and ceiling. */
 export function assertLiveCaller({ caller, scope }: Caller) {
   if (caller === undefined) return Effect.void;
-  return OrchestrationMcp.isLiveCallerShell(caller, scope.thread?.providerInstanceId)
+  return isLiveCallerShell(caller, scope.thread?.providerInstanceId)
     ? Effect.void
     : Effect.fail(
         new OrchestratorMcpFailure({
@@ -181,8 +182,9 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   const targetId = yield* resolveThreadId(context, threadId);
   const shell = yield* context.threads.getThreadShell(targetId).pipe(Effect.mapError(unavailable));
   if (shell === null || shell.deletedAt !== null) {
-    return yield* OrchestrationMcp.threadNotFound(
+    return yield* threadNotFound(
       context.threads,
+      context.scope,
       targetId,
       "The thread was not found.",
     );

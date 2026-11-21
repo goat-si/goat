@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, ProjectId } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -671,6 +671,42 @@ describe("attachmentUploadQueue", () => {
     );
   });
 
+  it("restores file ownership metadata when returning to its upload environment", async () => {
+    const draftId = DraftId.make("draft-environment-roundtrip");
+    const store = useComposerDraftStore.getState();
+    const file = makeFile("file-move");
+    const moveDraftTo = (environmentId: EnvironmentId) => {
+      store.setProjectDraftThreadId(
+        { environmentId, projectId: ProjectId.make("project") },
+        draftId,
+      );
+      startAttachmentUpload({ environmentId, image: file, draftTarget: draftId });
+    };
+    try {
+      store.addFiles(draftId, [file]);
+      moveDraftTo(firstEnvironment);
+      await Promise.resolve();
+      let settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+      moveDraftTo(secondEnvironment);
+      await Promise.resolve();
+      settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[1]!.complete(500);
+      await settled;
+      moveDraftTo(firstEnvironment);
+      expect(store.getComposerDraft(draftId)?.files).toMatchObject([
+        {
+          id: file.id,
+          uploadedAttachmentId: `pending-environment-1-${file.name}`,
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
+    } finally {
+      store.clearDraftThread(draftId);
+    }
+  });
+
   it("restores the previous environment after a replacement upload fails", async () => {
     const image = makeImage("image-move");
     startAttachmentUpload({ environmentId: firstEnvironment, image });
@@ -718,5 +754,115 @@ describe("attachmentUploadQueue", () => {
     await Promise.resolve();
     TestXmlHttpRequest.requests[4]!.complete();
     await awaitAttachmentUploads([images[3]!.id]);
+  });
+
+  it("keeps an upload alive while a send is waiting after the draft releases it", async () => {
+    const image = makeImage("send-owns-transfer");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([image.id]);
+    releaseAttachmentUpload(image.id);
+    expect(TestXmlHttpRequest.requests[0]?.listeners.get("abort")).toBeDefined();
+    TestXmlHttpRequest.requests[0]?.complete();
+    await settled;
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "ready",
+      environmentId: firstEnvironment,
+    });
+  });
+
+  it("does not let a retained send overwrite a newer environment upload", async () => {
+    const image = makeImage("send-retarget");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const firstSend = awaitAttachmentUploads([image.id]);
+    startAttachmentUpload({ environmentId: secondEnvironment, image });
+    await Promise.resolve();
+    TestXmlHttpRequest.requests[0]?.complete();
+    await firstSend;
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "uploading",
+      environmentId: secondEnvironment,
+    });
+    TestXmlHttpRequest.requests[1]?.complete();
+    await awaitAttachmentUploads([image.id]);
+    expect(readAttachmentUpload(image.id)).toMatchObject({
+      status: "ready",
+      environmentId: secondEnvironment,
+    });
+  });
+
+  it("retargets retries without sending another environment's upload ID", async () => {
+    const image = makeImage("send-retarget-retry");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const firstSend = awaitAttachmentUploads([image.id]);
+    startAttachmentUpload({ environmentId: secondEnvironment, image });
+    await Promise.resolve();
+    const requestB = TestXmlHttpRequest.requests[1];
+    expect(requestB).toBeDefined();
+    let resolveAborted: () => void = () => {};
+    const aborted = new Promise<void>((resolve) => {
+      resolveAborted = resolve;
+    });
+    const nativeAbort = requestB!.abort.bind(requestB);
+    const abortB = vi.spyOn(requestB!, "abort").mockImplementation(() => {
+      nativeAbort();
+      resolveAborted();
+    });
+    TestXmlHttpRequest.requests[0]?.complete();
+    await firstSend;
+    expect(getUploadedAttachments({ environmentId: firstEnvironment, images: [image] })).toBeNull();
+    expect(readAttachmentUpload(image.id, firstEnvironment)?.status).toBe("failed");
+    expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      mocks.removeUpload,
+      {
+        environmentId: firstEnvironment,
+        input: { attachmentId: "pending-environment-1-send-retarget-retry.png" },
+      },
+      expect.anything(),
+    );
+    retryAttachmentUpload({ environmentId: firstEnvironment, image });
+    await aborted;
+    expect(abortB).toHaveBeenCalledOnce();
+    expect(readAttachmentUpload(image.id, secondEnvironment)?.status).toBe("failed");
+    expect(
+      getUploadedAttachments({ environmentId: secondEnvironment, images: [image] }),
+    ).toBeNull();
+    const retryA = awaitAttachmentUploads([image.id]);
+    TestXmlHttpRequest.requests[2]?.complete();
+    await retryA;
+    expect(
+      getUploadedAttachments({ environmentId: firstEnvironment, images: [image] })?.[0]?.id,
+    ).toBe("pending-environment-1-send-retarget-retry.png");
+    retryAttachmentUpload({ environmentId: secondEnvironment, image });
+    await Promise.resolve();
+    expect(getUploadedAttachments({ environmentId: firstEnvironment, images: [image] })).toBeNull();
+    const retryB = awaitAttachmentUploads([image.id]);
+    TestXmlHttpRequest.requests[3]?.complete();
+    await retryB;
+    expect(
+      getUploadedAttachments({ environmentId: secondEnvironment, images: [image] })?.[0]?.id,
+    ).toBe("pending-environment-2-send-retarget-retry.png");
+  });
+
+  it("does not release the current upload from a previous environment", async () => {
+    const image = makeImage("stale-release");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    startAttachmentUpload({ environmentId: secondEnvironment, image });
+    await Promise.resolve();
+    const current = TestXmlHttpRequest.requests[1];
+    expect(current).toBeDefined();
+    const abort = vi.spyOn(current!, "abort");
+    releaseAttachmentUpload(image.id, firstEnvironment);
+    expect(abort).not.toHaveBeenCalled();
+    const settled = awaitAttachmentUploads([image.id]);
+    current?.complete();
+    await settled;
+    expect(
+      getUploadedAttachments({ environmentId: secondEnvironment, images: [image] })?.[0]?.id,
+    ).toBe("pending-environment-2-stale-release.png");
   });
 });

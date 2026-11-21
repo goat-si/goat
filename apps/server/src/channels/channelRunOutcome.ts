@@ -30,10 +30,23 @@ export const settleCompletedRun = (input: {
   readonly task: ChannelTask;
   readonly runId: RunId;
   readonly reported: ReportedRunOutcome | undefined;
+  readonly finalReportDue?: boolean;
   readonly fallbackSummary: string;
   readonly now: string;
 }): ChannelTaskEventSpec => {
   const { task, runId, reported } = input;
+  if (input.finalReportDue) {
+    const text = input.fallbackSummary.trim();
+    const reason = "The bot ended without a final report after its delegated work finished.";
+    return {
+      type: "task.failed",
+      payload: {
+        generation: task.generation,
+        reason: "missing_final_report",
+        summary: text && text !== NO_FINAL_TEXT ? reason + "\n\n" + text : reason,
+      },
+    };
+  }
   const summary = reported?.summary?.trim() || undefined;
   switch (reported?.outcome) {
     case "failed":

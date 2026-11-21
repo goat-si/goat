@@ -13,7 +13,6 @@ import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -35,23 +34,18 @@ import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
+import { processStartIdentity, writeServiceUpdateHandoff } from "../serviceUpdateHandoff.ts";
 import {
   ensurePinnedRuntimeInstalled,
-  pinnedRuntimeCommand,
-  PinnedRuntimeInstallError,
   pinnedRuntimePaths,
-  PinnedRuntimePreflightBlockedError,
   prunePinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { bootServiceRuntimeReferences } from "./bootServiceRuntimeReferences.ts";
-import { decodeServicePreflightResult } from "./servicePreflight.ts";
-import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
+import { runStagedServicePreflight } from "./servicePreflight.ts";
+import { isExactServiceVersion } from "./serviceProtocol.ts";
 
 export { SERVER_UPDATE_BUSY_REASON };
-
-// A staged runtime cold start can take over a minute on a loaded host.
-const PREFLIGHT_TIMEOUT = Duration.minutes(3);
 
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
@@ -223,7 +217,9 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
   },
 );
 
-export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+export const make = Effect.fn("cloud.server_self_update.make")(function* (options?: {
+  readonly launcherIdentity?: () => Promise<{ readonly pid: number; readonly start: string }>;
+}) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const desktopAppUpdate = yield* DesktopAppUpdate.DesktopAppUpdate;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
@@ -280,74 +276,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       // install. Never for the running version, whose directory a mismatch would remove.
       verifyCachedInstall: targetVersion !== packageJson.version,
       validate: (runtime) =>
-        runner
-          .run({
-            command: pinnedRuntimeCommand(runtime).command,
-            args: [
-              ...pinnedRuntimeCommand(runtime).args,
-              "__service-preflight",
-              "--database-path",
-              serverConfig.dbPath,
-              "--launcher-protocol",
-              String(SERVICE_LAUNCHER_PROTOCOL),
-            ],
-            timeout: PREFLIGHT_TIMEOUT,
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new PinnedRuntimeInstallError({
-                  step: "running the staged service preflight",
-                  cause,
-                }),
-            ),
-            Effect.flatMap(
-              (
-                result,
-              ): Effect.Effect<
-                void,
-                PinnedRuntimeInstallError | PinnedRuntimePreflightBlockedError
-              > => {
-                if (result.code !== 0) {
-                  return Effect.fail(
-                    new PinnedRuntimeInstallError({
-                      step: "running the staged service preflight",
-                      exitCode: Number(result.code),
-                      stdoutLength: result.stdout.length,
-                      stderrLength: result.stderr.length,
-                    }),
-                  );
-                }
-                let parsed: unknown;
-                try {
-                  parsed = JSON.parse(result.stdout.trim());
-                } catch (cause) {
-                  return Effect.fail(
-                    new PinnedRuntimeInstallError({
-                      step: "decoding the staged service preflight",
-                      cause,
-                    }),
-                  );
-                }
-                const preflight = decodeServicePreflightResult(parsed);
-                if (preflight === undefined || preflight.version !== targetVersion) {
-                  return Effect.fail(
-                    new PinnedRuntimeInstallError({
-                      step: "verifying the staged service preflight",
-                    }),
-                  );
-                }
-                return preflight.status === "ready"
-                  ? Effect.void
-                  : Effect.fail(
-                      new PinnedRuntimePreflightBlockedError({
-                        version: targetVersion,
-                        reason: preflight.reason,
-                      }),
-                    );
-              },
-            ),
-          ),
+        runStagedServicePreflight({
+          runner,
+          runtime,
+          targetVersion,
+          databasePath: serverConfig.dbPath,
+        }),
     }).pipe(
       Effect.mapError((error) => {
         if (error._tag === "PinnedRuntimePreflightBlockedError")
@@ -366,6 +300,24 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     );
   });
 
+  const prepare: ServerSelfUpdate["Service"]["prepare"] = (targetVersion) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (capability !== "boot-service" || !isExactServiceVersion(targetVersion)) {
+          return yield* failWith(
+            "Background preparation requires a launcher-managed server and an exact goat version.",
+          );
+        }
+        if (yield* Ref.getAndSet(inFlight, true)) {
+          return yield* failWith("A server update is already in progress.");
+        }
+        return yield* restore(prepareRuntime(targetVersion)).pipe(
+          Effect.asVoid,
+          Effect.ensuring(Ref.set(inFlight, false)),
+        );
+      }),
+    );
+
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (
@@ -374,6 +326,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     onHandoffAccepted = () => Effect.void,
     actor = { kind: "internal" },
   ) {
+    if (input.stageOnly === true) {
+      const targetVersion = input.targetVersion.trim();
+      yield* reportProgress("downloading");
+      yield* prepare(targetVersion);
+      return { targetVersion, method: "boot-service" as const };
+    }
     if (capability === "desktop-managed") {
       if (desktopAppUpdate.available) {
         return yield* desktopAppUpdate.run(reportProgress);
@@ -415,6 +373,20 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         mode: input.confirmReplacement === true ? ("confirmed" as const) : ("idle" as const),
       };
       let accepted = false;
+      const launcherIdentity = yield* Effect.tryPromise({
+        try:
+          options?.launcherIdentity ??
+          (async () => {
+            const pid = process.ppid;
+            return { pid, start: await processStartIdentity(pid, platform) };
+          }),
+        catch: (cause) => failWith("Could not identify the service launcher.", cause),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.logWarning("Could not identify the service launcher for update handoff."),
+        ),
+        Effect.option,
+      );
       const updateId = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* admission.beginDrain;
@@ -438,9 +410,32 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
                     error,
                   ),
                 ),
-                Effect.tap(() => {
-                  accepted = true;
-                  return onHandoffAccepted();
+                Effect.tap((updateId) => {
+                  const marker = Option.isSome(launcherIdentity)
+                    ? Effect.tryPromise({
+                        try: () =>
+                          writeServiceUpdateHandoff(
+                            serverConfig.baseDir,
+                            updateId,
+                            launcherIdentity.value.pid,
+                            launcherIdentity.value.start,
+                          ),
+                        catch: (cause) =>
+                          failWith("Could not record the service update handoff.", cause),
+                      }).pipe(
+                        Effect.catch(() =>
+                          Effect.logWarning("Could not record the service update handoff."),
+                        ),
+                      )
+                    : Effect.void;
+                  return marker.pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        accepted = true;
+                      }),
+                    ),
+                    Effect.andThen(Effect.suspend(onHandoffAccepted)),
+                  );
                 }),
                 Effect.tap((updateId) =>
                   audit
@@ -469,23 +464,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   return ServerSelfUpdate.of({
     capability,
     isUpdating: Ref.get(inFlight),
-    prepare: (targetVersion) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (capability !== "boot-service" || !isExactServiceVersion(targetVersion)) {
-            return yield* failWith(
-              "Background preparation requires a launcher-managed server and an exact goat version.",
-            );
-          }
-          if (yield* Ref.getAndSet(inFlight, true)) {
-            return yield* failWith("A server update is already in progress.");
-          }
-          return yield* restore(prepareRuntime(targetVersion)).pipe(
-            Effect.asVoid,
-            Effect.ensuring(Ref.set(inFlight, false)),
-          );
-        }),
-      ),
+    prepare,
     update,
     commitDesktopUpdate: Effect.fn("ServerSelfUpdate.commitDesktopUpdate")(
       function (requestId, onHandoffAccepted) {

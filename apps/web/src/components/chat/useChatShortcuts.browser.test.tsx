@@ -132,3 +132,89 @@ it.each([
   expect(composerKeys).toEqual(composer);
   expect(received).toEqual(launcher);
 });
+
+function MainAndSideShortcuts(props: { events: string[] }) {
+  const rules = [
+    {
+      command: "rightPanel.toggle" as const,
+      shortcut: {
+        key: "b",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: true,
+        modKey: false,
+      },
+    },
+    {
+      command: "thread.stop" as const,
+      shortcut: {
+        key: "x",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        modKey: false,
+      },
+    },
+    {
+      command: "modelPicker.toggle" as const,
+      shortcut: {
+        key: "m",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: true,
+        modKey: false,
+      },
+    },
+  ];
+  const input = (embedded: boolean) => ({
+    embedded,
+    enabled: true,
+    keybindings: rules,
+    scriptKeybindings: [],
+    getShortcutContext: () => shortcutContext,
+    threadFindActive: false,
+    composerRef: {
+      current: {
+        insertTextAtEnd: (key: string) => {
+          props.events.push(`${embedded ? "side" : "main"}:${key}`);
+          return true;
+        },
+        toggleModelPicker: () => props.events.push(embedded ? "side-model" : "main-model"),
+      } as Partial<ChatComposerHandle> as ChatComposerHandle,
+    },
+    branchToolbarRef: { current: null },
+    closeThreadFind: () => {},
+    commands: {
+      "rightPanel.toggle": () => void props.events.push(embedded ? "side-panel" : "main-panel"),
+      "thread.stop": () => void props.events.push(embedded ? "side-stop" : "main-stop"),
+    },
+    fallback: () => undefined,
+  });
+  useChatShortcuts(input(false));
+  useChatShortcuts(input(true));
+  return (
+    <>
+      <textarea aria-label="Main composer" />
+      <div data-side-chat-surface>
+        <textarea aria-label="Side composer" />
+        <div role="region" aria-label="Side conversation" tabIndex={0} />
+      </div>
+    </>
+  );
+}
+
+it("keeps side chat shortcuts scoped while panel shortcuts reach the main view", async () => {
+  const events: string[] = [];
+  await using screen = await render(<MainAndSideShortcuts events={events} />, options);
+  await userEvent.click(screen.getByRole("textbox", { name: "Side composer" }));
+  await userEvent.keyboard("{Control>}{Alt>}b{/Alt}{/Control}");
+  await userEvent.keyboard("{Control>}{Shift>}x{/Shift}{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}m{/Alt}{/Control}");
+  expect(events).toEqual(["main-panel", "side-model"]);
+  await userEvent.click(screen.getByRole("textbox", { name: "Main composer" }));
+  await userEvent.keyboard("{Control>}{Shift>}x{/Shift}{/Control}");
+  expect(events).toEqual(["main-panel", "side-model", "main-stop"]);
+});

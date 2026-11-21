@@ -29,6 +29,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import { planThreadDeletion } from "../orchestration-v2/ThreadDeletion.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ProjectSettingsOverrideSweep from "../provider/ProjectSettingsOverrideSweep.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
@@ -508,9 +509,13 @@ it.effect("deletes a project without force once its imported threads were delete
   }).pipe(Effect.provide(layerDatabase)),
 );
 
-it.effect(
-  "clears a deleted project's settings overrides so a machine-disabled instance cannot stay alive",
-  () =>
+it.effect.each([
+  { policy: "no", worktreeCleanup: undefined },
+  { policy: "off", worktreeCleanup: { mode: "off" } as const },
+  { policy: "legacy null", worktreeCleanup: null },
+])(
+  "clears a deleted project's settings overrides while keeping $policy cleanup policy",
+  ({ worktreeCleanup }) =>
     Effect.gen(function* () {
       const projectId = ProjectId.make("project:overrides-cleanup");
       const instanceId = ProviderInstanceId.make("codex_work");
@@ -524,17 +529,58 @@ it.effect(
             [projectId]: {
               providerInstances: { [instanceId]: { enabled: true } },
               builtInSkills: { "goat-discipline": { enabled: false } },
+              ...(worktreeCleanup === undefined ? {} : { worktreeCleanup }),
             },
           },
         });
 
+        const previousGlobalMode = (yield* serverSettings.getSettings).responseStreamingMode;
         yield* service.delete({
           commandId: CommandId.make("command:overrides-cleanup:project-delete"),
           projectId,
         });
 
         const settingsAfterDelete = yield* serverSettings.getSettings;
-        assert.isUndefined(settingsAfterDelete.projectSettingsOverrides[projectId]);
+        const entry = settingsAfterDelete.projectSettingsOverrides[projectId];
+        if (worktreeCleanup === undefined) {
+          assert.isUndefined(entry);
+        } else {
+          assert.deepStrictEqual(entry, {
+            worktreeCleanup,
+            providerInstances: {},
+            builtInSkills: {},
+          });
+        }
+        assert.strictEqual(settingsAfterDelete.responseStreamingMode, previousGlobalMode);
+        const liveProjectId = ProjectId.make("project:still-live");
+        const missingProjectId = ProjectId.make("project:missing");
+        yield* seedProject(liveProjectId);
+        yield* serverSettings.updateSettings({
+          projectSettingsOverrides: {
+            [projectId]: {
+              providerInstances: { [instanceId]: { enabled: true } },
+              builtInSkills: { "goat-discipline": { enabled: false } },
+              ...(worktreeCleanup === undefined ? {} : { worktreeCleanup }),
+            },
+            [liveProjectId]: { defaultAutoPull: true },
+            [missingProjectId]: { worktreeCleanup: { mode: "off" } },
+          },
+        });
+        yield* ProjectSettingsOverrideSweep.sweep;
+        const swept = yield* serverSettings.getSettings;
+        assert.deepStrictEqual(swept.projectSettingsOverrides[liveProjectId], {
+          defaultAutoPull: true,
+        });
+        assert.isUndefined(swept.projectSettingsOverrides[missingProjectId]);
+        if (worktreeCleanup === undefined)
+          assert.isUndefined(swept.projectSettingsOverrides[projectId]);
+        else
+          assert.deepStrictEqual(swept.projectSettingsOverrides[projectId], {
+            worktreeCleanup,
+            providerInstances: {},
+            builtInSkills: {},
+          });
+        assert.strictEqual(swept.responseStreamingMode, previousGlobalMode);
       }).pipe(Effect.provide(layerServices));
     }).pipe(Effect.provide(layerDatabase)),
 );

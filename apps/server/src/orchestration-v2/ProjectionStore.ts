@@ -1,3 +1,26 @@
+import { inheritsForkConversation } from "./ProjectionForkConversation.ts";
+import {
+  FORK_HISTORY_TYPES,
+  readForkHistoryPage,
+  selectMemoryHistory,
+  type ForkHistoryPage,
+} from "./ForkHistoryPage.ts";
+import { preserveAttemptDeliveryJson } from "./AttemptInputDelivery.ts";
+import {
+  attributePendingBackgroundTasks,
+  upsertProviderThreadProjection,
+} from "./projectionProviderThread.ts";
+import {
+  nullableStringField,
+  parseEncodedPayload,
+  stringField,
+} from "./ProjectionPayloadFields.ts";
+import {
+  decodeThreadPayload,
+  encodeThreadPayload,
+  encodeThreadUpdatedAt,
+} from "./ProjectionThreadPayload.ts";
+export { decodeThreadPayload } from "./ProjectionThreadPayload.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -47,9 +70,13 @@ import {
 } from "./ProjectionShellThreadRows.ts";
 import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { turnStartMessageIds } from "./manualContinuation.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
-import { isProviderNativeSubagentThread, pendingGuestMessageCount } from "@goat/contracts";
+import {
+  applyOrchestrationV2ThreadVisit,
+  isProviderNativeSubagentThread,
+  pendingGuestMessageCount,
+} from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import { readOnReader } from "./readerOverloadFallback.ts";
@@ -92,7 +119,6 @@ import type {
   RunAttemptId,
 } from "@goat/contracts";
 import {
-  OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
   OrchestrationV2ContextHandoffJson as OrchestrationV2ContextHandoffJsonSchema,
@@ -120,6 +146,7 @@ import {
   ProviderInstanceId,
 } from "@goat/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
+import { encodeTurnItemPayload, isInlineWorkOutput } from "./turnItemProjectionPayload.ts";
 import {
   activeNativeSubagents,
   deriveBlockedOnThreadWait,
@@ -446,6 +473,9 @@ export interface ProjectionRuntimeResponseContext {
 export interface ProjectionRecordFilter {
   readonly providerThreadIds?: ReadonlyArray<ProviderThreadId>;
   readonly providerTurnAttemptIds?: ReadonlyArray<RunAttemptId>;
+  readonly providerTurnIds?: ReadonlyArray<ProviderTurnId>;
+  readonly attemptIds?: ReadonlyArray<RunAttemptId>;
+  readonly providerTurnLimit?: 1;
   readonly messageRoles?: ReadonlyArray<OrchestrationV2ConversationMessage["role"]>;
   readonly turnItemRunId?: RunId;
   readonly messageIds?: ReadonlyArray<MessageId>;
@@ -465,6 +495,7 @@ export interface ProjectionRecordFilter {
   readonly runtimeRequestStatuses?: ReadonlyArray<OrchestrationV2RuntimeRequest["status"]>;
   readonly contextTransferStatuses?: ReadonlyArray<OrchestrationV2ContextTransfer["status"]>;
   readonly subagentIds?: ReadonlyArray<NodeId>;
+  readonly subagentChildThreadId?: ThreadId;
   readonly subagentRunIds?: ReadonlyArray<RunId>;
   readonly nodeIds?: ReadonlyArray<NodeId>;
   readonly turnItemRequestIds?: ReadonlyArray<RuntimeRequestId>;
@@ -493,26 +524,6 @@ export interface ProjectionRecordFilter {
     readonly keepMessageId: MessageId;
   };
 }
-
-// A fork inherits its source's history before it has messages of its own,
-// unless a portable handoff's budget left none of that history to deliver.
-const inheritsForkConversation = ({
-  thread,
-  contextTransfers,
-  contextHandoffs,
-}: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers" | "contextHandoffs">) => {
-  if (thread.forkedFrom?.type !== "run") return false;
-  const resolution = contextTransfers.find(
-    (transfer) => transfer.type === "fork" && transfer.targetThreadId === thread.id,
-  )?.resolution;
-  return (
-    resolution?.strategy !== "portable_context" ||
-    contextHandoffs.some(
-      (handoff) =>
-        handoff.id === resolution.contextHandoffId && (handoff.history?.messages.length ?? 0) > 0,
-    )
-  );
-};
 
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
@@ -778,6 +789,7 @@ export interface ProjectionStoreV2Shape
   readonly getTurnStartHistory: (
     threadId: ThreadId,
     runIds?: ReadonlyArray<RunId>,
+    page?: ForkHistoryPage,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2TurnItem>, ProjectionStoreV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
@@ -940,12 +952,6 @@ const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema
 const matchesNothing = (...filters: ReadonlyArray<ReadonlyArray<unknown> | undefined>) =>
   filters.some((values) => values?.length === 0);
 
-const encodeThreadPayload = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
-const encodeThreadUpdatedAt = Schema.encodeEffect(
-  OrchestrationV2AppThreadJsonSchema.fields.updatedAt,
-);
 const encodeRunPayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2RunJsonSchema));
 const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema.fields.restartCancelledBackgroundWork),
@@ -953,10 +959,10 @@ const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
 const encodeRunAttemptPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJsonSchema),
 );
-const encodeNodePayload = Schema.encodeEffect(
+export const encodeNodePayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ExecutionNodeJsonSchema),
 );
-const encodeSubagentPayload = Schema.encodeEffect(
+export const encodeSubagentPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2SubagentJsonSchema),
 );
 const encodeProviderSessionPayload = Schema.encodeEffect(
@@ -965,7 +971,7 @@ const encodeProviderSessionPayload = Schema.encodeEffect(
 export const encodeProviderThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderThreadJsonSchema),
 );
-const encodeProviderTurnPayload = Schema.encodeEffect(
+export const encodeProviderTurnPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderTurnJsonSchema),
 );
 const encodeRuntimeRequestPayload = Schema.encodeEffect(
@@ -978,9 +984,7 @@ const encodePlanPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2PlanArtifactSchema),
 );
 const decodePlanPayload = (json: string) => decodePlanJson(json);
-export const encodeTurnItemPayload = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2TurnItemJsonSchema),
-);
+export { encodeTurnItemPayload };
 // The codec every *Json payload schema uses for timestamps, so index columns match payload_json.
 const encodePayloadTimestamp = Schema.encodeEffect(Schema.DateTimeUtcFromString);
 const encodeCheckpointScopePayload = Schema.encodeEffect(
@@ -996,9 +1000,6 @@ const encodeContextTransferPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ContextTransferJsonSchema),
 );
 
-export const decodeThreadPayload = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
 const decodeRunPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema),
 );
@@ -1048,23 +1049,6 @@ const decodeContextTransferPayload = Schema.decodeUnknownEffect(
 const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 const isProjectionStoreReadError = Schema.is(ProjectionStoreReadError);
 
-function parseEncodedPayload(json: string): Record<string, unknown> {
-  return JSON.parse(json) as Record<string, unknown>;
-}
-
-function stringField(payload: Record<string, unknown>, field: string): string {
-  const value = payload[field];
-  return typeof value === "string" ? value : String(value);
-}
-
-function nullableStringField(payload: Record<string, unknown>, field: string): string | null {
-  const value = payload[field];
-  if (value === null || value === undefined) {
-    return null;
-  }
-  return typeof value === "string" ? value : String(value);
-}
-
 function booleanInt(value: boolean): 0 | 1 {
   return value ? 1 : 0;
 }
@@ -1087,12 +1071,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const archiveGate = yield* ThreadArchiveGate;
-    // Rendered output and delegated tasks stay inline when a long work group is deferred.
-    const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
-      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE '%"viewedImagePath"%'
-      OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
     // Background work cannot outlive this process: provider processes exit with the server. Past
     // that, work that showed no sign of life for STALE_BACKGROUND_WORK_MS was left open by a
     // provider that never closed it, so it no longer holds runtime updates.
@@ -1225,6 +1203,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               });
               break;
             }
+            case "thread.visit-recorded":
+              yield* apply({
+                ...event,
+                type: "thread.visited",
+                payload: applyOrchestrationV2ThreadVisit(
+                  yield* getThread(event.threadId),
+                  event.payload,
+                ),
+              });
+              break;
             case "thread.created":
             case "thread.archived":
             case "thread.unarchived":
@@ -1413,7 +1401,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 provider_thread_id = excluded.provider_thread_id,
                 provider_turn_id = excluded.provider_turn_id,
                 status = excluded.status,
-                payload_json = excluded.payload_json
+                payload_json = ${preserveAttemptDeliveryJson(sql)}
             `;
               break;
             }
@@ -1609,51 +1597,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               break;
             }
             case "provider-thread.updated": {
-              const payloadJson = yield* encodeProviderThreadPayload(event.payload);
+              const existing = event.payload.pendingBackgroundTasks?.some(
+                (task) => task.runId === undefined,
+              )
+                ? (yield* sql<PayloadRow>`
+                    SELECT payload_json FROM orchestration_v2_projection_provider_threads
+                    WHERE provider_thread_id = ${event.payload.id}
+                  `)[0]
+                : undefined;
+              const providerThread = attributePendingBackgroundTasks(
+                event.payload,
+                existing === undefined
+                  ? undefined
+                  : yield* decodeProviderThreadPayload(existing.payload_json),
+                event.runId,
+              );
+              const payloadJson = yield* encodeProviderThreadPayload(providerThread);
               const payload = parseEncodedPayload(payloadJson);
-              yield* sql`
-              INSERT INTO orchestration_v2_projection_provider_threads (
-                provider_thread_id,
-                thread_id,
-                owner_node_id,
-                provider,
-                driver,
-                provider_instance_id,
-                provider_session_id,
-                status,
-                first_run_ordinal,
-                last_run_ordinal,
-                updated_at,
-                payload_json
-              )
-              VALUES (
-                ${event.payload.id},
-                ${event.payload.appThreadId},
-                ${event.payload.ownerNodeId},
-                ${event.payload.providerInstanceId},
-                ${event.payload.driver},
-                ${event.payload.providerInstanceId},
-                ${event.payload.providerSessionId},
-                ${event.payload.status},
-                ${event.payload.firstRunOrdinal},
-                ${event.payload.lastRunOrdinal},
-                ${stringField(payload, "updatedAt")},
-                ${payloadJson}
-              )
-              ON CONFLICT(provider_thread_id)
-              DO UPDATE SET
-                thread_id = excluded.thread_id,
-                owner_node_id = excluded.owner_node_id,
-                provider = excluded.provider,
-                driver = excluded.driver,
-                provider_instance_id = excluded.provider_instance_id,
-                provider_session_id = excluded.provider_session_id,
-                status = excluded.status,
-                first_run_ordinal = excluded.first_run_ordinal,
-                last_run_ordinal = excluded.last_run_ordinal,
-                updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
-            `;
+              yield* upsertProviderThreadProjection(
+                sql,
+                event.payload,
+                payloadJson,
+                stringField(payload, "updatedAt"),
+              );
               if (
                 event.payload.appThreadId !== null &&
                 !isQueuedProviderThreadPlaceholder(event.payload)
@@ -1876,7 +1842,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 type,
                 status,
                 updated_at,
-                payload_json
+                payload_json, inline_work_output
               )
               VALUES (
                 ${event.payload.id},
@@ -1890,7 +1856,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ${event.payload.type},
                 ${event.payload.status},
                 ${updatedAt},
-                ${payloadJson}
+                ${payloadJson}, ${event.payload.type === "dynamic_tool" && isInlineWorkOutput(payloadJson) ? 1 : 0}
               )
               ON CONFLICT(turn_item_id)
               DO UPDATE SET
@@ -1904,7 +1870,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 type = excluded.type,
                 status = excluded.status,
                 updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
+                payload_json = excluded.payload_json, inline_work_output = excluded.inline_work_output
             `;
               break;
             }
@@ -2098,6 +2064,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.unsnoozed" &&
             event.type !== "thread.auto-settle-set" &&
             event.type !== "thread.pinned" &&
+            event.type !== "thread.visit-recorded" &&
             event.type !== "thread.unpinned" &&
             event.type !== "thread.pin-reordered" &&
             event.type !== "thread.active-reordered" &&
@@ -2147,7 +2114,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const eligible = sql`
                 WITH eligible AS NOT MATERIALIZED (
                   SELECT item.rowid AS item_rowid, item.payload_json, item.ordinal, item.turn_item_id,
-                    item.run_id, item.node_id, item.type, item.status, run.status AS run_status,
+                    item.run_id, item.node_id, item.type, item.status, item.inline_work_output, run.status AS run_status,
                     attempt.attempt_id, attempt.status AS attempt_status
                   FROM orchestration_v2_projection_turn_items AS item
                   LEFT JOIN orchestration_v2_projection_runs AS run
@@ -2439,7 +2406,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       OVER (PARTITION BY run_id ORDER BY ordinal) AS segment,
                     CASE WHEN status = 'completed' AND (run_status = 'completed' OR attempt_status = 'superseded')
                       AND type IN ${sql.in(DEFERRED_WORK_ITEM_TYPES)}
-                      AND NOT (${inlineWorkOutput})
+                      AND item.inline_work_output = 0
                       AND run_id NOT IN (SELECT run_id FROM blocked_runs)
                       THEN 1 ELSE 0 END AS can_defer
                   FROM eligible AS item
@@ -2896,7 +2863,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ))
             ORDER BY ordinal ASC
           `,
-          fields !== undefined && !fields.includes("attempts")
+          (fields !== undefined && !fields.includes("attempts")) ||
+          (window === undefined && matchesNothing(filter?.attemptIds))
             ? Effect.succeed([])
             : window === undefined
               ? sql<PayloadRow>`
@@ -2905,6 +2873,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
               ${inRecentRuns("run_id")}
               ${filter?.ancestryRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.ancestryRunIds)}))`}
+              ${filter?.attemptIds === undefined ? sql`` : sql`AND attempt_id IN (SELECT value FROM json_each(${encodeIdList(filter.attemptIds)}))`}
             ORDER BY run_id ASC, attempt_ordinal ASC
           `
               : sql<PayloadRow>`
@@ -2988,6 +2957,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             FROM orchestration_v2_projection_subagents AS subagent
             WHERE ${threadColumn(filter?.subagentIds)} = ${threadId}
               ${filter?.subagentIds === undefined ? sql`` : sql`AND subagent_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentIds)}))`}
+              ${filter?.subagentChildThreadId === undefined ? sql`` : sql`AND child_thread_id = ${filter.subagentChildThreadId}`}
               ${filter?.subagentRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentRunIds)}))`}
               ${
                 filter?.omitSettledSubagents === true
@@ -3085,7 +3055,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           `,
           (fields !== undefined && !fields.includes("providerTurns")) ||
           (window === undefined &&
-            matchesNothing(filter?.providerTurnAttemptIds, filter?.providerTurnThreadIds))
+            matchesNothing(
+              filter?.providerTurnAttemptIds,
+              filter?.providerTurnThreadIds,
+              filter?.providerTurnIds,
+            ))
             ? Effect.succeed([])
             : window === undefined
               ? sql<PayloadRow>`
@@ -3100,6 +3074,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       WHERE thread_id = ${threadId} ${inRecentRuns("run_id")})`
               }
               ${filter?.providerTurnAttemptIds === undefined ? sql`` : sql`AND run_attempt_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerTurnAttemptIds)}))`}
+              ${filter?.providerTurnIds === undefined ? sql`` : sql`AND provider_turn_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerTurnIds)}))`}
               ${filter?.providerTurnThreadIds === undefined ? sql`` : sql`AND provider_thread_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerTurnThreadIds)}))`}
               ${filter?.ancestryRunIds === undefined ? sql`` : sql`AND run_attempt_id IN (SELECT attempt_id FROM orchestration_v2_projection_run_attempts WHERE thread_id = ${threadId} AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.ancestryRunIds)})))`}
               ${
@@ -3108,7 +3083,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY julianday(json_extract(payload_json, '$.tokenUsage.updatedAt')) DESC,
               provider_thread_id ASC, ordinal ASC
             LIMIT 1`
-                  : sql`ORDER BY provider_thread_id ASC, ordinal ASC`
+                  : filter?.providerTurnLimit === 1
+                    ? sql`LIMIT 1`
+                    : sql`ORDER BY provider_thread_id ASC, ordinal ASC`
               }
           `
               : sql<PayloadRow>`
@@ -3355,8 +3332,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT json_extract(payload_json, '$.messageId') AS message_id, MIN(ordinal) AS ordinal
             FROM orchestration_v2_projection_turn_items
             WHERE thread_id = ${threadId}
-              AND ${userOnly ? sql`type = 'user_message'` : sql`type IN ('user_message', 'assistant_message')`}
-              ${loadedMessageIds === undefined ? sql`` : sql`AND json_extract(payload_json, '$.messageId') IN (SELECT value FROM json_each(${encodeIdList(loadedMessageIds)}))`}
+              AND type IN ('user_message', 'assistant_message')
+              ${
+                // Only per-ID lookups match the message ordinal index; a broad read through it
+                // fetches every message row, so "= 1" keeps that guard off the index's WHERE.
+                loadedMessageIds === undefined
+                  ? sql`AND json_valid(payload_json) = 1`
+                  : sql`AND json_valid(payload_json) AND json_extract(payload_json, '$.messageId') IN (SELECT value FROM json_each(${encodeIdList(loadedMessageIds)}))`
+              }
             GROUP BY json_extract(payload_json, '$.messageId')
           `;
           for (const row of rows) messageOrdinals.set(row.message_id, row.ordinal);
@@ -4143,27 +4126,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE bindings.thread_id = ${threadId}
               ORDER BY sessions.updated_at ASC, sessions.provider_session_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeProviderSessionPayload, threadId)));
-            // Read only the current prompt and its bounded automatic-continuation ancestry.
-            const memoryMessageIds = [];
-            let memoryRun = runs.find((candidate) => candidate.id === runId);
-            for (
-              let depth = 0;
-              memoryRun !== undefined && depth <= MAX_CONTINUATION_CHAIN;
-              depth++
-            ) {
-              memoryMessageIds.push(memoryRun.userMessageId);
-              const sourceId =
-                memoryRun.restartContinuationOfRunId ?? memoryRun.usageLimitContinuationOfRunId;
-              memoryRun =
-                sourceId === undefined
-                  ? undefined
-                  : runs.find((candidate) => candidate.id === sourceId);
-            }
+            const memoryMessageIds = turnStartMessageIds(
+              runs.find((run) => run.id === runId),
+              { runs, attempts },
+            );
             const messages = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_messages
               WHERE thread_id = ${threadId} AND (
                 message_id IN ${sql.in(memoryMessageIds)} OR message_id IN (SELECT json_extract(r.payload_json, '$.userMessageId') FROM orchestration_v2_projection_runs r JOIN orchestration_v2_projection_context_handoffs h ON h.target_run_id = r.run_id WHERE r.thread_id = ${threadId} AND h.thread_id = ${threadId} AND h.status = 'ready' AND json_extract(h.payload_json, '$.delivery') IS NULL)
                 OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
+                OR (role = 'user' AND trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace}) GLOB '/goal*')
               ) ORDER BY created_at ASC, message_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeMessagePayload, threadId)));
             const conversation = yield* sql<{ present: number }>`
@@ -4205,12 +4177,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getTurnStartHistory: ProjectionStoreV2Shape["getTurnStartHistory"] = Effect.fn(
       "ProjectionStore.getTurnStartHistory",
     )(
-      function* (threadId, runIds) {
+      function* (threadId, runIds, page) {
+        if (page !== undefined)
+          return yield* readForkHistoryPage(sql, threadId, runIds, page).pipe(
+            Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)),
+          );
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_turn_items
           WHERE thread_id = ${threadId}
-            AND type IN ('user_message','assistant_message','command_execution','error',
-              'run_interrupt_result','file_change','proposed_plan')
+            AND type IN ${sql.in(FORK_HISTORY_TYPES)}
             AND ${runIds === undefined ? sql`1` : sql`run_id IN ${sql.in(runIds)}`}
           ORDER BY ordinal ASC, turn_item_id ASC
         `;
@@ -5650,9 +5625,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }>`SELECT item.turn_item_id, item.run_id, item.node_id, item.parent_item_id, item.type, item.status, item.ordinal,
           ${includePersistentOutput ? sql`attempt.attempt_id` : sql`NULL`} AS attempt_id,
           ${includePersistentOutput ? sql`attempt.status` : sql`NULL`} AS attempt_status,
-          ${
-            includePersistentOutput ? sql`CASE WHEN ${inlineWorkOutput} THEN 1 ELSE 0 END` : sql`0`
-          } AS persistent_output,
+          ${includePersistentOutput ? sql`item.inline_work_output` : sql`0`} AS persistent_output,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.inputIntent') END AS input_intent,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.createdBy') END AS created_by,
           CASE WHEN item.type IN ('user_message', 'assistant_message') THEN json_extract(item.payload_json, '$.messageId') END AS message_id
@@ -6206,7 +6179,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           CROSS JOIN orchestration_v2_projection_turn_items AS item
             ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.run_id IS json_extract(wanted.value, '$.id')
-          WHERE item.status = 'completed' AND ${inlineWorkOutput}`;
+          WHERE item.status = 'completed' AND item.inline_work_output = 1`;
                 if (found.length === 0) break;
                 for (const row of found)
                   persistentOutputs.add(`${row.thread_id}:${row.turn_item_id}`);
@@ -6640,7 +6613,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
               WHERE held.run_id = per_run.run_key
                 AND held.type = 'user_message'
-                AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+                AND json_valid(held.payload_json) AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
             )
             ELSE 0
           END AS item_count
@@ -6659,7 +6632,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
                 WHERE held.run_id = counts.run_key
                   AND held.type = 'user_message'
-                  AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+                  AND json_valid(held.payload_json) AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
               )
               ELSE 0
             END
@@ -7153,7 +7126,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       while (pendingSourceIds.length > 0) {
         const sourceId = pendingSourceIds.pop();
         if (sourceId === undefined || rowsByThreadId.has(sourceId)) continue;
-        const source = (yield* selectShellThreadRows(sourceId))[0];
+        const source = (yield* selectShellThreadRows(sourceId, { includeDeleted: true }))[0];
         if (source === undefined) continue;
         rowsByThreadId.set(sourceId, source);
         if (source.forked_from_run_source_thread_id !== null) {
@@ -7394,7 +7367,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               if (nextId === undefined || rowsByThreadId.has(nextId)) {
                 continue;
               }
-              const rows = yield* selectShellThreadRows(nextId);
+              const rows = yield* selectShellThreadRows(nextId, {
+                includeDeleted: nextId !== threadId,
+              });
               const row = rows[0];
               if (row === undefined) {
                 continue;
@@ -8684,26 +8659,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
           })),
         ),
-      getTurnStartHistory: (threadId, runIds) =>
+      getTurnStartHistory: (threadId, runIds, page) =>
         service
           .getThreadProjection(threadId)
-          .pipe(
-            Effect.map((projection) =>
-              projection.turnItems.filter(
-                (item) =>
-                  [
-                    "user_message",
-                    "assistant_message",
-                    "command_execution",
-                    "error",
-                    "run_interrupt_result",
-                    "file_change",
-                    "proposed_plan",
-                  ].includes(item.type) &&
-                  (runIds === undefined || (item.runId !== null && runIds.includes(item.runId))),
-              ),
-            ),
-          ),
+          .pipe(Effect.map((projection) => selectMemoryHistory(projection, runIds, page))),
       getRuntimeRecoveryProjection: (threadId) => service.getThreadProjection(threadId),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(

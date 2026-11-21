@@ -1,6 +1,30 @@
 import { entry } from "../entry.ts";
 
 export const environmentEntries = {
+  "theme.set": entry({
+    resource: "theme",
+    verb: "set",
+    name: "goat_theme_set",
+    toolkit: "environment",
+    summary: "Publish and select an environment theme.",
+    description: "Validate and optionally publish a theme, then select it for this environment.",
+    guide:
+      "Requires settings:write and a person enabling agent theme changes. An empty themeId selects the stock theme for connected clients; goat theme clear instead removes the default and leaves their current themes alone. CSS is limited to scoped, vetted styles.",
+    parameters: {
+      themeId: "Built-in or published theme id, or empty to select the stock theme.",
+      appearance: "Set light, dark, or system appearance independently or with a theme.",
+      theme: "Optional theme file to publish under themeId.",
+    },
+    effect: "destructive",
+    capability: "settings.write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "Republishing assigns the supplied theme, while each selection refreshes the timestamp.",
+    annotations: { idempotentHint: false, openWorldHint: false },
+  }),
   "environment.usage": entry({
     resource: "environment",
     verb: "usage",

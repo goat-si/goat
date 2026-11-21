@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
@@ -8,6 +9,12 @@ import { describe, expect } from "vite-plus/test";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as M from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
+import {
+  resolveMemoryModelSelection,
+  resolveReviewGuideModelSelection,
+  resolveTextGenerationRoute,
+} from "@goat/shared/serverSettings";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -15,11 +22,15 @@ import * as TextGeneration from "./TextGeneration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import { TextGenerationProject } from "./textGenerationCapability.ts";
+import { memoryFixture } from "./memoryGenerationFixture.testkit.ts";
 
 const makeStubTextGeneration = (
   overrides: Partial<TextGeneration.TextGeneration["Service"]>,
 ): TextGeneration.TextGeneration["Service"] =>
   TextGeneration.TextGeneration.of({
+    ...noMemoryGeneration,
     generateCommitMessage: () =>
       Effect.die("generateCommitMessage stub not configured for this test"),
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
@@ -44,7 +55,7 @@ const makeStubInstance = (
     enabled: true,
     snapshot: {} as ProviderInstance["snapshot"],
     orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-    textGeneration,
+    textGeneration: { ...noMemoryGeneration, ...textGeneration },
   }) satisfies ProviderInstance;
 
 const makeStubRegistry = (
@@ -108,60 +119,6 @@ describe("TextGeneration.generateChannelReception", () => {
     }),
   );
 });
-
-const memoryFixture = (instanceId: ProviderInstanceId) => {
-  const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, "0")}`;
-  const modelSelection = createModelSelection(instanceId, "pinned-model");
-  const sourceThread = {
-    environmentId: M.EnvironmentId.make("fixture-owner"),
-    threadId: M.ThreadId.make(uuid(1)),
-  };
-  const sourceWatermark = {
-    fromEventId: M.EventId.make(uuid(2)),
-    toEventId: M.EventId.make(uuid(3)),
-    throughSequence: 7,
-  };
-  const memorySpaceId = M.MemorySpaceId.make(uuid(4));
-  const memoryId = M.MemoryId.make(uuid(5));
-  const heads = [6, 7].map((n) => ({
-    revision: {
-      memorySpaceId,
-      memoryId,
-      revisionId: M.MemoryRevisionId.make(uuid(n)),
-      operationId: M.MemoryOperationId.make(uuid(n + 10)),
-      parents: [],
-      scope: { kind: "user" as const },
-      payloadRef: M.MemoryRevisionId.make(uuid(n)),
-      assertionKind: "inference" as const,
-      provenance: { environmentId: sourceThread.environmentId },
-      createdAtUtc: "2026-10-14T00:00:00.000Z",
-    },
-    payload: { text: "ordinary fixture", evidence: [], derivedFromMemoryRevisions: [] },
-  }));
-  const summary: M.GenerateMemorySummaryInput = {
-    cwd: "/isolated-fixture",
-    sourceThread,
-    sourceWatermark,
-    messages: [{ messageId: M.MessageId.make(uuid(8)), text: "ordinary fixture", completed: true }],
-    modelSelection,
-  };
-  const conflict: M.ResolveMemoryConflictInput = {
-    cwd: summary.cwd,
-    memorySpaceId,
-    memoryId,
-    conflictId: M.MemoryConflictId.make(uuid(9)),
-    heads,
-    modelSelection,
-  };
-  const execution: M.MemoryGenerationExecution = {
-    requestedModelSelection: modelSelection,
-    effectiveProvider: M.ProviderDriverKind.make("codex"),
-    effectiveModel: "effective-alias",
-    providerInstanceId: instanceId,
-    environmentId: sourceThread.environmentId,
-  };
-  return { summary, conflict, execution };
-};
 
 describe("TextGeneration memory routing", () => {
   it.effect("routes both memory operations by pinned instance", () =>
@@ -327,11 +284,14 @@ const OMO = ProviderInstanceId.make("omo");
 
 const capableSelectionHarness = (
   snapshots: ReadonlyArray<M.ServerProvider>,
-  options: { readonly awaitingFirstCheck?: true } = {},
+  options: {
+    readonly awaitingFirstCheck?: ProviderInstanceId;
+    readonly memoryCapabilities?: ProviderInstance["textGeneration"]["memoryCapabilities"];
+  } = {},
 ) => {
   const ran: Array<M.ModelSelection> = [];
-  const instances = snapshots.map((snapshot) => ({
-    ...makeStubInstance(
+  const instances = snapshots.map((snapshot) => {
+    const instance = makeStubInstance(
       snapshot.instanceId,
       makeStubTextGeneration({
         generateBranchName: (input) =>
@@ -340,13 +300,23 @@ const capableSelectionHarness = (
             return { branch: "feature/fallback" };
           }),
       }),
-    ),
-    driverKind: snapshot.driver,
-    snapshot: {
-      getSnapshot: Effect.succeed(snapshot),
-      ...(options.awaitingFirstCheck ? { isAwaitingFirstCheck: Effect.succeed(true) } : {}),
-    } as unknown as ProviderInstance["snapshot"],
-  }));
+    );
+    return {
+      ...instance,
+      driverKind: snapshot.driver,
+      textGeneration: {
+        ...instance.textGeneration,
+        memoryCapabilities:
+          options.memoryCapabilities ?? instance.textGeneration.memoryCapabilities,
+      },
+      snapshot: {
+        getSnapshot: Effect.succeed(snapshot),
+        ...(options.awaitingFirstCheck === snapshot.instanceId
+          ? { isAwaitingFirstCheck: Effect.succeed(true) }
+          : {}),
+      } as unknown as ProviderInstance["snapshot"],
+    };
+  });
   const generation = TextGeneration.make.pipe(
     Effect.provideService(
       ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -367,6 +337,38 @@ const generateBranch = (
 ) => generation.generateBranchName({ cwd: "/tmp", message: "Add a model", modelSelection });
 
 describe("TextGeneration model Settings no longer offers", () => {
+  it.effect.each(["saved", "fallback"] as const)(
+    "generates a branch name on the %s route without starting a memory preflight",
+    (route) =>
+      Effect.gen(function* () {
+        const saved = createModelSelection(CODEX, M.DEFAULT_TEXT_GENERATION_MODEL);
+        const fallback = createModelSelection(PI, "default");
+        const { ran, generation } = capableSelectionHarness(
+          [
+            textProvider(CODEX, "codex", [{ slug: saved.model }]),
+            textProvider(PI, "pi", [{ slug: fallback.model }]),
+          ],
+          {
+            ...(route === "fallback" ? { awaitingFirstCheck: CODEX } : {}),
+            memoryCapabilities: Effect.die("Ordinary text generation ran a memory preflight."),
+          },
+        );
+        yield* generateBranch(
+          yield* generation.pipe(
+            Effect.provide(
+              ServerSettings.layerTest({
+                providerInstances: {
+                  [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+                },
+              }),
+            ),
+          ),
+          saved,
+        );
+        expect(ran).toEqual([route === "saved" ? saved : fallback]);
+      }),
+  );
+
   it.effect("moves a saved Pi extension model to Pi's default model", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([
@@ -376,7 +378,15 @@ describe("TextGeneration model Settings no longer offers", () => {
         ]),
       ]);
       yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        yield* generation.pipe(
+          Effect.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+              },
+            }),
+          ),
+        ),
         createModelSelection(PI, "demo/demo-model"),
       );
       expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
@@ -397,25 +407,33 @@ describe("TextGeneration model Settings no longer offers", () => {
     }),
   );
 
-  it.effect("uses Pi's documented default when no other provider can generate text", () =>
-    Effect.gen(function* () {
-      const { ran, generation } = capableSelectionHarness([
-        textProvider(PI, "pi", [{ slug: "demo/demo-model", supportsTextGeneration: false }], false),
-      ]);
-      yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        createModelSelection(PI, "demo/demo-model"),
-      );
-      expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
-    }),
+  it.effect(
+    "refuses Pi when its snapshot has no text generation support and there is no fallback",
+    () =>
+      Effect.gen(function* () {
+        const { ran, generation } = capableSelectionHarness([
+          textProvider(
+            PI,
+            "pi",
+            [{ slug: "demo/demo-model", supportsTextGeneration: false }],
+            false,
+          ),
+        ]);
+        const error = yield* Effect.flip(
+          generateBranch(
+            yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+            createModelSelection(PI, "demo/demo-model"),
+          ),
+        );
+        expect(error.detail).toBe("route_unavailable");
+        expect(ran).toEqual([]);
+      }),
   );
 
-  // OmO has no text generation default in the model tables; Settings shows its first listed model.
   it.effect.each([
-    ["a flagged OmO model", OMO, false, false],
-    ["OmO flagged as a whole with no other provider", OMO, true, false],
-    ["Pi flagged as a whole with OmO the first capable fallback", PI, true, true],
-  ] as const)("runs OmO's own default for %s", ([, saved, wholeListing, withOmoFallback]) =>
+    ["a flagged OmO model", OMO, false],
+    ["Pi flagged as a whole with OmO the first capable fallback", PI, true],
+  ] as const)("runs OmO's own default for %s", ([, saved, withOmoFallback]) =>
     Effect.gen(function* () {
       const flagged = [
         { slug: "default" },
@@ -426,48 +444,65 @@ describe("TextGeneration model Settings no longer offers", () => {
           saved,
           saved === OMO ? "omo" : "pi",
           flagged,
-          wholeListing ? false : undefined,
+          withOmoFallback ? false : undefined,
         ),
         ...(withOmoFallback ? [textProvider(OMO, "omo", [{ slug: "default" }])] : []),
       ]);
       yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        yield* generation.pipe(
+          Effect.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [OMO]: { driver: M.ProviderDriverKind.make("omo"), enabled: true },
+              },
+            }),
+          ),
+        ),
         createModelSelection(saved, "demo/demo-model"),
       );
       expect(ran).toEqual([{ instanceId: OMO, model: "default" }]);
     }),
   );
 
-  it.effect("keeps the saved model when the status predates the flag or is not checked yet", () =>
+  it.effect("refuses an OmO that is off at machine level", () =>
     Effect.gen(function* () {
-      const saved = createModelSelection(PI, "demo/demo-model");
-      const older = capableSelectionHarness([
-        textProvider(PI, "pi", [{ slug: "demo/demo-model" }]),
+      const { ran, generation } = capableSelectionHarness([
+        textProvider(PI, "pi", [{ slug: "default" }, { slug: "demo/demo-model" }], false),
+        textProvider(OMO, "omo", [{ slug: "default" }]),
       ]);
-      yield* generateBranch(
-        yield* older.generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        saved,
+      const error = yield* Effect.flip(
+        generateBranch(
+          yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+          createModelSelection(PI, "demo/demo-model"),
+        ),
       );
-      const unchecked = capableSelectionHarness(
-        [
-          textProvider(
-            PI,
-            "pi",
-            [{ slug: "demo/demo-model", supportsTextGeneration: false }],
-            false,
-          ),
-        ],
-        { awaitingFirstCheck: true },
-      );
-      yield* generateBranch(
-        yield* unchecked.generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        saved,
-      );
-      expect([...older.ran, ...unchecked.ran]).toEqual([saved, saved]);
+      expect(error.detail).toBe("route_unavailable");
+      expect(ran).toEqual([]);
     }),
   );
 
-  // goat_environment_settings_update stores the model through updateSettings without checking the list.
+  it.effect("keeps the saved model when the ready snapshot predates the capability flag", () =>
+    Effect.gen(function* () {
+      const saved = createModelSelection(PI, "demo/demo-model");
+      const { generation, ran } = capableSelectionHarness([
+        textProvider(PI, "pi", [{ slug: saved.model }]),
+      ]);
+      yield* generateBranch(
+        yield* generation.pipe(
+          Effect.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+              },
+            }),
+          ),
+        ),
+        saved,
+      );
+      expect(ran).toEqual([saved]);
+    }),
+  );
+
   it.effect("falls back from a flagged model an agent saved through the settings service", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([
@@ -492,6 +527,244 @@ describe("TextGeneration model Settings no longer offers", () => {
         ),
       );
       expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
+    }),
+  );
+});
+
+const CLAUDE = ProviderInstanceId.make("claudeAgent");
+const PROJECT = M.ProjectId.make("project-without-codex");
+const flaggedPi = () =>
+  textProvider(PI, "pi", [{ slug: "demo/demo-model", supportsTextGeneration: false }], false);
+const readyClaude = () => textProvider(CLAUDE, "claudeAgent", [{ slug: "claude-haiku-5-5" }]);
+
+const codexSelection = createModelSelection(CODEX, M.DEFAULT_TEXT_GENERATION_MODEL);
+const claudeSelection = createModelSelection(CLAUDE, "claude-haiku-5-5");
+const readyCodex = textProvider(CODEX, "codex", [{ slug: codexSelection.model }]);
+
+it.effect.each([
+  {
+    dimension: "the only provider is disabled for the project",
+    providers: [readyCodex],
+    projectId: PROJECT,
+    expected: null,
+  },
+  {
+    dimension: "the saved provider is signed out",
+    providers: [{ ...readyCodex, auth: { status: "unauthenticated" as const } }, readyClaude()],
+    projectId: null,
+    expected: claudeSelection,
+  },
+  {
+    dimension: "the saved provider has exhausted its quota",
+    providers: [
+      {
+        ...readyCodex,
+        usageLimits: {
+          checkedAt: readyCodex.checkedAt,
+          windows: [
+            {
+              id: "weekly",
+              kind: "weekly" as const,
+              label: "Weekly",
+              usedPercent: 100,
+              exhausted: true,
+            },
+          ],
+        },
+      },
+      readyClaude(),
+    ],
+    projectId: null,
+    expected: claudeSelection,
+  },
+  {
+    dimension: "the saved provider is cached as ready while awaiting its first check",
+    providers: [{ ...readyCodex, awaitingFirstCheck: true as const }, readyClaude()],
+    awaitingFirstCheck: CODEX,
+    projectId: null,
+    expected: claudeSelection,
+  },
+])("branch generation agrees with the Settings route when $dimension", (row) =>
+  Effect.gen(function* () {
+    const now = Date.parse(readyCodex.checkedAt);
+    yield* TestClock.setTime(now);
+    const layer = ServerSettings.layerTest({
+      textGenerationModelSelection: codexSelection,
+      projectSettingsOverrides: {
+        [PROJECT]: { providerInstances: { [CODEX]: { enabled: false } } },
+      },
+    });
+    const { ran, generation } = capableSelectionHarness(row.providers, row);
+    const settings = yield* Effect.service(ServerSettings.ServerSettingsService).pipe(
+      Effect.flatMap((service) => service.getSettings),
+      Effect.provide(layer),
+    );
+    const result = yield* generateBranch(
+      yield* generation.pipe(Effect.provide(layer)),
+      settings.textGenerationModelSelection,
+    ).pipe(Effect.provideService(TextGenerationProject, row.projectId), Effect.result);
+    const settingsRoute = resolveTextGenerationRoute(
+      settings,
+      settings.textGenerationModelSelection,
+      row.providers,
+      row.projectId,
+      now,
+    );
+    expect({
+      shown: settingsRoute.reason === "no_fallback" ? null : settingsRoute.selection,
+      dispatched: ran,
+      error: Result.isFailure(result) ? result.failure.detail : null,
+    }).toEqual({
+      shown: row.expected,
+      dispatched: row.expected === null ? [] : [row.expected],
+      error: row.expected === null ? "route_unavailable" : null,
+    });
+    if (row.awaitingFirstCheck !== undefined) {
+      expect(resolveMemoryModelSelection(settings, row.providers, now)).toEqual(row.expected);
+      expect(resolveReviewGuideModelSelection(settings, row.providers, null, now)).toEqual(
+        row.expected,
+      );
+    }
+  }),
+);
+
+describe("TextGeneration fallback provider", () => {
+  it.effect("falls back past a signed-out provider to a ready one", () =>
+    Effect.gen(function* () {
+      const { ran, generation } = capableSelectionHarness([
+        flaggedPi(),
+        {
+          ...textProvider(CODEX, "codex", [{ slug: M.DEFAULT_TEXT_GENERATION_MODEL }]),
+          auth: { status: "unauthenticated" },
+        },
+        readyClaude(),
+      ]);
+      yield* generateBranch(
+        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        createModelSelection(PI, "demo/demo-model"),
+      );
+      expect(ran).toEqual([{ instanceId: CLAUDE, model: "claude-haiku-5-5" }]);
+    }),
+  );
+
+  it.effect("runs a ready fallback when the saved provider is unregistered", () =>
+    Effect.gen(function* () {
+      const fallbackModel = "gpt-5.6-sol";
+      const { ran, generation } = capableSelectionHarness([
+        textProvider(CODEX, "codex", [{ slug: fallbackModel }]),
+      ]);
+      const saved = createModelSelection(
+        ProviderInstanceId.make("missing-instance"),
+        "missing-model",
+      );
+      yield* generateBranch(
+        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        saved,
+      );
+      expect(ran).toEqual([createModelSelection(CODEX, fallbackModel)]);
+    }),
+  );
+
+  it.effect("skips a provider the caller's project turned off, and only for that project", () =>
+    Effect.gen(function* () {
+      const { ran, generation } = capableSelectionHarness([
+        flaggedPi(),
+        textProvider(CODEX, "codex", [{ slug: M.DEFAULT_TEXT_GENERATION_MODEL }]),
+        readyClaude(),
+      ]);
+      const service = yield* generation.pipe(
+        Effect.provide(
+          ServerSettings.layerTest({
+            projectSettingsOverrides: {
+              [PROJECT]: { providerInstances: { [CODEX]: { enabled: false } } },
+            },
+          }),
+        ),
+      );
+      const saved = createModelSelection(PI, "demo/demo-model");
+      yield* generateBranch(service, saved).pipe(
+        Effect.provideService(TextGenerationProject, PROJECT),
+      );
+      yield* generateBranch(service, saved);
+      expect(ran).toEqual([
+        { instanceId: CLAUDE, model: "claude-haiku-5-5" },
+        { instanceId: CODEX, model: M.DEFAULT_TEXT_GENERATION_MODEL },
+      ]);
+    }),
+  );
+
+  it.effect("logs a fallback once per change of the chosen model, without error text", () =>
+    Effect.gen(function* () {
+      const logs: Array<unknown> = [];
+      const codex = textProvider(CODEX, "codex", [{ slug: M.DEFAULT_TEXT_GENERATION_MODEL }]);
+      const { generation } = capableSelectionHarness([flaggedPi(), codex]);
+      const service = yield* generation.pipe(Effect.provide(ServerSettings.layerTest()));
+      const saved = createModelSelection(PI, "demo/demo-model");
+      yield* Effect.gen(function* () {
+        yield* generateBranch(service, saved);
+        yield* generateBranch(service, saved);
+        yield* generateBranch(service, createModelSelection(PI, "demo/other-model"));
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => void logs.push(message))], {
+            mergeWithExisting: false,
+          }),
+        ),
+      );
+      const fallbacks = logs.filter((message) =>
+        JSON.stringify(message).includes("Text generation fell back"),
+      );
+      expect(fallbacks).toEqual([
+        [
+          "Text generation fell back",
+          {
+            from: { instanceId: PI, model: "demo/demo-model" },
+            to: { instanceId: CODEX, model: M.DEFAULT_TEXT_GENERATION_MODEL },
+            reason: "provider_unsupported",
+          },
+        ],
+        [
+          "Text generation fell back",
+          {
+            from: { instanceId: PI, model: "demo/other-model" },
+            to: { instanceId: CODEX, model: M.DEFAULT_TEXT_GENERATION_MODEL },
+            reason: "provider_unsupported",
+          },
+        ],
+      ]);
+    }),
+  );
+});
+
+describe("Settings normalization on OmO", () => {
+  it.effect("moves a disabled text generation provider to OmO's default model", () =>
+    Effect.gen(function* () {
+      const off = (driver: string) => ({
+        driver: M.ProviderDriverKind.make(driver),
+        enabled: false,
+      });
+      const settings = yield* Effect.gen(function* () {
+        return yield* (yield* ServerSettings.ServerSettingsService).getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettings.layerTest({
+            providerInstances: {
+              [CODEX]: off("codex"),
+              [CLAUDE]: off("claudeAgent"),
+              [ProviderInstanceId.make("cursor")]: off("cursor"),
+              [ProviderInstanceId.make("grok")]: off("grok"),
+              [ProviderInstanceId.make("muse")]: off("muse"),
+              [PI]: off("pi"),
+              [OMO]: { driver: M.ProviderDriverKind.make("omo"), enabled: true },
+            },
+            textGenerationModelSelection: createModelSelection(
+              CODEX,
+              M.DEFAULT_TEXT_GENERATION_MODEL,
+            ),
+          }),
+        ),
+      );
+      expect(settings.textGenerationModelSelection).toEqual(createModelSelection(OMO, "default"));
     }),
   );
 });

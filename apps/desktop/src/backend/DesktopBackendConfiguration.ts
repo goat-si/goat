@@ -256,7 +256,41 @@ interface SharedBootstrapInput {
   readonly bootstrapToken: string;
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
+  readonly hostScope: string | undefined;
 }
+
+// Matches the server's DESKTOP_HOST_SCOPE_ENV.
+const DESKTOP_HOST_SCOPE_ENV = "GOAT_DESKTOP_HOST_SCOPE";
+const HOST_SCOPE_FILE_NAME = "desktop-host-scope";
+const HOST_SCOPE_PATTERN = /^[0-9a-f]{32}$/;
+
+/**
+ * Not a credential: it only tells this install's Windows and WSL servers that
+ * they run on one machine, so usage both read from one Windows directory counts
+ * once. Persisted so summaries from earlier launches still match.
+ */
+const readOrCreateHostScope = Effect.fn("desktop.backendConfiguration.readOrCreateHostScope")(
+  function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const random = yield* SecureRandom.SecureRandom;
+    const scopePath = environment.path.join(environment.stateDir, HOST_SCOPE_FILE_NAME);
+    const existing = (yield* fileSystem
+      .readFileString(scopePath)
+      .pipe(Effect.orElseSucceed(() => ""))).trim();
+    if (HOST_SCOPE_PATTERN.test(existing)) return existing;
+    const scope = Hex.encode(yield* random.randomBytes(16).pipe(Effect.orDie));
+    return yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true }).pipe(
+      Effect.andThen(fileSystem.writeFileString(scopePath, scope)),
+      Effect.as(scope),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not persist the desktop host scope.", { cause }).pipe(
+          Effect.as(undefined),
+        ),
+      ),
+    );
+  },
+);
 
 type WslPreflightRuntime =
   | {
@@ -407,7 +441,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
     const runtime = yield* wslEnv.prepareRuntime(runningDistro, input.runtimeArchive);
     if (runtime.ok) {
       // Staged runtimes bundle Node and node-pty; provider PATH discovery must not require them.
-      const stagedProbe = yield* wslEnv.probeRuntime(runningDistro, runtime.linuxAppRoot);
+      const stagedProbe = yield* wslEnv.probeRuntime(runningDistro);
       if (stagedProbe.ok) {
         yield* wslServerTree.cleanupLegacy;
         return {
@@ -420,7 +454,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
         } as const;
       }
       yield* Effect.logWarning(
-        "The staged WSL runtime did not start; retrying from the mounted server tree.",
+        "The staged WSL runtime probe failed; retrying from the mounted server tree.",
         { reason: stagedProbe.reason },
       );
       stagedFailure = { runtimeId: input.runtimeArchive.runtimeId, reason: stagedProbe.reason };
@@ -563,6 +597,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
           : undefined,
         GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         GOAT_CLI_PATH: Option.getOrUndefined(input.cliPath),
+        [DESKTOP_HOST_SCOPE_ENV]: input.hostScope,
       },
       extendEnv: true,
       bootstrap,
@@ -672,8 +707,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const httpBaseUrl = new URL(`http://${rendererHost}:${input.port}`);
 
   const distroArgs = distroForConfig ? ["-d", distroForConfig] : [];
-  const forwardedEnv: Record<string, string> = {};
-  const forwardedEnvNames: string[] = [];
+  const forwardedEnv: Record<string, string> =
+    input.hostScope === undefined ? {} : { [DESKTOP_HOST_SCOPE_ENV]: input.hostScope };
+  const forwardedEnvNames = Object.keys(forwardedEnv);
   for (const name of WSL_FORWARDED_ENV_NAMES) {
     const value = process.env[name];
     if (value !== undefined && value.length > 0) {
@@ -693,6 +729,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       legacyEnvName(name) ?? name,
     ]),
   );
+  ownedNames.add(DESKTOP_HOST_SCOPE_ENV);
   for (const [key, value] of Object.entries(process.env)) {
     if (ownedNames.has(key)) continue;
     // mergeWslEnv preserves inherited suffixes; remove this owned variable
@@ -777,6 +814,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     ...baseConfig,
     args: [
       ...distroArgs,
+      // WSL otherwise inherits the Windows-mounted desktop working directory.
+      "--cd",
+      "~",
       "--exec",
       "env",
       `PATH=${launchPath}`,
@@ -803,6 +843,13 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   // Random generation yields; serialize it so concurrent backends cannot capture distinct bootstrap secrets.
   const secretRef = yield* SynchronizedRef.make(Option.none<string>());
+  const hostScope = yield* Effect.cached(
+    readOrCreateHostScope().pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+      Effect.provideService(SecureRandom.SecureRandom, random),
+    ),
+  );
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
@@ -830,6 +877,7 @@ export const make = Effect.gen(function* () {
       bootstrapToken,
       bootstrapSecret,
       observabilitySettings,
+      hostScope: yield* hostScope,
     } satisfies SharedBootstrapInput;
   });
 

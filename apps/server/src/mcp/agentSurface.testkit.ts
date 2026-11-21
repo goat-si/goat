@@ -1,4 +1,5 @@
 import * as Usage from "../usage/UsageService.ts";
+import * as ThemePublication from "../themePublication.ts";
 import * as Processes from "../diagnostics/ProcessResourceMonitor.ts";
 import * as Telemetry from "../resourceTelemetry/ResourceTelemetry.ts";
 import * as Review from "../review/ReviewService.ts";
@@ -122,6 +123,7 @@ import * as HostHealthMonitor from "../fleet/health/HostHealthMonitor.ts";
 import * as FleetHostStates from "../fleet/health/FleetHostStates.ts";
 import * as Rescheduler from "../fleet/health/Rescheduler.ts";
 import { HtmlToolkit } from "./toolkits/html/tools.ts";
+import { MessageToolkit } from "./toolkits/message/tools.ts";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -167,6 +169,7 @@ export const toolkits = {
   docs: DocsToolkit,
   fleetHealth: FleetHealthToolkit,
   html: HtmlToolkit,
+  message: MessageToolkit,
   memory: MemoryToolkit,
   memoryAdministration: MemoryAdministrationToolkit,
   orchestrator: OrchestratorToolkit,
@@ -195,6 +198,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,
   Layer.mock(DecisionService.DecisionService)({}),
+  Layer.mock(ThemePublication.ThemePublicationService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),

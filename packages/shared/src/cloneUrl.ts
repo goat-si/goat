@@ -56,13 +56,19 @@ export function cloneUrlForProtocol(url: string, protocol: CloneProtocol): strin
     const azure = /^([^/?#]+)\/([^/?#]+)\/_git\/([^/?#]+)$/.exec(parsed.path);
     return azure ? `git@ssh.dev.azure.com:v3/${azure[1]}/${azure[2]}/${azure[3]}` : null;
   }
+  // Bitbucket Cloud serves SSH only from `ssh.bitbucket.org` and HTTPS only from `bitbucket.org`.
+  const host = /^(?:(?:alt)?ssh\.)?bitbucket\.org$/i.test(parsed.host)
+    ? protocol === "ssh"
+      ? "ssh.bitbucket.org"
+      : "bitbucket.org"
+    : parsed.host;
   // SCP paths are literal; URI paths use percent escapes.
   try {
-    if (protocol === "ssh") return `git@${parsed.host}:${decodeURIComponent(parsed.path)}`;
+    if (protocol === "ssh") return `git@${host}:${decodeURIComponent(parsed.path)}`;
     const path = parsed.scp
       ? parsed.path.split("/").map(encodeURIComponent).join("/")
       : parsed.path;
-    return `https://${parsed.host}/${path}`;
+    return `https://${host}/${path}`;
   } catch {
     return null;
   }
@@ -80,10 +86,16 @@ export function cloneUrlRepositoryPath(url: string): string | null {
   if (isWindowsDrivePath(url.trim())) return null;
   const parsed = parseCloneUrl(url);
   if (!parsed) return null;
-  const segments = [
-    parsed.host,
-    ...(parsed.path.split(/[?#]/)[0] ?? "").split("/").filter(Boolean),
-  ];
+  let pathSegments = (parsed.path.split(/[?#]/)[0] ?? "").split("/").filter(Boolean);
+  if (!parsed.scp) {
+    try {
+      pathSegments = pathSegments.map(decodeURIComponent);
+    } catch {
+      return null;
+    }
+    if (pathSegments.some((segment) => segment.includes("/"))) return null;
+  }
+  const segments = [parsed.host, ...pathSegments];
   const last = segments.at(-1) ?? "";
   if (last.endsWith(".git")) segments[segments.length - 1] = last.slice(0, -".git".length);
   if (

@@ -68,7 +68,7 @@ GOAT prefers a matching `fj` login and falls back to `tea` when `fj` is unavaila
 or has no login for that server. Once an account is selected, failed actions stay on that
 account. Settings shows the detected CLI. Forgejo and Gitea share one integration entry.
 Servers hosted under a URL subpath, such as `https://example.com/forgejo`, use `tea` because
-fj 0.6 does not preserve the subpath when checking its account.
+fj does not preserve the subpath when checking its account.
 
 When cloning or publishing, use a full repository URL to select a specific server.
 You can use `owner/repo` when only one fj server is configured, or with your default `tea`
@@ -229,6 +229,12 @@ For a fork whose checkout also has an `upstream` remote, the list shows pull req
 fork's own `origin` repository. Turn on **Include upstream repos** in the filters to add the
 repository it was forked from.
 
+When several connected environments have a project for the same repository, the list reads it
+through one of them. If that environment cannot sign in to the host, the **All** list reads the
+repository through another environment that can, and each row names the environment it came from.
+Lists that depend on who is signed in (**Reviewing**, **Authored**, an author filter of "me") keep
+each repository's own environment, so they never show another account's pull requests.
+
 Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
 manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The
 repository must be a project in the connected environment. Outside MCP clients need the
@@ -238,6 +244,16 @@ Comments, reviews and replies require a retry key. If a write's outcome is uncer
 checks activity and tells you when it cannot confirm the result; a partial GitLab review or
 unconfirmed approval does not count as complete. Merge requests act on the host's current head
 and may be queued; use branch protection when a merge must require a particular head.
+
+Save a filter setup with **Views → Save current view** on the Pull Requests page. For example, choose
+**Reviewing** (**Your review** on mobile) and save it as "PRs Requesting My Review". Choose a saved view to restore its search,
+filters, sort order, and server/project scope. After changing filters, use **Update saved view** to
+keep the changes, or save another view. You can also rename or delete views from the same menu.
+Saved views stay in the browser or app where you created them and do not sync across devices.
+
+A link to part of a pull request opens that part: a comment or review is marked in the activity, a
+changed-line link opens the file at those lines, a checks link opens the checks, and a commit link
+opens that commit's changes. On web and desktop, hovering a comment or commit link previews it.
 
 On mobile, **Pull requests** lists reviews across your connected environments. Open a review
 to read its description, activity, commits, and changed files. Line comments stay as drafts
@@ -368,7 +384,12 @@ review is terminal. An open or unsynced link keeps it active.
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
 turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
-with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
+with `goat_call {path:"pull_request.watch"}`. An explicitly watched thread counts as working while
+the pull request still has checks running, including after the agent pushes a fix. Once every check
+has finished, including review bots that report as checks, the thread returns to your inbox: what
+happens next is up to a person. That includes a workflow waiting for a maintainer to approve it,
+which runs only once someone does. The watch stays on and still wakes the agent on new comments,
+failed checks or conflicts.
 
 The server checks every two minutes. On github.com, when GitHub offers your account pull request
 event streams, it also checks about 20 seconds after GitHub reports a push, review, state change,
@@ -392,8 +413,9 @@ only pauses watching. Unsettle the thread before starting a new watch. Watching 
 again does not repeat check or conflict news its last watch already reported; unlinking the pull
 request clears that. Subagents cannot watch pull requests; the thread that delegated to them does.
 
-An explicitly watched thread does not auto-settle. It appears in **Priority**, at the top of
-**Activity** on web and desktop and at the top of the thread list on mobile. **Mark all
+An explicitly watched thread does not auto-settle, even once its checks have finished. While they
+run it appears in **Priority**, at the top of **Activity** on web and desktop and at the top of the
+thread list on mobile. **Mark all
 as read** acknowledges unread completions without stopping a watch. Agents stop watching when they
 hand the work back to you.
 

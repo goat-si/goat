@@ -54,7 +54,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
+  Layer.provideMerge(layerServerConfig),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
@@ -176,6 +176,304 @@ const fakeHost = (input: {
 };
 
 describe("pull request watch host events", () => {
+  it.effect("baselines a newly persisted watch before the next periodic sweep", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest(
+        "pr-watch-start-baseline",
+        65,
+      );
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const key = { host: "github.com", repository: "goat-si/goat", number: 65 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("baseline-stop"),
+        threadId,
+        ...key,
+        watching: false,
+      });
+      const detailReads = yield* Queue.unbounded<void>();
+      const watchListings = yield* Queue.unbounded<void>();
+      const events = yield* Queue.unbounded<import("@goat/contracts").OrchestrationV2DomainEvent>();
+      let checks: PullRequestDetail["checks"] = [
+        { name: "lint", status: "pending", description: null, url: null, required: true },
+      ];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Queue.offer(detailReads, undefined).pipe(
+              Effect.as({
+                ...watchedPullRequestDetail({
+                  projectId,
+                  number: 65,
+                  at: "2026-10-02T12:00:00.000Z",
+                }),
+                headSha: "aaaaaaaaaa",
+                checks,
+              }),
+            ),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () => Effect.succeed(null),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          dispatch: orchestrator.dispatch,
+          streamDomainEvents: Stream.fromQueue(events),
+        }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadsWithPullRequests: (id) =>
+            projections
+              .getThreadsWithPullRequests(id)
+              .pipe(Effect.tap(() => Queue.offer(watchListings, undefined))),
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* reactor.start();
+      yield* Queue.take(watchListings);
+      const started = yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("baseline-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/goat-si/goat/pull/65", source: "agent" },
+      });
+      yield* Queue.offerAll(
+        events,
+        started.storedEvents.map((stored) => stored.event),
+      );
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(yield* Queue.size(detailReads), 1);
+      checks = [{ name: "lint", status: "success", description: null, url: null, required: true }];
+      yield* reactor.sweep;
+      yield* worker.drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.lengthOf(
+        messages.filter((message) => message.notification?.summary === "#65: checks passed"),
+        1,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("wakes once for a rebase change at an unchanged PR timestamp", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest("pr-rebase-watch", 64);
+      let rebaseRequired = false;
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => ({
+              ...watchedPullRequestDetail({
+                projectId,
+                number: 64,
+                at: "2026-10-02T12:00:00.000Z",
+              }),
+              headSha: "aaaaaaaaaa",
+              rebaseRequired,
+            })),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () =>
+            Effect.sync(() => ({
+              status: String(rebaseRequired),
+              remarks: "same",
+              coversDetail: true,
+            })),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      const wakes = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) => messages.filter((message) => message.notification != null),
+      );
+      yield* sweep;
+      rebaseRequired = true;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      const first = yield* wakes;
+      assert.lengthOf(first, 1);
+      assert.include(first[0]!.text, "requires a rebase");
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.lengthOf(yield* wakes, 1);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("a complete GitLab fingerprint avoids detail reads for unchanged running checks", () =>
+    Effect.gen(function* () {
+      const { projectId } = yield* watchPullRequest("pr-complete-fingerprint", 63);
+      let complete = true;
+      let details = 0;
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => {
+              details += 1;
+              return {
+                ...watchedPullRequestDetail({
+                  projectId,
+                  number: 63,
+                  at: "2026-10-02T12:00:00.000Z",
+                }),
+                headSha: "aaaaaaaaaa",
+                checks: [
+                  {
+                    name: "lint",
+                    status: "pending" as const,
+                    description: null,
+                    url: null,
+                    required: true,
+                  },
+                ],
+              };
+            }),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+          watchFingerprint: () =>
+            Effect.sync(() => ({ status: "same", remarks: "same", coversDetail: complete })),
+          invalidate: () => Effect.void,
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      yield* sweep;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.strictEqual(details, 1);
+      complete = false;
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.strictEqual(details, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("reports check changes even when activity fails and retries remarks", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest(
+        "pr-activity-failure",
+        62,
+      );
+      let available = true;
+      let activityReads = 0;
+      let checks: PullRequestDetail["checks"] = [
+        { name: "lint", status: "pending", description: null, url: null, required: true },
+      ];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => ({
+              ...watchedPullRequestDetail({
+                projectId,
+                number: 62,
+                at: "2026-10-02T12:00:00.000Z",
+              }),
+              headSha: "aaaaaaaaaa",
+              checks,
+            })),
+          activity: () =>
+            Effect.suspend(() => {
+              activityReads += 1;
+              return available
+                ? Effect.succeed({
+                    comments:
+                      activityReads < 3
+                        ? []
+                        : [
+                            {
+                              id: "late-comment",
+                              kind: "review-comment" as const,
+                              author: { login: "reviewer", name: null, avatarUrl: null },
+                              body: "Please check the edge case.",
+                              createdAt: "2026-10-02T12:05:00.000Z",
+                              url: "https://github.com/goat-si/goat/pull/62#late-comment",
+                              path: "src/index.ts",
+                              reviewState: null,
+                            },
+                          ],
+                    commentCount: activityReads < 3 ? 0 : 1,
+                    commentsTruncated: false,
+                    reviewThreads: [],
+                    commits: [],
+                  })
+                : Effect.die("activity unavailable");
+            }),
+          watchFingerprint: () => Effect.succeed(null),
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      const wakes = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) => messages.filter((message) => message.notification != null),
+      );
+      yield* sweep;
+      checks = [{ name: "lint", status: "success", description: null, url: null, required: true }];
+      available = false;
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      const reported = yield* wakes;
+      assert.lengthOf(reported, 1);
+      assert.equal(reported[0]?.notification?.summary, "#62: checks passed");
+      available = true;
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      const recovered = yield* wakes;
+      assert.lengthOf(recovered, 2);
+      assert.include(recovered[1]!.text, "Please check the edge case.");
+      assert.strictEqual(activityReads, 3);
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      assert.lengthOf(yield* wakes, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("opens a host feed for a watched pull request once the first sweep has read it", () =>
     Effect.gen(function* () {
       const { projectId } = yield* watchPullRequest("pr-watch-host-feed-opened", 16);

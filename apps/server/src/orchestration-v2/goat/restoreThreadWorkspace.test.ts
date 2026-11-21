@@ -1,3 +1,5 @@
+import { ServerConfig } from "../../config.ts";
+import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- real Git fixtures run in temporary repositories.
 import { assert, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
@@ -258,4 +260,138 @@ it.effect(
       assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "since"), "utf8"), "kept");
       assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
     }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("retries the snapshot and setup after a failed add left a linked checkout", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, snapshot } = yield* fixture;
+    const kept = NodePath.join(worktreePath, "keep.txt");
+    const hook = NodePath.join(repo, ".git", "hooks", "post-checkout");
+    NodeFS.writeFileSync(hook, "#!/bin/sh\nprintf keep > keep.txt\nexit 1\n", { mode: 0o755 });
+    const restored: string[] = [];
+    const setups: string[] = [];
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, restored, 0, (path) => void setups.push(path))),
+    );
+    const input = { threadId, cwd: repo, worktreePath, branch: "feature" };
+    const error = yield* withWorkspaceLease(worktreePath, Effect.flip(restore(input)));
+    assert.equal(error.reason, "git-failed");
+    assert.isTrue(NodeFS.existsSync(NodePath.join(worktreePath, ".git")));
+    assert.equal(NodeFS.readFileSync(kept, "utf8"), "keep");
+    const pending = yield* makeRestorePending;
+    assert.isFalse(yield* pending.ready(worktreePath));
+    NodeFS.unlinkSync(hook);
+    const retried = yield* withWorkspaceLease(worktreePath, restore(input));
+    assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "tracked"), "utf8"), "changed");
+    assert.deepEqual(setups, [worktreePath]);
+    assert.deepEqual(restored, [snapshot.snapshotRef]);
+    assert.isTrue(yield* pending.ready(worktreePath));
+    assert.isDefined(retried.setAsidePath);
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(retried.setAsidePath ?? "", "keep.txt"), "utf8"),
+      "keep",
+    );
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("rejects a replacement repository before its pending setup can write", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const pending = yield* makeRestorePending;
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "snapshot",
+        headSha: snapshot.headSha,
+        snapshotSha: snapshot.snapshotSha,
+        snapshotRef: snapshot.snapshotRef,
+        applied: true,
+      },
+      repo,
+    );
+    git(repo, ["clone", "--shared", "-b", "feature", repo, worktreePath]);
+    git(worktreePath, ["config", "user.name", "Test"]);
+    git(worktreePath, ["config", "user.email", "test@example.com"]);
+    const file = NodePath.join(worktreePath, "tracked");
+    NodeFS.writeFileSync(file, "different repository");
+    git(worktreePath, ["add", "."]);
+    git(worktreePath, ["commit", "-m", "replacement"]);
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, [], 0, () => NodeFS.writeFileSync(file, "setup write"))),
+    );
+    const failure = yield* Effect.flip(
+      restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+    );
+    assert.equal(failure.reason, "verify-failed");
+    assert.equal(NodeFS.readFileSync(file, "utf8"), "different repository");
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("shares a pre-add recovery marker across server homes and checkout aliases", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const pending = yield* makeRestorePending;
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "branch",
+        headSha: snapshot.headSha,
+        snapshotSha: null,
+        snapshotRef: null,
+      },
+      repo,
+    );
+    git(repo, ["worktree", "add", worktreePath, "feature"]);
+    const alias = worktreePath + "-alias";
+    NodeFS.symlinkSync(worktreePath, alias, "junction");
+    const second = yield* makeRestorePending.pipe(
+      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "other-server-restore-" })),
+    );
+    assert.isFalse(yield* second.ready(alias, repo));
+    assert.isFalse(yield* second.ready(alias));
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("leaves initialized submodules and explains how to recover an unmovable checkout", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const child = repo + "-module";
+    NodeFS.mkdirSync(child);
+    git(child, ["init", "-b", "main"]);
+    git(child, ["config", "user.name", "Test"]);
+    git(child, ["config", "user.email", "test@example.com"]);
+    NodeFS.writeFileSync(NodePath.join(child, "keep.txt"), "module contents");
+    git(child, ["add", "."]);
+    git(child, ["commit", "-m", "module"]);
+    git(repo, ["checkout", "feature"]);
+    git(repo, ["-c", "protocol.file.allow=always", "submodule", "add", child, "module"]);
+    git(repo, ["commit", "-am", "add module"]);
+    git(repo, ["checkout", "main"]);
+    git(repo, ["worktree", "add", worktreePath, "feature"]);
+    git(worktreePath, ["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
+    const pending = yield* makeRestorePending;
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "branch",
+        headSha: git(worktreePath, ["rev-parse", "HEAD"]),
+        snapshotSha: null,
+        snapshotRef: null,
+        applied: false,
+      },
+      repo,
+    );
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, [], null)),
+    );
+    const failure = yield* Effect.flip(
+      restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+    );
+    assert.include(failure.message, worktreePath);
+    assert.include(failure.message, "Back up the checkout and each initialized submodule");
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(worktreePath, "module", "keep.txt"), "utf8"),
+      "module contents",
+    );
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );

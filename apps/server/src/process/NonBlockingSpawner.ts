@@ -4,7 +4,9 @@ import * as NodeFSP from "node:fs/promises";
 
 import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -12,6 +14,7 @@ import * as Redacted from "effect/Redacted";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CommandLine from "effect/process/CommandLine";
+import * as SpawnWorker from "./SpawnWorker.ts";
 
 // libuv's _PATH_DEFPATH, searched when the child environment has no PATH.
 const DEFAULT_PATH = "/usr/bin:/bin";
@@ -20,37 +23,63 @@ const DEFAULT_PATH = "/usr/bin:/bin";
 // pool's four threads also compress every WebSocket frame. Checks therefore run one at a time
 // per directory and two at a time overall; the rest wait without holding a thread.
 const CHECK_LIMIT = 2;
-const directoryTails = new Map<string, Promise<unknown>>();
-const waiting: Array<() => void> = [];
-let running = 0;
+const WAITING_LIMIT = 32;
+const CHECK_TIMEOUT_MS = 5_000;
+const CHECK_TIMEOUT_NANOS = BigInt(CHECK_TIMEOUT_MS) * 1_000_000n;
+const active = new Map<string, bigint>();
+const waiting = new Set<{ directory: string; start: () => void }>();
 
-const access = async (path: string, mode: number) => {
-  if (running < CHECK_LIMIT) running++;
-  else await new Promise<void>((resume) => waiting.push(resume));
-  try {
-    await NodeFSP.access(path, mode);
-    return undefined;
-  } catch (error) {
-    return error as NodeJS.ErrnoException;
-  } finally {
-    // A waiter takes over the slot.
-    const next = waiting.shift();
-    if (next === undefined) running--;
-    else next();
+const accessFailure = (path: string, tag: "Busy" | "TimedOut") =>
+  PlatformError.systemError({
+    _tag: tag,
+    module: "FileSystem",
+    method: "access",
+    pathOrDescriptor: path,
+  });
+
+const releaseCheck = (directory: string) => {
+  active.delete(directory);
+  for (const queued of waiting) {
+    if (active.has(queued.directory)) continue;
+    waiting.delete(queued);
+    queued.start();
+    break;
   }
 };
 
 /** The errno error of `access(path, mode)`, or undefined when it passes. */
-const check = (directory: string, path: string, mode: number) => {
-  const result = (directoryTails.get(directory) ?? Promise.resolve()).then(() =>
-    access(path, mode),
+const check = (directory: string, path: string, mode: number) =>
+  Clock.clockWith((clock) =>
+    Effect.callback<NodeJS.ErrnoException | undefined, PlatformError.PlatformError>((resume) => {
+      const startedAt = active.get(directory);
+      const start = () => {
+        active.set(directory, clock.monotonicTimeNanosUnsafe());
+        // A timed-out caller leaves the slot occupied until libuv actually finishes.
+        const finish = (error?: NodeJS.ErrnoException) => {
+          releaseCheck(directory);
+          resume(Effect.succeed(error));
+        };
+        void NodeFSP.access(path, mode).then(() => finish(), finish);
+      };
+      if (startedAt === undefined && active.size < CHECK_LIMIT) return start();
+      if (
+        startedAt !== undefined &&
+        clock.monotonicTimeNanosUnsafe() - startedAt >= CHECK_TIMEOUT_NANOS
+      )
+        return resume(accessFailure(path, "TimedOut"));
+      if (waiting.size >= WAITING_LIMIT) return resume(accessFailure(path, "Busy"));
+      const queued = { directory, start };
+      waiting.add(queued);
+      return Effect.sync(() => {
+        waiting.delete(queued);
+      });
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: CHECK_TIMEOUT_MS,
+        orElse: () => accessFailure(path, "TimedOut"),
+      }),
+    ),
   );
-  directoryTails.set(directory, result);
-  void result.then(() => {
-    if (directoryTails.get(directory) === result) directoryTails.delete(directory);
-  });
-  return Effect.promise(() => result);
-};
 
 // The PATH the child searches, from the environment Effect's Node spawner gives it.
 const childPath = ({ env, extendEnv }: ChildProcess.CommandOptions) => {
@@ -175,4 +204,21 @@ const make = Effect.gen(function* () {
  * On Linux with GNU `env`, replaces the provided `ChildProcessSpawner` with one that never
  * hands libuv a cwd or a PATH search; elsewhere it passes the provided one through.
  */
-export const layer = Layer.effect(ChildProcessSpawner.ChildProcessSpawner, make);
+export const layer = Layer.unwrap(
+  Effect.gen(function* (): Effect.fn.Return<
+    Layer.Layer<
+      ChildProcessSpawner.ChildProcessSpawner,
+      never,
+      ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    >
+  > {
+    const platform = yield* HostProcess.Platform;
+    if (
+      platform === "win32" ||
+      (platform === "linux" && !(yield* Effect.promise(supportsEnvChdir)))
+    ) {
+      return SpawnWorker.layer;
+    }
+    return Layer.effect(ChildProcessSpawner.ChildProcessSpawner, make);
+  }),
+);

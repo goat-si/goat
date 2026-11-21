@@ -1,6 +1,8 @@
 import {
   OrchestrationV2GetShellSnapshotError,
   type OrchestrationV2GetThreadFamilyInput,
+  type OrchestrationV2ThreadShell,
+  type ProjectId,
   type ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -32,6 +34,33 @@ export function makeOmittableShellReaders<E>(input: {
     );
     return { snapshotSequence, threads: threads.threads };
   });
+  // The titles and projects of the threads a lookup found; a deleted project names none.
+  const lookupAnswer = Effect.fn("ThreadFamilyLookup.lookupAnswer")(function* (
+    threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  ) {
+    const projectIds = [...new Set(threads.map((thread) => thread.projectId))];
+    const liveRows =
+      projectIds.length === 0
+        ? []
+        : yield* input.sql<{ readonly project_id: ProjectId }>`
+            SELECT project_id FROM projection_projects
+            WHERE deleted_at IS NULL AND project_id IN ${input.sql.in(projectIds)}`.pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to resolve thread projects",
+                  cause,
+                }),
+            ),
+          );
+    const live = new Set(liveRows.map((row) => row.project_id));
+    return {
+      lookupTitles: Object.fromEntries(threads.map((thread) => [thread.id, thread.title])),
+      lookupProjectIds: Object.fromEntries(
+        threads.map((thread) => [thread.id, live.has(thread.projectId) ? thread.projectId : null]),
+      ),
+    };
+  });
   const readThreadFamily = Effect.fn("ThreadFamilyLookup.read")(function* (
     request: OrchestrationV2GetThreadFamilyInput,
   ) {
@@ -55,12 +84,7 @@ export function makeOmittableShellReaders<E>(input: {
       return {
         snapshotSequence,
         threads: [],
-        lookupTitles: Object.fromEntries(
-          [...threads.threads, ...threads.archivedThreads].map((thread) => [
-            thread.id,
-            thread.title,
-          ]),
-        ),
+        ...(yield* lookupAnswer([...threads.threads, ...threads.archivedThreads])),
       };
     }
     const family = yield* readOmittableShellRows(
@@ -81,12 +105,7 @@ export function makeOmittableShellReaders<E>(input: {
       );
     return {
       ...family,
-      lookupTitles: Object.fromEntries(
-        [...snapshot.threads, ...snapshot.archivedThreads].map((thread) => [
-          thread.id,
-          thread.title,
-        ]),
-      ),
+      ...(yield* lookupAnswer([...snapshot.threads, ...snapshot.archivedThreads])),
     };
   });
   return { readOmittableShellRows, readThreadFamily };

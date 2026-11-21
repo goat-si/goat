@@ -134,10 +134,10 @@ export const layer = Layer.effectDiscard(
         Effect.annotateLogs({ operation: error.operation }),
       );
     };
-    yield* sample().pipe(
+    yield* Effect.sleep(SAMPLE_INTERVAL).pipe(
+      Effect.andThen(sample()),
       Effect.andThen(recordSuccess),
       Effect.catch(recordFailure),
-      Effect.andThen(Effect.sleep(SAMPLE_INTERVAL)),
       Effect.forever,
       Effect.forkScoped,
     );

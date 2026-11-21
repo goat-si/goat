@@ -75,15 +75,18 @@ export const decodeNotificationPayload = <A, I>(
   );
 
 export const runHandler = Effect.fnUntraced(function* <A, B>(
-  handler: ((payload: A) => Effect.Effect<B, CodexError.CodexAppServerError>) | undefined,
+  handler:
+    | ((payload: A, rawParams: unknown) => Effect.Effect<B, CodexError.CodexAppServerError>)
+    | undefined,
   payload: A,
   method: string,
+  rawParams?: unknown,
 ) {
   if (!handler) {
     return yield* CodexError.CodexAppServerRequestError.methodNotFound(method);
   }
 
-  return yield* handler(payload).pipe(
+  return yield* handler(payload, rawParams).pipe(
     Effect.mapError((error) =>
       CodexError.CodexAppServerRequestError.fromAppServerError(error, method),
     ),

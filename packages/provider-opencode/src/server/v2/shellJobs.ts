@@ -33,6 +33,7 @@ interface TrackedShell {
   tool?: { name: string; input: Record<string, unknown> };
   command: string;
   running: boolean;
+  awaited?: boolean;
   stopping?: boolean;
   output: string;
   cursor: number;
@@ -71,6 +72,8 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
   const client = () => deps.connection().client;
   const shellInfo = new Map<string, Shell.Info>();
   const shells = new Map<string, TrackedShell>();
+  // The shell exit can arrive before the synthetic report. Retain only the ownership stamp.
+  const exitedShells = new Map<string, { readonly sessionId: string; readonly runId: RunId }>();
 
   const fetchShellOutput = Effect.fn("OpenCode2Adapter.fetchShellOutput")(function* (
     id: string,
@@ -233,6 +236,10 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
               }),
           command: info.command,
           running: true,
+          awaited:
+            state.providerThread.pendingBackgroundTasks?.some(
+              (task) => task.taskId === info.id && task.kind === "command" && task.awaited === true,
+            ) === true,
           output: "",
           cursor: 0,
         });
@@ -342,11 +349,16 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
     const id = stringField(payload.metadata, "shellID");
     const shell = id === undefined ? undefined : shells.get(id);
     if (shell !== undefined && shell.state !== state) return true;
+    const exited = id === undefined ? undefined : exitedShells.get(id);
+    if (exited !== undefined && exited.sessionId !== state.sessionId) return true;
+    if (id !== undefined) exitedShells.delete(id);
+    const runId = shell?.turn?.input.runId ?? shell?.recoveredRunId ?? exited?.runId;
     const outcome = reportOutcome(stringField(payload.metadata, "state"));
     state.reports.set(inboxId, {
       inboxId,
       childId: id ?? inboxId,
       text: payload.text,
+      ...(runId == null ? {} : { runId }),
       report: { kind: "command", label: shell?.command ?? payload.description, outcome },
     });
     if (id !== undefined && shell?.stopping !== true) {
@@ -396,6 +408,12 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
           : "failed",
       exit,
     );
+    const runId = shell.turn?.input.runId ?? shell.recoveredRunId;
+    if (runId != null) {
+      exitedShells.set(event.data.id, { sessionId: shell.state.sessionId, runId });
+      const oldest = exitedShells.keys().next();
+      if (exitedShells.size > 128 && !oldest.done) exitedShells.delete(oldest.value);
+    }
     shells.delete(event.data.id);
     shellInfo.delete(event.data.id);
     yield* syncRosterAncestors(shell.state);
@@ -453,6 +471,7 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
         taskId,
         kind: "command" as const,
         description: shell.command,
+        ...(shell.awaited === true ? { awaited: true } : {}),
         ...(shell.state.subagent === undefined
           ? {}
           : { parentTaskId: shell.state.subagent.call.nativeId }),
@@ -466,6 +485,26 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
       for (const [id] of runningFor(state))
         yield* lock.withPermit(stopShell(id)).pipe(Effect.ignore({ log: true }));
     }),
+    awaitTasks: Effect.fn("OpenCode2Adapter.awaitBackgroundTasks")(function* (
+      state: ThreadState | undefined,
+      taskIds: ReadonlyArray<string>,
+      awaited: boolean,
+    ) {
+      if (state === undefined) return { matched: [] };
+      const owned = new Set(sessionsOf(state));
+      const matched: string[] = [];
+      const changed = new Set<ThreadState>();
+      for (const id of new Set(taskIds)) {
+        const shell = shells.get(id);
+        if (shell === undefined || !shell.running || !owned.has(shell.state)) continue;
+        matched.push(id);
+        if ((shell.awaited === true) === awaited) continue;
+        shell.awaited = awaited;
+        changed.add(shell.state);
+      }
+      for (const owner of changed) yield* syncRosterAncestors(owner);
+      return { matched };
+    }, lock.withPermit),
     /** Stops one owned shell; false when the task is not a shell this thread owns. */
     stopTask: (state: ThreadState | undefined, taskId: string) => {
       const shell = shells.get(taskId);

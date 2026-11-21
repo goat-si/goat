@@ -25,6 +25,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
+import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { coalesceLiveUpdatedEvents } from "./ThreadLiveEventCoalescer.ts";
 import {
   boundFileChangeForStorage,
@@ -893,8 +894,56 @@ describe("live body deduper", () => {
     expect(payloadOf(card!)).toMatchObject({ files: [], filesOmitted: true, filesTotal });
   });
 
+  it("ships a reply whole when a replacement snapshot removes the original message", () => {
+    const first = message(1, "streamed reply");
+    const replacement: OrchestrationV2ThreadStreamItem = {
+      kind: "snapshot",
+      snapshotSequence: 2,
+      projection: idleThreadProjection(liveThreadShell(base.threadId)),
+    };
+    const later = reply(3, "streamed reply");
+    const sent = [first, replacement, later].map(makeLiveBodyDeduper());
+    expect(payloadOf(sent[2]!)).toMatchObject({ text: "streamed reply" });
+  });
+
   it("ships a reply whole when its message arrives after it", () => {
     const first = reply(1, "a");
     expect([first, message(2, "a")].map(makeLiveBodyDeduper())[0]).toBe(first);
   });
+});
+
+it("keeps a successful mid-turn message through the wire projection", () => {
+  for (const sentMessage of [
+    " # Draft\n\n> Full text\n ",
+    "界".repeat(4_000),
+    "😀".repeat(2_000),
+  ]) {
+    const projected = projectTurnItemForWire({
+      ...base,
+      toolName: "mcp__goat__goat_call",
+      input: { name: "goat_message_show", arguments: { message: sentMessage } },
+      output: [{ type: "text", text: JSON.stringify({ status: "ok", value: { sentMessage } }) }],
+    });
+    expect(projected).toMatchObject({ output: { sentMessage } });
+  }
+});
+
+it("does not forward mid-turn text from an unrelated, failed or invalid call", () => {
+  const item = {
+    ...base,
+    toolName: "mcp__goat__goat_call",
+    input: { path: "message.show" },
+    output: { status: "ok", value: { sentMessage: "Draft" } },
+  };
+  for (const candidate of [
+    { ...item, input: { path: "thread.read" } },
+    { ...item, toolName: "mcp__other__goat_message_show" },
+    { ...item, status: "failed" as const },
+    { ...item, output: { isError: true, structuredContent: item.output } },
+    { ...item, output: { status: "error", sentMessage: "Draft" } },
+    { ...item, output: { sentMessage: " \n " } },
+    { ...item, output: { sentMessage: "😀".repeat(2_001) } },
+  ]) {
+    expect(projectTurnItemForWire(candidate)).not.toHaveProperty("output.sentMessage");
+  }
 });

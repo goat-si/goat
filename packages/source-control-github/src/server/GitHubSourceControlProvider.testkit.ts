@@ -121,6 +121,7 @@ export function harness(input: {
   readonly localBranches?: ReadonlyArray<string>;
   readonly resolved?: string;
   readonly gitFailure?: unknown;
+  readonly originUrls?: string;
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const graphqlCalls: Array<GraphQlCall> = [];
@@ -135,7 +136,9 @@ export function harness(input: {
     execute: (args) =>
       Effect.sync(() => {
         git.push(["execute", args.args]);
-        return processOutput("");
+        return processOutput(
+          args.args[0] === "config" ? (input.originUrls ?? "git@github.com:acme/web.git\n") : "",
+        );
       }),
     resolvePrimaryRemoteName: () => Effect.succeed("origin"),
     readConfigValue: () => Effect.succeed("git@github.com:acme/web.git"),

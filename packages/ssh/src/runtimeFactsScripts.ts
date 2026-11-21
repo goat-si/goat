@@ -399,7 +399,11 @@ live_fact() {
     fi
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fi
-  fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  if [ -n "\${HOME_PROBE_DEADLINE:-}" ]; then
+    fact_out="$(home_probe "$HOME_PROBE_DEADLINE" "$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return $?
+  else
+    fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  fi
   if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
      live_none_absent "$2" "$3" "$4" && exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$live_none_key" ]; then
     case "$live_none_key$fact_out" in
@@ -547,8 +551,8 @@ lacks_memory_scopes() {
 # Sets RUNNER_DIGEST to the SHA-256 of file $1.
 runner_digest() {
   RUNNER_DIGEST=
-  if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 "$1")" || return 1
-  elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$1")" || return 1
+  if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 < "$1")" || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum < "$1")" || return 1
   else printf 'Install shasum or sha256sum to verify the retained GOAT runner.\\n' >&2; return 1; fi
   digest="\${digest%% *}"
   case "$digest" in *[!0123456789abcdef]*) return 1 ;; esac

@@ -15,11 +15,13 @@ export const loadErrorOf = (
     readonly tabId: string;
     readonly page: { url(): string };
     readonly loadError: PreviewAutomationLoadError | undefined;
+    readonly crash?: { readonly error: PreviewAutomationLoadError } | undefined;
     readonly desktop: unknown;
     readonly navigationGeneration: number;
   },
   desktopChannel: DesktopBrowserChannel.DesktopBrowserChannel["Service"],
 ): PreviewAutomationLoadError | undefined => {
+  if (tab.crash) return tab.crash.error;
   if (!tab.page.url().startsWith("chrome-error://")) return undefined;
   // A desktop failure from before CDP attached is superseded by any navigation we observe.
   if (tab.loadError || !tab.desktop || tab.navigationGeneration > 0) return tab.loadError;
@@ -32,10 +34,8 @@ export const reportedTabUrl = (
   tab: LoadErrorTab,
   desktopChannel: DesktopBrowserChannel.DesktopBrowserChannel["Service"],
 ): string | null =>
-  tab.page.url() === "about:blank"
-    ? null
-    : (loadErrorOf(tab, desktopChannel)?.url ??
-      ServerBrowserPage.withoutDataPayload(tab.page.url()));
+  loadErrorOf(tab, desktopChannel)?.url ??
+  (tab.page.url() === "about:blank" ? null : ServerBrowserPage.withoutDataPayload(tab.page.url()));
 
 /**
  * Throws when a navigation ended on Chromium's error page, naming the page without its

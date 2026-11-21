@@ -34,6 +34,7 @@ export interface FakePi {
   readonly queueEntries: (data: unknown) => void;
   readonly queueMessages: (data: unknown) => void;
   readonly vetoNextSwitch: () => void;
+  readonly failNextFork: () => void;
   readonly queueState: (data: Record<string, unknown>) => void;
   readonly setStreaming: (streaming: boolean) => void;
   readonly setCompacting: (compacting: boolean) => void;
@@ -101,6 +102,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let promptDisposition = true;
   let failThinking = false;
   let vetoSwitch = false;
+  let failFork = false;
   let vetoNewSession = false;
   let deferredLifecycle: string | undefined;
   let sessionFile = FAKE_SESSION_FILE;
@@ -203,6 +205,10 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       case "get_session_stats":
         return { ...base, data: statsQueue.shift() ?? {} };
       case "fork":
+        if (failFork) {
+          failFork = false;
+          return { ...base, success: false, error: "Invalid entry ID for forking" };
+        }
         return { ...base, data: { text: "Hello pi", cancelled: false } };
       case "clear_queue":
         return clearQueue === "unknown_command"
@@ -327,6 +333,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       vetoNewSession = true;
     },
     allRequests: () => allRequests,
+    failNextFork: () => {
+      failFork = true;
+    },
     vetoNextSwitch: () => {
       vetoSwitch = true;
     },

@@ -1,3 +1,5 @@
+import { usePendingListGroups } from "./usePendingListEntries";
+import { pullRequestLinkRevealProps, useLinkedPullRequest } from "./pullRequestLinkedSelection";
 import { PullRequestPanelControls } from "./PullRequestPanelControls";
 import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
 import { getShortcutContext } from "./pullRequestShortcutContext";
@@ -54,6 +56,8 @@ import {
   type PullRequestListPreferencePatch,
   writePullRequestListPreferences,
 } from "./pullRequestListPreferences";
+import { PullRequestSavedViewsMenu } from "./PullRequestSavedViewsMenu";
+import { pullRequestSavedViewPatch } from "./pullRequestSavedViews";
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
@@ -100,7 +104,7 @@ import {
 } from "~/rightPanelStore";
 import {
   pullRequestEnvironment,
-  usePullRequestList,
+  usePullRequestHostList,
   usePullRequestListStats,
   restoredPullRequestList,
   usePullRequestTurnRefreshes,
@@ -111,6 +115,8 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { usePullRequestHostReads } from "./usePullRequestHostReads";
+import { preferredPullRequestEntries, pullRequestListTargets } from "./pullRequestListTargets";
 
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
@@ -133,6 +139,22 @@ export function PullRequestsPage() {
     sort === "ready" || sort === "largest" || sort === "smallest" ? "eager" : "visible";
   const navigate = useNavigate({ from: "/pull-requests" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const hostReads = usePullRequestHostReads();
+  const typedQuery = (search.q ?? "").trim();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const {
+    sentQuery,
+    submitQuery,
+    querySettled,
+    typedParsed,
+    sentParsed,
+    menuFilters,
+    menuFiltered,
+    filters,
+    hasFilters,
+    localFilters,
+    hasLocalFilters,
+  } = usePullRequestQueryFilters(search, typedQuery);
   const {
     capableEnvironments,
     scopedEnvironmentId,
@@ -147,11 +169,13 @@ export function PullRequestsPage() {
     selectedProject,
     queryEnvironmentIds,
     environmentQueries,
+    preferredEnvironmentQueries,
+    baselineEnvironmentQueries,
     assignmentKey,
     linkedSelection,
     expectedHosts,
     projectsKnown,
-  } = usePullRequestScope(search);
+  } = usePullRequestScope(search, hostReads.hostReads, filters.author);
   const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
   const rightPanelState = useRightPanelStore((state) =>
@@ -215,7 +239,6 @@ export function PullRequestsPage() {
       },
       replace: true,
     });
-
   const clearedSelection = {
     repository: undefined,
     number: undefined,
@@ -233,25 +256,9 @@ export function PullRequestsPage() {
     writePullRequestListPreferences(currentPreferences);
     updateSearch(patch);
   };
-
-  const typedQuery = (search.q ?? "").trim();
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const {
-    sentQuery,
-    submitQuery,
-    querySettled,
-    typedParsed,
-    sentParsed,
-    menuFilters,
-    menuFiltered,
-    filters,
-    hasFilters,
-    localFilters,
-    hasLocalFilters,
-  } = usePullRequestQueryFilters(search, typedQuery);
-  const turnRefreshes = usePullRequestTurnRefreshes(
-    environmentQueries.map(({ environmentId }) => environmentId),
-  );
+  const turnRefreshes = usePullRequestTurnRefreshes([
+    ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
+  ]);
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
@@ -277,51 +284,40 @@ export function PullRequestsPage() {
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
   const sentRegrown = page.key === filterKey ? page.regrown : [];
-
   if (page.key !== filterKey) {
     setPage({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   }
-
-  const listTargets = environmentQueries.flatMap(({ environmentId, projectIds }) => {
-    const cursors = sentCursors?.[environmentId];
-    if (sentCursors !== null && cursors === undefined && !sentRegrown.includes(environmentId)) {
-      return [];
-    }
-    return [
+  const listTargetsFor = (queries: typeof environmentQueries) =>
+    pullRequestListTargets(
+      queries,
       {
-        environmentId,
-        input: {
-          state: search.state,
-          involvement: search.involvement,
-          limit: pageSize,
-          ...listScope,
-          ...(projectIds ? { projectIds } : {}),
-          ...(hasFilters ? { filters } : {}),
-          ...(sentParsed.text ? { query: sentParsed.text } : {}),
-          ...(cursors === undefined ? {} : { cursors }),
-        } satisfies PullRequestListInput,
+        state: search.state,
+        involvement: search.involvement,
+        limit: pageSize,
+        ...listScope,
+        ...(hasFilters ? { filters } : {}),
+        ...(sentParsed.text ? { query: sentParsed.text } : {}),
       },
-    ];
-  });
-  const listQuery = usePullRequestList(listTargets);
-
+      { sent: sentCursors, regrown: sentRegrown },
+    );
+  const listTargets = listTargetsFor(environmentQueries);
+  const listQuery = usePullRequestHostList(listTargets);
   /**
    * Kept as its own read rather than remembered from an earlier answer because an answer cannot
    * say which question it belongs to: mid-switch the text has already changed and the data has
    * not, and a search's answer would file itself under the workspace.
    */
-  const baselineTargets = environmentQueries.map(({ environmentId, projectIds }) => ({
-    environmentId,
-    input: {
+  const baselineTargetsFor = (queries: typeof environmentQueries) =>
+    pullRequestListTargets(queries, {
       state: search.state,
       involvement: search.involvement,
       limit: PAGE_SIZE,
       ...listScope,
-      ...(projectIds ? { projectIds } : {}),
       ...(menuFiltered ? { filters: menuFilters } : {}),
-    } satisfies PullRequestListInput,
-  }));
-  const baselineQuery = usePullRequestList(baselineTargets);
+    });
+  const baselineTargets = baselineTargetsFor(baselineEnvironmentQueries);
+  const baselineQuery = usePullRequestHostList(baselineTargets);
+  hostReads.observe(baselineQuery.observations, listQuery.observations);
   const baselineEmpty =
     baselineQuery.data?.entries.length === 0 &&
     baselineQuery.data.errors.length === 0 &&
@@ -340,7 +336,7 @@ export function PullRequestsPage() {
       } satisfies PullRequestListInput,
     }));
   })();
-  const facetQuery = usePullRequestList(facetTargets);
+  const facetQuery = usePullRequestHostList(facetTargets);
   const filterOptionScope = environmentQueries.map(({ environmentId, projectIds }) => ({
     environmentId,
     input: {
@@ -349,6 +345,14 @@ export function PullRequestsPage() {
     },
   }));
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const partitionTargetsFor = (involvement: PullRequestInvolvement) =>
+    pullRequestListTargets(preferredEnvironmentQueries, {
+      state: search.state,
+      involvement,
+      limit: PAGE_SIZE,
+      ...listScope,
+      ...(menuFiltered ? { filters: menuFilters } : {}),
+    });
   const partitionTargets = (() => {
     // The main list identifies indexed repositories before the expensive per-repository fallback.
     if (
@@ -358,27 +362,17 @@ export function PullRequestsPage() {
     ) {
       return { authored: NO_LIST_TARGETS, reviewing: NO_LIST_TARGETS };
     }
-    const targetsFor = (involvement: PullRequestInvolvement) =>
-      environmentQueries.map(({ environmentId, projectIds }) => ({
-        environmentId,
-        input: {
-          state: search.state,
-          involvement,
-          limit: PAGE_SIZE,
-          ...listScope,
-          ...(projectIds ? { projectIds } : {}),
-          ...(menuFiltered ? { filters: menuFilters } : {}),
-        } satisfies PullRequestListInput,
-      }));
-    return { authored: targetsFor("authored"), reviewing: targetsFor("reviewing") };
+    return {
+      authored: partitionTargetsFor("authored"),
+      reviewing: partitionTargetsFor("reviewing"),
+    };
   })();
-  const authoredQuery = usePullRequestList(partitionTargets.authored);
-  const reviewingQuery = usePullRequestList(partitionTargets.reviewing);
+  const authoredQuery = usePullRequestHostList(partitionTargets.authored);
+  const reviewingQuery = usePullRequestHostList(partitionTargets.reviewing);
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [invalidating, setInvalidating] = useState(false);
   const refreshing = invalidating || listQuery.isPending;
-
   const [loaded, setLoaded] = useState<{
     environmentKey: string;
     scope: string;
@@ -436,9 +430,7 @@ export function PullRequestsPage() {
     if (loaded?.environmentKey !== environmentKey) {
       const restored = restoredPullRequestList(baselineTargets);
       const restoredPartition = (involvement: PullRequestInvolvement) =>
-        restoredPullRequestList(
-          baselineTargets.map((target) => ({ ...target, input: { ...target.input, involvement } })),
-        )?.entries;
+        restoredPullRequestList(partitionTargetsFor(involvement))?.entries;
       const authored = partitionsWanted ? restoredPartition("authored") : undefined;
       const reviewing = partitionsWanted ? restoredPartition("reviewing") : undefined;
       setLoaded(
@@ -523,7 +515,6 @@ export function PullRequestsPage() {
   const showingCarried = answered === null && carried !== null;
   const loadingMore = listQuery.isPending && listData !== null;
   const firstLoad = listQuery.isPending && listData === null;
-
   if (
     answered !== null &&
     !listQuery.isPending &&
@@ -560,7 +551,6 @@ export function PullRequestsPage() {
       settlePullRequestOverrides(current, answeredEntries, pullRequestEntryKey, Date.now()),
     );
   }
-
   // From this question's own answer, never from the rows being held while it travels: a
   // continuation is a boundary in one listing, and carrying one across a search would ask the new
   // question to start where the old one stopped — skipping its newest matches entirely.
@@ -662,9 +652,14 @@ export function PullRequestsPage() {
     entriesByStatsKey,
     heldPullRequestsBySurface,
   } = pullRequestGroups({
-    known: ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
-    // The baseline was read without typed qualifiers, and rows cannot be checked for `checks:`.
-    baseline: typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+    ...usePendingListGroups(
+      { state: search.state, filters },
+      ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
+      typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+      partitionsWanted ? authoredQuery.data?.entries : undefined,
+      partitionsWanted ? reviewingQuery.data?.entries : undefined,
+      heldPartitions,
+    ),
     providers: baselineQuery.data?.providers ?? listData?.providers ?? [],
     viewers,
     involvement: search.involvement,
@@ -673,13 +668,8 @@ export function PullRequestsPage() {
     text: typedParsed.text,
     answeredLocally: querySettled && !showingCarried,
     baselineEmpty,
-    held:
-      loaded !== null && loaded.environmentKey === environmentKey && loaded.scope === scopeKey
-        ? loaded.partitions
-        : undefined,
-    authored: partitionsWanted ? authoredQuery.data?.entries : undefined,
-    reviewing: partitionsWanted ? reviewingQuery.data?.entries : undefined,
     partitionsWanted,
+    isPreferredEntry: preferredPullRequestEntries(preferredEnvironmentQueries),
   });
 
   const visibleStatsKeys = useRef({ key: filterKey, values: new Set<string>() });
@@ -863,6 +853,11 @@ export function PullRequestsPage() {
     await Promise.all(
       queryEnvironmentIds.map((environmentId) => invalidate({ environmentId, input: {} })),
     );
+    listQuery.refresh([
+      ...listTargetsFor(preferredEnvironmentQueries),
+      ...baselineTargetsFor(preferredEnvironmentQueries),
+    ]);
+    hostReads.reset();
     setInvalidating(false);
     refreshListAndStats(requestedStatsScope);
     setDetailRefreshToken((token) => token + 1);
@@ -989,10 +984,7 @@ export function PullRequestsPage() {
     if (rightPanelState.isOpen) setMaximized((value) => !value);
   };
   const onGuideShown = () => setMaximized(true);
-  useEffect(() => {
-    if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
-    useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
-  }, [linkedSelection, pullRequestsSupported, rightPanelRef]);
+  useLinkedPullRequest(pullRequestsSupported ? rightPanelRef : null, linkedSelection, updateSearch);
 
   const selected =
     rightPanelState.isOpen && activePullRequestSurface !== null
@@ -1119,7 +1111,7 @@ export function PullRequestsPage() {
         <PullRequestListGhost rows={7} caption="Loading pull requests…" />
       ) : listQuery.error && shownCount === 0 ? (
         <PullRequestsUnavailableState
-          error={listQuery.error}
+          error={`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message}`}
           refreshing={listQuery.isPending}
           onRetry={() => listQuery.refresh()}
         />
@@ -1164,7 +1156,7 @@ export function PullRequestsPage() {
 
       {listQuery.error && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
-          <span>{listQuery.error} Showing the last pull requests loaded.</span>
+          <span>{`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message} Showing the last pull requests loaded.`}</span>
           <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
             Retry
           </Button>
@@ -1292,6 +1284,12 @@ export function PullRequestsPage() {
     searchInput,
     sortMenu,
     filtersMenu,
+    savedViewsMenu: (
+      <PullRequestSavedViewsMenu
+        preferences={search}
+        onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
+      />
+    ),
     rightPanelControl: !pullRequestsSupported ? null : (
       <span
         aria-hidden
@@ -1482,6 +1480,7 @@ export function PullRequestsPage() {
               getShortcutContext={getShortcutContext}
               shortcutsEnabled={activePullRequestSurface?.id === renderedPullRequestSurface.id}
               key={renderedPullRequestSurface.id}
+              {...pullRequestLinkRevealProps(rightPanelRef, renderedPullRequestSurface)}
               environmentId={panelEnvironmentId}
               onGuideShown={onGuideShown}
               onSelectPullRequest={(reference) => {

@@ -90,8 +90,8 @@ export const AcpProviderCapabilitiesV2 = {
   checkpointing: {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
-    // ACP lacks truncation; rollback restores GOAT checkpoints and starts a fresh agent session.
-    providerCanRollbackConversation: true,
+    // ACP rollback starts a fresh agent session; turn start replays kept history.
+    providerCanRollbackConversation: false,
     providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: false,
   },

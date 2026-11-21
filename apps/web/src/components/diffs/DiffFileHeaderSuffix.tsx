@@ -6,16 +6,19 @@ export function DiffFileHeaderSuffix({
   hasStat,
   error,
   truncated,
+  unknownChangeType,
   onRetry,
 }: {
   filePath: string;
   hasStat: boolean;
   error: boolean;
-  truncated: boolean;
+  truncated?: boolean;
+  unknownChangeType?: boolean;
   onRetry: (path: string) => void;
 }) {
   return (
     <>
+      {unknownChangeType ? <span>Unknown change type</span> : null}
       <span data-diff-copy-path className="inline-flex">
         <DiffFilePathCopyButton filePath={filePath} />
       </span>
