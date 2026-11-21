@@ -831,3 +831,23 @@ it("says a running task waits for your answer when its worker asks you something
     .toMatchTextContent(/Working/);
   expect(titles(screen, ["Keep going", "Pick a name"])).toEqual(["Keep going", "Pick a name"]);
 });
+
+it("offers snoozed work in a closed fold instead of recent work", async () => {
+  setup();
+  const recent = taskRow("recent", "Publish notes", "running", "2026-11-09T02:00:00.000Z");
+  const folded = taskRow("snoozed", "Verify release build", "running", "2026-11-09T01:00:00.000Z");
+  const snoozed = {
+    ...folded,
+    view: { ...folded.view, snoozedUntil: "2026-11-10T01:00:00.000Z" },
+  };
+  await using screen = await render(view([recent, folded], { snoozed: [snoozed] }));
+  await expect.element(screen.getByRole("button", { name: /^Publish notes/ })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: /^Verify release build/ }))
+    .not.toBeInTheDocument();
+  await userEvent.click(screen.getByText("Snoozed", { exact: true }));
+  await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
+  await screen.rerender(view([recent, folded], { snoozed: [] }));
+  await expect.element(screen.getByRole("button", { name: /^Verify release build/ })).toBeVisible();
+  await expect.element(screen.getByText("Snoozed", { exact: true })).not.toBeInTheDocument();
+});

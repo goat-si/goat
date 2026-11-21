@@ -1,13 +1,17 @@
+import { botTaskSnoozeUntil } from "@goat/client-runtime/goatBot";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   BotId,
   ChannelChildWorkGroup,
   ChannelTaskId,
+  ChannelTaskView,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
 } from "@goat/contracts";
 import { useLayoutEffect, useRef } from "react";
 
+import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { updateMobileTaskView } from "./mobileTaskViewUpdate";
 import { useMobileBotTaskLookup } from "./useMobileBotTaskLookup";
@@ -31,6 +35,7 @@ export function useMobileTaskScreen(input: {
   readonly enabled: boolean;
   /** The server looks tasks up by id. */
   readonly lookupSupported: boolean;
+  readonly supportsSnooze?: boolean;
   /** The bot's current-list read. */
   readonly list: {
     readonly data: unknown;
@@ -48,11 +53,24 @@ export function useMobileTaskScreen(input: {
     supported: input.enabled && input.lookupSupported,
     established: input.list.data !== null,
     refreshing: input.list.isPending,
-    holdsTask: input.holdsTask,
+    holdsTask: input.holdsTask && !input.supportsSnooze,
+    revision: input.supportsSnooze ? input.list.data : undefined,
     childGroups: input.childGroups,
   });
   const permitted = useAtomValue(
     channelEnvironment.updateTaskView.permissionAtom(input.environmentId),
+  );
+  const canSnooze = useAtomValue(
+    (input.supportsSnooze
+      ? channelEnvironment.snoozeBotTask
+      : channelEnvironment.updateTaskView
+    ).permissionAtom(input.environmentId),
+  );
+  const canUnsnooze = useAtomValue(
+    (input.supportsSnooze
+      ? channelEnvironment.unsnoozeBotTask
+      : channelEnvironment.updateTaskView
+    ).permissionAtom(input.environmentId),
   );
   const identity = input.taskId === null ? null : identityOf(input.owner, input.taskId);
   const shown = useRef<string | null>(null);
@@ -87,6 +105,40 @@ export function useMobileTaskScreen(input: {
       }
       return ok;
     },
+    snooze: input.supportsSnooze
+      ? {
+          enabled: (view: ChannelTaskView) =>
+            input.enabled && (view.snoozedUntil === undefined ? canSnooze : canUnsnooze),
+          change: async (view: ChannelTaskView, action: string) => {
+            const { environmentId, botId } = input;
+            if (environmentId === null || !input.enabled || identity === null) return;
+            const task = { taskId: view.taskId, botId };
+            if (action === "unsnooze" && canUnsnooze) {
+              const result = await runAtomCommand(
+                appAtomRegistry,
+                channelEnvironment.unsnoozeBotTask,
+                {
+                  environmentId,
+                  input: task,
+                },
+              );
+              if (result._tag === "Success") settle(identity);
+            } else if (canSnooze) {
+              const until = botTaskSnoozeUntil(action, new Date());
+              if (until === undefined) return;
+              const result = await runAtomCommand(
+                appAtomRegistry,
+                channelEnvironment.snoozeBotTask,
+                {
+                  environmentId,
+                  input: { ...task, until },
+                },
+              );
+              if (result._tag === "Success") settle(identity);
+            }
+          },
+        }
+      : undefined,
     /** A Retry the screen started was accepted. */
     retried: () => {
       if (identity !== null) settle(identity);

@@ -2,9 +2,10 @@ import { useAtomValue } from "@effect/atom-react";
 import { resolveRemoteBotWork } from "@goat/client-runtime/goatBot";
 import type { BotRemoteWork, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { Pressable, Text } from "react-native";
+import { Text } from "react-native";
 
 import { channelEnvironment } from "../../state/channels";
+import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-remote-work:none"));
 
@@ -35,14 +36,14 @@ export function MobileBotRemoteWork(props: {
     return <Text className="text-foreground-muted">{target.host} · Unavailable</Text>;
   const { ref } = target;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: props.disabled === true }}
+    <MobileWorkThreadLink
+      worker={ref}
+      link={{
+        text: `Open work thread on ${target.host}`,
+        label: `Open work thread on ${target.host}`,
+      }}
       disabled={props.disabled === true}
-      className="min-h-[44px] justify-center"
       onPress={() => props.onOpenThread({ environmentId: ref.environmentId, id: ref.threadId })}
-    >
-      <Text className="text-foreground underline">Open work thread on {target.host}</Text>
-    </Pressable>
+    />
   );
 }

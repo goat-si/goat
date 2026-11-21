@@ -66,15 +66,35 @@ export function createChannelEnvironmentAtoms<R, E>(
     { environmentId }: { readonly environmentId: EnvironmentId },
     registry: AtomRegistry.AtomRegistry,
   ) => Effect.sync(() => registry.update(botThreadsRevision(environmentId), (n) => n + 1));
+  const taskChangesPermission = createCommandPermissions(
+    runtime,
+    CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+  ).permissionAtom;
+  const taskChanges = createEnvironmentSubscriptionAtomFamily(runtime, {
+    label: "environment-data:channel:task-changes",
+    idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
+    subscribe: (input: ChannelSubscribeTaskChangesInput) =>
+      subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
+  });
   // The thread shell's work signal, installed by `listedBotWork` when the shell is built.
   let shellWorkSignal: ((environmentId: EnvironmentId) => Atom.Atom<string>) | undefined;
   const botThreadsSignal = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get) =>
-        `${get(botThreadsRevision(environmentId))}|${
-          shellWorkSignal === undefined ? "" : get(shellWorkSignal(environmentId))
-        }`,
-    ).pipe(Atom.withLabel(`environment-data:channel:bot-threads-signal:${environmentId}`)),
+    Atom.make((get) => {
+      const config = get(sessions.initialConfigValueAtom(environmentId));
+      const revised =
+        config?.environment.capabilities.goatBotTaskSnooze === true &&
+        config.environment.capabilities.goatBotTaskChanges === true &&
+        get(taskChangesPermission(environmentId))
+          ? Option.getOrNull(AsyncResult.value(get(taskChanges({ environmentId, input: {} }))))
+          : null;
+      const position =
+        revised !== null && "value" in revised
+          ? `${revised.subscription}:${revised.value.revision}`
+          : "";
+      return `${get(botThreadsRevision(environmentId))}|${
+        shellWorkSignal === undefined ? "" : get(shellWorkSignal(environmentId))
+      }|${position}`;
+    }).pipe(Atom.withLabel(`environment-data:channel:bot-threads-signal:${environmentId}`)),
   );
   // The bot's rows and the thread lists that hide its work read this one query, so a row the
   // bot can no longer show stops hiding its thread on the same answer.
@@ -210,6 +230,13 @@ export function createChannelEnvironmentAtoms<R, E>(
           }
         } else {
           failingSince = null;
+          const snoozeExpiry = result.value.nextSnoozeExpiry;
+          if (snoozeExpiry !== undefined) {
+            const expiry = Date.parse(snoozeExpiry);
+            if (expiry > now) nextExpiry = Math.min(nextExpiry, expiry + CUTOFF_MARGIN_MS);
+            else if (now - expiry < CUTOFF_RETRY_WINDOW_MS)
+              nextExpiry = Math.min(nextExpiry, now + CUTOFF_MARGIN_MS);
+          }
           const shown = [];
           const retiredTasks = new Set<string>();
           for (const row of result.value.rows) {
@@ -403,16 +430,8 @@ export function createChannelEnvironmentAtoms<R, E>(
      * use it. It closes soon after the last one unmounts: the server allows few per connection.
      * A session without the stream says so, and the next session asks again.
      */
-    taskChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
-      label: "environment-data:channel:task-changes",
-      idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
-      subscribe: (input: ChannelSubscribeTaskChangesInput) =>
-        subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
-    }),
-    taskChangesPermission: createCommandPermissions(
-      runtime,
-      CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
-    ).permissionAtom,
+    taskChanges,
+    taskChangesPermission,
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
@@ -436,6 +455,16 @@ export function createChannelEnvironmentAtoms<R, E>(
       onSuccess: bumpBotThreads,
     }),
     /** A person runs failed or stopped work again; a resent clientRequestId returns the first result. */
+    snoozeBotTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:snooze-bot-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask,
+      onSuccess: bumpBotThreads,
+    }),
+    unsnoozeBotTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:unsnooze-bot-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask,
+      onSuccess: bumpBotThreads,
+    }),
     retryTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:retry-task",
       tag: CHANNEL_GATEWAY_WS_METHODS.retryTask,

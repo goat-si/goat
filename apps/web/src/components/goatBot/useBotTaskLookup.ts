@@ -9,7 +9,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { botTaskLookupDecision } from "./botTaskLookupDecision";
 
 type LookupError = "missing" | "failed" | "denied";
-type Answer = { period: number; value?: BotWorkResult; error?: LookupError };
+type Answer = { period: number; revision: unknown; value?: BotWorkResult; error?: LookupError };
 
 function failureKind(error: unknown): LookupError {
   if (!error || typeof error !== "object") return "failed";
@@ -29,6 +29,7 @@ export function useBotTaskLookup(
     readonly established: boolean;
     readonly refreshing: boolean;
     readonly holdsTask: boolean;
+    readonly revision?: unknown;
   },
   available: boolean,
 ) {
@@ -37,11 +38,14 @@ export function useBotTaskLookup(
     configs.get(environmentId)?.environment.capabilities.goatBotTaskLookupSearch === true;
   const permitted = useAtomValue(channelEnvironment.getBotTask.permissionAtom(environmentId));
   const command = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
+  const readsActivity =
+    configs.get(environmentId)?.environment.capabilities.goatBotTaskSnooze === true;
+  const holdsTask = list.holdsTask && !readsActivity;
   const readable = supported && permitted && available;
   const key = JSON.stringify([environmentId, botId, taskId]);
   // A read, its answer and an action's invalidation belong to one period in which this task is the
   // pane's and eligible. A new period begins when either changes; this is lifecycle, not a decision.
-  const periodKey = readable && list.established && !list.holdsTask ? key : null;
+  const periodKey = readable && list.established && !holdsTask ? key : null;
   const [period, setPeriod] = useState({ key: periodKey, id: 0 });
   if (period.key !== periodKey) setPeriod({ key: periodKey, id: period.id + 1 });
   /** The mounted period; a read whose period is no longer live sets nothing. */
@@ -56,8 +60,9 @@ export function useBotTaskLookup(
   const decision = botTaskLookupDecision({
     readable,
     ...list,
+    holdsTask,
     held,
-    stale: stale === period.id,
+    stale: stale === period.id || (readsActivity && held && answer.revision !== list.revision),
     inFlight,
   });
   const start = useStableCallback((id: number) => {
@@ -65,14 +70,15 @@ export function useBotTaskLookup(
     runningRef.current = id;
     setRunning(id);
     setStale(null);
+    const revision = list.revision;
     void command({ environmentId, input: { taskId, botId } }).then((result) => {
       if (live.current !== id) return;
       runningRef.current = null;
       setRunning(null);
       setAnswer(
         result._tag === "Success"
-          ? { period: id, value: result.value }
-          : { period: id, error: failureKind(squashAtomCommandFailure(result)) },
+          ? { period: id, revision, value: result.value }
+          : { period: id, revision, error: failureKind(squashAtomCommandFailure(result)) },
       );
     });
   });
