@@ -1,5 +1,5 @@
 import { copyMessageSnapshot } from "./copySnapshot";
-import { TurnMemoryDetails } from "./TurnMemoryDetails";
+import { UserMessageTurnMemory } from "./TurnMemoryDetails";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
 import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
@@ -142,16 +142,7 @@ export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mes
         <ModelSwitchRow environmentId={ctx.activeThreadEnvironmentId} modelSwitch={modelSwitch} />
       ) : null}
       <UserMessageContent row={row} />
-      {ctx.threadRef &&
-      row.message.runId &&
-      row.message.inputIntent !== "steer" &&
-      row.message.inputIntent !== "promoted_queued_to_steer" ? (
-        <TurnMemoryDetails
-          environmentId={ctx.threadRef.environmentId}
-          threadId={item?.threadId ?? ctx.threadRef.threadId}
-          runId={row.message.runId}
-        />
-      ) : null}
+      <UserMessageTurnMemory row={row} />
     </>
   );
 }

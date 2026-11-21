@@ -27,7 +27,6 @@ import {
   claudeFrameToolUseIds,
   isClaudeActiveSteeringAbortResult,
   isClaudeProviderContinuationTurn,
-  withoutMemoryBody,
   claudeEchoedPromptUuids,
   claudePromptLifecycle,
   answersClaudeRequest,
@@ -101,6 +100,7 @@ import {
 } from "./ClaudeToolFrames.ts";
 import {
   appendClaudeUserText,
+  withFreshMemory,
   handoffSkillOffset,
   makeClaudeUserMessage,
 } from "./ClaudeUserMessage.ts";
@@ -9269,19 +9269,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return context;
         });
 
-        const withFreshMemory = Effect.fnUntraced(function* (
-          message: SDKUserMessage,
-          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-        ) {
-          const snapshot = yield* MemoryContext.refreshSnapshot(turnInput);
-          if (snapshot === undefined) return { message, receipt: Effect.void };
-          const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          return {
-            message: appendClaudeUserText(message, text),
-            receipt: MemoryContext.deliveryReceipt(turnInput, snapshot),
-          };
-        });
-
         const withCuaNotice = (
           message: SDKUserMessage,
           query: ClaudeLiveQueryContext,
@@ -9596,7 +9583,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             };
             const offerUserMessage = Effect.fnUntraced(function* (
               message: SDKUserMessage,
-              receipt = Effect.void,
+              receipt: Effect.Effect<void> = Effect.void,
             ) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* startUserTurnForWakeReports(nativeThreadId).pipe(

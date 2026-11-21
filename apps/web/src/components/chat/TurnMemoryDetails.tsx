@@ -1,9 +1,25 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import * as Option from "effect/Option";
-import { useState } from "react";
+import { use, useState } from "react";
 import { useGT } from "gt-react";
 import { memoryEnvironment } from "../../state/memory";
+
+import { TimelineRowCtx, type TimelineRow } from "./timelineRowContext";
+
+export function UserMessageTurnMemory({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const { threadRef } = use(TimelineRowCtx);
+  const { runId, inputIntent } = row.message;
+  if (!threadRef || !runId || inputIntent === "steer" || inputIntent === "promoted_queued_to_steer")
+    return null;
+  return (
+    <TurnMemoryDetails
+      environmentId={threadRef.environmentId}
+      threadId={row.projectedItem?.item.threadId ?? threadRef.threadId}
+      runId={runId}
+    />
+  );
+}
 
 type Target = { environmentId: EnvironmentId; threadId: ThreadId; runId: RunId };
 

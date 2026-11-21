@@ -1,3 +1,4 @@
+import { inspectBootstrappedTurn } from "./memory/TurnMemoryInspectRpc.ts";
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
 import { speechStreamingCapabilities } from "./speech/SpeechCapabilities.ts";
 import {
@@ -1230,16 +1231,10 @@ export const layerWsRpc = (
           memory.list(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryRead]: (input) =>
           memory.read(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryTurnInspect]: (input) => {
-          const ready = memorySync.requireBootstrap(input.memorySpaceId);
-          return memorySource.pipe(
-            Effect.andThen(ready),
-            Effect.andThen(memory.inspectTurn(input, memorySource)),
-            Effect.tap(() => ready),
-            Effect.tap(() => memorySource),
+        [WS_METHODS.memoryTurnInspect]: (input) =>
+          inspectBootstrappedTurn(memory, memorySync, input, memorySource).pipe(
             Effect.mapError(memoryError),
-          );
-        },
+          ),
         [WS_METHODS.memoryHistory]: (input) =>
           memory.history(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubDiagnostics]: (input) =>
