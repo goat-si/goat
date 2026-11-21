@@ -44,6 +44,7 @@ import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/178_RemoteDispatchEnvironment.ts";
 import { forceStopDelegatedTask } from "../orchestration-v2/delegatedForceStop.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
@@ -115,6 +116,7 @@ export const fixtureWith = Effect.fnUntraced(function* (
     yield* Migration0068;
     yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
     yield* Migration0073;
+    yield* RemoteDispatchEnvironment;
   } else {
     // goatclaw reads lanes and the caller's runtime mode from the real schema.
     yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
