@@ -16,10 +16,9 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import * as Effect from "effect/Effect";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
-import { recallChannelBotNotes, type ChannelBotFiles } from "./channelBotNotes.ts";
+import { readSessionBotNotes, type ChannelBotFiles } from "./channelBotNotes.ts";
 import { localNotesBriefContext } from "./channelBriefs.ts";
 import { PERSONAL_DATA_RULE, turnInstruction } from "./channelWorkerBrief.ts";
-import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 
 export const sessionTurnBrief = Effect.fn("ChannelBotSession.turnBrief")(function* (
   task: ChannelTask,
@@ -28,13 +27,12 @@ export const sessionTurnBrief = Effect.fn("ChannelBotSession.turnBrief")(functio
   supervisor: boolean,
   ceiling: MemoryTaskGrantCeiling,
 ) {
-  const allowed = canReadChannelBotNotes(requester) && ceiling !== "none" && task.routineWork !== true;
-  const notes = yield* recallChannelBotNotes(files, task.instruction, allowed);
-  const context = yield* localNotesBriefContext(files, allowed, task.briefVersion);
+  const { notes, memory } = yield* readSessionBotNotes(files, task, requester, ceiling);
+  const context = yield* localNotesBriefContext(files, memory.notes, task.briefVersion);
   return {
     notes,
     context,
-    instruction: turnInstruction(task, files, supervisor, notes?.matched, { read: allowed, write: allowed && ceiling === "read_write" }),
+    instruction: turnInstruction(task, files, supervisor, notes?.matched, memory),
   };
 });
 

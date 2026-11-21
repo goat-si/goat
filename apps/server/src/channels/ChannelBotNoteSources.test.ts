@@ -27,9 +27,11 @@ import {
   makeHarness,
   owner,
   ownerId,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
+
+const memoryOwner = { ...owner, grantedScopes: [...owner.grantedScopes, "memory:read"] as const };
 
 const remembering = () => {
   const harness = makeHarness();
@@ -50,7 +52,7 @@ const remembering = () => {
 
 const say = (text: string, key: string) =>
   Effect.gen(function* () {
-    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), rpcContext);
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(goatInput(text, key), memoryRpcContext);
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
   });
 
@@ -97,7 +99,7 @@ describe("GOAT Bot note sources in listBotNotes", () => {
       yield* say("Remember I deploy on Fridays", "first");
       yield* say("Actually I deploy on Mondays", "second");
       const asker = { ...owner, grantedScopes: ["memory:read" as const] };
-      const reader = { ...owner, principalId: "someone-else" };
+      const reader = { ...memoryOwner, principalId: "someone-else" };
       for (const viewer of [asker, reader]) {
         const notes = yield* notesAs(viewer);
         const mondays = byText(notes, "I deploy on Mondays.");
@@ -107,7 +109,7 @@ describe("GOAT Bot note sources in listBotNotes", () => {
           inputId: inputIdFor({ ...goatInput("", "second"), ownerId }),
           channel: "goat",
           botId: BotId.make("main"),
-          from: rpcContext.displayName,
+          from: memoryRpcContext.displayName,
           at: mondays?.source?.kind === "shown" ? mondays.source.at : "",
         });
         assert.strictEqual(fridays?.replacedBy, mondays?.index);
@@ -154,7 +156,7 @@ describe("GOAT Bot note sources in listBotNotes", () => {
           );
         }
         yield* fs.writeFileString(notesFile.notes, "Written by hand\n", { flag: "a" });
-        const notes = yield* notesAs(owner);
+        const notes = yield* notesAs(memoryOwner);
         for (const id of ["in-other-owner", "in-null", "in-bad", "in-missing"]) {
           assert.deepStrictEqual(byText(notes, "Note " + id + ".")?.source, { kind: "elsewhere" });
         }
@@ -178,7 +180,7 @@ describe("GOAT Bot note sources in listBotNotes", () => {
           "in-" + index,
         );
       }
-      const notes = yield* notesAs(owner);
+      const notes = yield* notesAs(memoryOwner);
       // The opener saved one more note through reception.
       assert.lengthOf(notes, 202);
       assert.isTrue(notes.every((note) => note.source?.kind === "shown"));
@@ -193,7 +195,7 @@ describe("GOAT Bot note sources in listBotNotes", () => {
         SqlClient.SqlClient,
         (sql) => sql`ALTER TABLE channel_inbox RENAME TO channel_inbox_gone`,
       );
-      const error = yield* Effect.flip(notesAs(owner));
+      const error = yield* Effect.flip(notesAs(memoryOwner));
       assert.strictEqual(error.reason, "persistence_failed");
     }).pipe(Effect.provide(remembering())),
   );

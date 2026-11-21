@@ -56,6 +56,7 @@ type NotesResult = {
   readonly reason?: string;
   readonly told?: boolean;
   readonly code?: string;
+  readonly message?: string;
 };
 
 const scopeFor = (caller: Caller) =>
@@ -537,10 +538,9 @@ describe("notes changes from a GOAT Bot session turn", () => {
     return Effect.gen(function* () {
       yield* setupBot;
       const tidy = yield* sessionTurn(harness, "tidy my notes", "tidy");
-      assert.strictEqual(
-        (yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"))).outcome,
-        "granted",
-      );
+      const granted = yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
+      assert.strictEqual(granted.outcome, "granted");
+      assert.include(granted.message ?? "", JSON.stringify((yield* notesFile).notes));
       assert.strictEqual(
         (yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"))).outcome,
         "granted",

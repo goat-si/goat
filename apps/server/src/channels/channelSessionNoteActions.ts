@@ -262,7 +262,7 @@ const make = Effect.gen(function* () {
           const granted: NotesChangeResult = {
             outcome: "granted",
             told: false,
-            message: grantedMessage(latest.task.notesChangeRequested ?? request.quote),
+            message: grantedMessage(files.notes, latest.task.notesChangeRequested ?? request.quote),
           };
           return granted;
         }
@@ -364,7 +364,7 @@ const make = Effect.gen(function* () {
           const granted: NotesChangeResult = {
             outcome: "granted",
             told: false,
-            message: grantedMessage(request.quote.trim()),
+            message: grantedMessage(files.notes, request.quote.trim()),
           };
           return granted;
         }
@@ -380,8 +380,10 @@ const make = Effect.gen(function* () {
 // Queued before the tool answers; it is delivered like any reply, so the model must not say it arrived.
 const QUEUED = "GOAT queued this notice for the person (delivered like any reply): ";
 
-const grantedMessage = (quote: string) =>
-  "Allowed: edit the notes file now to make exactly this change and nothing else: " +
+const grantedMessage = (notesPath: string, quote: string) =>
+  "Allowed: edit " +
+  JSON.stringify(notesPath) +
+  " to make exactly this change and nothing else: " +
   JSON.stringify(quote);
 
 export const layer = Layer.effect(ChannelSessionNoteActions, make);

@@ -2,6 +2,10 @@ import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope, ChannelReceptionInput, ChannelTaskId } from "@goat/contracts";
 import { ChannelQuestionId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -140,6 +144,24 @@ const harnesses = {
     return { harness, opening: "do: check the disk" };
   },
 };
+
+it.effect("a Slack follow-up after revocation cannot reuse a warm session holding notes", () => {
+  const { harness, opening } = harnesses.session();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const files = channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
+    const fs = yield* FileSystem.FileSystem;
+    const note = "Follow the Juniper release checklist.";
+    yield* appendChannelBotNote(fs, files, note, "2026-11-21T00:00:00Z", "fixture");
+    yield* link("U2", "teammate", ["memory:read"]);
+    const stored = yield* start(opening, "start-with-notes");
+    assert.include(harness.world.launches[0]?.initialMessage?.text ?? "", note);
+    yield* say("U2", "more:" + stored.task.taskId + " check again", "follow");
+    yield* narrow("U2", ["orchestration:read", "orchestration:operate"]);
+    yield* forwardAll;
+    assert.isFalse(harness.world.sends.some((send) => send.text.includes("check again")));
+  }).pipe(Effect.provide(harness.layer));
+});
 
 describe.each(["session", "local"] as const)("a %s worker's delivery from someone else", (kind) => {
   it.effect("drops a follow-up whose sender lost access after it was accepted", () => {

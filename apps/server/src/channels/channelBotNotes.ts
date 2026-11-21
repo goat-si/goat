@@ -1,3 +1,4 @@
+import { canReadChannelBotNotes } from "./slack/slackNoteAccess.ts";
 /**
  * GOAT Bot's notes and skills: plain files on the bot's home machine that every reception pass
  * reads and every worker can open.
@@ -17,6 +18,8 @@ import {
   type BotId,
   type ChannelReceptionSkill,
   type ChannelRequester,
+  type ChannelTask,
+  type MemoryTaskGrantCeiling,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -118,6 +121,30 @@ export const recallChannelBotNotes = Effect.fn("channelBotNotes.recall")(functio
     standing: [shared.standing, own.standing].filter(Boolean).join("\n"),
     matched: [shared.matched, own.matched].filter(Boolean).join("\n"),
     ranked: [...own.ranked, ...shared.ranked],
+  };
+});
+
+export const readSessionBotNotes = Effect.fn("channelBotNotes.readSession")(function* (
+  files: ChannelBotFiles,
+  task: ChannelTask,
+  requester: ChannelRequester,
+  ceiling: MemoryTaskGrantCeiling,
+) {
+  const read = task.routineWork !== true && ceiling !== "none" && canReadChannelBotNotes(requester);
+  const write = read && ceiling === "read_write";
+  const notes = yield* recallChannelBotNotes(files, task.instruction, read);
+  return {
+    notes,
+    memory: {
+      read,
+      write,
+      notes:
+        read &&
+        (notes === undefined ||
+          notes.standing !== "" ||
+          notes.matched !== "" ||
+          (write && task.notesChangeRequested !== undefined)),
+    },
   };
 });
 
