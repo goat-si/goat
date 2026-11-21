@@ -2,8 +2,10 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   durableDecisionAnswer,
   isDecisionItemRemoved,
+  matchesDecisionRequest,
   orderDecisionQueue,
   type DecisionItem,
+  type DecisionRequestTarget,
 } from "@goat/client-runtime/state/decision-inbox";
 import {
   isAtomCommandInterrupted,
@@ -67,7 +69,7 @@ function withoutUntouchedSuggestions(
   );
 }
 
-export function useDecisionInbox() {
+export function useDecisionInbox(target?: DecisionRequestTarget) {
   const snapshot = useAtomValue(decisionInbox.itemsAtom);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -85,7 +87,11 @@ export function useDecisionInbox() {
   const answerDecision = useAtomCommand(serverEnvironment.answerDecision, {
     reportFailure: false,
   });
-  const ordered = orderDecisionQueue(snapshot.items, skippedIds);
+  const items =
+    target === undefined
+      ? snapshot.items
+      : snapshot.items.filter((item) => matchesDecisionRequest(item, target));
+  const ordered = orderDecisionQueue(items, skippedIds);
   const current = ordered.find((item) => item.id === activeId) ?? ordered[0] ?? null;
   // The thread composer keeps its answers in the same store, so either surface shows the other's.
   const sharedAnswers = usePendingUserInputAnswers();
@@ -140,7 +146,12 @@ export function useDecisionInbox() {
   ) {
     const latest = appAtomRegistry.get(decisionInbox.itemsAtom);
     const live = latest.items.find((item) => item.id === id);
-    if (!live || inFlight.current.has(id)) return;
+    if (
+      !live ||
+      (target !== undefined && !matchesDecisionRequest(live, target)) ||
+      inFlight.current.has(id)
+    )
+      return;
     // An approval handoff's card answers it through the handoff RPCs.
     if (live.kind === "handoff") return;
     if (live.kind === "decision") {

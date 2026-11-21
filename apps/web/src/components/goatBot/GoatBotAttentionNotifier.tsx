@@ -1,6 +1,7 @@
 import {
   allowsGoatBotAlert,
   attentionCursorKey,
+  botAttentionDecisionTarget,
   goatBotAttentionTitle,
   readGoatBotAttentionTarget,
   watchGoatBotAttention,
@@ -75,6 +76,17 @@ export function startGoatBotAttentionNotifications(
               if (target === null) return;
               window.focus();
               await window.desktopBridge?.revealWindow?.().catch(() => undefined);
+              if (!registry.get(channelEnvironment.listBotAttention.permissionAtom(environmentId)))
+                return;
+              const decision = botAttentionDecisionTarget(
+                environmentId,
+                target.task,
+                target.requestId,
+              );
+              if (decision !== null) {
+                await router.navigate({ to: "/decisions", search: decision });
+                return;
+              }
               await router.navigate({
                 to: "/bot",
                 search: {

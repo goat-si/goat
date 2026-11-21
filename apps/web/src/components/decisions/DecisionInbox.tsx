@@ -1,5 +1,6 @@
 import {
   type DecisionItem,
+  type DecisionRequestTarget,
   isDecisionItemWaiting,
   unlistedApprovalsNotice,
 } from "@goat/client-runtime/state/decision-inbox";
@@ -27,7 +28,7 @@ import { DecisionDurableForm } from "./DecisionDurableForm";
 import { DecisionUserInputForm } from "./DecisionUserInputForm";
 import { useDecisionInbox } from "./useDecisionInbox";
 
-export function DecisionInbox() {
+export function DecisionInbox({ target }: { readonly target?: DecisionRequestTarget | undefined }) {
   const {
     snapshot,
     ordered,
@@ -39,7 +40,7 @@ export function DecisionInbox() {
     skip,
     setAnswers,
     submit,
-  } = useDecisionInbox();
+  } = useDecisionInbox(target);
   return (
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
@@ -103,7 +104,9 @@ export function DecisionInbox() {
               />
             ) : !snapshot.isLoading && snapshot.errors.length === 0 ? (
               <p role="status">
-                All caught up. No pending thread requests on connected environments.
+                {target === undefined
+                  ? "All caught up. No pending thread requests on connected environments."
+                  : "This request is no longer pending or its computer is unavailable."}
               </p>
             ) : null}
           </WorkspacePageContainer>

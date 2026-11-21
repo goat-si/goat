@@ -1,4 +1,4 @@
-import { botAttentionRequest } from "@goat/client-runtime/goatBot";
+import { botAttentionDecisionTarget, botAttentionRequest } from "@goat/client-runtime/goatBot";
 import { BotId, MAIN_BOT_ID, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
@@ -30,6 +30,7 @@ function useAlertTask({ environmentId, taskId, botId, requestId }: Target) {
 }
 
 function AlertRequest({
+  environmentId: taskEnvironment,
   task,
   requestId,
 }: Target & {
@@ -41,28 +42,23 @@ function AlertRequest({
   if (request.kind === "answered") {
     return <p className="whitespace-pre-wrap">{request.text ?? "Answer recorded."}</p>;
   }
-  const { request: ref } = request;
+  const decision = botAttentionDecisionTarget(taskEnvironment, task, requestId);
   return (
     <p>
       {request.kind === "approval" ? "Approval needed." : "The worker has a question."}{" "}
-      {ref.host === undefined && task.worker ? (
-        <Link
-          className="underline"
-          to="/$environmentId/$threadId"
-          params={{
-            environmentId: task.worker.environmentId,
-            threadId: ref.threadId,
-          }}
-        >
-          Open worker
+      {decision === null ? (
+        "The worker’s computer is unavailable."
+      ) : (
+        <Link className="underline" to="/decisions" search={decision}>
+          Open request
         </Link>
-      ) : null}
+      )}
     </p>
   );
 }
 
 export function GoatBotAlertRequest(props: Target) {
-  const task = useAlertTask(props).data;
+  const task = useAlertTask(props).successResult?.value;
   if (!task) return null;
   return (
     <div className="border-b px-4 py-3 text-sm">
@@ -73,7 +69,7 @@ export function GoatBotAlertRequest(props: Target) {
 
 export function GoatBotAlertTask(props: Target) {
   const result = useAlertTask(props);
-  const task = result.data;
+  const task = result.successResult?.value;
   return (
     <SidebarInset className="overflow-auto scrollbar-gutter-both">
       <section className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-5 py-8">

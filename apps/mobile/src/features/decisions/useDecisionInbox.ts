@@ -1,9 +1,11 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   type DecisionItem,
+  type DecisionRequestTarget,
   durableDecisionAnswer,
   isDecisionItemRemoved,
   isDecisionItemWaiting,
+  matchesDecisionRequest,
   orderDecisionQueue,
 } from "@goat/client-runtime/state/decision-inbox";
 import {
@@ -100,6 +102,7 @@ export function useDecisionInbox(
   session: ReturnType<typeof useDecisionInboxSessionState>,
   isFocused: () => boolean,
   sideChat?: DecisionInboxSideChat,
+  target?: DecisionRequestTarget,
 ) {
   const registry = useContext(RegistryContext);
   const state = useAtomValue(decisionInbox.itemsAtom);
@@ -119,8 +122,14 @@ export function useDecisionInbox(
     inFlight,
   } = session;
   const queue = useMemo(
-    () => orderDecisionQueue(state.items, skippedIds),
-    [state.items, skippedIds],
+    () =>
+      orderDecisionQueue(
+        target === undefined
+          ? state.items
+          : state.items.filter((item) => matchesDecisionRequest(item, target)),
+        skippedIds,
+      ),
+    [state.items, skippedIds, target],
   );
   const unresolved = useCallback(
     (item: DecisionItem) => isDecisionItemWaiting(state, item),
@@ -130,7 +139,9 @@ export function useDecisionInbox(
     selected === null ? undefined : queue.find((item) => item.id === selected.id);
   const current =
     liveSelected ??
-    (selected !== null && unresolved(selected)
+    (selected !== null &&
+    (target === undefined || matchesDecisionRequest(selected, target)) &&
+    unresolved(selected)
       ? selected
       : state.isLoading && selected === null
         ? null

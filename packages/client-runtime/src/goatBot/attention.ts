@@ -1,4 +1,10 @@
-import type { ChannelTask, EnvironmentId } from "@goat/contracts";
+import type {
+  ChannelTask,
+  ChannelTaskApprovalRef,
+  EnvironmentId,
+  RuntimeRequestId,
+  ScopedThreadRef,
+} from "@goat/contracts";
 import type {
   ChannelAttentionEvent,
   ChannelAttentionTarget,
@@ -149,14 +155,7 @@ function currentAttentionRequest(task: ChannelTask, target: ChannelAttentionTarg
     (target.generation !== undefined && target.generation !== task.generation)
   )
     return undefined;
-  const request = target.requestId;
-  return task.openQuestions.some((item) => item.questionId === request) ||
-    task.answeredQuestions?.some((item) => item.questionId === request) === true ||
-    task.observed?.needsYou.some(
-      (need) => need.question?.requestId === request || need.approval?.requestId === request,
-    ) === true
-    ? request
-    : undefined;
+  return botAttentionRequest(task, target.requestId) === null ? undefined : target.requestId;
 }
 
 export async function readGoatBotAttentionTarget(
@@ -190,11 +189,35 @@ export function botAttentionRequest(task: ChannelTask, requestId: string | undef
   if (question !== undefined) return { kind: "question" as const, text: question.text };
   const answer = task.answeredQuestions?.find((item) => item.questionId === requestId);
   if (answer !== undefined) return { kind: "answered" as const, text: answer.answerText };
-  for (const need of task.observed?.needsYou ?? []) {
-    if (need.approval !== undefined && need.approval.requestId === requestId)
-      return { kind: "approval" as const, request: need.approval };
-    if (need.question !== undefined && need.question.requestId === requestId)
-      return { kind: "worker_question" as const, request: need.question };
-  }
-  return null;
+  const matches = (task.observed?.needsYou ?? []).flatMap<{
+    readonly kind: "approval" | "worker_question";
+    readonly request: ChannelTaskApprovalRef;
+  }>((need) =>
+    need.approval !== undefined && need.approval.requestId === requestId
+      ? [{ kind: "approval" as const, request: need.approval }]
+      : need.question !== undefined && need.question.requestId === requestId
+        ? [{ kind: "worker_question" as const, request: need.question }]
+        : [],
+  );
+  return matches.length === 1 ? (matches[0] ?? null) : null;
+}
+
+export function botAttentionDecisionTarget(
+  origin: EnvironmentId,
+  task: ChannelTask,
+  requestId: string | undefined,
+): (ScopedThreadRef & { readonly requestId: RuntimeRequestId }) | null {
+  const current = botAttentionRequest(task, requestId);
+  if (current?.kind !== "approval" && current?.kind !== "worker_question") return null;
+  const { host, threadId, requestId: nativeRequestId } = current.request;
+  const worker = task.worker;
+  const environmentId =
+    host === undefined
+      ? origin
+      : worker !== undefined && worker.host === host
+        ? worker.environmentId
+        : undefined;
+  return environmentId === undefined
+    ? null
+    : { environmentId, threadId, requestId: nativeRequestId };
 }

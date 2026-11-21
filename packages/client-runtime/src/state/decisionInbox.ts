@@ -2,11 +2,10 @@ import type {
   DecisionFeed,
   DecisionHandoff,
   DecisionItem as DurableDecision,
-  EnvironmentId,
   Handoff,
   ScopedThreadRef,
 } from "@goat/contracts";
-import { ThreadId } from "@goat/contracts";
+import { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
@@ -37,6 +36,38 @@ export type DecisionItem = {
   /** An approval handoff; its card answers it through the handoff RPCs. */
   | { readonly kind: "handoff"; readonly handoff: Handoff }
 );
+
+export type DecisionRequestTarget = ScopedThreadRef & { readonly requestId: RuntimeRequestId };
+
+export function readDecisionRequestTarget(
+  search: Readonly<Record<string, unknown>> | undefined,
+): DecisionRequestTarget | undefined {
+  const { environmentId, threadId, requestId } = search ?? {};
+  if (
+    typeof environmentId !== "string" ||
+    !environmentId ||
+    typeof threadId !== "string" ||
+    !threadId ||
+    typeof requestId !== "string" ||
+    !requestId
+  )
+    return undefined;
+  return {
+    environmentId: EnvironmentId.make(environmentId),
+    threadId: ThreadId.make(threadId),
+    requestId: RuntimeRequestId.make(requestId),
+  };
+}
+
+export function matchesDecisionRequest(item: DecisionItem, target: DecisionRequestTarget) {
+  return (
+    item.ref.environmentId === target.environmentId &&
+    item.ref.threadId === target.threadId &&
+    (item.kind === "handoff"
+      ? String(item.handoff.handoffId) === target.requestId
+      : item.kind !== "decision" && item.request.requestId === target.requestId)
+  );
+}
 
 const PERSON: DecisionRouting = { routedTo: "person" };
 

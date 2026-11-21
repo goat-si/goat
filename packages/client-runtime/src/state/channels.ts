@@ -54,6 +54,27 @@ export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   const sessions = createEnvironmentSessionAtoms(runtime);
+  const taskChanges = createEnvironmentSubscriptionAtomFamily(runtime, {
+    label: "environment-data:channel:task-changes",
+    idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
+    subscribe: (input: ChannelSubscribeTaskChangesInput) =>
+      subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
+  });
+  const taskChangesPermission = createCommandPermissions(
+    runtime,
+    CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+  ).permissionAtom;
+  const alertTaskChanges = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      if (
+        !get(taskChangesPermission(environmentId)) ||
+        get(sessions.initialConfigValueAtom(environmentId))?.environment.capabilities
+          .goatBotTaskChanges !== true
+      )
+        return null;
+      return Option.getOrNull(AsyncResult.value(get(taskChanges({ environmentId, input: {} }))));
+    }),
+  );
   // Bumped when this client changes a task's view, or a listed row's retention ends, so every
   // reader of that environment's bot rows reads them again.
   const botThreadsRevision = Atom.family((environmentId: EnvironmentId) =>
@@ -411,16 +432,8 @@ export function createChannelEnvironmentAtoms<R, E>(
      * use it. It closes soon after the last one unmounts: the server allows few per connection.
      * A session without the stream says so, and the next session asks again.
      */
-    taskChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
-      label: "environment-data:channel:task-changes",
-      idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
-      subscribe: (input: ChannelSubscribeTaskChangesInput) =>
-        subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
-    }),
-    taskChangesPermission: createCommandPermissions(
-      runtime,
-      CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
-    ).permissionAtom,
+    taskChanges,
+    taskChangesPermission,
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
@@ -455,7 +468,9 @@ export function createChannelEnvironmentAtoms<R, E>(
     getTask: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:get-task",
       tag: CHANNEL_GATEWAY_WS_METHODS.getTask,
-      staleTimeMs: 2_000,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => alertTaskChanges(environmentId),
     }),
     listTasks: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-tasks",

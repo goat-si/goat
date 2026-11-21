@@ -1,7 +1,11 @@
-import { unlistedApprovalsNotice } from "@goat/client-runtime/state/decision-inbox";
+import {
+  readDecisionRequestTarget,
+  unlistedApprovalsNotice,
+  type DecisionRequestTarget,
+} from "@goat/client-runtime/state/decision-inbox";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
-import { useIsFocused, useNavigation } from "@react-navigation/native";
+import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,7 +24,11 @@ import { DecisionDurableCard } from "./DecisionDurableCard";
 import { useDecisionInboxSideChat } from "./decisionInboxSideChat";
 import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 
-export function DecisionsRouteScreen() {
+export function DecisionsRouteScreen({
+  route,
+}: {
+  readonly route?: StaticScreenProps<Partial<DecisionRequestTarget> | undefined>["route"];
+}) {
   const focused = useIsFocused();
   const navigation = useNavigation();
   const session = useDecisionInboxSessionState();
@@ -32,7 +40,11 @@ export function DecisionsRouteScreen() {
         onBack={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate("Home"))}
       />
       {focused ? (
-        <FocusedDecisionsContent session={session} isFocused={() => navigation.isFocused()} />
+        <FocusedDecisionsContent
+          session={session}
+          isFocused={() => navigation.isFocused()}
+          target={readDecisionRequestTarget(route?.params)}
+        />
       ) : null}
     </View>
   );
@@ -41,6 +53,7 @@ export function DecisionsRouteScreen() {
 function FocusedDecisionsContent(props: {
   readonly session: ReturnType<typeof useDecisionInboxSessionState>;
   readonly isFocused: () => boolean;
+  readonly target?: DecisionRequestTarget | undefined;
 }) {
   const {
     state,
@@ -62,7 +75,7 @@ function FocusedDecisionsContent(props: {
     decisionDraft,
     onSelectOption,
     onChangeCustomAnswer,
-  } = useDecisionInbox(props.session, props.isFocused, useDecisionInboxSideChat());
+  } = useDecisionInbox(props.session, props.isFocused, useDecisionInboxSideChat(), props.target);
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
@@ -126,10 +139,14 @@ function FocusedDecisionsContent(props: {
               {unlistedApprovalsNotice(state.unlistedApprovals)}
             </Text>
           ) : null}
-          {state.items.length === 0 && !partial ? (
+          {current === null && !partial ? (
             <EmptyState
               title="No pending thread requests"
-              detail="Pending questions and approvals from connected environments will appear here."
+              detail={
+                props.target === undefined
+                  ? "Pending questions and approvals from connected environments will appear here."
+                  : "This request is no longer pending or its computer is unavailable."
+              }
             />
           ) : null}
           {current ? (

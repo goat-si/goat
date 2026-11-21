@@ -1,5 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
+import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
 import { EnvironmentId, RuntimeRequestId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import {
@@ -179,7 +180,9 @@ function makeRouter() {
   const decisions = createRoute({
     getParentRoute: () => rootRoute,
     path: "/decisions",
-    component: DecisionInbox,
+    validateSearch: (search): Partial<NonNullable<ReturnType<typeof readDecisionRequestTarget>>> =>
+      readDecisionRequestTarget(search) ?? {},
+    component: () => <DecisionInbox target={readDecisionRequestTarget(decisions.useSearch())} />,
   });
   const thread = createRoute({
     getParentRoute: () => rootRoute,
@@ -445,6 +448,27 @@ it("opens the exact environment/thread route from a disabled card", async () => 
   expect(router.state.location.pathname).toBe("/secondary/a");
   expect(container.textContent).toContain("Opened thread");
   expect(state.approval).not.toHaveBeenCalled();
+});
+
+it("a remote approval target never chooses a request with the same id on another thread or host", async () => {
+  const requested = approval("same", secondary, "second");
+  const otherHost = approval("same", primary, "second");
+  const otherThread = approval("same", secondary, "first");
+  await mount([otherHost, otherThread, requested]);
+  await act(async () => {
+    await router.navigate({
+      to: "/decisions",
+      search: { ...requested.ref, requestId: requested.request.requestId },
+    });
+  });
+  await click("Approve");
+  expect(state.approval).toHaveBeenCalledExactlyOnceWith({
+    environmentId: secondary,
+    input: { threadId: "second", requestId: "same", decision: "accept" },
+  });
+  await act(async () => write([otherHost, otherThread]));
+  expect(container.textContent).toContain("This request is no longer pending");
+  expect(container.querySelector("button[aria-label=Approve]")).toBeNull();
 });
 
 function durable(recommended: string | null): Extract<DecisionItem, { kind: "decision" }> {

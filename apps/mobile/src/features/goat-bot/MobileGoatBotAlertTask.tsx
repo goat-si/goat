@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botAttentionRequest } from "@goat/client-runtime/goatBot";
+import { botAttentionDecisionTarget, botAttentionRequest } from "@goat/client-runtime/goatBot";
 import type { ChannelTask } from "@goat/contracts";
 import type { ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
 import { useLinkTo } from "@react-navigation/native";
@@ -39,31 +39,28 @@ function Request({
   if (request === null) return null;
   if (request.kind === "question" || request.kind === "answered")
     return <Text>{request.text ?? "Answer recorded."}</Text>;
-  const { request: ref } = request;
-  const worker = task.worker;
+  const decision = botAttentionDecisionTarget(target.environmentId, task, target.requestId);
   return (
     <View className="gap-2">
       <Text>{request.kind === "approval" ? "Approval needed." : "The worker has a question."}</Text>
-      {worker && ref.host === undefined ? (
+      {decision !== null ? (
         <Text
           accessibilityRole="link"
           className="underline"
-          onPress={() =>
-            linkTo(
-              `/threads/${encodeURIComponent(worker.environmentId)}/${encodeURIComponent(ref.threadId)}`,
-            )
-          }
+          onPress={() => linkTo("/decisions?" + new URLSearchParams(decision).toString())}
         >
-          Open worker
+          Open request
         </Text>
-      ) : null}
+      ) : (
+        <Text>The worker’s computer is unavailable.</Text>
+      )}
     </View>
   );
 }
 
 export function MobileGoatBotAlertRequest({ target }: { readonly target: ChannelAttentionTarget }) {
-  const task = useAlertTask(target).data;
-  return task === null ? null : (
+  const task = useAlertTask(target).successResult?.value;
+  return task === undefined ? null : (
     <View className="px-4 py-3">
       <Request task={task} target={target} />
     </View>
@@ -72,7 +69,7 @@ export function MobileGoatBotAlertRequest({ target }: { readonly target: Channel
 
 export function MobileGoatBotAlertTask({ target }: { readonly target: ChannelAttentionTarget }) {
   const result = useAlertTask(target);
-  const task = result.data;
+  const task = result.successResult?.value;
   return (
     <ScreenScrollView contentContainerClassName="gap-3 px-5 py-5">
       {task ? (
