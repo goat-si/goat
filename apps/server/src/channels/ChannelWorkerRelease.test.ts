@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -9,6 +11,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { preparationSettled } from "../orchestration-v2/testkit/preparationSettled.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { workerLaunchIdsFor } from "./channelIds.ts";
 import {
@@ -50,6 +53,58 @@ it.effect("a person's launch can use channel-like thread and message ids", () =>
     assert.strictEqual(prepared.runs[0]?.status, "starting");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("releases an ordinary worker claimed before launch during rollback to #3797", () =>
+  Effect.gen(function* () {
+    const claimed = yield* Deferred.make<void>();
+    const ready = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      realWorkerLaunch: true,
+      channelsLayer: ChannelLayers.layerServices.pipe(
+        Layer.updateService(ThreadLaunch.ThreadLaunchService, (service) =>
+          ThreadLaunch.ThreadLaunchService.of({
+            ...service,
+            launch: (input) =>
+              Deferred.succeed(claimed, undefined).pipe(
+                Effect.andThen(Deferred.await(ready)),
+                Effect.andThen(service.launch(input)),
+              ),
+          }),
+        ),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: inspect fixtures", "rollback-claim"), rpcContext);
+      const oldDispatch = yield* runtime.drain.pipe(Effect.forkChild);
+      yield* Deferred.await(claimed);
+      yield* Fiber.interrupt(oldDispatch);
+      const { taskId, generation, status, worker } = yield* onlyTask;
+      const { threadId } = workerLaunchIdsFor(taskId, generation);
+      assert.strictEqual(status, "dispatching");
+      assert.isUndefined(worker);
+      assert.lengthOf(
+        yield* sql`SELECT 1 FROM channel_task_events
+          WHERE task_id = ${taskId} AND type = 'task.dispatch.claimed'`,
+        1,
+      );
+      assert.isEmpty(
+        yield* sql`SELECT 1 FROM orchestration_v2_projection_runs WHERE thread_id = ${threadId}`,
+      );
+      // The older dispatcher commits the claim and brief without writing the generation table.
+      yield* sql`DELETE FROM channel_worker_generations WHERE task_id = ${taskId}`;
+      assert.isEmpty(yield* runMigrations());
+      yield* Deferred.succeed(ready, undefined);
+      yield* runtime.drain;
+      assert.strictEqual((yield* preparationSettled(threadId)).runs[0]?.status, "starting");
+      yield* runtime.drain;
+      assert.lengthOf(yield* providerStarts(sql, threadId), 1);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale"] as const)(
   "releases an ordinary %s channel worker",
