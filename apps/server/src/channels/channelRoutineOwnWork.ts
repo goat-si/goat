@@ -188,15 +188,17 @@ export const prepareChannelWorkerWorkspace = Effect.fn("channel.prepareWorkerWor
     project === undefined || Option.isNone(identities)
       ? null
       : yield* identities.value.resolve(project.workspaceRoot);
+  const workspace = {
+    type: "worktree" as const,
+    baseRef: target.workspaceStrategy.baseRef ?? "HEAD",
+  };
+  const repository =
+    githubRepository(identity?.canonicalKey.match(/^github\.com\/(.+)$/i)?.[1]) ??
+    (identity?.provider === "github" && identity.owner !== undefined && identity.name !== undefined
+      ? identity.owner + "/" + identity.name
+      : undefined);
+  if (repository === undefined && task.routineWork !== true) return workspace;
   const branch = remoteBranchFor(task.taskId, task.generation);
-  yield* recordHead({
-    taskId: task.taskId,
-    generation: task.generation,
-    branch,
-    repository:
-      identity?.provider === "github" && identity.owner !== undefined && identity.name !== undefined
-        ? identity.owner + "/" + identity.name
-        : undefined,
-  });
-  return { type: "worktree", baseRef: target.workspaceStrategy.baseRef ?? "HEAD", branch };
+  yield* recordHead({ taskId: task.taskId, generation: task.generation, branch, repository });
+  return { ...workspace, branch };
 });
