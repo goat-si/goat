@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- fixture signs the original byte body with HMAC.
+import * as NodeCrypto from "node:crypto";
 import { assert, it } from "@effect/vitest";
 import { BotId, CommandId, ScheduledTaskId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -9,7 +11,12 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
-import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
+import {
+  requestFor,
+  waitForSpan,
+  webhookTaskInput,
+  withWebhookService,
+} from "./ScheduledRunFixture.testkit.ts";
 
 const botThread = "goat-bot-thread";
 const owner = { principalId: "person", grantedScopes: ["orchestration:read" as const] };
@@ -468,6 +475,80 @@ it.effect("a paused work trigger keeps its mode on older saves and needs a secre
           (yield* service.setEnabled({ id: task.id, enabled: true }, captured)).task.enabled,
           true,
         );
+      }),
+    {},
+  ),
+);
+
+it.effect("a signed webhook hands off one fenced input and a replay cannot start another", () =>
+  withWebhookService(
+    ({ service, sql, runs }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const secret = "synthetic-signing-secret";
+        const captured = {
+          memoryGrantCeiling: "none" as const,
+          owner: {
+            principalId: "person",
+            sessionId: "fixture-session",
+            grantedScopes: ["orchestration:operate", "settings:write"] as const,
+          },
+        };
+        const { task } = yield* service.upsert(
+          yield* routineInput({
+            routineMode: "work",
+            prompt: "Triage changes: {{body.action}}",
+            schedule: {
+              type: "webhook",
+              signature: { header: "x-test-signature", encoding: "hex", prefix: "", secret },
+            },
+          }),
+          captured,
+        );
+        const bodyText = '{"action":"fixture-marker"}';
+        const body = new TextEncoder().encode(bodyText);
+        const request = requestFor(task, { body, bodyText });
+        assert.strictEqual((yield* service.triggerWebhook(request))._tag, "rejected_signature");
+        const signed = {
+          ...request,
+          headers: {
+            ...request.headers,
+            "x-test-signature": NodeCrypto.createHmac("sha256", secret).update(body).digest("hex"),
+          },
+        };
+        const delivery = yield* waitForSpan(
+          service.triggerWebhook(signed),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        if (delivery._tag !== "accepted") return assert.fail("signed delivery was not accepted");
+        const links =
+          yield* sql<LinkRow>`SELECT firing_id, payload_json, state FROM scheduled_task_channel_inputs`;
+        const deliveries = yield* service.listWebhookDeliveries({
+          id: task.id,
+          acceptAnyOutcome: true,
+        });
+        assert.lengthOf(
+          links,
+          1,
+          JSON.stringify(
+            deliveries.deliveries.map(({ outcome, error, signatureVerified }) => ({
+              outcome,
+              error,
+              signatureVerified,
+            })),
+          ),
+        );
+        const payload = JSON.parse(links[0]?.payload_json ?? "{}");
+        assert.strictEqual(payload.webhookDeliveryId, delivery.deliveryId);
+        assert.include(payload.text, "fixture-marker");
+        assert.notInclude(payload.text, "{{body.action}}");
+        assert.include(payload.text, "untrusted");
+        assert.strictEqual(
+          (yield* runs.deliveryReceipt(delivery.deliveryId))?.dispatchStatus,
+          "dispatching",
+        );
+        assert.deepInclude(yield* service.triggerWebhook(signed), { outcome: "duplicate" });
+        assert.lengthOf(yield* sql`SELECT firing_id FROM scheduled_task_channel_inputs`, 1);
       }),
     {},
   ),
