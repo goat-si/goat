@@ -4,7 +4,7 @@ import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import remarkGfm from "remark-gfm";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page, userEvent } from "vite-plus/test/browser";
+import { commands, page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import "../index.css";
@@ -473,7 +473,6 @@ describe("ChatMarkdown streaming", () => {
       expect(runButtons()).toHaveLength(0);
     }
   });
-
   it("edits the current task text and marker after reusing a renderer", async () => {
     setup();
     let editedText: string | undefined;
@@ -672,7 +671,6 @@ describe("ChatMarkdown headings", () => {
     ).toHaveLength(2);
     await expect.element(screen.getByRole("note")).not.toHaveTextContent("After");
   });
-
   it("never gives two headings the same id, even when a suffix matches another heading", async () => {
     setup();
     await using screen = await renderText(
@@ -804,6 +802,19 @@ describe("ChatMarkdown user indentation copy", () => {
 });
 
 describe("ChatMarkdown file chip tooltips", () => {
+  it("stays open while the pointer selects the path, then closes when it leaves", async () => {
+    setup();
+    await using screen = await renderText("[notes](/tmp/project/docs/notes.md)");
+    await userEvent.hover(screen.container.querySelector(".chat-markdown-file-link")!);
+    const path = page.getByText("/tmp/project/docs/notes.md");
+    await expect.element(path).toBeVisible();
+    // Forced so the pointer lands on the popup even when it ignores pointer events.
+    await userEvent.tripleClick(path, { force: true });
+    expect(window.getSelection()?.toString().trim()).toBe("/tmp/project/docs/notes.md");
+    await expect.element(path).toBeVisible();
+    await commands.resetPointer();
+    await expect.element(path).not.toBeInTheDocument();
+  });
   it("wraps a long path so its file name stays inside the tooltip", async () => {
     setup();
     const path =
@@ -851,7 +862,6 @@ describe("ChatMarkdown editor deep links", () => {
       "vscode://file/Users/me/repo/file.md:3:7",
     ]);
   });
-
   it("still drops other editor links and unknown schemes", async () => {
     setup();
     await using screen = await renderText(
@@ -875,7 +885,6 @@ describe("ChatMarkdown Windows file links", () => {
     [...container.querySelectorAll(".chat-markdown-file-link")].map((chip) =>
       chip.getAttribute("href"),
     );
-
   it("still rejects unsafe schemes", async () => {
     setup();
     for (const parseRawHtml of [true, false]) {
