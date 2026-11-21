@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import { assert, it } from "@effect/vitest";
 import { BotId, CommandId, ScheduledTaskId } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -770,48 +771,46 @@ function signedEvent(task: Parameters<typeof requestFor>[0], value: string) {
 }
 
 it.effect("work triggers fence startup on a build that cannot enforce their grants", () =>
-  withWebhookService(
-    ({ service, sql }) =>
-      Effect.gen(function* () {
-        const legacy = migrationEntries.filter(([id]) => id <= 176);
-        const checkOldBuild = Effect.gen(function* () {
-          const history = yield* sql<{
-            migration_id: number;
-            name: string;
-          }>`SELECT migration_id, name FROM effect_sql_migrations`;
-          return skippedV2Migrations(
-            legacy,
-            history,
-            Math.max(...history.map((row) => row.migration_id)),
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const migrate = runMigrations({ toMigrationInclusive: 177 });
+    yield* migrate;
+    const legacy = migrationEntries.filter(([id]) => id <= 176);
+    const checkOldBuild = Effect.gen(function* () {
+      const history = yield* sql<{
+        migration_id: number;
+        name: string;
+      }>`SELECT migration_id, name FROM effect_sql_migrations`;
+      return skippedV2Migrations(
+        legacy,
+        history,
+        Math.max(...history.map((row) => row.migration_id)),
+      );
+    });
+    assert.isUndefined(yield* checkOldBuild);
+    yield* withWebhookService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* registerBot(sql);
+          yield* service.upsert(
+            yield* routineInput({
+              routineMode: "work",
+              enabled: false,
+              schedule: { type: "webhook", signature: eventSignature },
+            }),
+            eventTriggerOwner,
           );
-        });
-        assert.isUndefined(yield* checkOldBuild);
-        yield* registerBot(sql);
-        yield* service.upsert(
-          yield* routineInput({
-            routineMode: "work",
-            enabled: false,
-            schedule: { type: "webhook", signature: eventSignature },
-          }),
-          eventTriggerOwner,
-        );
-        assert.include(
-          (yield* checkOldBuild)?.message ?? "",
-          "would skip required schema migrations",
-        );
-        const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        assert.isEmpty(yield* migrate);
-        // The published build could already have a work trigger without the fence.
-        yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
-        yield* sql`DELETE FROM effect_sql_migrations WHERE name='WorkTriggerAuthorityFence'`;
-        assert.isUndefined(yield* checkOldBuild);
-        assert.deepStrictEqual(yield* migrate, [[177, "WorkTriggerAuthorityFence"]]);
-        assert.include(
-          (yield* checkOldBuild)?.message ?? "",
-          "would skip required schema migrations",
-        );
-        assert.isEmpty(yield* migrate);
-      }),
-    {},
-  ),
+        }),
+      { sql },
+    );
+    assert.include((yield* checkOldBuild)?.message ?? "", "would skip required schema migrations");
+    assert.isEmpty(yield* migrate);
+    // The published build could already have a work trigger without the fence.
+    yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkTriggerAuthority'`;
+    yield* sql`DELETE FROM effect_sql_migrations WHERE name='WorkTriggerAuthorityFence'`;
+    assert.isUndefined(yield* checkOldBuild);
+    assert.deepStrictEqual(yield* migrate, [[177, "WorkTriggerAuthorityFence"]]);
+    assert.include((yield* checkOldBuild)?.message ?? "", "would skip required schema migrations");
+    assert.isEmpty(yield* migrate);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
