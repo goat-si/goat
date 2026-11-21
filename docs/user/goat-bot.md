@@ -75,6 +75,10 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
+Tasks started in Slack appear in the assigned bot's **Home → Work** on
+web, desktop and mobile. The member's Home shows its configured Slack
+channel IDs. You can change the bindings in [Slack settings](slack.md).
+
 On web and desktop, the bot's name at the top of its chat opens the bot's home, where **Edit
 bot** changes its name, face, purpose and model. **Home** is one page: a status note when
 something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
