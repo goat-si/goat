@@ -117,6 +117,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
+  "ChannelBotTaskSnooze",
 ]);
 
 type MigrationEntry<E> = readonly [
