@@ -751,6 +751,7 @@ it.effect.each([undefined, true] as const)(
         {
           title: "Child",
           projectId,
+          modelSelection,
           report: {
             correlationId: "channel-remote:task",
             originLabel: "Origin",
@@ -767,7 +768,6 @@ it.effect.each([undefined, true] as const)(
     }).pipe(Effect.provide(f.layer));
   },
 );
-
 it.effect("thread launch forwards the caller runtime ceiling despite a full-access request", () => {
   const f = fixture(false, "published-ref", undefined, "owner", {
     runtimeMode: "approval-required",
