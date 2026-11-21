@@ -620,6 +620,7 @@ export function startThreadNotifications(
         const handoff = handoffs.get(handoffId);
         if (handoff === undefined) return;
         const threadId = handoff.handoff.requestedBy.threadId;
+        if (isRemoteChannelWorkerThreadId(threadId)) return;
         const source = entry.threads.find((thread) => thread.id === threadId);
         const origins = owningOrigins(environmentId, source);
         if (origins.length === 0) {
