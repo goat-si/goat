@@ -33,10 +33,12 @@ it.effect("strips only shared CJK assets and checksums the staged archive's own 
     const clientAssetsDirectory = path.join(root, "desktop-assets");
     const stage = path.join(root, "stage", stem);
     const filename = "NotoSansJP-Regular-abc_123.otf";
+    // Large enough to span GNU tar records, where an unpadded archive breaks --delete.
+    const font = "shared font".repeat(4096);
     for (const [member, contents] of [
       ["goat", "executable"],
       ["client/index.html", "index"],
-      [`client/assets/${filename}`, "shared font"],
+      [`client/assets/${filename}`, font],
       ["client/assets/other.otf", "another font"],
       ["resource-monitor/linux-x64/goat-resource-monitor", "monitor"],
       ["screen-code/quickjs.wasm", "quickjs"],
@@ -47,11 +49,12 @@ it.effect("strips only shared CJK assets and checksums the staged archive's own 
       yield* fs.writeFileString(file, contents);
     }
     yield* fs.makeDirectory(clientAssetsDirectory);
-    yield* fs.writeFileString(path.join(clientAssetsDirectory, filename), "shared font");
+    yield* fs.writeFileString(path.join(clientAssetsDirectory, filename), font);
     yield* fs.makeDirectory(sourceDirectory);
     const source = path.join(sourceDirectory, `${stem}.tar.gz`);
+    // -b 1 leaves the tar unpadded to GNU's 10240-byte record, like macOS bsdtar's CLI archives.
     const pack = yield* spawner.spawn(
-      ChildProcess.make(tar, ["-czf", source, "-C", path.dirname(stage), stem]),
+      ChildProcess.make(tar, ["-b", "1", "-czf", source, "-C", path.dirname(stage), stem]),
     );
     assert.equal(Number(yield* pack.exitCode), 0);
     const before = yield* fs.readFile(source);
@@ -63,7 +66,7 @@ it.effect("strips only shared CJK assets and checksums the staged archive's own 
       requireAll: false,
     };
     const sizes = yield* stageSshRuntimeArchives(input);
-    assert.deepEqual(sizes, { sharedBytes: 11, removedBytes: 11 });
+    assert.deepEqual(sizes, { sharedBytes: font.length, removedBytes: font.length });
     const [archive] = yield* validateSshRuntimeArchives({
       directory: destinationDirectory,
       version,
@@ -80,10 +83,7 @@ it.effect("strips only shared CJK assets and checksums the staged archive's own 
     assert.include(names, "client/assets/other.otf");
     assert.notDeepEqual(archive.bytes, before);
     assert.deepEqual(yield* fs.readFile(source), before);
-    assert.equal(
-      yield* fs.readFileString(path.join(clientAssetsDirectory, filename)),
-      "shared font",
-    );
+    assert.equal(yield* fs.readFileString(path.join(clientAssetsDirectory, filename)), font);
     const manifest = archive.fileName + ".fonts.sha256";
     const config = yield* createBuildConfig(
       "mac",
