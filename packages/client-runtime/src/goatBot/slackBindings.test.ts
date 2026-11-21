@@ -1,5 +1,5 @@
 import { BotId, SlackChannelConnectionId, type SlackChannelSettings } from "@goat/contracts";
-import { expect, it } from "vitest";
+import { expect, it } from "vite-plus/test";
 import { slackBoundChannelIds, slackReachabilityLabel } from "./slackBindings.ts";
 
 it("only reports reachable channels from connected Slack connections", () => {
