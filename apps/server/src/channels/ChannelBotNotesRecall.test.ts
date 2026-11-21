@@ -469,8 +469,10 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
             Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
               getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
             }),
-            ServerSettings.layerTest(),
-            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({}),
+            ServerSettings.layerTest().pipe(Layer.orDie),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => Effect.die("unused"),
+            }),
             Layer.succeed(ProviderInstallationGate.ProviderInstallationGate, {
               ...gate,
               execute: (id, work) =>

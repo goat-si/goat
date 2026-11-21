@@ -2416,9 +2416,9 @@ describe("notes require a request in the current input", () => {
             })
           : defaultScript(input);
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
-          goatInput("Please forget the Korean note", "change-note"),
+          yield* memberNoteInput("Please forget the Korean note", "change-note"),
           memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
@@ -2429,9 +2429,8 @@ describe("notes require a request in the current input", () => {
         }>`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.created'`;
         assert.lengthOf(rows, 1);
         const created = yield* decodeTaskEventJsonEffect(rows[0]!.event_json);
-        assert.strictEqual(created.type, "task.created");
         if (created.type !== "task.created") return yield* Effect.die("expected task.created");
-        const instruction = yield* launchBrief(harness.world.launches[0]);
+        const instruction = yield* launchBrief(harness.world.launches.at(-1));
         if (scenario === "quoted") {
           assert.strictEqual(task.notesChangeRequested, quote);
           assert.strictEqual(created.payload.notesChangeRequested, quote);
@@ -2447,7 +2446,8 @@ describe("notes require a request in the current input", () => {
           );
           assert.notInclude(instruction, "Edit the notes file only");
         }
-        assert.isFalse(yield* notesFileExists);
+        const files = yield* memberNoteFiles;
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(files.notes));
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );

@@ -645,8 +645,10 @@ export const makeChannelBotNoteWriter = (
  * change it would not grant: neither is dropped without saying so.
  */
 export const droppedNoteNotice = (refusal: string | undefined) =>
-  refusal === "missing_quote" || refusal === "quote_not_in_input"
-    ? CHANNEL_COPY.noteNotSaved
-    : refusal === "not_linked" || refusal === "not_a_person"
-      ? CHANNEL_COPY.noteEditNotAllowed
-      : undefined;
+  refusal === "shared_confirmation_required"
+    ? CHANNEL_COPY.sharedNoteConfirmationRequired
+    : refusal === "missing_quote" || refusal === "quote_not_in_input"
+      ? CHANNEL_COPY.noteNotSaved
+      : refusal === "not_linked" || refusal === "not_a_person"
+        ? CHANNEL_COPY.noteEditNotAllowed
+        : undefined;

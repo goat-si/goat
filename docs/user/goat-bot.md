@@ -133,6 +133,7 @@ bot's tasks, and a task opens in its own view.
   notes, including notes kept before this feature. When you ask a member to remember something,
   it goes in **This bot**. To share new information, send `Remember for all bots: <note>` and
   choose **For all bots** in the reply. The main bot uses this confirmation for new shared notes.
+  To edit or forget an existing shared note, choose it under **All bots**.
   Reading or using these notes requires GOAT memory access.
   Changing them requires memory write access. A full-access worker on the machine can still read
   the files directly.

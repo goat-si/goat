@@ -21,6 +21,7 @@ import {
   ChannelReceptionId,
   CommandId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
+  MAIN_BOT_ID,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import {
@@ -70,9 +71,8 @@ import {
   channelBotFilesFor,
   listChannelBotSkills,
   quotedFromInput,
-  recallChannelBotNotes,
+  readReceptionBotNotes,
 } from "./channelBotNotes.ts";
-import { channelBotNotesSection } from "./channelBotNotesRecall.ts";
 import { confirmMainBotNote, sharedBotNoteReply } from "./channelSharedBotNote.ts";
 import { droppedNoteNotice, mayWriteBotNotes } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
@@ -212,9 +212,7 @@ const make = Effect.gen(function* () {
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
   const filesFor = (botId: BotId) => channelBotFilesFor(path, serverConfig.stateDir, botId);
   const notesFor = (botId: BotId, viewer: ChannelRequester, query: string) =>
-    recallChannelBotNotes(filesFor(botId), query, canReadChannelBotNotes(viewer)).pipe(
-      Effect.map((notes) => (notes === undefined ? "" : channelBotNotesSection(notes))),
-    );
+    readReceptionBotNotes(filesFor(botId), query, viewer);
   const botNotes = yield* ChannelBotNoteWriter;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
@@ -339,15 +337,13 @@ const make = Effect.gen(function* () {
         yield* Effect.logWarning("channel reception failed", { kind: "unavailable" });
         return receptionFailure("unavailable");
       }
+      const viewer =
+        authority && viewerNow(input.requester, authority.connectionId, authority.inputId);
       return yield* generateReception({
         cwd: serverConfig.stateDir,
-        input:
-          authority === undefined
-            ? input
-            : yield* recheckReceptionNotes(
-                input,
-                viewerNow(input.requester, authority.connectionId, authority.inputId),
-              ),
+        input: viewer === undefined ? input : yield* recheckReceptionNotes(input, viewer),
+        recheckInput:
+          viewer === undefined ? undefined : (current) => recheckReceptionNotes(current, viewer),
         modelSelection: settings.value.textGenerationModelSelection,
       }).pipe(
         Effect.timeoutOption(CHANNEL_RECEPTION_TIMEOUT_MS),
@@ -1208,9 +1204,11 @@ const make = Effect.gen(function* () {
           ? undefined
           : !mayChangeNotes
             ? "not_linked"
-            : quotedFromInput(asked.notesChangeRequested, message.text)
-              ? undefined
-              : "quote_not_in_input";
+            : !quotedFromInput(asked.notesChangeRequested, message.text)
+              ? "quote_not_in_input"
+              : stored.botId === MAIN_BOT_ID
+                ? "shared_confirmation_required"
+                : undefined;
       const sharedProposal = yield* confirmMainBotNote(stored, decision, rememberRefusal, botNotes);
       const saved =
         decision.remember !== undefined &&
@@ -1271,11 +1269,7 @@ const make = Effect.gen(function* () {
           // A new turn is its own task, queued as its own run in the conversation's session;
           // only a follow_up naming a task joins that task's run.
           const notesChangeRequested =
-            mayChangeNotes &&
-            action.notesChangeRequested !== undefined &&
-            quotedFromInput(action.notesChangeRequested, message.text)
-              ? action.notesChangeRequested
-              : undefined;
+            editRefusal === undefined ? action.notesChangeRequested : undefined;
           createdTasks = makeCreatedTasks({
             action,
             inputId,

@@ -14,6 +14,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -37,6 +38,13 @@ import {
   memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+import {
+  memberNoteFiles,
+  memberNoteInput,
+  notesMember,
+  setupMemberNotes,
+  writeMemberNotes,
+} from "./testkit/memberNotes.ts";
 
 const fridays = "I deploy on Fridays.";
 
@@ -90,6 +98,29 @@ const send = (text: string, key: string) =>
 const replies = Effect.map(botMessages, (page) =>
   page.messages.map((message) => message.text).join("\n"),
 );
+
+const sendMember = Effect.fn("channelTest.sendMemberNoteInput")(function* (
+  text: string,
+  key: string,
+) {
+  const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+    yield* memberNoteInput(text, key),
+    memoryRpcContext,
+  );
+  yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+  return input;
+});
+const memberMessages = Effect.gen(function* () {
+  const { sessionThreadId } = yield* notesMember;
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  return (yield* threads.getThreadRecords(sessionThreadId, ["messages"])).messages;
+});
+const memberReplies = Effect.map(memberMessages, (messages) =>
+  messages.map((message) => message.text).join("\n"),
+);
+const readMemberNotes = Effect.gen(function* () {
+  return yield* (yield* FileSystem.FileSystem).readFileString((yield* memberNoteFiles).notes);
+});
 
 const taskCount = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
@@ -437,13 +468,13 @@ describe("Memory tab requests to change or forget a note", () => {
         : {},
     );
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
-      yield* writeNotes(text);
-      yield* send("Please tidy my notes", "tidy");
-      yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
-      assert.strictEqual(yield* readNotes, text);
-      assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+      yield* writeMemberNotes(text);
+      yield* sendMember("Please tidy my notes", "tidy");
+      yield* sendMember(goatBotForgetNoteMessage(fridays, "private"), "tab-forget");
+      assert.strictEqual(yield* readMemberNotes, text);
+      assert.include(yield* memberReplies, CHANNEL_COPY.noteEditBusy);
     }).pipe(Effect.provide(layer));
   });
 });
@@ -651,16 +682,16 @@ describe("Memory tab requests with the default session routing", () => {
         : {},
     );
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
-      yield* writeNotes(text);
+      yield* writeMemberNotes(text);
       yield* routing("reception");
-      yield* send("Please tidy my notes", "tidy");
+      yield* sendMember("Please tidy my notes", "tidy");
       yield* routing("session");
       const launches = harness.world.launches.length;
-      yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
-      assert.strictEqual(yield* readNotes, text);
-      assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+      yield* sendMember(goatBotForgetNoteMessage(fridays, "private"), "tab-forget");
+      assert.strictEqual(yield* readMemberNotes, text);
+      assert.include(yield* memberReplies, CHANNEL_COPY.noteEditBusy);
       assert.lengthOf(harness.world.launches, launches);
     }).pipe(Effect.provide(layer));
   });
@@ -711,27 +742,25 @@ describe("Memory tab requests with the default session routing", () => {
             : {},
       );
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
-        yield* writeNotes(text);
+        yield* writeMemberNotes(text);
         yield* routing("reception");
-        yield* send("Please tidy my notes", "tidy");
+        yield* sendMember("Please tidy my notes", "tidy");
         yield* routing("session");
         const tidy = yield* (yield* ChannelLedger.ChannelLedger).getTask(tidyTaskId);
         assert.strictEqual(tidy?.task.status, "running");
         assert.isDefined(tidy?.task.notesChangeRequested);
         const launches = harness.world.launches.length;
         const tasks = yield* taskCount;
-        const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-          goatInput(rememberText, "remember-" + variant),
-          memoryRpcContext,
-        );
-        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const input = yield* sendMember(rememberText, "remember-" + variant);
         assert.deepStrictEqual(
-          (yield* repliesTo(input.inputId)).map((message) => message.text),
+          (yield* memberMessages)
+            .filter((message) => message.channel?.inReplyToInputId === input.inputId)
+            .map((message) => message.text),
           [CHANNEL_COPY.noteEditBusy],
         );
-        assert.strictEqual(yield* readNotes, text);
+        assert.strictEqual(yield* readMemberNotes, text);
         assert.strictEqual(yield* taskCount, tasks);
         assert.lengthOf(harness.world.launches, launches);
         const forwarded = yield* (yield* SqlClient.SqlClient)<{
@@ -776,13 +805,13 @@ describe("Memory tab requests with the default session routing", () => {
           : {},
       );
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         const kept = line(fridays, "earlier");
-        const files = yield* writeNotes(NOTES_HEADER + kept + "\n");
+        const files = yield* writeMemberNotes(NOTES_HEADER + kept + "\n");
         yield* routing("reception");
-        yield* send("Please tidy my notes", "tidy");
-        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
-        assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+        yield* sendMember("Please tidy my notes", "tidy");
+        yield* sendMember(goatBotForgetNoteMessage(fridays, "private"), "tab-forget");
+        assert.include(yield* memberReplies, CHANNEL_COPY.noteEditBusy);
         const ledger = yield* ChannelLedger.ChannelLedger;
         const tidy = (yield* ledger.listTasks({ ownerId, limit: 50 })).tasks.find(
           (task) => task.notesChangeRequested !== undefined,
@@ -798,8 +827,8 @@ describe("Memory tab requests with the default session routing", () => {
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         assert.strictEqual((yield* ledger.getTask(tidy.taskId))!.task.status, "completed");
-        assert.strictEqual(yield* readNotes, NOTES_HEADER + kept + "\n");
-        assert.include(yield* replies, noteKeptNotice(fridays));
+        assert.strictEqual(yield* readMemberNotes, NOTES_HEADER + kept + "\n");
+        assert.include(yield* memberReplies, noteKeptNotice(fridays));
       }).pipe(Effect.provide(layer));
     },
   );

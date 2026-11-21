@@ -9,8 +9,8 @@ export const recheckReceptionNotes = Effect.fn("channel.recheckReceptionNotes")(
   liveViewer: Effect.Effect<ChannelRequester, E>,
 ) {
   if (
-    !canReadChannelBotNotes(input.requester) ||
-    (input.notes === undefined && input.readResults === undefined)
+    input.notes === undefined &&
+    (input.readResults === undefined || !canReadChannelBotNotes(input.requester))
   )
     return input;
   if (

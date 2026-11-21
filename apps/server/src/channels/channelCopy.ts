@@ -58,7 +58,7 @@ export const CHANNEL_COPY = {
   noteCorrectionUnmatched:
     "I saved that, but couldn't find the earlier note it changes. If an older note says otherwise, ask me to forget it.",
   sharedNoteConfirmationRequired:
-    "To save a note for all bots, ask “Remember for all bots:” followed by the note, then confirm the reply.",
+    "To save a note for all bots, ask “Remember for all bots:” followed by the note, then confirm the reply. To edit or forget a shared note, choose All bots in Library → Memory.",
   noteNotSaved: "I couldn't save that note, so it won't apply yet. Please ask me again.",
   noteChanged: "Changed that note.",
   noteForgotten: "Forgot that note.",

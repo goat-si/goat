@@ -7,7 +7,7 @@ import type { ChannelBotProfiles } from "./ChannelBotProfiles.ts";
 import type { ChannelLedger, ChannelStoredTask } from "./ChannelLedger.ts";
 import { channelBotFilesFor, recallChannelBotNotes } from "./channelBotNotes.ts";
 import { identitySection } from "./channelBotSessionBrief.ts";
-import { readableNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import { freezeChannelBrief } from "./channelBriefs.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 
 export const makeRemoteBotBrief = (deps: {
@@ -36,12 +36,8 @@ export const makeRemoteBotBrief = (deps: {
         prefix: identitySection(identity),
         suffix,
       });
-      const notesRevision =
-        task.briefVersion === undefined && notes?.standing
-          ? yield* readableNotesRevision(files.notes)
-          : null;
       const frozen = yield* freezeChannelBrief(deps.ledger, stored, owner, message, {
-        notesRevision,
+        notesRevision: notes?.revision ?? null,
       });
       const sendsNotes = frozen.brief.deliveredText.includes("<goat_bot_notes>");
       return { ...frozen, sendsNotes, denied: sendsNotes && !mayRead };

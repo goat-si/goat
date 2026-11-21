@@ -252,12 +252,19 @@ const make = Effect.gen(function* () {
         request.kind === "edit" &&
         task.taskId === request.taskId &&
         holdsFor(task) === request.inputId;
+      const held = Effect.map(ledger.listTasksByStatus(OPEN), (open) =>
+        open.some((task) => holdsFor(task.task) !== undefined),
+      );
 
       for (let attempt = 0; attempt < 2; attempt++) {
         const latest = (yield* ledger.getTask(request.taskId)) ?? stored;
         // The run carries the generation it was bound to; a retry since then is new work.
         if (latest.task.generation !== stored.task.generation || !OPEN.includes(latest.task.status))
           return yield* refuse("task_finished", CHANNEL_COPY.noteEditTaskDone);
+        if (files.sharedNotes === undefined)
+          return (yield* held)
+            ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
+            : yield* refuse("not_saved", CHANNEL_COPY.sharedNoteConfirmationRequired);
         if (sameGrant(latest.task)) {
           const granted: NotesChangeResult = {
             outcome: "granted",
@@ -266,16 +273,9 @@ const make = Effect.gen(function* () {
           };
           return granted;
         }
-        const held = Effect.map(ledger.listTasksByStatus(OPEN), (open) =>
-          open.some((task) => holdsFor(task.task) !== undefined),
-        );
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
-          if (files.sharedNotes === undefined)
-            return (yield* held)
-              ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
-              : yield* refuse("not_saved", CHANNEL_COPY.sharedNoteConfirmationRequired);
           // Checked again under the writer's lock; this check orders the save, so a turn that
           // finishes between it and the write finishes after the save.
           const written = yield* writer.saveIf(
