@@ -31,6 +31,8 @@ import {
   ScheduledTaskWebhookEndpoint,
 } from "./scheduledTask.ts";
 
+import { ScheduledTaskRecentRun } from "./scheduledTaskRecentRuns.ts";
+
 // ScheduledTask as clients shipped before recentRuns decode it, frozen at f74894c1a2e.
 const ShippedScheduledTask = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
@@ -329,17 +331,22 @@ describe("scheduled run outcomes", () => {
     const { recentRuns: _recent, ...shipped } = decoded ?? {};
     expect(decodeShippedList(wire).tasks).toEqual([shipped]);
   });
-  it("adds provenance without preventing either version from reading the routine", () => {
-    const oldWire = JSON.stringify({ tasks: [routine], timeZone: "Asia/Seoul" });
-    expect(decodeList(oldWire).tasks[0]?.recentRuns).toEqual(routine.recentRuns);
-    const newer = {
-      ...routine,
-      recentRunsIncomplete: true,
-      recentRuns: [run(1, { origin: "event", taskThreadId: "work" })],
-    };
-    const newWire = JSON.stringify({ tasks: [newer], timeZone: "Asia/Seoul" });
-    expect(decodeList(newWire).tasks[0]).toMatchObject(newer);
-    expect(decodeShippedList(newWire).tasks[0]?.id).toBe(routine.id);
+  it("preserves base run fields across versions with and without provenance", () => {
+    const baseRun = ScheduledTaskRecentRun.mapFields(
+      ({ origin: _origin, taskThreadId: _taskThreadId, ...fields }) => fields,
+    );
+    const oldRun = routine.recentRuns[0];
+    const newRun = { ...oldRun, origin: "event", taskThreadId: "work" };
+
+    expect(Schema.decodeUnknownSync(baseRun)(newRun)).toEqual(oldRun);
+    expect(Schema.decodeUnknownSync(ScheduledTaskRecentRun)(oldRun)).toEqual(oldRun);
+    expect(
+      decodeList(
+        JSON.stringify({
+          tasks: [{ ...routine, recentRuns: [newRun], recentRunsIncomplete: true }],
+        }),
+      ).tasks[0],
+    ).toMatchObject({ recentRuns: [newRun], recentRunsIncomplete: true });
   });
   it("a recentRuns that is not an array drops the history and keeps the routine", () => {
     const [decoded] = decodeList(
