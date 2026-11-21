@@ -5,6 +5,7 @@ import {
   NodeId,
   type OrchestrationV2RuntimeRequest,
   RuntimeRequestId,
+  ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -220,6 +221,38 @@ describe("open asks across bots", () => {
         threadId: task.worker!.threadId,
         requestId: pending.id,
       });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("records one exact SSH approval when the worker reports only a durable handoff", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const task = yield* startWaiting(harness, "do: deploy staging", "Ev-ssh-handoff");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("mcp:legacy-worker");
+      const handoff = { threadId, host: "box", requestId: RuntimeRequestId.make("handoff:42") };
+      yield* sql`UPDATE channel_tasks SET worker_thread_id = ${threadId}, task_json = json_set(
+        task_json, '$.worker.threadId', ${threadId}, '$.worker.host', ${handoff.host},
+        '$.worker.environmentId', 'remote') WHERE task_id = ${task.taskId}`;
+      for (const since of [task.createdAt, task.updatedAt]) {
+        const stored = (yield* ledger.getTask(task.taskId))!;
+        yield* commitTransition(ledger, stored, {
+          type: "task.worker.observed",
+          payload: {
+            generation: task.generation,
+            observed: { pullRequests: [], needsYou: [{ kind: "approval", since, handoff }] },
+          },
+        });
+      }
+      const feed = yield* members.attentionFeed(owner, { cursor: 0 });
+      assert.deepStrictEqual(
+        feed.events.map(({ kind, request }) => ({ kind, request })),
+        [{ kind: "approval", request: { kind: "handoff", ...handoff } }],
+      );
+      assert.deepStrictEqual((yield* members.attentionFeed(stranger, { cursor: 0 })).events, []);
     }).pipe(Effect.provide(harness.layer));
   });
 

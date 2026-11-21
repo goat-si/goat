@@ -850,6 +850,8 @@ it.each([
   ["handoff only", "off", "one", "channel-worker:abc", []],
   ["older SSH destination", "needs_you", "two", "mcp:worker", ["Scout has a question"]],
   ["older SSH destination", "off", "two", "mcp:worker", []],
+  ["SSH handoff only", "needs_you", "two", "mcp:worker", ["Scout needs approval"]],
+  ["SSH handoff only", "off", "two", "mcp:worker", []],
 ] as const)(
   "%s routes only through bot alerts in %s mode",
   async (scenario, mode, destination, id, titles) => {
@@ -859,7 +861,7 @@ it.each([
     const worker = { id, title: "Private task", creationSource: "mcp" as const };
     state.shells.set(destination, shell(worker));
     app.registry.set(decisionAtom(destination), { handoffs: [] });
-    const handoff = scenario === "handoff only";
+    const handoff = scenario.endsWith("handoff only");
     state.feed.mockResolvedValue(
       AsyncResult.success({ cursor: 0, hasMore: false, mode, events: [] }),
     );
@@ -905,13 +907,20 @@ it.each([
               createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
             },
             threadTitle: worker.title,
-            botAttentionOwned: true,
+            ...(destination === "one" ? { botAttentionOwned: true } : {}),
           },
         ],
       });
-    } else {
+    }
+    if (destination === "two") {
       app.registry.set(revisions, AsyncResult.success({ value: 1 }));
-      state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
+      if (!handoff) state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
+    }
+    await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
+    expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
+      titles.map((title) => [title, undefined]),
+    );
+    if (destination === "two") {
       await vi.waitFor(() =>
         expect(state.feed).toHaveBeenCalledWith(app.registry, {
           environmentId: "one",
@@ -919,10 +928,6 @@ it.each([
         }),
       );
     }
-    await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
-    expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
-      titles.map((title) => [title, undefined]),
-    );
     expect(screen.container.textContent).toBe("");
   },
 );
