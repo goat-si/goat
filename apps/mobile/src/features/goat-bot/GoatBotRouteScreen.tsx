@@ -2,7 +2,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { ChannelTaskId } from "@goat/contracts";
 import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Text, View } from "react-native";
 import { useAppActive, useAppForeground } from "../../lib/appState";
 import { useThreadShell } from "../../state/entities";
@@ -18,6 +18,15 @@ import {
   useGoatBotLocalRead,
   useGoatBotVisitSnapshot,
 } from "./useGoatBotVisitSnapshot";
+
+const MobileBotApprovals = lazy(() => import("./MobileBotApprovals"));
+function BotApprovalCards(props: React.ComponentProps<typeof MobileBotApprovals>) {
+  return (
+    <Suspense fallback={null}>
+      <MobileBotApprovals {...props} />
+    </Suspense>
+  );
+}
 
 export function GoatBotRouteScreen({
   route,
@@ -110,6 +119,7 @@ export function GoatBotRouteScreen({
   return (
     <GoatBotScreen
       visible={focused}
+      approvalCards={BotApprovalCards}
       foreground={foreground}
       seen={seen}
       member={member}

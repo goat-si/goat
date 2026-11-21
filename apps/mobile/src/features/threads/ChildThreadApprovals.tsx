@@ -5,6 +5,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import { Atom } from "effect/reactivity";
 import { useState } from "react";
 import { useEnvironmentScope } from "../../state/session";
 import { ScrollView, View } from "react-native";
@@ -12,6 +13,7 @@ import Animated, { useAnimatedStyle, type DerivedValue } from "react-native-rean
 import { AppText } from "../../components/ui/AppText";
 import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { ChildApprovalContext } from "./ChildApprovalContext";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 
 function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
@@ -59,19 +61,26 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   );
 }
 
-export function ChildThreadApprovals({
-  threadRef,
-  maxHeight,
-}: {
-  threadRef: ScopedThreadRef | null;
-  maxHeight: DerivedValue<number>;
+export function ChildThreadApprovals(props: {
+  readonly threadRef?: ScopedThreadRef | null;
+  readonly approvalsAtom?: Atom.Atom<ReadonlyArray<ChildThreadApproval>>;
+  readonly maxHeight?: DerivedValue<number>;
+  readonly onOpenWorker?: (thread: ScopedThreadRef) => void;
 }) {
-  const approvals = useAtomValue(childThreadApprovalsAtom(threadRef));
-  const heightStyle = useAnimatedStyle(() => ({ maxHeight: Math.min(320, maxHeight.value / 2) }));
+  const { maxHeight, onOpenWorker } = props;
+  const approvals = useAtomValue(
+    props.approvalsAtom ?? childThreadApprovalsAtom(props.threadRef ?? null),
+  );
+  const heightStyle = useAnimatedStyle(() => ({
+    maxHeight: maxHeight ? Math.min(320, maxHeight.value / 2) : 240,
+  }));
   if (approvals.length === 0) return null;
   return (
     <Animated.View style={heightStyle} className="overflow-hidden">
       <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled style={{ flexShrink: 1 }}>
+        {onOpenWorker ? (
+          <ChildApprovalContext approvals={approvals} onOpenWorker={onOpenWorker} />
+        ) : null}
         {approvals.map((entry) => (
           <ChildApproval
             key={JSON.stringify([

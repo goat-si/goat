@@ -99,6 +99,7 @@ import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotCo
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import type { MobileBotApprovalSlot } from "./MobileBotApprovals";
 import { MobileBotWork } from "./MobileBotWork";
 import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
@@ -322,9 +323,11 @@ export function GoatBotScreen(props: {
   /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
   readonly onRestoreMember?: MobileRestoreMember | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
+  readonly approvalCards?: MobileBotApprovalSlot;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
+  const { approvalCards: ApprovalCards } = props;
   const member = props.member ?? null;
   const conversation = member
     ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
@@ -884,6 +887,19 @@ export function GoatBotScreen(props: {
           className="gap-2 border-t border-border px-4 pt-2"
           style={composerPaddingStyle}
         >
+          {ApprovalCards &&
+          props.visible &&
+          session.homeConnected &&
+          session.historyEnvironmentId &&
+          session.threadId ? (
+            <ApprovalCards
+              environmentId={session.historyEnvironmentId}
+              threadId={session.threadId}
+              taskId={taskId}
+              chips={session.taskChips}
+              onOpenThread={onSelectThread}
+            />
+          ) : null}
           <GoatBotAttachmentStrip
             environmentId={session.historyEnvironmentId}
             attachments={attachments}
