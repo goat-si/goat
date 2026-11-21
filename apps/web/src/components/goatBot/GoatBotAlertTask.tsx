@@ -63,6 +63,7 @@ function AlertRequest({
     if (!isRemoteApproval) return null;
     return (
       <RemoteApproval
+        key={JSON.stringify([taskEnvironment, taskId, generation, native])}
         request={native}
         target={{
           environmentId: taskEnvironment,

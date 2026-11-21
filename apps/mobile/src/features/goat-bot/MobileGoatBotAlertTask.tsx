@@ -53,7 +53,13 @@ function Request({
     const isRemoteApproval =
       (target.generation === undefined || task.generation === target.generation) &&
       botAttentionRemoteApproval(task, native);
-    return isRemoteApproval ? <RemoteApproval target={target} request={native} /> : null;
+    return isRemoteApproval ? (
+      <RemoteApproval
+        key={JSON.stringify([target.environmentId, target.taskId, target.generation, native])}
+        target={target}
+        request={native}
+      />
+    ) : null;
   }
   const request = botAttentionRequest(task, target.requestId);
   if (request === null) return null;
