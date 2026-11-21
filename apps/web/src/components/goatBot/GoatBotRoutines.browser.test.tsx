@@ -23,12 +23,16 @@ const reads = vi.hoisted(() => ({
   timestampFormat: "24-hour" as "locale" | "12-hour" | "24-hour",
 }));
 vi.mock("~/state/entities", () => ({
+  useProjects: () => [
+    { id: "trigger-project", title: "Demo Repository", environmentId: "env", archivedAt: null },
+  ],
   useThreadShell: () => ({
     id: "bot",
     projectId: "bot-project",
     modelSelection: { instanceId: "codex", model: "gpt-5" },
   }),
 }));
+vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
@@ -645,4 +649,54 @@ it("a long reply with no chat row is fully reachable in the popover", async () =
     await expect.element(popup()).not.toBeInTheDocument();
     expect(document.activeElement).toBe(dot(name).element());
   }
+});
+
+it("creates a pull-request trigger with a project and required signature and lists it as a webhook", async () => {
+  setup();
+  const workTrigger: BotRoutineSource = {
+    ...savedCheckIn,
+    title: "Pull request opened",
+    schedule: {
+      type: "webhook",
+      signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" },
+    },
+  };
+  mocks.upsert.mockResolvedValue(AsyncResult.success({ task: workTrigger }));
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[savedCheckIn]}
+      error={null}
+      onRetry={() => {}}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "New trigger" }));
+  await userEvent.selectOptions(screen.getByLabelText("Event"), "pr-opened");
+  await expect.element(screen.getByLabelText("Project")).toBeVisible();
+  await expect.element(screen.getByText("Webhook URL appears after saving.")).toBeVisible();
+  await userEvent.fill(screen.getByLabelText("Signing secret"), "fixture-signing-secret");
+  await userEvent.click(screen.getByRole("button", { name: "Save trigger" }));
+  expect(mocks.upsert).toHaveBeenCalledWith({
+    environmentId,
+    input: expect.objectContaining({
+      routineMode: "work",
+      threadId,
+      projectId: "trigger-project",
+      schedule: expect.objectContaining({
+        type: "webhook",
+        signature: expect.objectContaining({ required: true }),
+      }),
+    }),
+  });
+  await screen.rerender(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[workTrigger]}
+      error={null}
+      onRetry={() => {}}
+    />,
+  );
+  await expect.element(screen.getByText("On webhook · Listening")).toBeVisible();
 });
