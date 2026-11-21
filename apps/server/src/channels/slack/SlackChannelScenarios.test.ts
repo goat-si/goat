@@ -4,7 +4,6 @@ import {
   type ChannelReceptionInput,
   ProviderTurnId,
   ProviderDriverKind,
-  type RuntimeMode,
 } from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -16,7 +15,6 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as EffectWorker from "../../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../../orchestration-v2/EventSink.ts";
@@ -26,24 +24,31 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelBotThreads from "../ChannelBotThreads.ts";
 import * as ChannelBotMembers from "../ChannelBotMembers.ts";
 import { channelBotFilesFor, readChannelBotNotesSnapshot } from "../channelBotNotes.ts";
-import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import { CHANNEL_COPY } from "../channelCopy.ts";
 import { inputIdFor } from "../channelIds.ts";
 import {
   defaultScript,
-  makeHarness,
   modelSelection,
   owner,
   ownerId,
   setupBot,
 } from "../testkit/ChannelHarness.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
-import * as SlackChannelSettingsLive from "./SlackChannelSettings.live.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
-import { channelMention, directMessage, eventCallback } from "./slackChannelTestSupport.ts";
-import { makeFakeSlackSdk, type FakeSlackSdk } from "./slackSdkFake.ts";
+import {
+  connect,
+  connectionId,
+  createBot,
+  emit,
+  linkAlice,
+  receive,
+  ROOT_TS,
+  slackScenario,
+  tasks,
+} from "./slackChannelScenarioHarness.ts";
+import { channelMention, directMessage } from "./slackChannelTestSupport.ts";
 
 /**
  * The live Slack runtime against the real channel core: gateway, ledger, reception, and the
@@ -51,88 +56,6 @@ import { makeFakeSlackSdk, type FakeSlackSdk } from "./slackSdkFake.ts";
  * the adapter alone cannot prove: one stored input per Slack event, no work for unlinked users,
  * and how the outbox treats Slack's delivery failures.
  */
-
-const connectionId = "slack-1";
-const ROOT_TS = "1760000000.000100";
-
-const slackScenario = (options: Parameters<typeof makeHarness>[0] = {}) => {
-  const sdk = makeFakeSlackSdk();
-  const harness = makeHarness({ ...options, fakeSlackTransport: false });
-  const runtime = SlackChannelRuntime.layer.pipe(Layer.provide(sdk.layer));
-  const layer = SlackChannelSettingsLive.layer.pipe(
-    Layer.provide(sdk.layer),
-    Layer.provide(ServerSecretStore.layer),
-    Layer.provideMerge(runtime),
-    Layer.provideMerge(harness.layer),
-  );
-  return { sdk, harness, layer };
-};
-
-const connect = (
-  _sdk: FakeSlackSdk,
-  options: {
-    readonly botBindings?: ReadonlyArray<{ readonly channelId: string; readonly botId: BotId }>;
-    readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
-    readonly owner?: typeof owner;
-  } = {},
-) =>
-  Effect.gen(function* () {
-    const runtime = yield* SlackChannelRuntime.SlackChannelRuntime;
-    yield* runtime.apply({
-      connectionId,
-      enabled: true,
-      channelScope: "listed",
-      allowedChannelIds: ["C0ALLOWED"],
-      appToken: "xapp-1-test",
-      botToken: "xoxb-test",
-      expectedTeamId: "T0TEAM",
-      owner,
-      ...options,
-    });
-    yield* runtime.streamStatus.pipe(
-      Stream.filter((event) => event.connectionId === connectionId && event.status === "connected"),
-      Stream.runHead,
-    );
-  });
-
-const emit = (sdk: FakeSlackSdk, event: Record<string, unknown>, eventId: string) => {
-  const session = sdk.sessions.at(-1);
-  assert(session !== undefined);
-  const envelope = session.emitEnvelope(eventCallback(event, { event_id: eventId }));
-  return Effect.promise(() => envelope.acked).pipe(Effect.as(envelope));
-};
-
-const linkAlice = (sdk: FakeSlackSdk, linkOwner = owner) =>
-  Effect.gen(function* () {
-    const identities = yield* ChannelIdentityService.ChannelIdentityService;
-    const { code } = yield* identities.createLink(
-      { connectionId, runtimeModeCeiling: "auto-accept-edits" },
-      linkOwner,
-    );
-    yield* emit(sdk, directMessage({ text: `link ${code}` }), "EvLinkAlice01");
-  });
-
-const tasks = Effect.flatMap(ChannelLedger.ChannelLedger, (ledger) =>
-  ledger.listTasks({ ownerId, limit: 10 }),
-);
-
-const createBot = (name: string) =>
-  Effect.flatMap(ChannelBotMembers.ChannelBotMembers, (members) =>
-    members.create(
-      { clientRequestId: name, name, purpose: "", avatar: null, defaultModelSelection: null },
-      owner,
-    ),
-  );
-
-const eventInputId = (eventId: string) =>
-  inputIdFor({ ownerId, kind: "slack", connectionId, idempotencyKey: "T0TEAM:" + eventId });
-
-const receive = (sdk: FakeSlackSdk, event: Record<string, unknown>, eventId: string) =>
-  Effect.gen(function* () {
-    yield* emit(sdk, event, eventId);
-    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-    return yield* (yield* ChannelLedger.ChannelLedger).getInput(eventInputId(eventId));
-  });
 
 describe("Slack runtime on the channel core", () => {
   it.effect(
@@ -289,6 +212,48 @@ describe("Slack runtime on the channel core", () => {
         "EvLongestNameFollowup",
       );
       assert.strictEqual(followup?.botId, east.botId);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reserves a longer stored name after deletion and allows an exact replacement", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createBot("Ops");
+      const east = yield* createBot("Ops: East");
+      yield* (yield* ChannelBotMembers.ChannelBotMembers).remove({ botId: east.botId }, owner);
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const text = "<@U0BOT> Ops: East: Check the build";
+      const rejected = yield* receive(sdk, channelMention({ text }), "EvDeletedLongest");
+      assert.strictEqual(rejected?.snapshot.state, "rejected");
+      assert.strictEqual(sdk.ephemeral.at(-1)?.userId, "U0ALICE");
+      assert.isFalse(sdk.posted.some((post) => post.threadTs === ROOT_TS));
+      const replacement = yield* createBot("OPS: EAST");
+      const routed = yield* receive(
+        sdk,
+        channelMention({ text, ts: "1760000000.000102" }),
+        "EvReplacedLongest",
+      );
+      assert.strictEqual(routed?.botId, replacement.botId);
+      assert.strictEqual(routed?.message.text, "Check the build");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("routes a bot name that starts with Link and six digits", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ops = yield* createBot("Link 123456 Ops");
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const routed = yield* receive(
+        sdk,
+        directMessage({ text: "Link 123456 Ops: Check the build" }),
+        "EvLinkDigitsName",
+      );
+      assert.strictEqual(routed?.botId, ops.botId);
+      assert.strictEqual(routed?.message.text, "Check the build");
     }).pipe(Effect.provide(layer));
   });
 
