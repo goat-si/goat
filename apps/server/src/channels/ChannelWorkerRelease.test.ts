@@ -10,6 +10,7 @@ import { preparationSettled } from "../orchestration-v2/testkit/preparationSettl
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { workerLaunchIdsFor } from "./channelIds.ts";
 import {
   goatInput,
   makeHarness,
@@ -50,8 +51,8 @@ it.effect("a person's launch can use channel-like thread and message ids", () =>
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect.each(["bound", "upgraded unbound"] as const)(
-  "release of an ordinary %s channel worker makes one indexed generation read",
+it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale"] as const)(
+  "releases an ordinary %s channel worker",
   (phase) =>
     Effect.gen(function* () {
       const preparing = yield* Deferred.make<void>();
@@ -60,7 +61,7 @@ it.effect.each(["bound", "upgraded unbound"] as const)(
         realWorkerLaunch: true,
         getWorkerBranch: () =>
           Effect.gen(function* () {
-            if (branchReads++ === 0) return null;
+            if (branchReads++ !== 1) return null;
             yield* Deferred.succeed(preparing, undefined);
             return yield* Effect.never;
           }),
@@ -73,7 +74,7 @@ it.effect.each(["bound", "upgraded unbound"] as const)(
         const threads = yield* ThreadManagement.ThreadManagementService;
         yield* gateway.ingest(goatInput("do: inspect fixtures", "ordinary-worker"), rpcContext);
         yield* runtime.drain;
-        const { taskId, worker } = yield* onlyTask;
+        const { taskId, generation, worker } = yield* onlyTask;
         if (worker?.runId === undefined) return assert.fail("Expected a bound worker run");
         yield* Deferred.await(preparing);
         assert.strictEqual(
@@ -93,6 +94,32 @@ it.effect.each(["bound", "upgraded unbound"] as const)(
           yield* sql`UPDATE channel_tasks SET status = 'dispatching', worker_thread_id = NULL
           WHERE task_id = ${taskId}`;
           yield* runMigrations();
+        }
+        if (phase === "rollback unbound" || phase === "rollback stale") {
+          // The older writer leaves the new table and migration ledger alone.
+          if (phase === "rollback unbound") {
+            yield* sql`DELETE FROM channel_worker_generations WHERE task_id = ${taskId}`;
+            yield* sql`UPDATE channel_tasks SET status = 'dispatching', worker_thread_id = NULL
+              WHERE task_id = ${taskId}`;
+          } else {
+            const retired = workerLaunchIdsFor(taskId, generation - 1);
+            yield* sql`UPDATE channel_worker_generations
+              SET generation = ${generation - 1}, worker_thread_id = ${retired.threadId}
+              WHERE task_id = ${taskId}`;
+          }
+          assert.isEmpty(yield* runMigrations());
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          yield* launches.prepareRun({
+            commandId: CommandId.make("recover-ordinary-worker"),
+            threadId: worker.threadId,
+            runId: worker.runId,
+          });
+          assert.strictEqual(
+            (yield* preparationSettled(worker.threadId)).runs[0]?.status,
+            "starting",
+          );
+          assert.lengthOf(yield* providerStarts(sql, worker.threadId), 1);
+          return;
         }
         const reads: Array<readonly [string, ReadonlyArray<unknown>]> = [];
         const observe: Statement.Transformer = (statement) =>

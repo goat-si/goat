@@ -901,3 +901,37 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
     {},
   ),
 );
+
+it.effect("a second rollback to #3797 refuses work-trigger state written during the first", () =>
+  withWebhookService(({ sql }) =>
+    Effect.gen(function* () {
+      const oldManifest = migrationEntries.filter(([id]) => id <= 177);
+      const checkOldBuild = Effect.gen(function* () {
+        const history = yield* sql<{
+          readonly migration_id: number;
+          readonly name: string;
+        }>`SELECT migration_id, name FROM effect_sql_migrations`;
+        return skippedV2Migrations(
+          oldManifest,
+          history,
+          Math.max(...history.map((row) => row.migration_id)),
+        );
+      });
+      assert.isUndefined(yield* checkOldBuild);
+      // The older writer fences a work routine on write. Its input can outlive deletion of the routine.
+      yield* sql`UPDATE effect_sql_migrations SET name = 'ChannelLedgerRequiresWorkTriggerAuthority'
+        WHERE name = 'ChannelLedger'`;
+      yield* sql`INSERT INTO scheduled_task_channel_inputs
+        (firing_id, task_id, input_id, payload_json, state, created_at)
+        VALUES ('rollback-firing', 'rollback-routine', 'rollback-input',
+          '{"routineMode":"work"}', 'settled', '2026-11-21T00:00:00Z')`;
+      const migrate = runMigrations().pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      assert.isEmpty(yield* migrate);
+      assert.include(
+        (yield* checkOldBuild)?.message ?? "",
+        "93_ChannelLedger (recorded: ChannelLedgerRequiresWorkerReleaseAuthority)",
+      );
+      assert.isEmpty(yield* migrate);
+    }),
+  ),
+);
