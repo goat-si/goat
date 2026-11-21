@@ -1,6 +1,7 @@
 import { CHANNEL_BOT_THREADS_SNOOZED_LIMIT } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect has no incremental digest.
 import * as NodeCrypto from "node:crypto";
 import { taskViewKeyPrefix } from "./channelTaskViews.ts";
 
@@ -100,11 +101,11 @@ export const readHomeSnoozedRevision = Effect.fn("ChannelBotThreads.snoozedRevis
   const batchSize = 256;
   let after = taskViewKeyPrefix(scope.ownerId);
   while (true) {
-    const rows = yield* sql<{ readonly key: string; readonly until: string }>`
-      SELECT v.key, json_extract(v.value_json, '$.snoozedUntil') AS until
+    const rows = yield* sql<{ readonly key: string; readonly revision_row: string }>`
+      SELECT v.key, json_array(v.key, json_extract(v.value_json, '$.snoozedUntil')) AS revision_row
       ${activeHomeSnoozeViews(sql, scope)} AND v.key > ${after}
       ORDER BY v.key LIMIT ${batchSize}`;
-    for (const { key, until } of rows) hash.update(JSON.stringify([key, until]));
+    for (const { revision_row } of rows) hash.update(revision_row);
     const last = rows.at(-1);
     if (last === undefined || rows.length < batchSize) return hash.digest("hex");
     after = last.key;

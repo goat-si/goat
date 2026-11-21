@@ -3,6 +3,7 @@ import {
   BotId,
   CHANNEL_BOT_ROW_PULL_REQUESTS,
   ChannelTaskId,
+  ThreadId,
   type BotThreadRow,
   type ChannelBotTaskActivityEntry,
 } from "@goat/contracts";
@@ -523,7 +524,7 @@ it.effect(
         yield* setup;
         const taskId = "ssh-activity";
         yield* insertTask(taskId, { status: "running", createdAt: at(10) });
-        const subject = { host: "unpaired", threadId: "ssh-worker" };
+        const subject = { host: "unpaired", threadId: ThreadId.make("ssh-worker") };
         const launch = {
           surface: "ssh_thread_launch",
           destination: { ...subject, correlationId: "dispatch" },
@@ -534,7 +535,7 @@ it.effect(
           actor: "bot",
           at: at(1),
           ...subject,
-        };
+        } satisfies ChannelBotTaskActivityEntry;
         yield* childRecord(taskId, "child", { ...launch, state: "bound" });
         const inProgress = yield* lookup(taskId);
         assert.deepStrictEqual(
@@ -549,7 +550,7 @@ it.effect(
           actor: "goat",
           at: at(1),
           ...subject,
-        };
+        } satisfies ChannelBotTaskActivityEntry;
         const completed = yield* lookup(taskId);
         assert.deepStrictEqual(
           completed.activity?.entries.filter((entry) => "threadId" in entry),
