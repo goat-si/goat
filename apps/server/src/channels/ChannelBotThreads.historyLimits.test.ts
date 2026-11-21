@@ -1,7 +1,19 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts";
+import {
+  BotId,
+  ChannelSnoozeBotTaskInput,
+  ChannelTaskId,
+  type ChannelListBotThreadsResult,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqlite from "node:sqlite";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
+import * as Schema from "effect/Schema";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import { searchStatement } from "./channelBotTaskSearch.ts";
@@ -11,9 +23,10 @@ import {
   historyStatement,
   launchesStatement,
 } from "./channelBotThreadHistory.ts";
-import { owner, ownerId } from "./testkit/ChannelHarness.ts";
+import { makeHarness, owner, ownerId } from "./testkit/ChannelHarness.ts";
 import {
   at,
+  NOW,
   name,
   insertTask,
   launch,
@@ -25,8 +38,10 @@ import {
   walk,
 } from "./testkit/botThreadHistory.fixture.ts";
 
+const decodeSnoozeInput = Schema.decodeEffect(ChannelSnoozeBotTaskInput);
+
 describe("ChannelBotThreads history limits", () => {
-  it.effect("checks an older task's live snooze even when the fold is full", () =>
+  it.effect("pages the 51st snoozed task and checks it outside the fold", () =>
     provide(
       Effect.gen(function* () {
         yield* setup;
@@ -43,6 +58,24 @@ describe("ChannelBotThreads history limits", () => {
         assert.lengthOf(home.snoozed ?? [], 50);
         assert.isFalse(home.snoozed?.some((row) => row.task.taskId === taskId));
         assert.strictEqual(home.readAt, at(0));
+        assert.isString(home.snoozedNextCursor);
+        const next = yield* service.list(
+          owner,
+          botId,
+          undefined,
+          undefined,
+          home.snoozedNextCursor,
+        );
+        assert.deepStrictEqual(
+          next.snoozed?.map((row) => row.task.taskId),
+          [taskId],
+        );
+        assert.isUndefined(next.snoozedNextCursor);
+        assert.deepStrictEqual(next.rows, []);
+        const wrongBot = yield* Effect.flip(
+          service.list(owner, BotId.make("other"), undefined, undefined, home.snoozedNextCursor),
+        );
+        assert.strictEqual(wrongBot.reason, "invalid_input");
         assert.deepStrictEqual(
           (yield* service.list(owner, botId, undefined, [taskId])).activeSnoozes,
           [{ taskId, until }],
@@ -61,6 +94,104 @@ describe("ChannelBotThreads history limits", () => {
           (yield* service.list(owner, botId, undefined, [taskId])).activeSnoozes,
           [],
         );
+      }),
+    ),
+  );
+
+  it.effect(
+    "writes a one-hour preset from the server clock at -75, -45, and +45 minute client skew",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          const input = { taskId: ChannelTaskId.make("skew"), botId: BotId.make("main") };
+          yield* insertTask(input.taskId, { status: "running", createdAt: at(0) });
+          const service = yield* BotThreads.ChannelBotThreads;
+          for (const skew of [-75, -45, 45]) {
+            yield* TestClock.setTime(NOW + skew * 60_000);
+            const request = yield* decodeSnoozeInput({
+              ...input,
+              preset: "hour",
+            });
+            yield* TestClock.setTime(NOW);
+            const view = yield* service.snooze(request, owner);
+            assert.strictEqual(view.snoozedUntil, at(-60), `client skew ${skew} minutes`);
+            yield* service.unsnooze(input, owner);
+          }
+        }),
+      ),
+  );
+
+  it.effect("resolves calendar presets in the client's time zone from the server's date", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const taskId = ChannelTaskId.make("calendar");
+        yield* insertTask(taskId, { status: "running", createdAt: at(0) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const target = { taskId, botId: BotId.make("main") };
+        yield* TestClock.setTime(Date.parse("2026-10-31T23:30:00.000Z"));
+        const timeZone = "America/Los_Angeles";
+        const tomorrow = yield* service.snooze({ ...target, preset: "tomorrow", timeZone }, owner);
+        assert.strictEqual(tomorrow.snoozedUntil, "2026-11-01T17:00:00.000Z");
+        const week = yield* service.snooze({ ...target, preset: "week", timeZone }, owner);
+        assert.strictEqual(week.snoozedUntil, "2026-11-02T17:00:00.000Z");
+        const error = yield* Effect.flip(
+          service.snooze({ ...target, preset: "tomorrow", timeZone: "invalid-zone" }, owner),
+        );
+        assert.strictEqual(error.reason, "invalid_input");
+      }),
+    ),
+  );
+
+  it.effect("reads a Home snapshot while a separate connection holds the SQLite writer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const dbPath = dir + "/state.sqlite";
+      const harness = makeHarness({
+        databaseLayer: SqlitePersistence.layerFromPath(dbPath).pipe(
+          Layer.provide(NodeServices.layer),
+          Layer.orDie,
+        ),
+      });
+      yield* Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("current", { status: "running", createdAt: at(0) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const sql = yield* SqlClient.SqlClient;
+        yield* service.list(owner);
+        yield* sql`PRAGMA busy_timeout = 0`;
+        const writer = new NodeSqlite.DatabaseSync(dbPath);
+        try {
+          writer.exec("BEGIN IMMEDIATE");
+          assert.deepStrictEqual(taskIds([yield* service.list(owner)]), ["current"]);
+        } finally {
+          writer.close();
+        }
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not decode another bot's historical task view when reading Home", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        yield* insertTask("current", { status: "running", createdAt: at(0) });
+        const other = ChannelTaskId.make("unrelated-old");
+        yield* insertTask(other, { status: "completed", createdAt: at(10_000), botId: "other" });
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          VALUES (${TaskViews.taskViewKey(ownerId, other)}, ${JSON.stringify({ taskId: other })}, ${at(0)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        assert.deepStrictEqual(taskIds([yield* service.list(owner)]), ["current"]);
       }),
     ),
   );

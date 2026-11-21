@@ -856,7 +856,7 @@ it("moves snoozed work to the closed fold and restores it on Unsnooze", async ()
   await vi.waitFor(() =>
     expect(actions.snooze).toHaveBeenCalledWith({
       environmentId,
-      input: { botId: "main", taskId: folded.task.taskId, until: expect.any(String) },
+      input: { botId: "main", taskId: folded.task.taskId, preset: "hour" },
     }),
   );
   await screen.rerender(view([recent], { ...options, snoozed: [snoozed] }));
@@ -885,4 +885,52 @@ it("moves snoozed work to the closed fold and restores it on Unsnooze", async ()
   await expect
     .element(screen.getByRole("button", { name: /^Verify release build/ }))
     .not.toBeInTheDocument();
+});
+
+it("sends the same one-hour preset at -75, -45, and +45 minute client skew", async () => {
+  setup();
+  const now = Date.parse("2026-11-09T02:00:00.000Z");
+  const row = taskRow("preset", "Check the build", "running", "2026-11-09T01:00:00.000Z");
+  await using screen = await render(view([row], { supportsSnooze: true }));
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const menu = screen.getByRole("button", { name: "Actions for Check the build" });
+  for (const skew of [-75, -45, 45]) {
+    vi.setSystemTime(now + skew * 60_000);
+    actions.show.mockResolvedValueOnce("hour");
+    await userEvent.click(menu);
+  }
+  expect(actions.snooze.mock.calls).toEqual(
+    Array.from({ length: 3 }, () => [
+      { environmentId, input: { botId: "main", taskId: "preset", preset: "hour" } },
+    ]),
+  );
+});
+
+it("opens the 51st snoozed task through the web fold's Show more", async () => {
+  setup();
+  const snoozed = Array.from({ length: 51 }, (_, index) => {
+    const row = taskRow(
+      `task-${index}`,
+      `Delayed task ${index + 1}`,
+      "running",
+      "2026-11-09T01:00:00.000Z",
+    );
+    return { ...row, view: { ...row.view, snoozedUntil: "2026-11-10T01:00:00.000Z" } };
+  });
+  const loadMore = vi.fn();
+  const props = { snoozed: snoozed.slice(0, 50), supportsSnooze: true };
+  await using screen = await render(
+    view([], {
+      ...props,
+      snoozedContinuation: { loading: false, failed: false, loadMore },
+    }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Snoozed" }));
+  await expect
+    .element(screen.getByRole("button", { name: /^Delayed task 51/ }))
+    .not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Show more snoozed tasks" }));
+  expect(loadMore).toHaveBeenCalledOnce();
+  await screen.rerender(view([], { ...props, snoozed }));
+  await expect.element(screen.getByRole("button", { name: /^Delayed task 51/ })).toBeVisible();
 });

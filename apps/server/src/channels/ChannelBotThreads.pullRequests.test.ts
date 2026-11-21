@@ -1,7 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelTaskId, type BotThreadRow } from "@goat/contracts";
+import {
+  BotId,
+  ChannelTaskId,
+  ThreadId,
+  type BotThreadRow,
+  type ChannelBotTaskActivityEntry,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import { environmentId, owner } from "./testkit/ChannelHarness.ts";
 import { warnings } from "./testkit/botThreadUnread.fixture.ts";
@@ -429,3 +437,58 @@ describe("ChannelBotThreads pull requests", () => {
     ),
   );
 });
+
+it.effect("keeps a dated PR in Activity after retrying the primary SSH worker", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* setup;
+      const taskId = ChannelTaskId.make("ssh-primary");
+      yield* insertTask(taskId, { status: "running", createdAt: at(10) });
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const read = () => ledger.getTask(taskId);
+      yield* commitTransition(ledger, (yield* read())!, {
+        type: "task.worker.bound",
+        payload: {
+          worker: {
+            environmentId,
+            threadId: ThreadId.make("ssh-worker"),
+            host: "builder",
+            generation: 1,
+          },
+        },
+      });
+      const linkedAt = at(2);
+      yield* commitTransition(ledger, (yield* read())!, {
+        type: "task.worker.observed",
+        payload: {
+          generation: 1,
+          observed: {
+            needsYou: [],
+            pullRequests: [
+              { repository, number: 42, url: url(repository, 42), watching: false, linkedAt },
+            ],
+          },
+        },
+      });
+      const entry: ChannelBotTaskActivityEntry = {
+        type: "pr_linked",
+        repo: repository,
+        number: 42,
+        at: linkedAt,
+        id: "pr:" + repository + "#42",
+        actor: "goat",
+      };
+      assert.deepInclude((yield* lookup(taskId)).activity?.entries ?? [], entry);
+      yield* commitTransition(ledger, (yield* read())!, {
+        type: "task.failed",
+        payload: { generation: 1, reason: "Worker stopped." },
+      });
+      yield* commitTransition(ledger, (yield* read())!, {
+        type: "task.retry.requested",
+        payload: { generation: 2 },
+      });
+      assert.isUndefined((yield* read())?.task.observed);
+      assert.deepInclude((yield* lookup(taskId)).activity?.entries ?? [], entry);
+    }),
+  ),
+);

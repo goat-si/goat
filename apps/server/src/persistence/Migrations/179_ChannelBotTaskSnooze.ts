@@ -9,6 +9,11 @@ export default Effect.gen(function* () {
     BEGIN
       UPDATE channel_tasks SET status_version = OLD.status_version + 1 WHERE task_id = NEW.task_id;
     END`;
+  yield* sql`CREATE INDEX channel_task_views_by_task ON channel_runtime_state (
+    json_valid(value_json),
+    CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskId') END,
+    key
+  ) WHERE key >= 'task-view:' AND key < 'task-view;'`;
   yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
     VALUES ('bot-task-activity-since', '{}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`;
 });

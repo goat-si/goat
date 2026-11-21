@@ -468,10 +468,15 @@ export type ChannelUpdateTaskViewInput = typeof ChannelUpdateTaskViewInput.Type;
 
 export const ChannelUnsnoozeBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, botId: BotId });
 export type ChannelUnsnoozeBotTaskInput = typeof ChannelUnsnoozeBotTaskInput.Type;
-export const ChannelSnoozeBotTaskInput = Schema.Struct({
-  ...ChannelUnsnoozeBotTaskInput.fields,
-  until: IsoDateTime,
-});
+const ChannelBotTaskSnoozePreset = Schema.Literals(["hour", "tomorrow", "week"]);
+export const ChannelSnoozeBotTaskInput = Schema.Union([
+  Schema.Struct({ ...ChannelUnsnoozeBotTaskInput.fields, until: IsoDateTime }),
+  Schema.Struct({
+    ...ChannelUnsnoozeBotTaskInput.fields,
+    preset: ChannelBotTaskSnoozePreset,
+    timeZone: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  }),
+]);
 export type ChannelSnoozeBotTaskInput = typeof ChannelSnoozeBotTaskInput.Type;
 
 /** Shipped clients reject a longer list, so listing more needs a new key. */
@@ -658,6 +663,7 @@ export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
 export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
 export const CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH = 512;
 export const CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT = 700;
+export const CHANNEL_BOT_THREADS_SNOOZED_LIMIT = 50;
 const BotTaskSnooze = Schema.Struct({ taskId: ChannelTaskId, until: IsoDateTime });
 /** Opaque and bound to one owner and bot; a server refuses one that is not its own. */
 export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(
@@ -665,7 +671,9 @@ export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(
 );
 export const ChannelListBotThreadsInput = Schema.Struct({
   botId: Schema.optionalKey(BotId),
-  /** Read only the active snoozes of these cached history tasks. */
+  /** Read the next page of the Snoozed fold, without the rest of Home. */
+  snoozedAfter: Schema.optionalKey(ChannelBotThreadsCursor),
+  /** Read only the active snoozes of these cached tasks. */
   checkSnoozes: Schema.optionalKey(
     Schema.Array(ChannelTaskId).check(
       Schema.isMinLength(1),
@@ -684,7 +692,10 @@ export const ChannelListBotThreadsInput = Schema.Struct({
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
-  snoozed: Schema.optionalKey(Schema.Array(BotTaskRow).check(Schema.isMaxLength(50))),
+  snoozed: Schema.optionalKey(
+    Schema.Array(BotTaskRow).check(Schema.isMaxLength(CHANNEL_BOT_THREADS_SNOOZED_LIMIT)),
+  ),
+  snoozedNextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
   nextSnoozeExpiry: Schema.optionalKey(IsoDateTime),
   readAt: Schema.optionalKey(IsoDateTime),
   /** Present on a snooze check, including when every requested task is unsnoozed. */

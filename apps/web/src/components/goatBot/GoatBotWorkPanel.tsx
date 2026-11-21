@@ -170,15 +170,14 @@ export function GoatBotWorkPanel({
     environment?.connection.phase === "connected"
       ? environment.serverConfig?.environment.capabilities
       : undefined,
-    {
+    current.workRevision ?? {
       rows: current.rows,
-      ...(current.snoozed === undefined ? {} : { snoozed: current.snoozed }),
       remoteWork: current.remoteWork,
       mainMessageCount: current.mainMessageCount ?? 0,
     },
     loaded && !failed,
   );
-  const { rows, remoteWork } = history;
+  const { rows, remoteWork, snoozeList } = history;
   const offline = environment?.connection.phase === "offline";
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
@@ -220,7 +219,7 @@ export function GoatBotWorkPanel({
   const peeked =
     peek === null
       ? undefined
-      : [...rows, ...(current.snoozed ?? [])].find(
+      : [...rows, ...snoozeList.snoozed].find(
           (row): row is Extract<BotThreadRow, { kind: "task" }> =>
             row.kind === "task" && row.task.taskId === peek.taskId,
         );
@@ -357,7 +356,7 @@ export function GoatBotWorkPanel({
                 threadId={threadId}
                 botName={botName}
                 rows={rows}
-                snoozed={current.snoozed}
+                {...snoozeList}
                 supportsSnooze={current.supportsSnooze}
                 remoteWork={remoteWork}
                 chips={current.chips}

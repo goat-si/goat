@@ -1,5 +1,6 @@
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT,
   type ChannelBotRef,
   type BotId,
   type ChannelIngestInput,
@@ -14,6 +15,7 @@ import {
 } from "@goat/contracts";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -119,13 +121,38 @@ export function createChannelEnvironmentAtoms<R, E>(
     refreshTrigger: ({ environmentId, input }) =>
       botListSignal(JSON.stringify([environmentId, input.botId ?? null, true])),
   });
-  const checkBotSnoozes = createEnvironmentRpcQueryAtomFamily(runtime, {
+  const checkBotSnoozeBatch = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:check-bot-snoozes",
     tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
     idleTtlMs: 2_000,
     refreshTrigger: ({ environmentId, input }) =>
       botListSignal(JSON.stringify([environmentId, input.botId ?? null, false])),
   });
+  type SnoozeCheckInput = {
+    readonly environmentId: EnvironmentId;
+    readonly input: Pick<ChannelListBotThreadsInput, "botId"> & {
+      readonly checkSnoozes: ReadonlyArray<ChannelTaskId>;
+    };
+  };
+  const checkBotSnoozeBatches = Atom.family((key: string) => {
+    const { environmentId, input }: SnoozeCheckInput = JSON.parse(key);
+    const batches = Arr.chunksOf(input.checkSnoozes, CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT).map(
+      (checkSnoozes) => checkBotSnoozeBatch({ environmentId, input: { ...input, checkSnoozes } }),
+    );
+    return Atom.make((get) =>
+      AsyncResult.map(AsyncResult.all(batches.map((batch) => get(batch))), (answers) => ({
+        rows: [],
+        mainMessageCount: 0,
+        ...(answers.every((answer) => answer.activeSnoozes !== undefined)
+          ? { activeSnoozes: answers.flatMap((answer) => answer.activeSnoozes ?? []) }
+          : {}),
+      })),
+    ).pipe(Atom.setIdleTTL("2 seconds"));
+  });
+  const checkBotSnoozes = (request: SnoozeCheckInput) =>
+    request.input.checkSnoozes.length <= CHANNEL_BOT_THREADS_SNOOZE_CHECK_LIMIT
+      ? checkBotSnoozeBatch(request)
+      : checkBotSnoozeBatches(JSON.stringify(request));
   const listBots = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-bots",
     tag: CHANNEL_GATEWAY_WS_METHODS.listBots,

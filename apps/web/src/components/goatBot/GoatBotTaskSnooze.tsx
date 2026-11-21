@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { BOT_TASK_SNOOZE_CHOICES, botTaskSnoozeUntil } from "@goat/client-runtime/goatBot";
+import { BOT_TASK_SNOOZE_CHOICES, botTaskSnoozeInput } from "@goat/client-runtime/goatBot";
 import type { BotId, ChannelTaskView, ContextMenuItem, EnvironmentId } from "@goat/contracts";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
@@ -31,10 +31,11 @@ export function useGoatBotTaskSnooze(environmentId: EnvironmentId, supported: bo
       if (action === "unsnooze" && canUnsnooze)
         return (await sendUnsnooze({ environmentId, input }))._tag === "Success";
       if (!canSnooze) return false;
-      const until = botTaskSnoozeUntil(action, new Date());
+      const snoozeInput = botTaskSnoozeInput(action);
       return (
-        until !== undefined &&
-        (await sendSnooze({ environmentId, input: { ...input, until } }))._tag === "Success"
+        snoozeInput !== undefined &&
+        (await sendSnooze({ environmentId, input: { ...input, ...snoozeInput } }))._tag ===
+          "Success"
       );
     },
   };

@@ -1,6 +1,7 @@
 import {
   COLLAPSED_FINISHED,
   type BotHomeWork,
+  type BotSnoozeFoldContinuation,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import type {
@@ -43,6 +44,9 @@ export function mobileBotTaskListItems(props: {
   readonly ticking: boolean;
   readonly showAllFinished: boolean;
   readonly snoozed?: ReadonlyArray<TaskRow>;
+  readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
+  readonly activeSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
+  readonly uncheckedSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
   readonly showSnoozed?: boolean;
   readonly onToggleSnoozed?: () => void;
   readonly onToggleFinished: () => void;
@@ -79,7 +83,11 @@ export function mobileBotTaskListItems(props: {
   const snoozed = props.snoozed ?? [];
   const snoozedIds = new Set(snoozed.map((row) => String(row.task.taskId)));
   const earlier = props.chatTasks.filter(
-    (card) => !listed.has(card.key) && !snoozedIds.has(card.key),
+    (card) =>
+      !listed.has(card.key) &&
+      !snoozedIds.has(card.key) &&
+      !props.activeSnoozes?.has(card.key as ChannelTaskId) &&
+      !props.uncheckedSnoozes?.has(card.key as ChannelTaskId),
   );
   if (listed.size + others.length + earlier.length + snoozed.length === 0) {
     return props.failed
@@ -225,6 +233,25 @@ export function mobileBotTaskListItems(props: {
             </Pressable>
           ),
         });
+    const continuation = props.snoozedContinuation;
+    if (props.showSnoozed && continuation) {
+      if (continuation.failed) items.push(label("snoozed-failed", "Couldn't load snoozed work."));
+      items.push({
+        key: "snoozed-more",
+        render: () => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show more snoozed tasks"
+            accessibilityState={{ busy: continuation.loading }}
+            disabled={continuation.loading}
+            onPress={continuation.loadMore}
+            className="min-h-[44px] items-center justify-center"
+          >
+            <Text className="text-foreground">Show more</Text>
+          </Pressable>
+        ),
+      });
+    }
   }
   items.push(...historyTail(props, props.work.finished.length));
   if (others.length > 0) items.push(label("section:other", "Other threads"));

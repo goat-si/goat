@@ -3,7 +3,13 @@ import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  BotThreadRow,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+  type ChannelListBotThreadsResult,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -136,6 +142,11 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
+  openTask: vi.fn(),
+  snoozeCapable: false,
+  checkSnoozes: vi.fn(),
+  snoozePage: vi.fn(),
+  snoozeCheck: { data: null as null | Pick<ChannelListBotThreadsResult, "activeSnoozes"> },
   // A server that looks tasks up by id and searches their titles.
   lookupCapable: false,
   lookup: vi.fn(),
@@ -202,6 +213,10 @@ vi.mock("../../state/channels", () => ({
     // Home's shared current work; its links are not read in this file.
     homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "task",
+    checkBotSnoozes: state.checkSnoozes,
+    listBotThreadsPage: { label: "work page", run: state.snoozePage },
+    snoozeBotTask: { permissionAtom: () => "permission" },
+    unsnoozeBotTask: { permissionAtom: () => "permission" },
     listChildWork: () => "child",
     listBotArtifacts: () => "artifacts",
     readBotArtifact: {},
@@ -239,6 +254,7 @@ vi.mock("../../state/environments", () => ({
               capabilities: {
                 goatBotTaskThreads: true,
                 goatBotTaskRetry: true,
+                goatBotTaskSnooze: state.snoozeCapable,
                 goatBotChildWork: true,
                 goatBotMembers: true,
                 goatBotTaskLookupSearch: state.lookupCapable,
@@ -266,14 +282,16 @@ vi.mock("../../state/query", () => ({
         { ...state.task, successResult: state.task.isSuccess && !state.task.isPending ? {} : null }
       : key === "routines"
         ? state.routines
-        : {
-            data: null,
-            cause: null,
-            error: null,
-            isPending: false,
-            isSuccess: false,
-            refresh: vi.fn(),
-          },
+        : key === "snooze-check"
+          ? state.snoozeCheck
+          : {
+              data: null,
+              cause: null,
+              error: null,
+              isPending: false,
+              isSuccess: false,
+              refresh: vi.fn(),
+            },
 }));
 // The task card's renderer pulls in the native Markdown view, which cannot load under Vitest.
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
@@ -314,6 +332,11 @@ afterEach(async () => {
 
 function reset() {
   state.connected = true;
+  state.snoozeCapable = false;
+  state.checkSnoozes.mockReset();
+  state.snoozePage.mockReset();
+  state.openTask.mockClear();
+  state.snoozeCheck.data = null;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockReset();
@@ -344,7 +367,7 @@ async function render(
         turnsWaiting={turnsWaiting}
         chatTasks={chatTasks}
         chipFace={chipFace}
-        onOpenTask={() => {}}
+        onOpenTask={state.openTask}
         onOpenThread={state.openThread}
       />,
     ),
@@ -409,6 +432,65 @@ it("lists the tasks the chat shows while the work list loads or after it failed"
   await render(undefined, undefined, [], [card]);
   expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
   expect(container.textContent).toContain("Earlier in chat");
+});
+
+it("checks the chat fallback task and fetches the second Snoozed page from Home", async () => {
+  reset();
+  state.snoozeCapable = true;
+  const readAt = "2026-10-12T00:00:00.000Z";
+  const until = "2026-10-12T01:00:00.000Z";
+  const snoozed = Array.from({ length: 51 }, (_, index) => {
+    const taskId = `task-${String(index).padStart(3, "0")}`;
+    return decodeRow({
+      kind: "task",
+      task: { taskId, title: `Snoozed task ${index + 1}`, status: "completed", updatedAt: readAt },
+      view: { taskId, pinnedAt: null, doneAt: null, readThrough: null, snoozedUntil: until },
+      lastActivityAt: readAt,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    });
+  });
+  const card: GoatBotTaskCard = {
+    key: "task-050",
+    revision: 1,
+    updatedAt: readAt,
+    title: "Snoozed task 51",
+    statusLabel: "Done",
+    tone: "success",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: { kind: "none", label: "No thread" },
+  };
+  Object.assign(state.task, {
+    isPending: false,
+    isSuccess: true,
+    data: { rows: [], snoozed: snoozed.slice(0, 50), snoozedNextCursor: "cursor", readAt },
+  });
+  state.checkSnoozes.mockReturnValue("snooze-check");
+  state.snoozePage.mockResolvedValue(
+    AsyncResult.success({ rows: [], snoozed: snoozed.slice(50), mainMessageCount: 0 }),
+  );
+  await render(undefined, undefined, [], [card]);
+  await press("Work");
+  expect(state.checkSnoozes).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { checkSnoozes: ["task-050"] },
+  });
+  expect(container.textContent).not.toContain("Earlier in chat");
+  state.snoozeCheck.data = { activeSnoozes: [{ taskId: ChannelTaskId.make("task-050"), until }] };
+  await render(undefined, undefined, [], [card]);
+  expect(container.textContent).not.toContain("Earlier in chat");
+  await press("Snoozed");
+  expect(container.textContent).not.toContain("Snoozed task 51");
+  await press("Show more");
+  expect(state.snoozePage).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { snoozedAfter: "cursor" },
+  });
+  await press("Snoozed task 51");
+  expect(state.openTask).toHaveBeenCalledWith("task-050", "Snoozed task 51");
 });
 
 it("shows empty routines when live data is available while the subscription waits", async () => {

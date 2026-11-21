@@ -114,6 +114,13 @@ const readLaunchLinks = (
       SELECT json_extract(value, '$.repository') AS repository,
         json_extract(value, '$.number') AS number, json_extract(value, '$.linkedAt') AS at
       FROM links WHERE COALESCE(json_extract(value, '$.source'), '') != 'stack-dismissed'
+      UNION ALL
+      SELECT json_extract(pr.value, '$.repository'), json_extract(pr.value, '$.number'),
+        json_extract(pr.value, '$.linkedAt')
+      FROM channel_task_events e
+      JOIN json_each(CASE WHEN json_valid(e.event_json) THEN e.event_json END,
+        '$.payload.observed.pullRequests') pr
+      WHERE e.task_id = ${task.taskId} AND e.type = 'task.worker.observed' AND pr.type = 'object'
     )
     SELECT repository, number, MIN(at) AS linkedAt
     FROM facts

@@ -1,4 +1,4 @@
-import { botTaskSnoozeUntil } from "@goat/client-runtime/goatBot";
+import { botTaskSnoozeInput } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -124,14 +124,14 @@ export function useMobileTaskScreen(input: {
               );
               if (result._tag === "Success") settle(identity);
             } else if (canSnooze) {
-              const until = botTaskSnoozeUntil(action, new Date());
-              if (until === undefined) return;
+              const snoozeInput = botTaskSnoozeInput(action);
+              if (snoozeInput === undefined) return;
               const result = await runAtomCommand(
                 appAtomRegistry,
                 channelEnvironment.snoozeBotTask,
                 {
                   environmentId,
-                  input: { ...task, until },
+                  input: { ...task, ...snoozeInput },
                 },
               );
               if (result._tag === "Success") settle(identity);

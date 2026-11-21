@@ -14,6 +14,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
@@ -40,8 +41,26 @@ export const visibleTaskView = (
   Date.parse(snoozedUntil) > now
     ? { ...view, snoozedUntil }
     : view;
+export const taskViewKeyPrefix = (ownerId: string) =>
+  "task-view:" + encodeURIComponent(ownerId) + ":";
 export const taskViewKey = (ownerId: string, taskId: ChannelTaskId) =>
-  "task-view:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(taskId);
+  taskViewKeyPrefix(ownerId) + encodeURIComponent(taskId);
+function snoozeDeadline(input: ChannelSnoozeBotTaskInput, now: DateTime.Utc) {
+  if ("until" in input) return Date.parse(input.until);
+  if (input.preset === "hour") return DateTime.toEpochMillis(DateTime.addDuration(now, 3_600_000));
+  const zoned = DateTime.makeZoned(now, { timeZone: input.timeZone ?? "UTC" });
+  if (Option.isNone(zoned)) return NaN;
+  const weekday = DateTime.toParts(zoned.value).weekDay;
+  const days = input.preset === "tomorrow" ? 1 : (8 - weekday) % 7 || 7;
+  const wake = DateTime.setParts(DateTime.add(zoned.value, { days }), {
+    hour: 9,
+    minute: 0,
+    second: 0,
+    millisecond: 0,
+  });
+  return DateTime.toEpochMillis(wake);
+}
+
 const persistenceFailed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
 export class ChannelTaskViews extends Context.Service<
@@ -141,7 +160,7 @@ const make = Effect.gen(function* () {
     const clock = yield* DateTime.now;
     const now = DateTime.formatIso(clock);
     const nowMs = DateTime.toEpochMillis(clock);
-    const untilMs = "until" in input ? Date.parse(input.until) : null;
+    const untilMs = "until" in input || "preset" in input ? snoozeDeadline(input, clock) : null;
     // Match the longest client preset, including a daylight saving change.
     if (
       untilMs !== null &&

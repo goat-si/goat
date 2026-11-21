@@ -188,10 +188,11 @@ export function MobileBotWork(props: {
     enabled: enabled && open && !props.taskId,
     scope: JSON.stringify([workOwner, sheet.generation]),
     owner: workOwner,
+    fallbackTasks: props.chatTasks,
   });
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
-  const snoozed = listData?.snoozed ?? [];
+  const { snoozed } = history.snoozeList;
   const homeRows = props.taskId ? rows : withoutSnoozedBotTasks(history.rows, snoozed);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
@@ -620,7 +621,7 @@ export function MobileBotWork(props: {
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
-            snoozed,
+            ...history.snoozeList,
             showSnoozed,
             onToggleSnoozed: () => setShowSnoozed((value) => !value),
             onToggleFinished: () => setShowAllFinished((value) => !value),

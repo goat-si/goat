@@ -1,27 +1,31 @@
 import {
   applyHistoryPress,
   botThreadKey,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
   botThreadsHistoryInput,
   botWorkHistorySnoozeInput,
   botWorkHistoryView,
   EMPTY_WALK,
+  type GoatBotTaskCard,
   markWalkRead,
   readBotThreadHistory,
   writeThrough,
 } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
-import type {
-  BotId,
-  ChannelListBotThreadsResult,
+import {
   ChannelTaskId,
-  EnvironmentId,
-  ExecutionEnvironmentCapabilities,
+  type BotId,
+  type ChannelListBotThreadsResult,
+  type EnvironmentId,
+  type ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
 
 const NO_LIST: ChannelListBotThreadsResult = { rows: [], remoteWork: [], mainMessageCount: 0 };
 const UNWRITTEN = "[[],[],[]]";
@@ -47,6 +51,7 @@ export function useMobileBotWorkHistory(input: {
   readonly scope: string;
   /** The computer and bot alone: an accepted read mark is a fact about them, whichever walk shows. */
   readonly owner: string;
+  readonly fallbackTasks?: ReadonlyArray<GoatBotTaskCard> | undefined;
 }) {
   const { environmentId, botId, enabled, scope, owner } = input;
   const current = input.current ?? NO_LIST;
@@ -99,16 +104,54 @@ export function useMobileBotWorkHistory(input: {
   const listedCapabilities = walk.started
     ? { ...input.capabilities, goatBotTaskThreadsPaged: true }
     : input.capabilities;
-  const snoozeInput = botWorkHistorySnoozeInput(walk, current, input.capabilities, botId);
+  const fallbackTaskIds = useMemo(
+    () => input.fallbackTasks?.map((task) => ChannelTaskId.make(task.key)),
+    [input.fallbackTasks],
+  );
+  const snoozeInput = useMemo(
+    () => botWorkHistorySnoozeInput(walk, current, input.capabilities, botId, fallbackTaskIds),
+    [walk, current, input.capabilities, botId, fallbackTaskIds],
+  );
   const snoozes = useEnvironmentQuery(
     environmentId === null || !enabled || snoozeInput === null
       ? null
       : channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }),
   ).data?.activeSnoozes;
+  const checked = useKeptWhileOffline(snoozes ?? null, scope, !enabled);
   const snoozeCheck =
     snoozeInput === null || snoozes === undefined
       ? undefined
       : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
+  const activeSnoozes = useMemo(() => new Set(checked?.map(({ taskId }) => taskId)), [checked]);
+  const uncheckedSnoozes = useMemo(
+    () =>
+      checked === null && snoozeInput !== null ? new Set(snoozeInput.checkSnoozes) : undefined,
+    [checked, snoozeInput],
+  );
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const foldScope = JSON.stringify([scope, current.readAt]);
+  if (snoozedPages !== undefined && snoozedPages.scope !== foldScope) setSnoozedPages(undefined);
+  const fold = botSnoozeFold({
+    scope: foldScope,
+    first: current,
+    pages: snoozedPages,
+    setPages: setSnoozedPages,
+    read:
+      !enabled || environmentId === null || input.capabilities?.goatBotTaskSnooze !== true
+        ? null
+        : async (cursor) => {
+            const result = await runAtomCommand(
+              appAtomRegistry,
+              channelEnvironment.listBotThreadsPage,
+              {
+                environmentId,
+                input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
+              },
+              { reportFailure: false },
+            );
+            return result._tag === "Success" ? result.value : undefined;
+          },
+  });
   const view = botWorkHistoryView({
     walk,
     current,
@@ -180,6 +223,12 @@ export function useMobileBotWorkHistory(input: {
   }
   return {
     supported: view.supported,
+    snoozeList: {
+      snoozed: fold.rows,
+      snoozedContinuation: fold.continuation,
+      activeSnoozes,
+      uncheckedSnoozes,
+    },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

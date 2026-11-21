@@ -43,6 +43,9 @@ export { homeWorkGoverns, type HomeCurrentOpenableLink } from "./homeCurrentOpen
 export { botTaskActivityText } from "./taskActivity.ts";
 export {
   BOT_TASK_SNOOZE_CHOICES,
-  botTaskSnoozeUntil,
+  botTaskSnoozeInput,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
+  type BotSnoozeFoldContinuation,
   withoutSnoozedBotTasks,
 } from "./taskSnooze.ts";

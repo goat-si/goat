@@ -8,6 +8,7 @@ import {
   goatBotRowTime,
   presentTaskStatus,
   type BotWorkTask,
+  type BotSnoozeFoldContinuation,
   type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
 import { BotId } from "@goat/contracts";
@@ -76,6 +77,7 @@ export function GoatBotHomeWork({
   botName,
   rows,
   snoozed = NO_SNOOZED,
+  snoozedContinuation,
   supportsSnooze = false,
   remoteWork = NO_REMOTE,
   chips = NO_CHIPS,
@@ -101,6 +103,7 @@ export function GoatBotHomeWork({
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly snoozed?: ReadonlyArray<TaskRow> | undefined;
+  readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
   readonly supportsSnooze?: boolean | undefined;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
   /** Each task's newest chip in the conversation, which says what its worker asks the person. */
@@ -266,6 +269,21 @@ export function GoatBotHomeWork({
                 "snoozed",
               ),
             )}
+          {showSnoozed && snoozedContinuation && (
+            <div className="flex flex-col items-center py-1">
+              {snoozedContinuation.failed && <p role="status">Couldn't load snoozed work.</p>}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Show more snoozed tasks"
+                aria-busy={snoozedContinuation.loading}
+                disabled={snoozedContinuation.loading}
+                onClick={snoozedContinuation.loadMore}
+              >
+                Show more
+              </Button>
+            </div>
+          )}
         </>
       )}
       {/* One region per notice, mounted with Home's history, so one never repeats the other. */}

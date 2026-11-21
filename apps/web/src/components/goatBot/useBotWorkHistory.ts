@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import {
   applyHistoryPress,
   botThreadKey,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
   botThreadsHistoryInput,
   botWorkHistorySnoozeInput,
   botWorkHistoryView,
@@ -46,6 +48,25 @@ export function useBotWorkHistory(
     snoozeInput === null || snoozes === undefined
       ? undefined
       : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const foldScope = JSON.stringify([environmentId, botId, current.readAt]);
+  if (snoozedPages !== undefined && snoozedPages.scope !== foldScope) setSnoozedPages(undefined);
+  const fold = botSnoozeFold({
+    scope: foldScope,
+    first: current,
+    pages: snoozedPages,
+    setPages: setSnoozedPages,
+    read:
+      capabilities?.goatBotTaskSnooze !== true
+        ? null
+        : async (cursor) => {
+            const result = await read({
+              environmentId,
+              input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
+            });
+            return result._tag === "Success" ? result.value : undefined;
+          },
+  });
   const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded, snoozeCheck });
   const [written, setWritten] = useState("[[],[],[]]");
   if (view.reported !== written) {
@@ -82,6 +103,7 @@ export function useBotWorkHistory(
   }
   return {
     supported: view.supported,
+    snoozeList: { snoozed: fold.rows, snoozedContinuation: fold.continuation },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

@@ -67,7 +67,6 @@ export function useBotThreads(
   }, [supported, watchedThreadId, revision, refreshThreads]);
   return {
     rows: threads.data?.rows ?? [],
-    snoozed: threads.data?.snoozed,
     workRevision: threads.data,
     supportsSnooze: connected && capabilities?.goatBotTaskSnooze === true,
     mainMessageCount: threads.data?.mainMessageCount ?? 0,

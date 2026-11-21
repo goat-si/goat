@@ -9,6 +9,8 @@ import {
   type BotRemoteWork,
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
+  CHANNEL_BOT_THREADS_SNOOZED_LIMIT,
+  ChannelTaskId,
   type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
   type ChannelTaskView,
@@ -29,6 +31,7 @@ import {
   MAIN_BOT_ID,
   ProjectId,
 } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -51,10 +54,17 @@ import {
 } from "./channelBotRowPullRequests.ts";
 import {
   decodeHistoryCursor,
+  encodeHistoryCursor,
   launchesStatement,
   quietMessagesStatement,
   readHistoryPage,
 } from "./channelBotThreadHistory.ts";
+import {
+  type HomeTaskRow,
+  recentHomeTaskRows,
+  snoozedHomeTaskRows,
+  unreadableHomeTaskView,
+} from "./channelBotHomeTaskRows.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import {
   makeMarkWarnings,
@@ -73,6 +83,10 @@ const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const isGatewayError = Schema.is(ChannelGatewayError);
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
+const snoozedCursorScope = (owner: Pick<ChannelConnectionOwner, "ownerId">, botId: BotId) => ({
+  ownerId: owner.ownerId,
+  botId: "snoozed:" + botId,
+});
 interface ChildRow extends ThreadPullRequestColumns {
   readonly key?: string;
   readonly value_json: string;
@@ -101,6 +115,7 @@ export class ChannelBotThreads extends Context.Service<
       botId?: BotId,
       history?: { readonly cursor?: string },
       checkSnoozes?: ChannelListBotThreadsInput["checkSnoozes"],
+      snoozedAfter?: ChannelListBotThreadsInput["snoozedAfter"],
     ) => Effect.Effect<ChannelListBotThreadsResult, ChannelGatewayError>;
     readonly listChildWork: (
       input: ChannelListChildWorkInput,
@@ -415,119 +430,78 @@ const make = Effect.gen(function* () {
     owner: ChannelConnectionOwner,
     botId: BotId,
     environmentId: EnvironmentId,
+    after: { readonly createdAt: string; readonly taskId: string } | undefined,
   ) {
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
-    const cutoff = now - 3 * 24 * 60 * 60 * 1000;
-    const messages = yield* mainMessageCount(owner, botId);
-    const viewPrefix = "task-view:" + encodeURIComponent(owner.ownerId) + ":";
-    const viewRows = yield* sql<{
-      readonly key: string;
-      readonly value_json: string;
-    }>`SELECT key, value_json
-      FROM channel_runtime_state WHERE key >= ${viewPrefix} AND key < ${viewPrefix.slice(0, -1) + ";"}`.pipe(
-      Effect.mapError(failed),
-    );
-    const decodedViews = yield* Effect.try(() =>
-      viewRows.map((row) => {
-        const view = decodeView(row.value_json);
-        if (row.key !== viewPrefix + encodeURIComponent(view.taskId))
-          throw new Error("Invalid task view key");
-        return view;
-      }),
-    ).pipe(Effect.mapError(failed));
-    const storedViews = new Map(decodedViews.map((view) => [view.taskId, view]));
-    const pinned = encodeJson(
-      decodedViews.filter((view) => view.pinnedAt !== null).map((view) => view.taskId),
-    );
-    const snoozes = encodeJson(
-      decodedViews.flatMap((view) =>
-        view.snoozedUntil === undefined || Date.parse(view.snoozedUntil) <= now
-          ? []
-          : [{ id: view.taskId, until: view.snoozedUntil, revision: view.snoozedStatusVersion }],
-      ),
-    );
-    const cutoffIso = DateTime.formatIso(DateTime.makeUnsafe(cutoff));
-    const source = yield* sql<{
-      readonly task_json: string;
-      readonly status_version: number;
-    }>`WITH snoozes AS (
-      SELECT t.task_id
-      FROM json_each(${snoozes}) s
-      JOIN channel_tasks t ON t.task_id = json_extract(s.value, '$.id')
-        AND t.status_version = json_extract(s.value, '$.revision')
-      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
-    ), recent AS (
-      SELECT t.task_json, t.status_version, t.updated_at, t.task_id
-      FROM channel_tasks t
-      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
-        AND c.kind = 'goat' AND t.task_id NOT IN (SELECT task_id FROM snoozes)
-        AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
-          AND (t.status NOT IN ('completed', 'failed', 'cancelled')
-            OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
-            OR t.task_id IN (SELECT value FROM json_each(${pinned}))))
-          OR (json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
-            SELECT 1 FROM channel_runtime_state s
-            WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
-              AND json_extract(s.value_json, '$.generation') = t.generation
-              AND json_extract(s.value_json, '$.state') IN ('launched', 'bound', 'unknown'))))
-      ORDER BY (t.task_id IN (SELECT value FROM json_each(${pinned}))) DESC,
-        t.updated_at DESC, t.task_id DESC LIMIT 100
+    const clock = yield* DateTime.now;
+    const now = DateTime.toEpochMillis(clock);
+    const nowIso = DateTime.formatIso(clock);
+    const scope = { ownerId: owner.ownerId, botId, now: nowIso };
+    if (
+      (yield* unreadableHomeTaskView(sql, owner.ownerId).pipe(Effect.mapError(failed))).length > 0
     )
-    SELECT task_json, status_version
-    FROM recent ORDER BY updated_at DESC, task_id DESC`.pipe(Effect.mapError(failed));
-    const folded = yield* sql<{
-      readonly task_json: string;
-      readonly status_version: number;
-    }>`SELECT t.task_json, t.status_version FROM json_each(${snoozes}) s
-      JOIN channel_tasks t ON t.task_id = json_extract(s.value, '$.id')
-        AND t.status_version = json_extract(s.value, '$.revision')
-      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
-      ORDER BY json_extract(s.value, '$.until'), t.task_id LIMIT 50`.pipe(Effect.mapError(failed));
-    const decodeRows = (
-      rows: ReadonlyArray<{ readonly task_json: string; readonly status_version: number }>,
-    ) =>
-      Effect.try(() =>
-        rows.map((item) => {
-          const task = decodeTask(item.task_json);
-          const stored = storedViews.get(task.taskId);
-          return {
-            task,
-            view: stored && TaskViews.visibleTaskView(stored, item.status_version, now),
-          };
+      return yield* failed();
+    const source =
+      after === undefined
+        ? yield* recentHomeTaskRows(sql, {
+            ...scope,
+            cutoff: DateTime.formatIso(DateTime.subtractDuration(clock, 3 * 86_400_000)),
+          }).pipe(Effect.mapError(failed))
+        : [];
+    const folded = yield* snoozedHomeTaskRows(sql, scope, after).pipe(Effect.mapError(failed));
+    const page = folded.slice(0, CHANNEL_BOT_THREADS_SNOOZED_LIMIT);
+    const keys = [...source, ...page].map((row) =>
+      TaskViews.taskViewKey(owner.ownerId, ChannelTaskId.make(row.task_id)),
+    );
+    const stored =
+      keys.length === 0
+        ? []
+        : yield* sql<{
+            readonly key: string;
+            readonly value_json: string;
+          }>`SELECT key, value_json FROM channel_runtime_state WHERE key IN ${sql.in(keys)}`.pipe(
+            Effect.mapError(failed),
+          );
+    const decoded = yield* Effect.try(() => {
+      const views = new Map(
+        stored.map((row) => {
+          const view = decodeView(row.value_json);
+          if (row.key !== TaskViews.taskViewKey(owner.ownerId, view.taskId))
+            throw new Error("Invalid task view key");
+          return [view.taskId, view] as const;
         }),
-      ).pipe(Effect.mapError(failed));
-    const recent = yield* decodeRows(source);
-    const suspended = yield* decodeRows(folded);
-    const viewsByTask = new Map(
-      [...recent, ...suspended].flatMap(({ task, view }) =>
-        view === undefined ? [] : [[task.taskId, view] as const],
-      ),
-    );
-    const built = yield* rowsFor(
-      owner,
-      environmentId,
-      viewsByTask,
-      recent.map(({ task }) => task),
-      {},
-    );
-    const snoozed = (yield* rowsFor(
-      owner,
-      environmentId,
-      viewsByTask,
-      suspended.map(({ task }) => task),
-      {
-        skipLaunches: true,
-      },
-    )).rows.filter(
-      (row): row is Extract<BotThreadRow, { kind: "task" }> =>
-        row.kind === "task" && row.view.snoozedUntil !== undefined,
-    );
-    const nextSnoozeExpiry = snoozed[0]?.view.snoozedUntil;
+      );
+      const visible = new Map<ChannelTaskId, ChannelTaskView>();
+      const decodeRows = (rows: ReadonlyArray<HomeTaskRow>) =>
+        rows.map((row) => {
+          const task = decodeTask(row.task_json);
+          if (task.taskId !== row.task_id) throw new Error("Invalid task key");
+          const view = views.get(task.taskId);
+          if (view !== undefined)
+            visible.set(task.taskId, TaskViews.visibleTaskView(view, row.status_version, now));
+          return task;
+        });
+      const recent = decodeRows(source);
+      const suspended = decodeRows(page);
+      if (
+        page.some((row) => visible.get(ChannelTaskId.make(row.task_id))?.snoozedUntil !== row.until)
+      )
+        throw new Error("Invalid snoozed task view");
+      return { recent, suspended, visible };
+    }).pipe(Effect.mapError(failed));
+    const built = yield* rowsFor(owner, environmentId, decoded.visible, decoded.recent, {});
+    const snoozed = (yield* rowsFor(owner, environmentId, decoded.visible, decoded.suspended, {
+      skipLaunches: true,
+    })).rows.filter((row): row is Extract<BotThreadRow, { kind: "task" }> => row.kind === "task");
+    const nextSnoozeExpiry = after === undefined ? page[0]?.until : undefined;
+    const last = page.at(-1);
+    const snoozedNextCursor =
+      last !== undefined && folded.length > page.length
+        ? encodeHistoryCursor(snoozedCursorScope(owner, botId), {
+            createdAt: last.until,
+            taskId: last.task_id,
+          })
+        : undefined;
+    const messages = after === undefined ? yield* mainMessageCount(owner, botId) : 0;
     for (const threadId of built.unreadablePullRequests)
       yield* warnPullRequests(
         threadId,
@@ -536,9 +510,9 @@ const make = Effect.gen(function* () {
       );
     return {
       rows: built.rows,
-      ...(nextSnoozeExpiry === undefined
-        ? {}
-        : { snoozed, nextSnoozeExpiry, readAt: DateTime.formatIso(DateTime.makeUnsafe(now)) }),
+      ...(snoozed.length === 0 ? {} : { snoozed }),
+      ...(snoozedNextCursor === undefined ? {} : { snoozedNextCursor }),
+      ...(nextSnoozeExpiry === undefined ? {} : { nextSnoozeExpiry, readAt: nowIso }),
       mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
     };
@@ -646,9 +620,17 @@ const make = Effect.gen(function* () {
     botId: BotId = BotId.make(MAIN_BOT_ID),
     history?: { readonly cursor?: string },
     checkSnoozes?: ChannelListBotThreadsInput["checkSnoozes"],
+    snoozedAfter?: ChannelListBotThreadsInput["snoozedAfter"],
   ) {
+    if (snoozedAfter !== undefined && (history !== undefined || checkSnoozes !== undefined))
+      return yield* new ChannelGatewayError({ reason: "invalid_input" });
+    const after =
+      snoozedAfter === undefined
+        ? undefined
+        : yield* decodeHistoryCursor(snoozedCursorScope(owner, botId), snoozedAfter);
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
-    if (checkSnoozes !== undefined) return yield* readSnoozes(owner, botId, checkSnoozes);
+    if (checkSnoozes !== undefined)
+      return yield* readSnoozes(owner, botId, checkSnoozes).pipe(NodeSqliteClient.readOnly);
     // A cursor is checked before anything else, so a missing bot cannot vouch for a foreign one.
     if (history?.cursor !== undefined)
       yield* decodeHistoryCursor({ ownerId: owner.ownerId, botId }, history.cursor);
@@ -656,9 +638,10 @@ const make = Effect.gen(function* () {
     if (bot === undefined)
       return { rows: [], mainMessageCount: 0, ...(history === undefined ? {} : { history: {} }) };
     return yield* history === undefined
-      ? sql
-          .withTransaction(current(owner, botId, bot.bot.environmentId))
-          .pipe(Effect.mapError((error) => (isGatewayError(error) ? error : failed())))
+      ? sql.withTransaction(current(owner, botId, bot.bot.environmentId, after)).pipe(
+          NodeSqliteClient.readOnly,
+          Effect.mapError((error) => (isGatewayError(error) ? error : failed())),
+        )
       : historyPage(owner, botId, bot.bot.environmentId, history.cursor);
   });
   const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
@@ -808,7 +791,7 @@ export const rpcHandlers = (
   owner: ChannelConnectionOwner,
 ) => ({
   [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: (input: ChannelListBotThreadsInput) =>
-    service.list(owner, input.botId, input.history, input.checkSnoozes),
+    service.list(owner, input.botId, input.history, input.checkSnoozes, input.snoozedAfter),
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: (input: ChannelUpdateTaskViewInput) =>
     service.update(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>

@@ -50,12 +50,17 @@ export function botWorkHistorySnoozeInput(
   current: ChannelListBotThreadsResult,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   botId: BotId | null,
+  fallbackTaskIds: ReadonlyArray<ChannelTaskId> = [],
 ) {
-  if (capabilities?.goatBotTaskSnooze !== true || walk.entries.length === 0) return null;
+  if (capabilities?.goatBotTaskSnooze !== true) return null;
   const listed = taskRows(current.rows);
-  const checkSnoozes = walk.entries
-    .map((entry) => entry.task.task.taskId)
-    .filter((id) => !listed.has(id));
+  const folded = taskRows(current.snoozed ?? []);
+  const checkSnoozes = [
+    ...new Set([
+      ...walk.entries.map((entry) => entry.task.task.taskId),
+      ...fallbackTaskIds.filter((id) => !folded.has(id)),
+    ]),
+  ].filter((id) => !listed.has(id));
   return checkSnoozes.length === 0
     ? null
     : ({ ...(botId === null ? {} : { botId }), checkSnoozes } satisfies ChannelListBotThreadsInput);
