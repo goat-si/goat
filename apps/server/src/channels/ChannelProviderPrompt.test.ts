@@ -1,3 +1,11 @@
+import { EventId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -105,5 +113,92 @@ describe("GOAT Bot thread transcripts", () => {
         }).pipe(Effect.provide(layerMcpRead), Effect.provide(harness.layer));
       });
     },
+  );
+  it.effect("settles a warm queued turn whose app session is revoked before provider start", () =>
+    Effect.gen(function* () {
+      const provider = yield* nextTurnSelectionHarness("channel-queued-private");
+      const harness = sessionHarness({
+        realWorkerLaunch: true,
+        botWorkspaceRoot: provider.cwd,
+        workerAdapter: provider.adapter,
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        yield* appendChannelBotNote(
+          fs,
+          files,
+          "Always check the Juniper runbook.",
+          "2026-11-21T00:00:00Z",
+          "fixture",
+        );
+        const sessions = yield* SessionStore.SessionStore;
+        const issue = sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const opener = yield* issue;
+        const queuedSender = yield* issue;
+        const first = yield* ask("look: check the deploy", "warm-first", {
+          ...memoryRpcContext,
+          authSessionId: opener.sessionId,
+        });
+        const threadId = first.worker?.threadId;
+        const firstRun = first.worker?.runId;
+        if (threadId === undefined || firstRun === undefined)
+          return yield* Effect.die("No warm session");
+        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+        yield* starts.start({ threadId, runId: firstRun });
+        const started = provider.started[0];
+        if (started === undefined) return yield* Effect.die("No first provider turn");
+        const second = yield* ask("look: verify the health page", "warm-queued", {
+          ...memoryRpcContext,
+          authSessionId: queuedSender.sessionId,
+        });
+        const queued = second.worker?.runId;
+        assert.strictEqual(second.worker?.threadId, threadId);
+        if (queued === undefined) return yield* Effect.die("No queued warm run");
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const readRun = threads
+          .getThreadRecords(threadId, ["runs"])
+          .pipe(Effect.map((records) => records.runs.find((run) => run.id === queued)));
+        assert.strictEqual((yield* readRun)?.status, "queued");
+        yield* sessions.revoke(queuedSender.sessionId);
+
+        const active = (yield* threads.getThreadRecords(threadId, ["runs"])).runs.find(
+          (run) => run.id === firstRun,
+        );
+        if (active?.status !== "running") return yield* Effect.die("The first run was not active");
+        const now = yield* DateTime.now;
+        yield* (yield* EventSink.EventSinkV2).write({
+          events: [
+            {
+              id: EventId.make("event:previous-turn-settled"),
+              type: "run.updated",
+              threadId,
+              runId: active.id,
+              occurredAt: now,
+              providerInstanceId: active.providerInstanceId,
+              payload: { ...active, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
+        assert.strictEqual((yield* readRun)?.status, "starting");
+        yield* starts.start({ threadId, runId: queued });
+        assert.lengthOf(provider.started, 1);
+        assert.strictEqual((yield* readRun)?.status, "failed");
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
+    }),
   );
 });
