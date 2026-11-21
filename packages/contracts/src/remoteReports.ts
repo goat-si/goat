@@ -36,6 +36,8 @@ export const RemoteReportBindingInput = Schema.Struct({
    * for them is refused instead of losing them on the way.
    */
   relayCapabilities: Schema.optional(Schema.Boolean),
+  /** The originating GOAT Bot delivers this worker's alerts through its attention feed. */
+  botAttention: Schema.optional(Schema.Literal(true)),
 });
 export type RemoteReportBindingInput = typeof RemoteReportBindingInput.Type;
 /** A goat_thread_send the remote thread asked its origin to deliver on its behalf. */

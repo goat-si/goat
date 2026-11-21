@@ -23,6 +23,7 @@ import type {
 import {
   isChannelWorkerThreadId,
   isGoatBotSessionThreadId,
+  isRemoteChannelWorkerThreadId,
   isSideChatThread,
 } from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
@@ -263,6 +264,7 @@ export function startThreadNotifications(
 
   const usesBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
     isGoatBotSessionThreadId(threadId) ||
+    isRemoteChannelWorkerThreadId(threadId) ||
     (isChannelWorkerThreadId(threadId) &&
       registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
         ?.environment.capabilities.goatBotAttention === true);

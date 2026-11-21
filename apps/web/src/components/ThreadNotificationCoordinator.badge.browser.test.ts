@@ -4,6 +4,7 @@ import type { ChannelAttentionFeedResult } from "@goat/contracts/channel-bot-att
 import { attentionCursorKey } from "@goat/client-runtime/goatBot";
 import { createElement, useEffect } from "react";
 import * as Option from "effect/Option";
+import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -54,6 +55,13 @@ vi.mock(import("../state/shell"), async (original) => {
       ...actual.environmentShell,
       stateValueAtom: ((id: string) => shellAtom(id)) as never,
     },
+  };
+});
+vi.mock(import("../state/server"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    serverEnvironment: { ...actual.serverEnvironment, decisionFeed: decisions as never },
   };
 });
 vi.mock(import("../state/presentation"), async (original) => {
@@ -116,6 +124,10 @@ import { startThreadNotifications } from "./ThreadNotificationCoordinator";
 
 let registry: AtomRegistry.AtomRegistry;
 const shellAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
+function decisions(id: string) {
+  return decisionAtom(id);
+}
+const decisionAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
 const supported = Atom.make(false);
 const allowed = Atom.make(true);
 const revisions = Atom.make(AsyncResult.success({ value: 0 }));
@@ -865,28 +877,42 @@ function stubAttentionStorage() {
   });
 }
 
-it.each(["needs_you", "off"] as const)(
-  "uses only the bot alert path for a worker question with Bot alerts set to %s",
-  async (mode) => {
+it.each([
+  ["one", "channel-worker:abc", "needs_you"],
+  ["one", "channel-worker:abc", "off"],
+  ["two", "remote-channel-worker:mcp:worker", "needs_you"],
+  ["two", "remote-channel-worker:mcp:worker", "off"],
+] as const)(
+  "environment %s routes worker %s through only its origin's bot alerts in %s mode",
+  async (destination, id, mode) => {
     await using app = setup();
     using _storage = stubAttentionStorage();
     app.registry.set(supported, true);
-    const worker = { id: "channel-worker:abc", title: "Private task title" };
-    state.shells.set("one", shell(worker));
+    const worker = { id, title: "Private task" };
+    state.shells.set(destination, shell(worker));
+    app.registry.set(decisionAtom(destination), { handoffs: [] });
     state.feed.mockResolvedValue(
-      AsyncResult.success({
-        cursor: 1,
-        hasMore: false,
-        mode,
-        events: [attentionEvent],
-      } satisfies ChannelAttentionFeedResult),
+      AsyncResult.success({ cursor: 1, hasMore: false, mode, events: [attentionEvent] }),
     );
 
-    // These services are started together at app startup and have no router UI of their own.
+    // Both coordinators observe the two connected environments as they do at startup.
     await using screen = await render(createElement(MountedCoordinators, { app }), {
       router: false,
     });
-    state.shells.set("one", shell({ ...worker, hasPendingUserInput: true }));
+    state.shells.set(destination, shell({ ...worker, hasPendingUserInput: true }));
+    app.registry.set(decisionAtom(destination), {
+      handoffs: [
+        {
+          handoff: {
+            handoffId: "approval",
+            createdAt: DateTime.makeUnsafe("2026-11-21T00:00:00Z"),
+            requestedBy: { threadId: worker.id },
+            title: "Private approval",
+          },
+          threadTitle: worker.title,
+        },
+      ],
+    });
     await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
     expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
       mode === "off" ? [] : [["Scout has a question", undefined]],

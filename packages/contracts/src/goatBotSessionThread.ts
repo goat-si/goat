@@ -18,3 +18,8 @@ export const CHANNEL_WORKER_THREAD_PREFIX = "channel-worker:";
 /** Channel dispatch reserves this id before launching the worker's first turn. */
 export const isChannelWorkerThreadId = (threadId: string): boolean =>
   threadId.startsWith(CHANNEL_WORKER_THREAD_PREFIX);
+
+export const REMOTE_CHANNEL_WORKER_THREAD_PREFIX = "remote-channel-worker:";
+
+export const isRemoteChannelWorkerThreadId = (threadId: string): boolean =>
+  threadId.startsWith(REMOTE_CHANNEL_WORKER_THREAD_PREFIX);
