@@ -1,5 +1,6 @@
 import { MemoryForgetControl } from "./MemoryForgetControl";
 import { MemoryMoveControl } from "./MemoryMoveControl";
+import { MemoryRecordsError, MemorySearchControls } from "./MemorySearchControls";
 import {
   MemoryOriginPicker,
   useWebMemoryBatch,
@@ -82,7 +83,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
 import { formatTimestamp } from "../../timestampFormat";
@@ -665,42 +665,19 @@ function ScopedMemoryRecords({
             />
           </SettingsRow>
         ) : null}
-        <SettingsRow
-          title="Search memories"
-          control={
-            <form
-              className="flex flex-wrap gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setCursor(undefined);
-                setQuery(queryInput.trim());
-              }}
-            >
-              <Input
-                aria-label="Search memories"
-                placeholder="Search memories"
-                value={queryInput}
-                onChange={(event) => setQueryInput(event.currentTarget.value)}
-              />
-              <Button type="submit" size="sm" variant="outline">
-                Search
-              </Button>
-              {queryInput || query ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setQueryInput("");
-                    setQuery("");
-                    setCursor(undefined);
-                  }}
-                >
-                  Clear search
-                </Button>
-              ) : null}
-            </form>
-          }
+        <MemorySearchControls
+          value={queryInput}
+          canClear={Boolean(queryInput || query)}
+          onChange={setQueryInput}
+          onSearch={() => {
+            setCursor(undefined);
+            setQuery(queryInput.trim());
+          }}
+          onClear={() => {
+            setQueryInput("");
+            setQuery("");
+            setCursor(undefined);
+          }}
         />
         {capabilities?.originFilter ? (
           <MemoryOriginPicker
@@ -723,14 +700,10 @@ function ScopedMemoryRecords({
           }}
         />
         {page.error ? (
-          <SettingsRow
-            title="Could not load memories"
-            description={<span role="alert">{page.error}</span>}
-            control={
-              <Button size="sm" variant="outline" onClick={page.refresh}>
-                Retry
-              </Button>
-            }
+          <MemoryRecordsError
+            searching={Boolean(query)}
+            error={page.error}
+            onRetry={page.refresh}
           />
         ) : null}
         {items.length > 0 && coverage && coverage.status !== "available" ? (
