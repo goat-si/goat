@@ -27,7 +27,7 @@ export async function checkQuarantineSearch(
   click: (label: string) => Promise<void>,
   queries: Map<string, unknown>,
   requests: readonly { label: string; input: unknown }[],
-  supportedScreen: Parameters<typeof exerciseMemoryMove>[0]["supportedScreen"],
+  supportedScreen: (withDetails: boolean) => Promise<unknown>,
 ) {
   queries.set("list", Option.some({ items: [], nextCursor: null }));
   queries.set("search", Option.some({ items: [activeItem], nextCursor: "search-next" }));
