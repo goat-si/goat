@@ -41,7 +41,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import { taskIdFor } from "./channelIds.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
-import { ask, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import { ask, current, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
   environmentId,
   makeHarness,
@@ -362,6 +362,66 @@ describe("GOAT Bot thread transcripts", () => {
         assert.include(reply, "Only people can start new work");
         assert.isUndefined(yield* ledger.getTask(taskIdFor(inputId, 0)));
         assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+  it.effect("redispatches a queued warm run with the bot instructions edited before start", () =>
+    Effect.gen(function* () {
+      const provider = yield* nextTurnSelectionHarness("channel-queued-profile");
+      const harness = sessionHarness({
+        realWorkerLaunch: true,
+        botWorkspaceRoot: provider.cwd,
+        workerAdapter: provider.adapter,
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+        const update = (instructions: string) =>
+          profiles.update({ botId: BotId.make("main"), instructions }, owner);
+        const old = "Use the old release checklist.";
+        const edited = "Use the new release checklist.";
+        yield* update(old);
+        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+        const first = yield* ask("look: check the deploy", "profile-first");
+        const { threadId, runId: firstRun } = first.worker!;
+        if (firstRun === undefined) return yield* Effect.die("No first run");
+        yield* starts.start({ threadId, runId: firstRun });
+        assert.include(provider.started[0]?.message.text, old);
+
+        const second = yield* ask("look: check the status page", "profile-queued");
+        assert.strictEqual(second.worker?.threadId, threadId);
+        const queued = second.worker?.runId;
+        if (queued === undefined) return yield* Effect.die("No queued run");
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const readQueued = threads
+          .getThreadRecords(threadId, ["runs"])
+          .pipe(Effect.map(({ runs }) => runs.find((run) => run.id === queued)));
+        assert.strictEqual((yield* readQueued)?.status, "queued");
+        yield* update(edited);
+
+        yield* finishRecordedRun(threadId, firstRun);
+        yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
+        assert.strictEqual((yield* readQueued)?.status, "starting");
+        yield* starts.start({ threadId, runId: queued });
+        assert.deepStrictEqual(
+          provider.started.map((turn) => turn.runId),
+          [firstRun],
+        );
+
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const replacement = (yield* current(second.taskId)).worker;
+        assert.isDefined(replacement);
+        assert.notStrictEqual(replacement?.threadId, threadId);
+        if (replacement?.runId === undefined) return yield* Effect.die("No replacement run");
+        yield* starts.start({ threadId: replacement.threadId, runId: replacement.runId });
+        assert.deepStrictEqual(
+          provider.started.map((turn) => turn.runId),
+          [firstRun, replacement.runId],
+        );
+        const input = provider.started[1]?.message.text ?? "";
+        assert.include(input, "check the status page");
+        assert.include(input, edited);
+        assert.notInclude(input, old);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
