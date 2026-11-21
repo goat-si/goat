@@ -91,13 +91,12 @@ export const acceptChannelInput = Effect.fn("ChannelLedger.acceptInput")(functio
         slack && input.requester !== undefined
           ? yield* routeSlackInput(sql, input, input.message.text)
           : undefined;
-      const refused = route !== undefined && "notice" in route ? route.notice : undefined;
-      const chosen = route !== undefined && "botId" in route ? route : undefined;
+      const refused = route?.notice;
       const requester = refused === undefined ? input.requester : undefined;
-      const botId = chosen?.botId ?? input.botId ?? MAIN_BOT_ID;
+      const botId = route?.botId ?? input.botId ?? MAIN_BOT_ID;
       const message =
-        chosen === undefined ? input.message : { ...input.message, text: chosen.text };
-      const pinned = chosen?.botId ?? null;
+        route?.text === undefined ? input.message : { ...input.message, text: route.text };
+      const pinned = route?.botId ?? null;
       // The decisive check against a delete: both are write transactions, so one sees the other.
       if (!slack && botId !== MAIN_BOT_ID) {
         if (!(yield* isActiveMember(sql, input.ownerId, botId))) {

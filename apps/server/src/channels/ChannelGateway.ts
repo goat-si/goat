@@ -723,7 +723,7 @@ const make = Effect.gen(function* () {
           ? Effect.succeed(skipped)
           : slackReplyIdentity(input.message).pipe(
               Effect.flatMap((message) => editMessage({ ...input, message })),
-              Effect.catch(() => Effect.succeed(skipped)),
+              Effect.orElseSucceed(() => skipped),
             );
       }),
     );

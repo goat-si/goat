@@ -34,8 +34,11 @@ export function SlackBotBindingEditor(props: {
     >
       <div className="flex flex-col gap-2">
         {bindings.map((binding) => (
-          <div key={binding.channelId} className="flex flex-wrap items-center gap-2">
-            <span className="mr-auto truncate font-mono text-xs">{binding.channelId}</span>
+          <div
+            key={binding.channelId}
+            className="grid items-center gap-2 sm:grid-cols-[minmax(8rem,1fr)_minmax(9rem,12rem)_auto]"
+          >
+            <span className="truncate font-mono text-xs">{binding.channelId}</span>
             <BotPicker
               bots={bots}
               value={binding.botId}
@@ -62,18 +65,16 @@ export function SlackBotBindingEditor(props: {
             </Button>
           </div>
         ))}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-36 flex-1">
-            <Input
-              size="sm"
-              aria-label="Slack channel ID to bind"
-              placeholder="C0123456789"
-              value={channel}
-              maxLength={32}
-              disabled={disabled || atLimit}
-              onChange={(event) => setChannel(event.target.value)}
-            />
-          </div>
+        <div className="grid items-center gap-2 sm:grid-cols-[minmax(8rem,1fr)_minmax(9rem,12rem)_auto]">
+          <Input
+            size="sm"
+            aria-label="Slack channel ID to bind"
+            placeholder="C0123456789"
+            value={channel}
+            maxLength={32}
+            disabled={disabled || atLimit}
+            onChange={(event) => setChannel(event.target.value)}
+          />
           <BotPicker
             bots={bots}
             value={target}
