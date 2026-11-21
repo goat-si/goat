@@ -931,3 +931,32 @@ describe("synchronized mobile model visibility", () => {
     ).toEqual(["hidden", "first", "second", "custom"]);
   });
 });
+
+it("carries the install channel into the mobile provider notice", () => {
+  const instanceId = ProviderInstanceId.make("claudeAgent");
+  const advisory = {
+    status: "current",
+    currentVersion: "2.1.311",
+    latestVersion: "2.1.311",
+    updateCommand: "brew upgrade --cask claude-code",
+    canUpdate: true,
+    checkedAt: null,
+    message: null,
+  };
+  const config = {
+    providers: [
+      {
+        instanceId,
+        driver: "claudeAgent",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        models: [{ slug: "old", name: "Old", isCustom: false, capabilities: null }],
+        updateRequiredModels: [{ slug: "new", name: "New", minVersion: "2.1.321" }],
+        versionAdvisory: advisory,
+      },
+    ],
+  } as unknown as ServerConfig;
+  const options = buildModelOptions(config, null, instanceId, null);
+  expect(options[0]?.providerUpdateRequired?.versionAdvisory).toEqual(advisory);
+});
