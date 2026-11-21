@@ -12,7 +12,6 @@ import {
   type ReactNode,
   useEffect,
   useEffectEvent,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -53,7 +52,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { useDeviceState } from "~/state/device";
 
 import { DeviceStreamView } from "../device/DeviceStreamView";
-import { deviceStreamScreenAtom } from "../device/deviceStreamSession";
+import { deviceScreenKey, deviceStreamScreenAtom } from "../device/deviceStreamSession";
 import type { PreviewStreamViewport } from "@goat/client-runtime/preview/server-browser-stream";
 import { previewBridge } from "./previewBridge";
 import { PreviewUnreachable } from "./PreviewUnreachable";
@@ -277,7 +276,7 @@ function DeviceMiniPlayer({
   miniPlayer,
 }: Props & { readonly source: Extract<PreviewMiniPlayerSource, { kind: "device" }> }) {
   const { state: deviceState } = useDeviceState(threadRef.environmentId);
-  const viewId = useId();
+  const viewId = `preview-mini-player\u0000${deviceScreenKey(threadRef.environmentId, source.hostId, source.deviceId)}`;
   const screen = useAtomValue(deviceStreamScreenAtom(viewId));
   const sourceSize = resolveDeviceMiniPlayerSourceSize(source.platform, screen);
   const device = deviceState.devices.find(
