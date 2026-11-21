@@ -1,12 +1,12 @@
 import { RegistryContext } from "@effect/atom-react";
-import { readGoatBotAttentionTarget } from "@goat/client-runtime/goatBot";
 import { MAIN_BOT_ID } from "@goat/contracts";
 import { type ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
 import { channelEnvironment } from "../../state/channels";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentPresentations } from "../../state/presentation";
 import { Atom } from "effect/reactivity";
-import { botTaskLink, startMobileBotAttention } from "./goatBotLocalAlerts";
+import { resolveMobileBotAttentionLink } from "./goatBotAttentionLink";
+import { startMobileBotAttention } from "./goatBotLocalAlerts";
 import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { mobileGoatBotHomeEnvironmentIdAtom } from "../../state/goatBotHomeEnvironment";
@@ -102,10 +102,8 @@ export function useAgentNotificationNavigation(
       });
       tap.abort();
       if (!connected || lifetime.signal.aborted) return null;
-      const fresh = await readGoatBotAttentionTarget(registry, channelEnvironment, target);
-      return fresh === null || currentTap !== tap || lifetime.signal.aborted
-        ? null
-        : botTaskLink(target, fresh.requestId);
+      const href = await resolveMobileBotAttentionLink(registry, channelEnvironment, target);
+      return currentTap !== tap || lifetime.signal.aborted ? null : href;
     };
     const handleResponse = (response: Notifications.NotificationResponse) =>
       routeAgentNotificationResponseOnce({

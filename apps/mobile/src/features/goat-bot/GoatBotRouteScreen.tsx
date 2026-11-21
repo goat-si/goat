@@ -28,6 +28,7 @@ export function GoatBotRouteScreen({
   taskTitle?: string;
   attentionRequest?: string;
   attentionEnvironment?: string;
+  attentionDetail?: "external";
 }>) {
   const focused = useIsFocused();
   const active = useAppActive();
@@ -110,7 +111,9 @@ export function GoatBotRouteScreen({
   if (
     taskId !== undefined &&
     attentionEnvironment !== undefined &&
-    (attentionEnvironment !== environmentId || (botId !== undefined && member === null))
+    (route.params?.attentionDetail === "external" ||
+      attentionEnvironment !== (member?.environmentId ?? environmentId) ||
+      (botId !== undefined && member === null))
   ) {
     return (
       <MobileGoatBotAlertTask

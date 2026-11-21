@@ -12,3 +12,9 @@ export const isGoatBotConversationThreadId = (threadId: string): boolean =>
   isGoatBotSessionThreadId(threadId) ||
   threadId.startsWith("channel-bot:") ||
   threadId.startsWith("channel-member-bot:");
+
+export const CHANNEL_WORKER_THREAD_PREFIX = "channel-worker:";
+
+/** Channel dispatch reserves this id before launching the worker's first turn. */
+export const isChannelWorkerThreadId = (threadId: string): boolean =>
+  threadId.startsWith(CHANNEL_WORKER_THREAD_PREFIX);

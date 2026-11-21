@@ -1,15 +1,20 @@
 import type { AnyRouter } from "@tanstack/react-router";
-import { EnvironmentId } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
+import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import type { ChannelAttentionFeedResult } from "@goat/contracts/channel-bot-attention";
+import { attentionCursorKey } from "@goat/client-runtime/goatBot";
+import { createElement, useEffect } from "react";
 import * as Option from "effect/Option";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
-import { fakeTimers, stubGlobal } from "../../test/render";
+import { fakeTimers, render, stubGlobal } from "../../test/render";
+import { thread, toV2ThreadShell } from "./threadNotificationTestShell";
 import { RELEASED_COMPLETION_GRACE_MS } from "./ThreadNotificationCoordinator.logic";
 
 const state = vi.hoisted(() => ({
   foldBuilds: 0,
+  feed: vi.fn(),
+  task: vi.fn(),
   mode: "notifications",
   inApp: false,
   toast: vi.fn(),
@@ -55,6 +60,10 @@ vi.mock(import("../state/presentation"), async (original) => {
   const actual = await original();
   return {
     ...actual,
+    environmentPresentations: {
+      ...actual.environmentPresentations,
+      presentationAtom: ((id: string) => presentationAtom(id)) as never,
+    },
     environmentSummaries: {
       ...actual.environmentSummaries,
       // Read lazily: the factory runs before this module's own bindings exist.
@@ -82,10 +91,43 @@ vi.mock(import("../threadNotifications"), async (original) => ({
   setNotificationBadge: state.badge,
 }));
 
+vi.mock(import("../state/channels"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    channelEnvironment: {
+      ...actual.channelEnvironment,
+      listBotAttention: {
+        ...actual.channelEnvironment.listBotAttention,
+        permissionAtom: () => allowed,
+        run: state.feed as never,
+      },
+      readAttentionTask: {
+        ...actual.channelEnvironment.readAttentionTask,
+        run: state.task as never,
+      },
+      taskChanges: (() => revisions) as never,
+    },
+  };
+});
+
+import { startGoatBotAttentionNotifications } from "./goatBot/GoatBotAttentionNotifier";
 import { startThreadNotifications } from "./ThreadNotificationCoordinator";
 
 let registry: AtomRegistry.AtomRegistry;
 const shellAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
+const supported = Atom.make(false);
+const allowed = Atom.make(true);
+const revisions = Atom.make(AsyncResult.success({ value: 0 }));
+const presentationAtom = Atom.family((id: string) =>
+  Atom.make((get) => ({
+    serverConfig: {
+      environment: {
+        capabilities: id === "one" && get(supported) ? { goatBotAttention: true } : {},
+      },
+    },
+  })),
+);
 const environmentIdsAtom = Atom.make<ReadonlyArray<string>>([]);
 state.shells = { set: (id, value) => registry.set(shellAtom(id), value) };
 
@@ -105,91 +147,8 @@ class TestNotification extends EventTarget {
   }
 }
 
-const thread = {
-  id: "thread",
-  title: "Test thread",
-  archivedAt: null as string | null,
-  snoozedUntil: null as string | null,
-  subagentOf: null as string | null,
-  hasPendingApprovals: false,
-  hasPendingUserInput: false,
-  pendingRequestId: "request-1",
-  session: null as { status: string } | null,
-  completionNotification: undefined as string | undefined,
-  launchedBy: undefined as
-    | undefined
-    | {
-        kind: "launch";
-        via: "delegate_task";
-        threadId: string;
-        environmentId: string;
-        environmentLabel: null;
-        threadTitle: null;
-      },
-  latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
-};
 let focused = false;
 let visibility = "visible";
-
-const SHELL_NOW = DateTime.makeUnsafe("2026-09-13T07:00:00.000Z");
-
-function toV2ThreadShell(input: typeof thread) {
-  const latestTurn = input.latestTurn;
-  return {
-    id: input.id,
-    projectId: "project",
-    title: input.title,
-    providerInstanceId: "codex",
-    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: {
-      rootThreadId: input.subagentOf ?? input.id,
-      parentThreadId: input.subagentOf,
-      relationshipToParent: input.subagentOf === null ? null : "subagent",
-    },
-    forkedFrom: null,
-    createdBy: "user",
-    creationSource: input.subagentOf === null ? "web" : "mcp",
-    launchedBy: input.launchedBy,
-    latestRunId: latestTurn.turnId,
-    activeRunId: null,
-    status:
-      latestTurn.state === "completed"
-        ? "completed"
-        : latestTurn.state === "error" || input.session?.status === "error"
-          ? "failed"
-          : "running",
-    pendingRuntimeRequest: input.hasPendingUserInput
-      ? { id: input.pendingRequestId, kind: "user_input", createdAt: SHELL_NOW }
-      : input.hasPendingApprovals
-        ? { id: input.pendingRequestId, kind: "command", createdAt: SHELL_NOW }
-        : null,
-    latestVisibleMessage: null,
-    latestUserMessageAt: null,
-    hasActionableProposedPlan: false,
-    itemCount: 0,
-    visibleItemCount: 0,
-    createdAt: SHELL_NOW,
-    updatedAt: SHELL_NOW,
-    latestRunRequestedAt: SHELL_NOW,
-    latestRunStartedAt: SHELL_NOW,
-    latestRunCompletionNotification: input.completionNotification,
-    notificationCompletedAt: null,
-    latestRunCompletedAt: latestTurn.completedAt
-      ? DateTime.makeUnsafe(latestTurn.completedAt)
-      : undefined,
-    archivedAt: input.archivedAt ? DateTime.makeUnsafe(input.archivedAt) : null,
-    snoozedUntil: input.snoozedUntil ? DateTime.makeUnsafe(input.snoozedUntil) : null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: null,
-  };
-}
 
 function shell(overrides: Partial<typeof thread> = {}, ...others: Partial<typeof thread>[]) {
   return {
@@ -231,7 +190,7 @@ function setup() {
   const routeListeners = new Set<() => void>();
   const route = { params: {} as Record<string, string> };
   const router = {
-    state: { matches: [route] },
+    state: { matches: [route], location: { pathname: "/", search: {} } },
     navigate: state.navigate,
     subscribe: (_event: string, listener: () => void) => {
       routeListeners.add(listener);
@@ -239,6 +198,8 @@ function setup() {
     },
   } as unknown as AnyRouter;
   return {
+    registry: testRegistry,
+    router,
     start: () => {
       stack.defer(startThreadNotifications(testRegistry, router));
     },
@@ -860,3 +821,142 @@ it("opening a thread closes only its in-app toasts, and disabling notifications 
     "two-completed",
   ]);
 });
+
+function MountedCoordinators({
+  app,
+  legacyClient = false,
+}: {
+  readonly app: ReturnType<typeof setup>;
+  readonly legacyClient?: boolean;
+}) {
+  useEffect(() => {
+    const stopThreads = startThreadNotifications(app.registry, app.router);
+    const stopAttention = legacyClient
+      ? undefined
+      : startGoatBotAttentionNotifications(app.registry, app.router);
+    return () => {
+      stopAttention?.();
+      stopThreads();
+    };
+  }, [app, legacyClient]);
+  return null;
+}
+
+const attentionEnvironment = EnvironmentId.make("one");
+const cursorKey = attentionCursorKey(attentionEnvironment);
+const attentionEvent = {
+  environmentId: attentionEnvironment,
+  botId: BotId.make("main"),
+  taskId: ChannelTaskId.make("task"),
+  eventId: "event",
+  sequence: 1,
+  generation: 1,
+  occurredAt: "2026-11-21T00:00:00Z",
+  kind: "question",
+  requestId: "ask",
+  botName: "Scout",
+} as const;
+
+function stubAttentionStorage() {
+  const storage = new Map([[cursorKey, "0"]]);
+  return stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+}
+
+it.each(["needs_you", "off"] as const)(
+  "uses only the bot alert path for a worker question with Bot alerts set to %s",
+  async (mode) => {
+    await using app = setup();
+    using _storage = stubAttentionStorage();
+    app.registry.set(supported, true);
+    const worker = { id: "channel-worker:abc", title: "Private task title" };
+    state.shells.set("one", shell(worker));
+    state.feed.mockResolvedValue(
+      AsyncResult.success({
+        cursor: 1,
+        hasMore: false,
+        mode,
+        events: [attentionEvent],
+      } satisfies ChannelAttentionFeedResult),
+    );
+
+    // These services are started together at app startup and have no router UI of their own.
+    await using screen = await render(createElement(MountedCoordinators, { app }), {
+      router: false,
+    });
+    state.shells.set("one", shell({ ...worker, hasPendingUserInput: true }));
+    await vi.waitFor(() => expect(localStorage.getItem(cursorKey)).toBe("1"));
+    expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual(
+      mode === "off" ? [] : [["Scout has a question", undefined]],
+    );
+    expect(screen.container.textContent).toBe("");
+  },
+);
+
+it.each([false, true])("opens the freshly read Slack request (answered: %s)", async (answered) => {
+  await using app = setup();
+  using _storage = stubAttentionStorage();
+  app.registry.set(supported, true);
+  state.feed.mockResolvedValue(
+    AsyncResult.success({
+      cursor: 1,
+      hasMore: false,
+      mode: "needs_you",
+      events: [attentionEvent],
+    } satisfies ChannelAttentionFeedResult),
+  );
+  state.task.mockResolvedValue(
+    AsyncResult.success({
+      generation: 1,
+      originAddress: { kind: "slack" },
+      openQuestions: answered ? [] : [{ questionId: "ask", text: "Pick one" }],
+      answeredQuestions: answered ? [{ questionId: "ask", answerText: "Option A" }] : [],
+    }),
+  );
+
+  // The production notification handlers use the supplied app router.
+  await using screen = await render(createElement(MountedCoordinators, { app }), { router: false });
+  await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(1));
+  TestNotification.sent[0]!.dispatchEvent(new Event("click"));
+  await vi.waitFor(() => expect(state.navigate).toHaveBeenCalledOnce());
+  expect(state.task).toHaveBeenCalledWith(app.registry, {
+    environmentId: attentionEnvironment,
+    input: { taskId: "task", botId: "main", attentionRequest: "ask" },
+  });
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/bot",
+    search: {
+      task: "task",
+      attentionEnvironment,
+      attentionRequest: "ask",
+      attentionDetail: "external",
+    },
+  });
+  expect(screen.container.textContent).toBe("");
+});
+
+it.each([false, true])(
+  "never calls the feed RPC across a mixed-version connection (older client: %s)",
+  async (legacyClient) => {
+    await using app = setup();
+    using _storage = stubAttentionStorage();
+    using warn = vi.spyOn(console, "warn");
+    app.registry.set(supported, legacyClient);
+    state.feed.mockImplementation(() => {
+      throw new Error("unknown RPC");
+    });
+
+    // No UI route is needed to exercise either version's notification installation.
+    await using screen = await render(createElement(MountedCoordinators, { app, legacyClient }), {
+      router: false,
+    });
+    app.registry.set(revisions, AsyncResult.success({ value: 1 }));
+    state.shells.set("one", shell({ hasPendingUserInput: true }));
+    expect(TestNotification.sent.map(({ title }) => title)).toEqual(["Input needed"]);
+    expect(state.feed).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(screen.container.textContent).toBe("");
+  },
+);

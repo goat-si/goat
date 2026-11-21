@@ -59,7 +59,14 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
-  const { task, taskTitle, bot: botId, attentionEnvironment, attentionRequest } = Route.useSearch();
+  const {
+    task,
+    taskTitle,
+    bot: botId,
+    attentionEnvironment,
+    attentionRequest,
+    attentionDetail,
+  } = Route.useSearch();
   const roster = useBotRoster();
   // A bot this client just created opens from the create's answer, even when the list read after
   // it failed.
@@ -92,17 +99,19 @@ function GoatBotRouteSession() {
   const bot =
     !memberUnknown && session.availability.kind === "ready" ? session.availability.bot : null;
   useEffect(() => {
-    if (bot && (task === undefined || !session.supportsTaskThreads))
+    if (bot && (task === undefined || (!attentionEnvironment && !session.supportsTaskThreads)))
       void navigate({
         to: "/$environmentId/$threadId",
         params: { environmentId: bot.environmentId, threadId: bot.threadId },
         replace: true,
       });
-  }, [bot, navigate, task, session.supportsTaskThreads]);
+  }, [bot, navigate, task, attentionEnvironment, session.supportsTaskThreads]);
   if (
     task &&
     attentionEnvironment &&
-    (bot?.environmentId !== attentionEnvironment || !session.supportsTaskThreads)
+    (attentionDetail === "external" ||
+      bot?.environmentId !== attentionEnvironment ||
+      !session.supportsTaskThreads)
   )
     return (
       <GoatBotAlertTask

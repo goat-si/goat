@@ -4,7 +4,7 @@ import {
   goatBotAttentionTitle,
   watchGoatBotAttention,
 } from "@goat/client-runtime/goatBot";
-import { MAIN_BOT_ID, type EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { type ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
 import * as Notifications from "expo-notifications";
 import { AppState, Platform } from "react-native";
@@ -47,7 +47,7 @@ export function startMobileBotAttention(
                 return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
               },
               writeCursor: (value) => secureStore.setItem(key, String(value)),
-              present: async (event, mode) => {
+              present: async (event, mode, active) => {
                 if (!allowsGoatBotAlert(mode, event)) return;
                 const preferences = registry.get(mobilePreferencesAtom);
                 if (
@@ -55,7 +55,7 @@ export function startMobileBotAttention(
                   preferences.value.goatBotLocalAlerts === false
                 )
                   return;
-                if (!(await Notifications.getPermissionsAsync()).granted) return;
+                if (!(await Notifications.getPermissionsAsync()).granted || !active()) return;
                 if (AppState.currentState === "active" && focused(event)) return;
                 const data = {
                   kind: "goat-bot-attention",
@@ -107,14 +107,4 @@ export function startMobileBotAttention(
     for (const stop of watches.values()) stop();
     watches.clear();
   };
-}
-
-export function botTaskLink(target: ChannelAttentionTarget, requestId?: string) {
-  const params = new URLSearchParams({
-    taskId: target.taskId,
-    attentionEnvironment: target.environmentId,
-    ...(target.botId === MAIN_BOT_ID ? {} : { botId: target.botId }),
-    ...(requestId === undefined ? {} : { attentionRequest: requestId }),
-  });
-  return "/bot?" + params.toString();
 }

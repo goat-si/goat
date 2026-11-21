@@ -20,7 +20,11 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@goat/contracts";
-import { isGoatBotSessionThreadId, isSideChatThread } from "@goat/contracts";
+import {
+  isChannelWorkerThreadId,
+  isGoatBotSessionThreadId,
+  isSideChatThread,
+} from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import { monitorHoldsWakeCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -35,7 +39,7 @@ import {
 
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { isWindowsPlatform } from "../lib/utils";
-import { environmentSummaries } from "../state/presentation";
+import { environmentPresentations, environmentSummaries } from "../state/presentation";
 import { serverEnvironment } from "../state/server";
 import { environmentShell } from "../state/shell";
 import { threadFamilies } from "../state/threads";
@@ -257,12 +261,17 @@ export function startThreadNotifications(
     return parents;
   };
 
+  const usesBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    isGoatBotSessionThreadId(threadId) ||
+    (isChannelWorkerThreadId(threadId) &&
+      registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
+        ?.environment.capabilities.goatBotAttention === true);
+
   // Completions fire from a timer, so read settings, focus and route when presenting.
   const presentApproval = (environmentId: EnvironmentId, entry: DecisionHandoff) => {
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
     const threadId = entry.handoff.requestedBy.threadId;
-    // A GOAT Bot session asks through its bot, as its other requests do.
-    if (isGoatBotSessionThreadId(threadId)) return;
+    if (usesBotAlerts(environmentId, threadId)) return;
     const active = (router.state.matches.at(-1)?.params ?? {}) as {
       environmentId?: string;
       threadId?: string;
@@ -344,6 +353,7 @@ export function startThreadNotifications(
     approvalTitle?: string,
   ) => {
     let { thread } = state;
+    if (usesBotAlerts(environmentId, thread.id)) return;
     const { status } = state;
     if (isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy })) {
       const key = scopedThreadKey(scopeThreadRef(environmentId, thread.id));
@@ -471,7 +481,7 @@ export function startThreadNotifications(
       if (
         rawThread.lineage.relationshipToParent === "subagent" ||
         isSideChatThread(rawThread) ||
-        isGoatBotSessionThreadId(rawThread.id)
+        usesBotAlerts(environmentId, rawThread.id)
       )
         continue;
       const prior = previous.get(rawThread.id);

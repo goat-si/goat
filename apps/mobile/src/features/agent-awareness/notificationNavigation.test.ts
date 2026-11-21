@@ -1,6 +1,8 @@
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type { NotificationResponse } from "expo-notifications";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { resolveMobileBotAttentionLink } from "./goatBotAttentionLink";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 import {
@@ -134,41 +136,76 @@ describe("routeAgentNotificationResponseOnce", () => {
     expect(navigate).toHaveBeenCalledTimes(2);
   });
 
-  it("routes a cold bot tap and a warm stale tap through a fresh task read", async () => {
-    const handledResponseIds = new Set<string>();
-    const navigate = vi.fn();
-    const resolveBotTarget = vi
-      .fn()
-      .mockResolvedValueOnce("/bot?taskId=task&requestId=ask")
-      .mockResolvedValueOnce("/bot?taskId=task");
-    const response = responseWithData({
-      kind: "goat-bot-attention",
-      environmentId: "env",
-      botId: "main",
-      taskId: "task",
-      requestId: "ask",
-    }) as NotificationResponse;
-    const handle = (response: NotificationResponse) =>
-      routeAgentNotificationResponseOnce({
-        handledResponseIds,
-        response,
-        navigate,
-        resolveBotTarget,
+  it("opens a cold Slack ask and its warm recorded answer, and rejects a revoked tap", async () => {
+    const registry = AtomRegistry.make();
+    try {
+      const allowed = Atom.make(true);
+      const originAddress = { kind: "slack" };
+      const open = { originAddress, generation: 1, openQuestions: [{ questionId: "ask" }] };
+      const answered = {
+        ...open,
+        openQuestions: [],
+        answeredQuestions: [{ questionId: "ask", answerText: "Option A" }],
+      };
+      const run = vi
+        .fn()
+        .mockResolvedValueOnce(AsyncResult.success(open))
+        .mockResolvedValueOnce(AsyncResult.success(answered))
+        .mockImplementationOnce(async () => {
+          registry.set(allowed, false);
+          return AsyncResult.success(answered);
+        })
+        .mockResolvedValueOnce(AsyncResult.success({ ...answered, generation: 2 }));
+      const channels = {
+        listBotAttention: { permissionAtom: () => allowed },
+        readAttentionTask: { run },
+      } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+      const handledResponseIds = new Set<string>();
+      const navigate = vi.fn();
+      const data = {
+        kind: "goat-bot-attention",
+        environmentId: "env",
+        botId: "main",
+        taskId: "task",
+        requestId: "ask",
+        generation: 1,
+      };
+      const response = (id: string) => responseWithData(data, id) as NotificationResponse;
+      const handle = (notification: NotificationResponse) =>
+        routeAgentNotificationResponseOnce({
+          handledResponseIds,
+          response: notification,
+          navigate,
+          resolveBotTarget: (target) => resolveMobileBotAttentionLink(registry, channels, target),
+        });
+      await consumeLastAgentNotificationResponse({
+        getLastResponse: () => Promise.resolve(response("cold")),
+        clearLastResponse: () => Promise.resolve(),
+        handleResponse: handle,
       });
-    await consumeLastAgentNotificationResponse({
-      getLastResponse: () => Promise.resolve(response),
-      clearLastResponse: () => Promise.resolve(),
-      handleResponse: handle,
-    });
-    await handle(response);
-    await handle(
-      responseWithData(
-        response.notification.request.content.data ?? {},
-        "notification-2",
-      ) as NotificationResponse,
-    );
-    expect(resolveBotTarget).toHaveBeenCalledTimes(2);
-    expect(navigate.mock.calls).toEqual([["/bot?taskId=task&requestId=ask"], ["/bot?taskId=task"]]);
+      await handle(response("cold"));
+      await handle(response("warm"));
+      await handle(response("revoked"));
+      registry.set(allowed, true);
+      await handle(response("stale-generation"));
+
+      const searches = navigate.mock.calls.map(([href]) =>
+        Object.fromEntries(new URL(String(href), "https://app.test").searchParams),
+      );
+      const detail = { taskId: "task", attentionEnvironment: "env", attentionDetail: "external" };
+      expect(searches).toEqual([
+        { ...detail, attentionRequest: "ask" },
+        { ...detail, attentionRequest: "ask" },
+        detail,
+      ]);
+      expect(run).toHaveBeenCalledTimes(4);
+      expect(run).toHaveBeenCalledWith(registry, {
+        environmentId: "env",
+        input: { taskId: "task", botId: "main", attentionRequest: "ask" },
+      });
+    } finally {
+      registry.dispose();
+    }
   });
 
   it("discards malformed destination ids without leaving the response pending", async () => {

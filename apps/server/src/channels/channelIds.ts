@@ -19,6 +19,7 @@ import {
   type ChannelQuestionId,
   type ChannelTaskEventId,
   type ChannelTaskId,
+  CHANNEL_WORKER_THREAD_PREFIX,
   CommandId,
   GOAT_BOT_SESSION_THREAD_PREFIX,
   MAIN_BOT_ID,
@@ -104,15 +105,9 @@ export const deliveryIdFor = (causeKey: string) =>
 /** The launch of one task generation: the same command, thread, and message on every retry. */
 export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
   commandId: CommandId.make(stableId("channel-launch", [taskId, String(generation)])),
-  threadId: ThreadId.make(stableId("channel-worker", [taskId, String(generation)])),
+  threadId: ThreadId.make(CHANNEL_WORKER_THREAD_PREFIX + digest([taskId, String(generation)])),
   messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
 });
-
-/**
- * Whether a thread is a channel task's worker, from its id alone. The id is fixed when the
- * thread is created, before its first turn and before the ledger records the binding.
- */
-export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
 
 /** One generation of a conversation's GOAT Bot session thread. */
 export const goatBotSessionThreadIdFor = (

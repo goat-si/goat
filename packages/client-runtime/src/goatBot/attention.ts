@@ -37,6 +37,8 @@ type Channels = ReturnType<typeof createChannelEnvironmentAtoms>;
 export const attentionCursorKey = (id: EnvironmentId) =>
   "goat.bot-attention.cursor." + encodeURIComponent(id);
 
+const drains = new Map<EnvironmentId, Promise<void>>();
+
 /** One reader per connected environment. The stream only wakes a bounded cursor walk. */
 export function watchGoatBotAttention(input: {
   readonly registry: AtomRegistry.AtomRegistry;
@@ -44,40 +46,68 @@ export function watchGoatBotAttention(input: {
   readonly environmentId: EnvironmentId;
   readonly readCursor: () => Promise<number | undefined>;
   readonly writeCursor: (cursor: number) => Promise<void>;
-  readonly present: (event: ChannelAttentionEvent, mode: GoatBotAlerts) => void | Promise<void>;
+  readonly present: (
+    event: ChannelAttentionEvent,
+    mode: GoatBotAlerts,
+    active: () => boolean,
+  ) => void | Promise<void>;
   readonly onError: (cause: unknown) => void;
   readonly withLock?: (read: () => Promise<void>) => Promise<void>;
 }): () => void {
   const { registry, channels, environmentId } = input;
   const permitted = () => registry.get(channels.listBotAttention.permissionAtom(environmentId));
   let stopped = false;
+  const active = () => !stopped && permitted();
   let reading = false;
   let dirty = false;
   const drain = async () => {
+    if (!active()) return;
     let cursor = await input.readCursor();
     // A continuously busy producer cannot monopolize the reader.
     for (let page = 0; page < 10; page++) {
-      if (stopped || !permitted()) return;
+      if (!active()) return;
       const response = await runAtomCommand(
         registry,
         channels.listBotAttention,
         { environmentId, input: cursor === undefined ? {} : { cursor } },
         { reportFailure: false },
       );
-      if (stopped || !permitted() || response._tag !== "Success") return;
+      if (!active() || response._tag !== "Success") return;
       const batch = response.value;
       for (const event of batch.events) {
-        if (stopped || !permitted()) return;
-        if (event.environmentId !== environmentId) continue;
+        if (!active()) return;
+        if (event.environmentId !== environmentId || event.sequence <= (cursor ?? -1)) continue;
         // Save first so a restart or another window cannot present the same event again.
         await input.writeCursor(event.sequence);
-        if (!stopped && permitted()) {
-          await input.present(event, batch.mode);
-        }
+        cursor = event.sequence;
+        if (active()) await input.present(event, batch.mode, active);
       }
-      await input.writeCursor(batch.cursor);
+      if (!active()) return;
+      if (batch.cursor > (cursor ?? -1)) {
+        await input.writeCursor(batch.cursor);
+        cursor = batch.cursor;
+      }
       if (!batch.hasMore) return;
-      cursor = batch.cursor;
+    }
+  };
+  const drainSerially = async () => {
+    // Replaced watchers share the same cursor, including while a native presentation is pending.
+    let pending = drains.get(environmentId);
+    while (pending !== undefined) {
+      await pending.catch(() => undefined);
+      if (!active()) return;
+      pending = drains.get(environmentId);
+    }
+    if (!active()) return;
+    const running = Promise.resolve().then(() => {
+      if (!active()) return;
+      return input.withLock === undefined ? drain() : input.withLock(drain);
+    });
+    drains.set(environmentId, running);
+    try {
+      await running;
+    } finally {
+      drains.delete(environmentId);
     }
   };
   const read = async () => {
@@ -86,7 +116,7 @@ export function watchGoatBotAttention(input: {
     try {
       do {
         dirty = false;
-        await (input.withLock === undefined ? drain() : input.withLock(drain));
+        await drainSerially();
         if (stopped) break;
       } while (dirty);
     } catch (cause) {

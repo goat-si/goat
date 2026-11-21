@@ -12,12 +12,14 @@ export function validateBotTaskSearch(search: Record<string, unknown>): {
   taskTitle?: string;
   attentionEnvironment?: EnvironmentId;
   attentionRequest?: string;
+  attentionDetail?: "external";
 } {
   return {
     ...(isChannelTaskId(search.task) ? { task: search.task } : {}),
     ...(isEnvironmentId(search.attentionEnvironment) && isChannelTaskId(search.task)
       ? { attentionEnvironment: search.attentionEnvironment }
       : {}),
+    ...(search.attentionDetail === "external" ? { attentionDetail: "external" } : {}),
     ...(typeof search.attentionRequest === "string" && search.attentionRequest.length <= 1024
       ? { attentionRequest: search.attentionRequest }
       : {}),

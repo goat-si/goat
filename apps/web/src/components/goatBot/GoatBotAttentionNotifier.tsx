@@ -81,6 +81,9 @@ export function startGoatBotAttentionNotifications(
                   task: event.taskId,
                   ...(event.botId === MAIN_BOT_ID ? {} : { bot: event.botId }),
                   attentionEnvironment: environmentId,
+                  ...(target.task.originAddress.kind === "goat"
+                    ? {}
+                    : { attentionDetail: "external" }),
                   ...(target.requestId === undefined ? {} : { attentionRequest: target.requestId }),
                 },
               });
