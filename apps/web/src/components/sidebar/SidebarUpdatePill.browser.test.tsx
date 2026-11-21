@@ -1,4 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
+import { gtFallback } from "gt-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -117,6 +118,6 @@ it("reports a refused install refresh timeout as an error", async () => {
     }),
   } satisfies Pick<DesktopBridge, "installUpdate">;
   const reportError = vi.fn();
-  expect(await installLocalUpdate(bridge as DesktopBridge, reportError)).toBe(false);
+  expect(await installLocalUpdate(bridge as DesktopBridge, gtFallback, reportError)).toBe(false);
   expect(reportError).toHaveBeenCalledExactlyOnceWith("Could not install update", message);
 });
