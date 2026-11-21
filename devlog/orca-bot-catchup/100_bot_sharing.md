@@ -25,4 +25,4 @@ Exporting from one environment and importing into another gives the same setup w
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop captures of export and the import review screen; iOS simulator capture of mobile export.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop captures of export and the import review screen; iOS simulator and Android emulator capture of mobile export.

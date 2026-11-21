@@ -23,4 +23,4 @@ From a bot's Home a person can tell why each recent run ran, open its task, and 
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop capture of the run list and Deliveries; iOS simulator capture of the labeled run strip.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop capture of the run list and Deliveries; iOS simulator and Android emulator capture of the labeled run strip.

@@ -28,4 +28,4 @@ New bot always starts blank (`docs/user/goat-bot.md:23`). Orca seeds name, instr
 
 ## Verification floor
 
-Focused tests, including an older-host stub that hides the picker; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator captures of the picker and the unsent draft.
+Focused tests, including an older-host stub that hides the picker; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator and Android emulator captures of the picker and the unsent draft.

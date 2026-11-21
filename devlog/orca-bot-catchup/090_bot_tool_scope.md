@@ -24,4 +24,4 @@ Bot A with a tool off cannot call it in its session or any worker, including one
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review. Before merge: a transcript of a denied call, and web/desktop and iOS simulator captures of the Tools editor and its read-only view.
+Focused tests; `vp run check:changed`; independent review. Before merge: a transcript of a denied call, and web/desktop and iOS simulator and Android emulator captures of the Tools editor and its read-only view.

@@ -16,7 +16,7 @@ Recommendation: an event trigger may start **new work only**, in the trigger's o
 
 ## Change
 
-1. **Contract** (`packages/contracts/src/scheduledTask.ts`): a bot routine may use the existing `webhook` schedule with `routineMode: "work"` (absent = `check_in`). A `work` routine requires a project and a signature configuration with a secret, for every preset including **Any webhook**. New fields are optional, and an older writer that round-trips the record keeps them.
+1. **Contract** (`packages/contracts/src/scheduledTask.ts`): a bot routine may use the existing `webhook` schedule with `routineMode: "work"` (absent = `check_in`). A `work` routine requires a project and a signature configuration for every preset including **Any webhook**. It may be **saved paused** with the signature required and its secret not yet set (`signature: { required: true, secretSet: false }`), which is how 060 templates and 100 imports create it; enabling it requires the secret (checked on both the upsert and enable paths, `ScheduledTaskService.ts:1079`, :1145), and admitting work always requires a verified signature. New fields are optional, and an older writer that round-trips the record keeps them.
 2. **Admission and settlement** (`apps/server/src/scheduledTasks/ScheduledTaskService.ts:640`, :1595): the existing transaction that records a firing and its routine input carries the **rendered, fenced prompt** and the webhook delivery id instead of the saved template. For bot routines the webhook runner does not settle the firing (`cleanupDelivery`, :1595–1643); channel intake owns settlement. Intake's completion rule (`ChannelRoutineIntake.ts:187`) changes for `work` inputs: the firing completes when the started task ends, or when reception replied without starting work; "the inbox replied" alone no longer means done.
 3. **Authority**
    - `channelDispatchAuthority.ts` `requesterForDispatch`: for a schedule-origin task, re-read the trigger owner's current grant and intersect, as Slack does; a revoked or reduced grant, or a paused or deleted trigger, refuses the dispatch with a visible task error.
@@ -32,7 +32,7 @@ Recommendation: an event trigger may start **new work only**, in the trigger's o
 
 ## Tests (failing first)
 
-- `apps/server/src/scheduledTasks/ScheduledTaskService.botRoutine.test.ts`: person creates a `work` trigger; one without a signature secret is refused; agent create, update, enable and rebind are refused. For each of immediate, coalesced and restart-recovered deliveries: exactly one routine input, one task and one settled receipt; a replay adds zero tasks.
+- `apps/server/src/scheduledTasks/ScheduledTaskService.botRoutine.test.ts`: person creates a `work` trigger; a paused draft without a secret saves but cannot be enabled through upsert or enable until the secret is set; an enabled one without a secret cannot exist; agent create, update, enable and rebind are refused. For each of immediate, coalesced and restart-recovered deliveries: exactly one routine input, one task and one settled receipt; a replay adds zero tasks.
 - `apps/server/src/channels/ChannelRoutines.test.ts`: a `work` input that starts work creates one task pinned to the routine's project; an unavailable project fails with a reason; steer/stop/answer become replies; the created task carries no note-change grant; a `check_in` input is unchanged.
 - Authority: owner's grant revoked after admission → dispatch refused; trigger paused after admission → queued input refused.
 - New `apps/server/src/channels/channelRoutineOwnWork.test.ts`: own work filtered by launch-recorded head when the webhook arrives **before** the PR link is projected; same branch name in another repository not filtered; unmatched bot-prefixed head filtered fail-closed; check event without a PR filtered with its reason.
@@ -48,4 +48,4 @@ Recommendation: an event trigger may start **new work only**, in the trigger's o
 
 ## Verification floor
 
-Focused tests above; `vp run check:changed`; independent review lane. Before merge: web/desktop capture of creating a trigger and the task a signed `curl` delivery starts; iOS simulator capture of the trigger row with pause.
+Focused tests above; `vp run check:changed`; independent review lane. Before merge: web/desktop capture of creating a trigger and the task a signed `curl` delivery starts; iOS simulator and Android emulator capture of the trigger row with pause.

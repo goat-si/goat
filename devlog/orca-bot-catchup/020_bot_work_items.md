@@ -33,4 +33,4 @@ A bot task row is a title, a status and PR chips (`packages/contracts/src/channe
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; migration test; independent review. Before merge: web/desktop and iOS simulator captures with the Replay provider.
+Focused tests; `vp run check:changed`; migration test; independent review. Before merge: web/desktop and iOS simulator and Android emulator captures with the Replay provider.

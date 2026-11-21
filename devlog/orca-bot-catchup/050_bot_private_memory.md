@@ -32,4 +32,4 @@ Scoped recall and editing: a member bot's notes are read, recalled, edited and f
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator captures of the two Memory sections and the instructions field.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop and iOS simulator and Android emulator captures of the two Memory sections and the instructions field.

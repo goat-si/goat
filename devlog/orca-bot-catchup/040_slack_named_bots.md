@@ -35,4 +35,4 @@ In `apps/server/src/channels/slack/SlackChannelScenarios.test.ts` with `slackSdk
 
 ## Verification floor
 
-Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop captures of the binding picker and the member's Home opening a Slack task; iOS simulator capture of that Home. Live Slack: NOT RUN (no workspace credentials), stated in the PR.
+Focused tests; `vp run check:changed`; independent review. Before merge: web/desktop captures of the binding picker and the member's Home opening a Slack task; iOS simulator and Android emulator capture of that Home. Live Slack: NOT RUN (no workspace credentials), stated in the PR.
