@@ -55,6 +55,7 @@ const MobileDatabaseOperation = Schema.Literals([
   "save-cache",
   "remove-cache",
   "sweep-bot-summary-cache",
+  "delete-bot-summary-cache",
   "clear-cache-kind",
   "clear-environment-cache",
   "clear-all-caches",
@@ -238,6 +239,9 @@ export class MobileDatabase extends Context.Service<
     ) => Effect.Effect<void, MobileDatabaseError>;
     readonly sweepBotSummaryCache: (
       expiredBefore?: number,
+    ) => Effect.Effect<void, MobileDatabaseError>;
+    readonly deleteBotSummaryCache: (
+      environmentId: EnvironmentId | null,
     ) => Effect.Effect<void, MobileDatabaseError>;
     readonly clearCacheKind: (
       environmentId: EnvironmentId,
@@ -473,6 +477,20 @@ const makeAvailable = Effect.gen(function* () {
         catch: databaseError("sweep-bot-summary-cache"),
       }).pipe(Effect.asVoid),
     ),
+    deleteBotSummaryCache: Effect.fn("MobileDatabase.deleteBotSummaryCache")((environmentId) =>
+      Effect.tryPromise({
+        try: () =>
+          database.runAsync(
+            `DELETE FROM client_cache
+             WHERE kind = 'shell' AND environment_id = COALESCE(?, environment_id)
+               AND (cache_key IN ('goat-bot-summary:bots', 'goat-bot-summary:asks')
+                 OR cache_key GLOB 'goat-bot-summary:bots:*'
+                 OR cache_key GLOB 'goat-bot-summary:asks:*')`,
+            environmentId,
+          ),
+        catch: databaseError("delete-bot-summary-cache"),
+      }).pipe(Effect.asVoid),
+    ),
     clearCacheKind: Effect.fn("MobileDatabase.clearCacheKind")((environmentId, kind) =>
       Effect.tryPromise({
         try: () =>
@@ -564,6 +582,7 @@ function makeUnavailable(error: MobileDatabaseError): MobileDatabase["Service"] 
     saveCache: () => fail,
     removeCache: () => fail,
     sweepBotSummaryCache: () => fail,
+    deleteBotSummaryCache: () => fail,
     clearCacheKind: () => fail,
     clearEnvironmentCache: () => fail,
     clearAllCaches: fail,

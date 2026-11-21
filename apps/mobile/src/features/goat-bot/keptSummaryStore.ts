@@ -66,6 +66,7 @@ interface Storage {
   write: (id: EnvironmentId, kind: KeptKind, value: string, scope: string) => Promise<void>;
   remove: (id: EnvironmentId, kind: KeptKind, scope: string) => Promise<void>;
   markPurge: (id: EnvironmentId | null) => Promise<void>;
+  deleteSummaries: (id: EnvironmentId | null) => Promise<void>;
   sweep: (expiredBefore?: number) => Promise<void>;
 }
 
@@ -132,7 +133,12 @@ export function createKeptSummaryStore(storage: Storage) {
       () => false,
     );
     pending.set(id, async () => {
-      if (!(await marked)) await storage.markPurge(id);
+      if (await marked) return;
+      try {
+        await storage.markPurge(id);
+      } catch {
+        await storage.deleteSummaries(id);
+      }
     });
     return serialized(() => reconcile());
   }

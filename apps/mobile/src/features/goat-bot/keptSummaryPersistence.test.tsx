@@ -17,7 +17,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
-import { act, type ReactNode } from "react";
+import { act, createContext, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -26,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   runDatabase: vi.fn(),
   open: vi.fn(),
   registry: undefined as unknown as AtomRegistry.AtomRegistry,
+  width: 400,
   appState: {
     currentState: "active",
     listeners: new Set<(state: string) => void>(),
@@ -62,17 +63,44 @@ vi.mock("expo-crypto", () => ({
   digestStringAsync: async (algorithm: string, value: string) =>
     NodeCrypto.createHash(algorithm).update(value).digest("hex"),
 }));
+vi.mock("expo-haptics", () => ({ impactAsync: async () => {} }));
 vi.mock("react-native", () => ({
   AppState: fixture.appState,
   Platform: { OS: "android" },
-  useWindowDimensions: () => ({ width: 400, height: 800 }),
+  useWindowDimensions: () => ({ width: fixture.width, height: 800 }),
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Pressable: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
 }));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
+vi.mock("react-native-safe-area-context", () => ({
+  SafeAreaInsetsContext: createContext(null),
+  useSafeAreaInsets: () => ({ bottom: 0 }),
+}));
+vi.mock("react-native-keyboard-controller", () => ({
+  useKeyboardState: () => false,
+}));
+vi.mock("react-native-reanimated", async () => {
+  const { useRef } = await import("react");
+  return {
+    default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
+    Easing: { inOut: () => undefined, cubic: () => undefined },
+    ReduceMotion: { System: "system" },
+    runOnJS: () => () => {},
+    useSharedValue: (value: unknown) =>
+      useRef({
+        value,
+        set(next: unknown) {
+          this.value = next;
+        },
+      }).current,
+    useAnimatedStyle: () => ({}),
+    useDerivedValue: () => ({ value: 0 }),
+    withTiming: (value: number) => value,
+  };
+});
 vi.mock("@react-navigation/native", () => ({
+  useFocusEffect: () => {},
   useNavigation: () => ({}),
   useNavigationState: (select: (state: unknown) => unknown) =>
     select({ index: 0, routes: [{ name: "Home" }] }),
@@ -141,19 +169,31 @@ vi.mock("../cloud/connectOnboarding", () => ({
   requestConnectOnboarding: () => {},
 }));
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
-vi.mock("./MobileBotList", async () => {
+vi.mock("./MobileBotList", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./MobileBotList")>();
   const { default: OfflineBotRoster } = await import("./OfflineBotRoster");
   return {
-    MobileBotList: ({ visible }: { visible: boolean }) => (
-      <OfflineBotRoster
-        environmentId={null}
-        visible={visible}
-        computer={null}
-        openBot={() => undefined}
-      />
-    ),
+    MobileBotList: ({ visible }: { visible: boolean }) =>
+      fixture.width > 400 ? (
+        <actual.MobileBotList visible={visible} />
+      ) : (
+        <OfflineBotRoster
+          environmentId={null}
+          visible={visible}
+          computer={null}
+          openBot={() => undefined}
+        />
+      ),
   };
 });
+vi.mock("./MobileBotRosterView", () => ({ MobileHomeSegments: () => null }));
+vi.mock("./MobileBotEditSheet", () => ({ MobileBotEditSheet: () => null }));
+vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => ({}) }));
+vi.mock("../../state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, error: null, refresh: () => {} }),
+}));
+vi.mock("../../components/ui/AndroidAnchoredMenu", () => ({ AndroidAnchoredMenu: () => null }));
 vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
 vi.mock("./GoatBotModelAndroidMenu", () => ({ GoatBotModelAndroidMenu: () => null }));
 vi.mock("../home/ThreadUndoNotice", () => ({ ThreadUndoNotice: () => null }));
@@ -166,6 +206,7 @@ vi.mock("../home/WorkspaceConnectionTitle", () => ({
   getConnectionAwareBrandHeaderOptions: () => ({}),
 }));
 vi.mock("../home/home-list-options", () => ({
+  HomeListOptionsProvider: ({ children }: { children: ReactNode }) => children,
   useHomeListOptions: () => ({
     options: { selectedEnvironmentId: null, selectedProjectKey: null },
     setSelectedProjectKey: () => {},
@@ -177,25 +218,54 @@ vi.mock("../home/home-route-visibility", () => ({
 }));
 vi.mock("../home/useThreadListActions", () => ({ useThreadListActions: () => ({}) }));
 vi.mock("../home/usePendingTaskListActions", () => ({ usePendingTaskListActions: () => ({}) }));
-vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
-  useAdaptiveWorkspaceLayout: () => ({ layout: { usesSplitView: false }, panes: {} }),
+vi.mock("../workspace/AndroidWorkspaceNavigation", () => ({
+  AndroidWorkspaceNavigation: () => null,
+  ANDROID_WORKSPACE_RAIL_WIDTH: 72,
 }));
+vi.mock("../workspace/AndroidWorkspaceSidebar", () => ({
+  AndroidWorkspaceSidebar: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("../workspace/AndroidWorkspaceTabsProvider", () => ({
+  useAndroidWorkspaceRoot: () => null,
+}));
+vi.mock("../../native/AndroidHingeObserver", () => ({ AndroidHingeObserver: () => null }));
+vi.mock("../threads/ThreadNavigationSidebar", () => ({
+  ThreadNavigationSidebar: () => <div>Threads sidebar</div>,
+}));
+vi.mock("../threads/use-open-thread-pull-requests", () => ({
+  useOpenThreadPullRequests: () => () => {},
+}));
+vi.mock("../../state/use-thread-pr", () => ({ withKnownPullRequestSummary: () => null }));
+vi.mock("../keyboard/hardwareKeyboardCommands", () => ({
+  useHardwareKeyboardCommand: () => {},
+  parseActiveThreadPath: () => null,
+}));
+vi.mock("../layout/workspace-inspector-pane", () => ({ WorkspaceInspectorPane: () => null }));
 vi.mock("../layout/WorkspaceEmptyDetail", () => ({ WorkspaceEmptyDetail: () => null }));
 vi.mock("../updates/app-updates", () => ({
   checkForAppUpdateOnLaunch: async () => {},
   startAppUpdateForegroundRecheck: () => {},
 }));
 vi.mock("../workspace/WorkspaceTabsContext", () => ({ useWorkspaceTabs: () => null }));
+vi.mock("../workspace/workspace-selection-store", () => ({
+  currentWorkspaceSelections: () => ({}),
+  workspaceSelectionCheck: {},
+}));
 vi.mock("../workspace/useSelectWorkspaceTab", () => ({ useSelectWorkspaceTab: () => () => {} }));
 vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  startOpeningDetail: () => {},
   useSelectWorkspaceDetail: () => () => {},
 }));
 vi.mock("../settings/settings-navigation", () => ({ openSettings: () => {} }));
 vi.mock("../../components/ui/Toolbar", () => ({ Toolbar: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: async () => {} }));
+vi.mock("../../components/ui/AppText", () => ({ AppText: () => null }));
+vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
 vi.mock("../../components/ui/AndroidScreenHeader", () => ({ AndroidScreenHeader: () => null }));
 vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
 vi.mock("../../native/native-layout-metrics", () => ({
   useDeviceType: () => "phone",
+  useNativeLayoutMetrics: () => null,
   useNativeColumnLayoutMetrics: () => null,
 }));
 
@@ -204,6 +274,7 @@ import { environmentSession } from "../../state/session";
 import { layer, MobileDatabase } from "../../persistence/mobile-database";
 import { cloudAccountService } from "../cloud/cloudAccountService";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
+import { AdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { installKeptSummaryPersistence, refuseConnection } from "./keptPerComputerStore";
 import { createMobileKeptSummaryPersistence } from "./keptSummaryPersistence";
 
@@ -244,8 +315,11 @@ function phone() {
   const filename = NodePath.join(directory, "client.sqlite");
   fixture.credentials.clear();
   fixture.appState.currentState = "active";
+  fixture.width = 400;
   let failDeletes = false;
+  let failMarkers = false;
   let didFailDelete = Promise.withResolvers<void>();
+  let nextSweep: PromiseWithResolvers<void> | undefined;
   let readTime = now;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => readTime);
   const run = <A, E>(effect: Effect.Effect<A, E, MobileDatabase>) =>
@@ -264,11 +338,22 @@ function phone() {
       const native = {
         execAsync: async (sql: string) => sqlite.exec(sql),
         runAsync: async (sql: string, ...args: (string | number)[]) => {
+          if (
+            failMarkers &&
+            args[2] === "goat-bot-summary-purge" &&
+            /INSERT INTO client_cache/.test(sql)
+          )
+            throw new Error("SQLite purge marker write failed");
           if (failDeletes && /DELETE FROM client_cache/.test(sql)) {
             didFailDelete.resolve();
             throw new Error("SQLite delete failed");
           }
-          return sqlite.prepare(sql).run(...args);
+          const result = sqlite.prepare(sql).run(...args);
+          if (sql.includes("WITH pending_purges")) {
+            nextSweep?.resolve();
+            nextSweep = undefined;
+          }
+          return result;
         },
         getFirstAsync: async (sql: string, ...args: (string | number)[]) =>
           sqlite.prepare(sql).get(...args) ?? null,
@@ -345,6 +430,7 @@ function phone() {
       save,
       saveAsk,
       restore,
+      purge: persistence.store.purge,
       async [Symbol.asyncDispose]() {
         uninstall();
         registry.dispose();
@@ -366,6 +452,13 @@ function phone() {
     },
     allowDelete: () => {
       failDeletes = false;
+    },
+    failMarkers: () => {
+      failMarkers = true;
+    },
+    onNextSweep: () => {
+      nextSweep = Promise.withResolvers<void>();
+      return nextSweep.promise;
     },
     [Symbol.dispose]() {
       clock.mockRestore();
@@ -393,36 +486,46 @@ function observeClerk(accountId: string | null) {
   return { [Symbol.dispose]: attach };
 }
 
-it("opens the offline roster on Home cold start with Bots saved and no saved bot ref or server config", async () => {
-  using device = phone();
-  {
+it.each([
+  ["compact Home", 400],
+  ["the split sidebar", 1200],
+] as const)(
+  "opens the offline roster in %s with Bots saved and no saved bot ref or server config",
+  async (_surface, width) => {
+    using device = phone();
+    {
+      await using app = device.open();
+      app.pair("token-a");
+      await app.save("Scout");
+      await app.saveAsk();
+      expect(JSON.stringify(device.inspect())).not.toMatch(/Private question|private-request/);
+    }
     await using app = device.open();
-    app.pair("token-a");
-    await app.save("Scout");
-    await app.saveAsk();
-    expect(JSON.stringify(device.inspect())).not.toMatch(/Private question|private-request/);
-  }
-  await using app = device.open();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () =>
-      root.render(
-        <RegistryContext value={app.registry}>
-          <HomeRouteScreen />
-        </RegistryContext>,
-      ),
-    );
-    await vi.waitFor(() => expect(container.textContent).toContain("Scout"));
-    await vi.waitFor(() => expect(container.textContent).toContain("Needs you · 1"));
-    expect(container.textContent).toContain("As of");
-    expect(container.textContent).not.toContain("Threads view");
-  } finally {
-    await act(async () => root.unmount());
-    vi.unstubAllGlobals();
-  }
-});
+    fixture.width = width;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <RegistryContext value={app.registry}>
+            <AdaptiveWorkspaceLayout pathname="/" workspaceRouteKey={undefined}>
+              <HomeRouteScreen />
+            </AdaptiveWorkspaceLayout>
+          </RegistryContext>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Scout"));
+      await vi.waitFor(() => expect(container.textContent).toContain("Needs you · 1"));
+      expect(container.textContent).toContain("As of");
+      expect(container.textContent).not.toContain("Threads view");
+      expect(container.textContent).not.toContain("Threads sidebar");
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("keeps independently authorized pairings and refuses a different or missing credential", async () => {
   using device = phone();
@@ -465,6 +568,53 @@ it("does not restore the refused pairing on relaunch after SQLite failed to dele
   expect(
     device.inspect().some((row) => String(row.cache_key).startsWith("goat-bot-summary:")),
   ).toBe(false);
+});
+
+it("deletes the refused environment's summaries when SQLite cannot write a purge marker", async () => {
+  using device = phone();
+  const other = EnvironmentId.make("other");
+  let invalidated: boolean;
+  {
+    await using app = device.open();
+    app.pair("token-a");
+    await app.save("Scout");
+    await app.saveAsk();
+    const unrelated = device.inspect()[0];
+    if (unrelated === undefined) throw new Error("Expected a saved summary.");
+    await device.run(
+      Effect.flatMap(MobileDatabase, (db) =>
+        Effect.all([
+          db.saveCache(other, "shell", String(unrelated.cache_key), 2, String(unrelated.payload)),
+          db.saveCache(env, "shell", "meta", 1, "shell"),
+        ]),
+      ),
+    );
+    device.failMarkers();
+    invalidated = await app.purge(env).then(
+      () => true,
+      () => false,
+    );
+  }
+  await using app = device.open();
+  expect(await app.restore()).toBeNull();
+  expect(invalidated).toBe(true);
+  expect(device.inspect()).toEqual([
+    expect.objectContaining({ cache_key: expect.stringMatching(/^goat-bot-summary:/) }),
+    { cache_key: "meta", payload: "shell" },
+  ]);
+});
+
+it("fences restores while both the purge marker and targeted SQLite delete fail", async () => {
+  using device = phone();
+  await using app = device.open();
+  app.pair("token-a");
+  await app.save("Scout");
+  device.failMarkers();
+  void device.failDelete();
+  await expect(app.purge(env)).rejects.toThrow("delete-bot-summary-cache");
+  await expect(app.restore()).rejects.toThrow("delete-bot-summary-cache");
+  device.allowDelete();
+  expect(await app.restore()).toBeNull();
 });
 
 it("purges kept summaries on the first signed-out Clerk observation after relaunch", async () => {
@@ -528,19 +678,21 @@ it("sweeps expired rows at startup and foreground without an eligible pairing or
     );
   }
   fixture.credentials.clear();
+  const startupSweep = device.onNextSweep();
   await using _app = device.open();
-  await vi.waitFor(() =>
-    expect(device.inspect().map((row) => row.cache_key)).not.toContain(
-      "goat-bot-summary:bots:legacy-scope",
-    ),
+  await startupSweep;
+  expect(device.inspect().map((row) => row.cache_key)).not.toContain(
+    "goat-bot-summary:bots:legacy-scope",
   );
   expect(device.inspect()).toHaveLength(2);
   device.advance(now + 7 * day);
+  const foregroundSweep = device.onNextSweep();
   for (const state of ["background", "active"]) {
     fixture.appState.currentState = state;
     for (const listener of fixture.appState.listeners) listener(state);
   }
-  await vi.waitFor(() => expect(device.inspect()).toEqual([{ cache_key: "meta", payload: shell }]));
+  await foregroundSweep;
+  expect(device.inspect()).toEqual([{ cache_key: "meta", payload: shell }]);
   expect(
     await device.run(Effect.flatMap(MobileDatabase, (db) => db.loadCache(env, "shell", "meta"))),
   ).toEqual(Option.some(shell));

@@ -54,6 +54,7 @@ const openStore = () =>
           "null",
         ),
       ),
+    deleteSummaries: (id) => database((db) => db.deleteBotSummaryCache(id)),
     sweep: (expiredBefore) => database((db) => db.sweepBotSummaryCache(expiredBefore)),
   });
 

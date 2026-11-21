@@ -168,6 +168,9 @@ it("signing out drops the saved summaries and hides the relay-only computer at o
     markPurge: async () => {
       saved.clear();
     },
+    deleteSummaries: async () => {
+      saved.clear();
+    },
     sweep: async () => {},
   });
   for (const id of [RELAY_ONLY, ALSO_LAN])

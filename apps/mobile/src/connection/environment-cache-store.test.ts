@@ -244,6 +244,7 @@ function makeDatabase() {
         values.delete(id);
       }),
     sweepBotSummaryCache: () => Effect.void,
+    deleteBotSummaryCache: () => Effect.void,
     clearCacheKind: (environmentId, kind) =>
       Effect.sync(() => {
         for (const key of values.keys()) {

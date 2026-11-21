@@ -20,6 +20,7 @@ function fixture(initial: unknown = {}) {
     saveCache: () => Effect.void,
     removeCache: () => Effect.void,
     sweepBotSummaryCache: () => Effect.void,
+    deleteBotSummaryCache: () => Effect.void,
     clearCacheKind: () => Effect.void,
     clearEnvironmentCache: () => Effect.void,
     clearAllCaches: Effect.void,

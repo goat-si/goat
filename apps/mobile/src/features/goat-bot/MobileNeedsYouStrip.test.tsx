@@ -728,6 +728,9 @@ it("reopens the read-only Bots roster and ask counts offline, then removes them 
     markPurge: async () => {
       values.clear();
     },
+    deleteSummaries: async () => {
+      values.clear();
+    },
     sweep: async () => {},
   };
   const previousApp = createKeptSummaryStore(disk);

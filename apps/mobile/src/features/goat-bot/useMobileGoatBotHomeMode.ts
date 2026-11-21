@@ -70,10 +70,10 @@ export function useMobileGoatBotHomeMode() {
   return { mode, known, loaded, botRef, environments, home, setMode };
 }
 
-export function useMobileGoatBotModeWithOfflineSummary() {
+export function useMobileGoatBotModeWithOfflineSummary(restoreOffline = true) {
   const home = useMobileGoatBotHomeMode();
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const summary = useOfflineBotSummary(null, !home.known);
+  const summary = useOfflineBotSummary(null, restoreOffline && !home.known);
   if (summary === null) return home;
   return {
     ...home,

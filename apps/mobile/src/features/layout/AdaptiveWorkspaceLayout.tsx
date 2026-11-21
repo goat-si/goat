@@ -83,7 +83,7 @@ import {
 } from "../../native/v5-workspace-context";
 
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
-import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotModeWithOfflineSummary } from "../goat-bot/useMobileGoatBotHomeMode";
 import { MobileBotList } from "../goat-bot/MobileBotList";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
@@ -145,7 +145,6 @@ function AdaptiveWorkspaceLayoutContent(
     readonly savedThreadListFilters?: ThreadListFilters | undefined;
   },
 ) {
-  const botHome = useMobileGoatBotHomeMode();
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
   const usesPresentationHost = use(WorkspacePresentationHostContext);
@@ -182,6 +181,9 @@ function AdaptiveWorkspaceLayoutContent(
   const baseLayout = useMemo(
     () => deriveLayout({ width: viewportWidth, height, nativeMetrics, nativeWorkspace }),
     [height, viewportWidth, nativeMetrics, nativeWorkspace],
+  );
+  const botHome = useMobileGoatBotModeWithOfflineSummary(
+    baseLayout.usesSplitView && !nativeWorkspace,
   );
   // The overlay sidebar closes when a page opens from it, and stays open on a list or on the
   // page a tab switch opened (`keepOpenFor`, set by that switch).

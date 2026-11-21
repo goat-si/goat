@@ -42,6 +42,12 @@ function device() {
   const values = new Map<string, string>();
   const key = (id: EnvironmentId, kind: string, scope: string) => JSON.stringify([id, kind, scope]);
   const purges = new Set<EnvironmentId | null>();
+  const deleteSummaries = async (id: EnvironmentId | null) => {
+    if (id === null) values.clear();
+    else
+      for (const key of values.keys())
+        if (key.startsWith(JSON.stringify([id]).slice(0, -1))) values.delete(key);
+  };
   const storage = {
     read: async (id: EnvironmentId, kind: string, scope: string) =>
       values.get(key(id, kind, scope)) ?? null,
@@ -54,13 +60,9 @@ function device() {
     markPurge: async (id: EnvironmentId | null) => {
       purges.add(id);
     },
+    deleteSummaries,
     sweep: async () => {
-      for (const id of purges) {
-        if (id === null) values.clear();
-        else
-          for (const key of values.keys())
-            if (key.startsWith(JSON.stringify([id]).slice(0, -1))) values.delete(key);
-      }
+      for (const id of purges) await deleteSummaries(id);
       purges.clear();
     },
   };
