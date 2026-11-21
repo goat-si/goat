@@ -22,6 +22,8 @@ type Persistence = {
     live: boolean,
   ) => Promise<ReadonlyArray<string>>;
   readonly accountAtom: Atom.Atom<string | null>;
+  readonly observeAccount?: (accountId: string | null) => Promise<void>;
+  readonly startMaintenance?: (onChange: () => void, onFailure: () => void) => () => void;
 };
 const installed = new WeakMap<AtomRegistry.AtomRegistry, Persistence>();
 export const getKeptSummaryPersistence = (registry: AtomRegistry.AtomRegistry) =>
@@ -39,9 +41,26 @@ export function installKeptSummaryPersistence(
   persistence: Persistence,
 ): () => void {
   installed.set(registry, persistence);
+  const stopMaintenance = persistence.startMaintenance?.(
+    () => noteSummaryChange(registry),
+    reportStorageFailure,
+  );
   return () => {
+    stopMaintenance?.();
     installed.delete(registry);
   };
+}
+
+export async function observeKeptSummaryAccount(
+  registry: AtomRegistry.AtomRegistry,
+  accountId: string | null,
+): Promise<void> {
+  const observe = installed.get(registry)?.observeAccount;
+  if (observe === undefined) return;
+  const work = observe(accountId);
+  noteSummaryChange(registry);
+  await work;
+  noteSummaryChange(registry);
 }
 
 export function rememberKeptAnswer(

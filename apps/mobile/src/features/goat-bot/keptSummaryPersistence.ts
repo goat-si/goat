@@ -13,40 +13,52 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { CryptoDigestAlgorithm, digestStringAsync } from "expo-crypto";
 import { Atom, type AtomRegistry } from "effect/reactivity";
+import { AppState } from "react-native";
 
 import { environmentCatalog } from "../../connection/catalog";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { runtime } from "../../lib/runtime";
-import { MobileDatabase } from "../../persistence/mobile-database";
+import {
+  botSummaryCloudAccountKey,
+  botSummaryGlobalPurgeKey,
+  botSummaryLocalId,
+  botSummaryPurgeKey,
+  MobileDatabase,
+} from "../../persistence/mobile-database";
 import { environmentSession } from "../../state/session";
-import { createKeptSummaryStore, KEPT_KINDS, type KeptKind } from "./keptSummaryStore";
+import { createKeptSummaryStore, type KeptKind } from "./keptSummaryStore";
 
 // Separate projection keys keep the shared cache readable by older mobile clients.
 const cacheKind = "shell";
-const summaryKey = (kind: KeptKind) => `goat-bot-summary:${kind}`;
+const summaryKey = (kind: KeptKind, scope: string) => `goat-bot-summary:${kind}:${scope}`;
 const database = <A>(use: (db: MobileDatabase["Service"]) => Effect.Effect<A, unknown>) =>
   runtime.runPromise(Effect.flatMap(MobileDatabase, use));
 
-const store = createKeptSummaryStore({
-  read: (id, kind) =>
-    database((db) => Effect.map(db.loadCache(id, cacheKind, summaryKey(kind)), Option.getOrNull)),
-  write: (id, kind, payload) =>
-    database((db) => db.saveCache(id, cacheKind, summaryKey(kind), 1, payload)),
-  remove: (id, kind) => database((db) => db.removeCache(id, cacheKind, summaryKey(kind))),
-  clear: () =>
-    database((db) =>
-      Effect.flatMap(db.inspectCaches, (rows) =>
-        Effect.forEach(
-          new Set(rows.filter((row) => row.kind === cacheKind).map((row) => row.environmentId)),
-          (id) =>
-            Effect.forEach(KEPT_KINDS, (kind) => db.removeCache(id, cacheKind, summaryKey(kind)), {
-              discard: true,
-            }),
-          { discard: true },
+const openStore = () =>
+  createKeptSummaryStore({
+    read: (id, kind, scope) =>
+      database((db) =>
+        Effect.map(db.loadCache(id, cacheKind, summaryKey(kind, scope)), Option.getOrNull),
+      ),
+    write: (id, kind, payload, scope) =>
+      database((db) => db.saveCache(id, cacheKind, summaryKey(kind, scope), 2, payload)),
+    remove: (id, kind, scope) =>
+      database((db) => db.removeCache(id, cacheKind, summaryKey(kind, scope))),
+    markPurge: (id) =>
+      database((db) =>
+        db.saveCache(
+          id ?? botSummaryLocalId,
+          cacheKind,
+          id === null ? botSummaryGlobalPurgeKey : botSummaryPurgeKey,
+          1,
+          "null",
         ),
       ),
-    ),
-});
+    sweep: (expiredBefore) => database((db) => db.sweepBotSummaryCache(expiredBefore)),
+  });
+
+const accountAtom = Atom.map(managedRelaySessionAtom, (session) => session?.accountId ?? null);
+const fingerprint = (value: string) => digestStringAsync(CryptoDigestAlgorithm.SHA256, value);
 
 const resolveScopes = createRuntimeCommand(connectionAtomRuntime, {
   label: "mobile.keptBotSummary.pairingScopes",
@@ -62,10 +74,8 @@ const resolveScopes = createRuntimeCommand(connectionAtomRuntime, {
       ? Option.getOrNull(registry.get(environmentSession.preparedConnectionValueAtom(input.id)))
       : null;
     const credentials = yield* CredentialStore.ConnectionCredentialStore;
-    const fingerprint = (kind: string, secret: string) =>
-      Effect.promise(() =>
-        digestStringAsync(CryptoDigestAlgorithm.SHA256, JSON.stringify([input.id, kind, secret])),
-      );
+    const pairingFingerprint = (kind: string, secret: string) =>
+      Effect.promise(() => fingerprint(JSON.stringify([input.id, kind, secret])));
 
     const secrets = new Set<string>();
     let hasRelayRoute = false;
@@ -114,28 +124,93 @@ const resolveScopes = createRuntimeCommand(connectionAtomRuntime, {
       if (prepared !== current) return [];
       const auth = prepared?.httpAuthorization;
       if (auth?._tag === "Bearer" && secrets.has(auth.token))
-        return [yield* fingerprint("bearer", auth.token)];
+        return [yield* pairingFingerprint("bearer", auth.token)];
       if (auth?._tag !== "Dpop" || !hasRelayRoute || !relayAccount) return [];
       const tokens = yield* TokenStore.RemoteDpopAccessTokenStore;
       const token = Option.getOrNull(
         yield* tokens.get(auth.hubProxyOwner?.environmentId ?? input.id),
       );
       return token?.accountId === relayAccount && token.accessToken === auth.accessToken
-        ? [yield* fingerprint("relay", relayAccount)]
+        ? [yield* pairingFingerprint("relay", relayAccount)]
         : [];
     }
-    const scopes = yield* Effect.forEach(secrets, (secret) => fingerprint("bearer", secret));
-    if (hasRelayRoute && relayAccount) scopes.push(yield* fingerprint("relay", relayAccount));
+    const scopes = yield* Effect.forEach(secrets, (secret) => pairingFingerprint("bearer", secret));
+    if (hasRelayRoute && relayAccount)
+      scopes.push(yield* pairingFingerprint("relay", relayAccount));
     return scopes;
   }),
 });
 
-export const mobileKeptSummaryPersistence = {
-  store,
-  async scopes(registry: AtomRegistry.AtomRegistry, id: EnvironmentId, live: boolean) {
-    const result = await resolveScopes.run(registry, { id, live });
-    if (result._tag === "Success") return result.value;
-    throw new Error("Could not read the local pairing for the bot summary.");
-  },
-  accountAtom: Atom.map(managedRelaySessionAtom, (session) => session?.accountId ?? null),
-};
+export function createMobileKeptSummaryPersistence() {
+  const store = openStore();
+  let accountLoad: Promise<string | null> | undefined;
+  let accountWork = Promise.resolve();
+  let failedAccount: { readonly id: string | null } | undefined;
+
+  const readAccount = () =>
+    (accountLoad ??= database((db) =>
+      Effect.map(
+        db.loadCache(botSummaryLocalId, cacheKind, botSummaryCloudAccountKey),
+        Option.getOrNull,
+      ),
+    ).catch((error: unknown) => {
+      accountLoad = undefined;
+      throw error;
+    }));
+  const accountFingerprint = (id: string | null) => (id === null ? null : fingerprint(id));
+  function observeAccount(id: string | null) {
+    const update = async () => {
+      const previous = await readAccount();
+      const next = await accountFingerprint(id);
+      if (next === previous) return;
+      if (previous !== null) await store.purgeAll();
+      await database((db) =>
+        next === null
+          ? db.removeCache(botSummaryLocalId, cacheKind, botSummaryCloudAccountKey)
+          : db.saveCache(botSummaryLocalId, cacheKind, botSummaryCloudAccountKey, 1, next),
+      );
+      accountLoad = Promise.resolve(next);
+    };
+    failedAccount = undefined;
+    const work = accountWork.then(update, update);
+    accountWork = work;
+    void work.catch(() => {
+      if (accountWork === work) failedAccount = { id };
+    });
+    return work;
+  }
+
+  return {
+    store,
+    accountAtom,
+    observeAccount,
+    startMaintenance(onChange: () => void, onFailure: () => void) {
+      const maintain = async () => {
+        await store.maintain(Date.now());
+        if (failedAccount !== undefined) {
+          await observeAccount(failedAccount.id);
+          onChange();
+        }
+      };
+      void maintain().catch(onFailure);
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") void maintain().catch(onFailure);
+      });
+      return () => subscription.remove();
+    },
+    async scopes(registry: AtomRegistry.AtomRegistry, id: EnvironmentId, live: boolean) {
+      const observed = accountWork;
+      await observed;
+      const account = registry.get(accountAtom);
+      const savedAccount = await readAccount();
+      // An account active in the previous process must be observed before restoring its cache.
+      if (savedAccount !== (await accountFingerprint(account))) return [];
+      const result = await resolveScopes.run(registry, { id, live });
+      if (accountWork !== observed || registry.get(accountAtom) !== account) return [];
+      if (result._tag === "Success") return result.value;
+      throw new Error("Could not read the local pairing for the bot summary.");
+    },
+  };
+}
+
+export const mobileKeptSummaryPersistence = createMobileKeptSummaryPersistence();

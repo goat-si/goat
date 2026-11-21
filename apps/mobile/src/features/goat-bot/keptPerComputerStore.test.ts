@@ -40,16 +40,29 @@ const asks = Schema.decodeUnknownSync(ChannelListOpenAsksResult)({
 
 function device() {
   const values = new Map<string, string>();
-  const key = (id: EnvironmentId, kind: string) => JSON.stringify([id, kind]);
+  const key = (id: EnvironmentId, kind: string, scope: string) => JSON.stringify([id, kind, scope]);
+  const purges = new Set<EnvironmentId | null>();
   const storage = {
-    read: async (id: EnvironmentId, kind: string) => values.get(key(id, kind)) ?? null,
-    write: async (id: EnvironmentId, kind: string, value: string) => {
-      values.set(key(id, kind), value);
+    read: async (id: EnvironmentId, kind: string, scope: string) =>
+      values.get(key(id, kind, scope)) ?? null,
+    write: async (id: EnvironmentId, kind: string, value: string, scope: string) => {
+      values.set(key(id, kind, scope), value);
     },
-    remove: async (id: EnvironmentId, kind: string) => {
-      values.delete(key(id, kind));
+    remove: async (id: EnvironmentId, kind: string, scope: string) => {
+      values.delete(key(id, kind, scope));
     },
-    clear: async () => values.clear(),
+    markPurge: async (id: EnvironmentId | null) => {
+      purges.add(id);
+    },
+    sweep: async () => {
+      for (const id of purges) {
+        if (id === null) values.clear();
+        else
+          for (const key of values.keys())
+            if (key.startsWith(JSON.stringify([id]).slice(0, -1))) values.delete(key);
+      }
+      purges.clear();
+    },
   };
   return { values, storage, open: () => createKeptSummaryStore(storage) };
 }

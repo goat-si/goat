@@ -62,15 +62,16 @@ export interface KeptSummary<K extends KeptKind> {
 }
 
 interface Storage {
-  read: (id: EnvironmentId, kind: KeptKind) => Promise<string | null>;
-  write: (id: EnvironmentId, kind: KeptKind, value: string) => Promise<void>;
-  remove: (id: EnvironmentId, kind: KeptKind) => Promise<void>;
-  clear: () => Promise<void>;
+  read: (id: EnvironmentId, kind: KeptKind, scope: string) => Promise<string | null>;
+  write: (id: EnvironmentId, kind: KeptKind, value: string, scope: string) => Promise<void>;
+  remove: (id: EnvironmentId, kind: KeptKind, scope: string) => Promise<void>;
+  markPurge: (id: EnvironmentId | null) => Promise<void>;
+  sweep: (expiredBefore?: number) => Promise<void>;
 }
 
 interface ReadLease {
   readonly id: EnvironmentId;
-  readonly writtenAt: Partial<Record<KeptKind, number>>;
+  readonly writtenAt: Record<KeptKind, Map<string, number>>;
 }
 
 const decoders: { [K in KeptKind]: (raw: unknown) => Option.Option<KeptSummary<K>> } = {
@@ -99,8 +100,6 @@ const summarize: { [K in KeptKind]: (answer: Answers[K]) => Contents[K] } = {
 export function createKeptSummaryStore(storage: Storage) {
   const leases = new Map<EnvironmentId, ReadLease>();
   let tail = Promise.resolve();
-  // A native write may already be running when a refusal arrives. Deletion queues behind it,
-  // and the lease invalidates anything that has not yet reached storage or returned to a reader.
   const serialized = <A>(action: () => Promise<A>): Promise<A> => {
     const work = tail.then(action);
     tail = work.then(
@@ -110,11 +109,39 @@ export function createKeptSummaryStore(storage: Storage) {
     return work;
   };
   const isCurrent = (lease: ReadLease) => leases.get(lease.id) === lease;
+  const pending = new Map<EnvironmentId | null, () => Promise<void>>();
+  let initialized = false;
+
+  async function reconcile(now?: number): Promise<void> {
+    if (initialized && pending.size === 0 && now === undefined) return;
+    const marks = [...pending];
+    for (const [, writeMark] of marks) await writeMark();
+    await storage.sweep(now === undefined ? undefined : now - KEPT_SUMMARY_TTL);
+    for (const [id, writeMark] of marks) {
+      if (pending.get(id) === writeMark) pending.delete(id);
+    }
+    initialized = true;
+  }
+
+  function purge(id: EnvironmentId | null) {
+    if (id === null) leases.clear();
+    else leases.delete(id);
+    // Write the tombstone immediately. Physical deletion waits for any native write in progress.
+    const marked = storage.markPurge(id).then(
+      () => true,
+      () => false,
+    );
+    pending.set(id, async () => {
+      if (!(await marked)) await storage.markPurge(id);
+    });
+    return serialized(() => reconcile());
+  }
+
   return {
     lease(id: EnvironmentId) {
       const previous = leases.get(id);
       if (previous !== undefined) return previous;
-      const lease: ReadLease = { id, writtenAt: {} };
+      const lease: ReadLease = { id, writtenAt: { bots: new Map(), asks: new Map() } };
       leases.set(id, lease);
       return lease;
     },
@@ -126,16 +153,21 @@ export function createKeptSummaryStore(storage: Storage) {
       now: number,
     ): Promise<KeptSummary<K> | null> {
       return serialized(async () => {
-        if (!isCurrent(lease) || scopes.length === 0) return null;
-        const raw = await storage.read(lease.id, kind);
-        if (raw === null || !isCurrent(lease)) return null;
-        const entry = Option.getOrNull(decoders[kind](raw));
-        if (entry === null || now >= entry.readAt + KEPT_SUMMARY_TTL) {
-          await storage.remove(lease.id, kind);
-          return null;
+        if (!isCurrent(lease)) return null;
+        await reconcile();
+        let newest: KeptSummary<K> | null = null;
+        for (const scope of scopes) {
+          const raw = await storage.read(lease.id, kind, scope);
+          if (!isCurrent(lease)) return null;
+          if (raw === null) continue;
+          const entry = Option.getOrNull(decoders[kind](raw));
+          if (entry === null || entry.scope !== scope || now >= entry.readAt + KEPT_SUMMARY_TTL) {
+            await storage.remove(lease.id, kind, scope);
+          } else if (newest === null || entry.readAt > newest.readAt) {
+            newest = entry;
+          }
         }
-        if (!scopes.includes(entry.scope)) return null;
-        return entry;
+        return isCurrent(lease) ? newest : null;
       });
     },
     keep<K extends KeptKind>(
@@ -147,20 +179,16 @@ export function createKeptSummaryStore(storage: Storage) {
     ) {
       const payload = JSON.stringify({ kind, scope, readAt, data: summarize[kind](answer) });
       return serialized(async () => {
-        if (!isCurrent(lease) || readAt < (lease.writtenAt[kind] ?? 0)) return;
-        await storage.write(lease.id, kind, payload);
-        lease.writtenAt[kind] = readAt;
+        if (!isCurrent(lease)) return;
+        await reconcile();
+        const times = lease.writtenAt[kind];
+        if (!isCurrent(lease) || readAt < (times.get(scope) ?? 0)) return;
+        await storage.write(lease.id, kind, payload, scope);
+        times.set(scope, readAt);
       });
     },
-    purge(id: EnvironmentId) {
-      leases.delete(id);
-      return serialized(async () => {
-        for (const kind of KEPT_KINDS) await storage.remove(id, kind);
-      });
-    },
-    purgeAll() {
-      leases.clear();
-      return serialized(storage.clear);
-    },
+    maintain: (now: number) => serialized(() => reconcile(now)),
+    purge,
+    purgeAll: () => purge(null),
   };
 }

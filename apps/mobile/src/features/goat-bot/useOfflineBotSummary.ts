@@ -1,5 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
+import * as Equal from "effect/Equal";
 import { Atom } from "effect/reactivity";
 import { useContext, useEffect, useState } from "react";
 
@@ -10,6 +11,15 @@ import { environmentPresentations } from "../../state/presentation";
 import { getKeptSummaryPersistence, keptSummaryChangeAtom } from "./keptPerComputerStore";
 import { KEPT_SUMMARY_TTL, type KeptSummary } from "./keptSummaryStore";
 import { isComputerReadable } from "./useKeptPerComputer";
+
+const connectedComputersAtom = Atom.make(
+  (get) =>
+    new Set(
+      [...get(environmentPresentations.presentationsAtom)]
+        .filter(([, presentation]) => presentation.connection.phase === "connected")
+        .map(([id]) => id),
+    ),
+).pipe(Atom.withEquality(Equal.equals));
 
 const NO_ACCOUNT = Atom.make<string | null>(null);
 export interface OfflineBotSummary {
@@ -26,6 +36,7 @@ export function useOfflineBotSummary(
   const persistence = getKeptSummaryPersistence(registry);
   const accountAtom = persistence?.accountAtom ?? NO_ACCOUNT;
   const account = useAtomValue(accountAtom);
+  const connected = useAtomValue(connectedComputersAtom);
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const revision = useAtomValue(keptSummaryChangeAtom);
   const active = useAppActive();
@@ -38,7 +49,9 @@ export function useOfflineBotSummary(
   } | null>(null);
 
   const allowed =
+    visible &&
     held !== null &&
+    !connected.has(held.summary.environmentId) &&
     held.selected === environmentId &&
     held.revision === revision &&
     held.catalog === catalog &&
@@ -53,11 +66,13 @@ export function useOfflineBotSummary(
     botsExpired ? (botsExpiry ?? 0) : 0,
     asksExpired ? (asksExpiry ?? 0) : 0,
   );
-  // oxlint-disable-next-line goat/react-effect-budget -- Restore the selected pairing's local summary and remove expired records on resume.
+  // oxlint-disable-next-line goat/react-effect-budget -- Restore a local summary for a readable offline pairing.
   useEffect(() => {
     if (!visible || !active || !catalog.isReady || persistence === undefined) return;
     let current = true;
-    const ids = environmentId === null ? [...catalog.entries.keys()] : [environmentId];
+    const ids = (environmentId === null ? [...catalog.entries.keys()] : [environmentId]).filter(
+      (id) => !connected.has(id),
+    );
     const readable = (id: EnvironmentId) =>
       isComputerReadable(registry, id) &&
       registry.get(environmentPresentations.presentationsAtom).get(id)?.connection.phase !==
@@ -76,11 +91,13 @@ export function useOfflineBotSummary(
           persistence.store.restore(lease, "asks", scopes, now),
         ]);
         if (!current) return;
-        if (!persistence.store.isCurrent(lease) || !readable(id)) continue;
         if (bots !== null && asks !== null && bots.scope !== asks.scope) {
-          if (bots.readAt >= asks.readAt) asks = null;
-          else bots = null;
+          if (bots.readAt >= asks.readAt)
+            asks = await persistence.store.restore(lease, "asks", [bots.scope], now);
+          else bots = await persistence.store.restore(lease, "bots", [asks.scope], now);
         }
+        if (!current) return;
+        if (!persistence.store.isCurrent(lease) || !readable(id)) continue;
         const readAt = Math.max(bots?.readAt ?? 0, asks?.readAt ?? 0);
         if (readAt > latestAt) {
           latestAt = readAt;
@@ -107,6 +124,7 @@ export function useOfflineBotSummary(
     registry,
     persistence,
     catalog,
+    connected,
     environmentId,
     visible,
     active,

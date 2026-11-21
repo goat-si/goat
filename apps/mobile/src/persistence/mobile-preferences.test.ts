@@ -89,6 +89,7 @@ const openedDatabase = (row: { current: MobileDatabase.StoredPreferencesJson | n
         listCache: () => unused,
         saveCache: () => unused,
         removeCache: () => unused,
+        sweepBotSummaryCache: () => unused,
         clearCacheKind: () => unused,
         clearEnvironmentCache: () => unused,
         clearAllCaches: unused,

@@ -28,6 +28,7 @@ import {
 } from "../agent-awareness/remoteRegistration";
 import {
   getKeptSummaryPersistence,
+  observeKeptSummaryAccount,
   purgeKeptSummaries,
   refuseRelayOnlyComputers,
 } from "../goat-bot/keptPerComputerStore";
@@ -44,6 +45,9 @@ function hasActiveKeptSummaryAccount(): boolean {
 
 export function deactivateCloudRelayAccount(): void {
   if (hasActiveKeptSummaryAccount()) purgeKeptSummaries(appAtomRegistry);
+  void observeKeptSummaryAccount(appAtomRegistry, null).catch(() =>
+    console.warn("Could not clear the offline bot summary account."),
+  );
   setAgentAwarenessRelayTokenProvider(null);
   setManagedRelaySession(appAtomRegistry, null);
   // A cleanup that fails leaves relay-only computers listed; nothing read from them shows meanwhile.
@@ -118,6 +122,10 @@ export const cloudAccountService = createCloudAccountService<ClerkInstance>({
     }
     if (!isCurrent()) return;
     await restoreCloudComposerDrafts(accountId);
+    if (isCurrent())
+      await observeKeptSummaryAccount(appAtomRegistry, accountId).catch(() =>
+        console.warn("Could not update the offline bot summary account."),
+      );
   },
   activate: ({ source, accountId, isAccountTransition }) => {
     activateCloudRelayAccount(accountId, clerkTokenReader(source));

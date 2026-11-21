@@ -165,7 +165,10 @@ it("signing out drops the saved summaries and hides the relay-only computer at o
     remove: async (id, kind) => {
       saved.delete(JSON.stringify([id, kind]));
     },
-    clear: async () => saved.clear(),
+    markPurge: async () => {
+      saved.clear();
+    },
+    sweep: async () => {},
   });
   for (const id of [RELAY_ONLY, ALSO_LAN])
     await store.keep(store.lease(id), "asks", "paired", 1, {

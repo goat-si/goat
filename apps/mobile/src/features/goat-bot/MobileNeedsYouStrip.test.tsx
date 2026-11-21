@@ -165,6 +165,7 @@ vi.mock("./GoatBotFace", () => ({
   ),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotModeWithOfflineSummary: () => ({ known: false }),
   useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: link.savedRef, threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
@@ -724,7 +725,10 @@ it("reopens the read-only Bots roster and ask counts offline, then removes them 
     remove: async (_id: EnvironmentId, kind: string) => {
       values.delete(kind);
     },
-    clear: async () => values.clear(),
+    markPurge: async () => {
+      values.clear();
+    },
+    sweep: async () => {},
   };
   const previousApp = createKeptSummaryStore(disk);
   const readAt = Date.parse("2026-11-21T10:42:00.000Z");
