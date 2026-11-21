@@ -6,7 +6,7 @@ export function slackBoundChannelIds(
 ) {
   const channels = new Set<string>();
   for (const connection of connections ?? []) {
-    if (!connection.enabled) continue;
+    if (!connection.enabled || connection.status !== "connected") continue;
     const { channelScope } = resolveSlackAccess(connection);
     for (const binding of connection.botBindings ?? []) {
       if (

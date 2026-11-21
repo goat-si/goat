@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -7,6 +8,7 @@ import * as ServerConfig from "../config.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
 import {
   linkSlackUser,
   makeHarness,
@@ -16,20 +18,22 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
-import { RemoteMachine, remoteScript, sha256, until } from "./testing/RemoteMachine.ts";
+import { RemoteMachine, remoteScript, sha256 } from "./testing/RemoteMachine.ts";
 
 const remoteHarness = () => {
   const machine = new RemoteMachine();
+  const launch = Deferred.makeUnsafe<Parameters<NonNullable<typeof machine.beforeLaunch>>[0]>();
+  machine.beforeLaunch = (input) => Deferred.succeed(launch, input).pipe(Effect.asVoid);
   const harness = makeHarness({ sshRemote: machine.layer });
   harness.script.current = remoteScript;
-  return { machine, harness };
+  return { launch: Deferred.await(launch), harness };
 };
 
 describe("what a worker on another machine is told", () => {
   it.effect(
     "carries this machine's GOAT Bot notes, the named skill, and the same safety rules",
     () => {
-      const { machine, harness } = remoteHarness();
+      const { launch, harness } = remoteHarness();
       return Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -49,8 +53,8 @@ describe("what a worker on another machine is told", () => {
           slackInput("do@mac-studio: ship it with deploy-staging", "notes-remote"),
           { ...slackContext, grantedScopes },
         );
-        yield* until("running", (task) => task.status === "running");
-        const message = machine.launches[0]?.message ?? "";
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const message = (yield* launch).message ?? "";
         assert.include(message, "<goat_bot_notes>\n- 2026-10-17: open PRs as drafts (asked in x)");
         assert.include(message, '<goat_bot_skill name="deploy-staging">\n# Deploy staging');
         assert.notInclude(message, "Unrelated");
@@ -68,7 +72,7 @@ describe("what a worker on another machine is told", () => {
     },
   );
   it.effect("does not embed notes when the Slack requester has no memory access", () => {
-    const { machine, harness } = remoteHarness();
+    const { launch, harness } = remoteHarness();
     return Effect.gen(function* () {
       const files = channelBotFilesFor(
         yield* Path.Path,
@@ -84,8 +88,8 @@ describe("what a worker on another machine is told", () => {
         slackInput("do@mac-studio: ship it", "notes-remote-denied"),
         slackContext,
       );
-      yield* until("running", (task) => task.status === "running");
-      const message = machine.launches[0]?.message ?? "";
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const message = (yield* launch).message ?? "";
       assert.include(message, "ship it");
       assert.notInclude(message, "<goat_bot_notes>");
       assert.notInclude(message, "open PRs as drafts");
