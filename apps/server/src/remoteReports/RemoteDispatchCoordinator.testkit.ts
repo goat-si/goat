@@ -1,6 +1,7 @@
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { assert } from "@effect/vitest";
 import {
+  EnvironmentId,
   ThreadId,
   NodeId,
   RunId,
@@ -27,6 +28,7 @@ import Migration0089 from "../persistence/Migrations/114_RemoteDispatchObservati
 import Migration0101 from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
 import Migration0137 from "../persistence/Migrations/147_RemoteDispatchDeleteIntent.ts";
 import Migration0143 from "../persistence/Migrations/153_RemoteDispatchHostOutage.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/178_RemoteDispatchEnvironment.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -35,6 +37,7 @@ import * as Coordinator from "./RemoteDispatchCoordinator.ts";
 
 export const origin = ThreadId.make("origin");
 export const remote = ThreadId.make("remote");
+export const remoteEnvironment = EnvironmentId.make("remote-environment");
 export const runId = RunId.make("remote-run");
 export const at = "2026-10-12T00:00:00.000Z";
 export const report = (
@@ -63,14 +66,17 @@ export const answer = (
     summary: status === "completed" ? "done" : null,
   },
 });
-export const fixture = Effect.gen(function* () {
+export const makeFixture = Effect.fn("test.dispatchFixture")(function* (migrate: boolean) {
   const sql = yield* SqlClient.SqlClient;
-  for (const migration of [Migration0062, Migration0063, Migration0065, Migration0068])
-    yield* migration;
-  yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
-  for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
-  yield* Migration0137;
-  yield* Migration0143;
+  if (migrate) {
+    for (const migration of [Migration0062, Migration0063, Migration0065, Migration0068])
+      yield* migration;
+    yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
+    for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
+    yield* Migration0137;
+    yield* Migration0143;
+    yield* RemoteDispatchEnvironment;
+  }
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -197,6 +203,7 @@ export const fixture = Effect.gen(function* () {
             workspaceStrategy: { type: "root" },
             runtimeMode: input.runtimeMode,
             remoteServerKind: null,
+            sourceEnvironmentId: remoteEnvironment,
             notes: [],
           } satisfies Ssh.SshLaunchResult;
         }),
@@ -333,6 +340,7 @@ export const fixture = Effect.gen(function* () {
     },
   };
 });
+export const fixture = makeFixture(true);
 export const database = NodeSqliteClient.layer({ filename: ":memory:" });
 
 /** Once every drain has ended, the drain owners and row locks the coordinator still holds. */

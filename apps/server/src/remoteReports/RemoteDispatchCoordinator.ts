@@ -1013,7 +1013,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
-      yield* db(sql`UPDATE remote_dispatches SET remote_thread_id = ${result.threadId},
+      yield* db(sql`UPDATE remote_dispatches SET remote_thread_id = ${result.threadId}, remote_environment_id = ${result.sourceEnvironmentId ?? null},
       launched_run_id = ${result.runId}, reports_supported = ${result.reportsSupported ? 1 : 0},
       state = ${input.kind === "task" ? (result.runId === null ? "lost" : "running") : result.reportsSupported && (result.runId !== null || input.launch.message?.trim()) ? "running" : "idle"},
       last_error = ${input.kind === "task" ? (result.runId === null ? "launch outcome unknown" : null) : result.reportsSupported ? null : "This host does not support reports; enable the launch watch to follow run ends."},
