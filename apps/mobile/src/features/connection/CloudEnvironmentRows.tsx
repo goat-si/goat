@@ -373,6 +373,7 @@ function CloudEnvironmentRowShell(props: {
         {props.connectionError ? (
           <Text
             aria-hidden
+            pointerEvents="none"
             onTextLayout={onMeasuredErrorTextLayout}
             className={cn("absolute inset-x-0 -z-[1] text-xs opacity-0", statusClassName)}
           >
@@ -425,15 +426,9 @@ function CloudEnvironmentRowShell(props: {
       />
       {props.opensDetails || props.showChevron ? (
         <ChevronContainer
-          accessibilityRole={props.onOpen ? "button" : undefined}
-          accessibilityLabel={
-            props.onOpen
-              ? `Manage ${props.label}`
-              : props.onRemove
-                ? `Remove ${props.label} from this device`
-                : undefined
-          }
-          accessibilityHint={props.onRemove ? "Long press to remove from this device" : undefined}
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
           onPress={props.onOpen}
           onLongPress={props.onRemove}
           style={{
