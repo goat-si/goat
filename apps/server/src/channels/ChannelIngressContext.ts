@@ -9,6 +9,7 @@
  */
 import type {
   AuthEnvironmentScope,
+  BotId,
   ChannelKind,
   CommandId,
   RuntimeMode,
@@ -48,6 +49,7 @@ export interface ChannelConnectionOwner {
 
 export interface ChannelIngressContext extends ChannelConnectionOwner {
   readonly caller: ChannelIngressCaller;
+  readonly slackRouting?: { readonly boundBotId?: BotId; readonly allowName: boolean };
   /** Set when the transport connection lets accounts without a link start work, at this ceiling. */
   readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
 }

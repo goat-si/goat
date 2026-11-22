@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect has no incremental digest.
 import * as NodeCrypto from "node:crypto";
+import { botWorkConversationFilter, botWorkTaskFilter } from "./channelBotThreadHistory.ts";
 import { taskViewKeyPrefix } from "./channelTaskViews.ts";
 
 interface HomeScope {
@@ -49,12 +50,12 @@ export const recentHomeTaskRows = (
       ORDER BY v.key LIMIT 1
     )
     WHERE t.owner_id = ${ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${ownerId}
-      AND c.kind = 'goat' AND NOT COALESCE((${activeSnooze(sql, now)}), 0)
-      AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
+      AND ${botWorkConversationFilter(sql, botId)} AND NOT COALESCE((${activeSnooze(sql, now)}), 0)
+      AND ((${botWorkTaskFilter(sql, botId)}
         AND (t.status NOT IN ('completed', 'failed', 'cancelled')
           OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoff}
           OR json_type(v.value_json, '$.pinnedAt') = 'text'))
-        OR (json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
+        OR (c.kind = 'goat' AND json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
           SELECT 1 FROM channel_runtime_state s
           WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
             AND json_extract(s.value_json, '$.generation') = t.generation
@@ -89,7 +90,7 @@ const activeHomeSnoozeViews = (sql: SqlClient.SqlClient, { ownerId, botId, now }
     JOIN channel_conversations c ON c.conversation_id = t.conversation_id
     WHERE ${ownerViews(sql, ownerId)}
       AND t.owner_id = ${ownerId} AND t.bot_id = ${botId}
-      AND c.owner_id = ${ownerId} AND c.kind = 'goat'
+      AND c.owner_id = ${ownerId} AND ${botWorkConversationFilter(sql, botId)}
       AND CASE WHEN json_valid(v.value_json) THEN (${activeSnooze(sql, now)}) END`;
 
 // Home hashes only IDs and deadlines in bounded batches within its existing reader snapshot.

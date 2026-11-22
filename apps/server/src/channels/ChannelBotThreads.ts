@@ -57,6 +57,7 @@ import {
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
 import {
+  botWorkConversationFilter,
   decodeHistoryCursor,
   encodeHistoryCursor,
   launchesStatement,
@@ -616,7 +617,9 @@ const make = Effect.gen(function* () {
       JOIN channel_runtime_state s ON s.key = json_extract(k.value, '$.key')
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND ${botWorkConversationFilter(sql, botId)}`.pipe(
+      Effect.mapError(failed),
+    );
     const activeSnoozes = yield* Effect.try(() =>
       rows.flatMap((row) => {
         const view = decodeView(row.value_json);
@@ -675,7 +678,9 @@ const make = Effect.gen(function* () {
     }>`SELECT t.task_id, t.conversation_id, t.task_json, t.status_version FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND ${botWorkConversationFilter(sql, input.botId)}`.pipe(
+      Effect.mapError(failed),
+    );
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(

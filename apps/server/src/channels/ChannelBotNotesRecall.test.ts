@@ -6,9 +6,11 @@ import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -42,12 +44,17 @@ import {
   type EvalSet,
 } from "./testkit/channelBotNotesEval.ts";
 import { HELDOUT_SET } from "./testkit/channelBotNotesHeldout.ts";
+import { dispatchBarrier } from "./testkit/dispatchRace.ts";
 import {
   defaultScript,
   goatInput,
+  linkSlackUser,
   makeHarness,
+  owner,
   rpcContext,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
 
 const task = (instruction: string) => ({
@@ -290,6 +297,54 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );
+    },
+  );
+
+  it.effect(
+    "strips shared notes from the second reception pass after Slack memory is revoked",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const grantedScopes = [...owner.grantedScopes, "memory:read" as const];
+        yield* linkSlackUser("U1", { ...owner, grantedScopes });
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const note = line("The vendor rollout uses Indigo.", "vendor");
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(files.notes, NOTES_HEADER + note + "\n");
+        const first = yield* dispatchBarrier;
+        const prompts: Array<string | undefined> = [];
+        harness.script.current = (input) => {
+          if (input.mode !== "input") return defaultScript(input);
+          prompts.push(input.notes);
+          return input.readsAllowed === true
+            ? first.pause.pipe(
+                Effect.as({
+                  replyText: "",
+                  action: { type: "read", reads: [{ kind: "memory", query: "vendor rollout" }] },
+                } as const),
+              )
+            : Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+        };
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          slackInput("How is the vendor rollout set up?", "revoked-reception-notes"),
+          { ...slackContext, grantedScopes },
+        );
+        const reception = yield* Effect.forkScoped(runtime.drain);
+        yield* first.reached;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        yield* first.release;
+        yield* Fiber.join(reception);
+        assert.lengthOf(prompts, 2);
+        assert.include(prompts[0] ?? "", note);
+        assert.isUndefined(prompts[1]);
+      }).pipe(Effect.provide(harness.layer));
     },
   );
 

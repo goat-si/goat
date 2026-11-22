@@ -74,7 +74,7 @@ import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -82,7 +82,7 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
-import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import { freezeRemoteWorkerBrief } from "./channelRemoteWorkerBrief.ts";
 import {
   decodeOffered,
   matchingOfferedProviders,
@@ -104,7 +104,6 @@ import {
   resumeBranchFor,
 } from "./channelReplica.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
-import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
 import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
@@ -1295,17 +1294,6 @@ const make = Effect.gen(function* () {
       return { type: "target", target } as const;
     });
 
-  /**
-   * The worker's first message. GOAT Bot's notes and the skills the instruction names exist only
-   * on this machine, so they are read now and travel inside the message.
-   */
-  const workerMessage = (task: ChannelLedger.ChannelStoredTask["task"]) =>
-    Effect.gen(function* () {
-      const notes = yield* readChannelBotNotesSnapshot(botFiles, task.instruction);
-      const skills = yield* readNamedSkills(fileSystem, path, botFiles, task.instruction);
-      return remoteWorkerMessage(task, { notes, skills });
-    });
-
   /** Binds the task to the remote thread the launch (or its recovery) found. */
   const bindWorker = (
     owner: string,
@@ -1428,10 +1416,11 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
-      const requester = yield* requesterForDispatch(task).pipe(
+      const dispatchRequester = requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
+      const requester = yield* dispatchRequester;
       const now = yield* nowIso;
       let state = yield* readState(taskId);
       if (
@@ -1636,16 +1625,24 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
-      const message =
-        (yield* workerMessage(task)) +
-        (resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt));
-      const notesRevision =
-        stored.task.briefVersion === undefined && message.includes("<goat_bot_notes>")
-          ? yield* channelNotesRevision(botFiles.notes).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-            )
-          : null;
-      const frozen = yield* freezeChannelBrief(ledger, stored, owner, message, { notesRevision });
+      const frozen = yield* freezeRemoteWorkerBrief(
+        ledger,
+        stored,
+        owner,
+        botFiles,
+        dispatchRequester,
+        resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      if (frozen === undefined)
+        return yield* failTask(
+          owner,
+          stored,
+          "permission_changed",
+          "The requester's permission to start this work changed.",
+        );
       stored = frozen.stored;
       if (resume !== undefined || target.workspaceStrategy.type === "worktree")
         yield* ledger.recordLaunchHead({
@@ -1700,6 +1697,8 @@ const make = Effect.gen(function* () {
             Effect.flatMap((ceiling) =>
               ceiling === callerCeiling ? Effect.void : Effect.fail(new Superseded()),
             ),
+            Effect.andThen(frozen.notesAllowedNow),
+            Effect.flatMap((allowed) => (allowed ? Effect.void : Effect.fail(new AuthorityLost()))),
           ),
         )
         .pipe(Effect.result);

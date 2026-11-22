@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   diagnoseGoatBot,
+  slackBoundChannelIds,
+  slackReachabilityLabel,
   goatBotModelStatus,
   type GoatBotDiagnosticAction,
   type GoatBotDiagnosticTone,
@@ -92,10 +94,11 @@ export function GoatBotStatusCard({
   );
   const canConfigureSlack = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const slackSupported =
-    member === null &&
     environmentId !== null &&
     presentation?.connection.phase === "connected" &&
-    presentation.serverConfig?.environment.capabilities.slackChannel === true;
+    presentation.serverConfig?.environment.capabilities.slackChannel === true &&
+    (member === null ||
+      presentation.serverConfig.environment.capabilities.slackBotBindings === true);
   const slack = useEnvironmentQuery(
     slackSupported ? channelEnvironment.slackSettings({ environmentId, input: {} }) : null,
   );
@@ -134,12 +137,24 @@ export function GoatBotStatusCard({
     canChangeModel,
     rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
     turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : [],
-    slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
+    slack:
+      member !== null || !slackSupported
+        ? "unavailable"
+        : slack.error
+          ? "failed"
+          : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack,
     now,
   });
-  if (quietWhenReady && diagnostics.lines.every((line) => line.tone === "ok")) return null;
+  const slackReachability =
+    member === null ? null : slackReachabilityLabel(slackBoundChannelIds(member.botId, slack.data));
+  if (
+    quietWhenReady &&
+    slackReachability === null &&
+    diagnostics.lines.every((line) => line.tone === "ok")
+  )
+    return null;
   const content = (
     <section aria-label={`${name} status`} className={cn("space-y-2 text-sm", className)}>
       <p className="font-semibold">{diagnostics.title}</p>
@@ -163,6 +178,9 @@ export function GoatBotStatusCard({
           </li>
         ))}
       </ul>
+      {slackReachability === null ? null : (
+        <p className="text-muted-foreground">{slackReachability}</p>
+      )}
       {home.error ? <p className="text-xs text-destructive-foreground">{home.error}</p> : null}
     </section>
   );

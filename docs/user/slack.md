@@ -3,9 +3,9 @@
 Mention the GOAT bot in a Slack channel or send it a direct message, and GOAT
 answers in that Slack thread, starts the work in its own coding thread, and
 posts the result back to the same thread. The conversation stays in Slack; the
-GOAT Bot shows the work and its final report. On web and desktop, choose **Bots**
-in the sidebar to find the main bot and its task threads. Slack and iMessage reach
-the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
+GOAT Bot shows the work and its final report. In GOAT, open **Bots** and choose
+the bot that answered to find its work. Slack can route to the main bot or
+a named bot. iMessage reaches the main bot.
 
 ## Set up
 
@@ -46,6 +46,20 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
   as a new message. After it, GOAT removes that message if it only said the
   work was under way, or puts its first reply back as it was. If Slack refuses
   an update, the message stays as it is.
+- Use **Channel bindings** under **Settings → GOAT Bot → Slack** to pick a
+  member bot for a channel. Paste the channel ID from its details in Slack,
+  choose the bot, then add the binding and save. In a DM or mention, start with
+  the bot's name followed by a colon, for example `Scout: Check the build`.
+  The name takes priority over the channel binding on the first accepted
+  message. A channel without a binding goes to the main bot.
+- Follow-ups stay with the bot that took the thread, even after a rename or
+  binding change. Threads from before channel bindings stay with the main bot.
+  If that member bot is deleted, restore it in GOAT or start a new Slack thread.
+  Only the requester sees the reply when a bot name is unavailable or ambiguous.
+- Member replies include the bot's name. An app with the optional
+  `chat:write.customize` scope can show it as the sender name.
+  The same channel and account access rules apply to every bot.
+
 - **Default project** decides where work from Slack runs when your message
   doesn't name a project. Without it, GOAT picks the project from the
   conversation and asks only when it can't tell, suggesting the one you worked

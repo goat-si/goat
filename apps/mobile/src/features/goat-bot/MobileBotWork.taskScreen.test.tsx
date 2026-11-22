@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -203,7 +204,6 @@ vi.mock("../../native/StackHeader", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
 }));

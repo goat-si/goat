@@ -20,6 +20,7 @@ export {
   type ProviderTurnStartServiceV2Shape,
 } from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
+import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
@@ -145,6 +146,9 @@ export const layer: Layer.Layer<
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
     const explainOpenFailure = yield* openFailureExplainer;
     const makeRunControls = makeProviderRunControls(projectionStore, idAllocator);
+    const providerInputRefusal = yield* Effect.serviceOption(
+      ChannelProviderInputAuthority.ChannelProviderInputAuthority,
+    );
     const makeRefreshMemoryContext = yield* makeMemoryRefreshFactory;
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -1377,6 +1381,19 @@ export const layer: Layer.Layer<
             sameNativeThread &&
             !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
+        ...(!observeOnly && Option.isSome(providerInputRefusal)
+          ? {
+              providerInputRefusal: Effect.provideService(
+                providerInputRefusal.value(
+                  run.threadId,
+                  providerMessage.id,
+                  run.memoryGrantCeiling,
+                ),
+                ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                resolvedRuntimePolicy.runtimeMode,
+              ),
+            }
+          : {}),
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
@@ -1468,4 +1485,8 @@ export const layer: Layer.Layer<
       ),
     });
   }),
+);
+
+export const layerWithChannelAuthority = layer.pipe(
+  Layer.provide(ChannelProviderInputAuthority.layer),
 );

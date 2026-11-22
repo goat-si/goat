@@ -192,6 +192,7 @@ describe("V2 preview upgrade", () => {
         [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
         [181, "ChannelBotAttention"],
+        [182, "SlackConversationBot"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -394,6 +395,7 @@ describe("V2 preview upgrade", () => {
         [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
         [181, "ChannelBotAttention"],
+        [182, "SlackConversationBot"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
