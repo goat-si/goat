@@ -39,13 +39,13 @@ export function MobileBotPackageSheet({
 
   return (
     <Modal presentationStyle="pageSheet" onRequestClose={close}>
-      <View className="flex-1 gap-3 bg-background px-5 pb-5 pt-12">
+      <View className="flex-1 gap-3 bg-screen px-5 pb-5 pt-12">
         <Text accessibilityRole="header" className="font-goat-semibold text-xl text-foreground">
           Share {bot.name}
         </Text>
         <ScrollView className="flex-1" contentContainerClassName="gap-3">
           {result === null ? (
-            <Text className="text-muted-foreground">Preparing package…</Text>
+            <Text className="text-foreground-muted">Preparing package…</Text>
           ) : typeof result === "string" ? (
             <Text accessibilityRole="alert" className="text-danger-foreground">
               {result}
@@ -63,7 +63,7 @@ export function MobileBotPackageSheet({
             </>
           ) : (
             <>
-              <Text className="text-muted-foreground">
+              <Text className="text-foreground-muted">
                 Review the setup before sharing the package.
               </Text>
               <Text selectable className="font-mono text-foreground">

@@ -62,7 +62,7 @@ export function MobileBotTemplateSheet(props: {
         if (!busy) props.close();
       }}
     >
-      <ScrollView className="flex-1 bg-background" contentContainerClassName="gap-4 p-5 pt-12">
+      <ScrollView className="flex-1 bg-screen" contentContainerClassName="gap-4 p-5 pt-12">
         <Text className="text-xl font-semibold text-foreground">From a template</Text>
         {template === undefined ? (
           GOAT_BOT_TEMPLATES.map((item) => (
