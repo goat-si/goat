@@ -741,7 +741,7 @@ function KeybindingKeyControl({
           {row.isUnassigned ? (
             <span className="text-sm text-muted-foreground">Unassigned</span>
           ) : (
-            <KeybindingPill value={row.key} />
+            <KeybindingPill shortcut={row.binding.shortcut} />
           )}
         </button>
       ) : (
