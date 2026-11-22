@@ -137,6 +137,7 @@ export const ChannelOutboundMessage = Schema.Struct({
     Schema.Struct({
       sessionId: AuthSessionId,
       principalId: Schema.String,
+      instance: Schema.optionalKey(Schema.Struct({ key: Schema.String, id: Schema.String })),
     }),
   ),
   deliveryId: ChannelDeliveryId,

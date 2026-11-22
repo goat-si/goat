@@ -75,8 +75,8 @@ it.effect("keeps the original follow and reports concurrent observations once", 
     const notices: string[] = [];
     const settle = follows.settle(
       follow,
-      (record) => Effect.succeed("Ended: " + record.taskId),
-      (_, text) => Effect.sync(() => void notices.push(text)),
+      (record) => Effect.succeed({ snapshot: { text: "Ended: " + record.taskId } }),
+      (_, text) => Effect.sync(() => void notices.push(text.text)),
     );
     yield* Effect.all([settle, settle], { concurrency: "unbounded" });
     assert.deepEqual(notices, ["Ended: task"]);
@@ -91,8 +91,8 @@ it.effect("records access loss once and cancels further observations", () =>
     const notices: string[] = [];
     const settle = follows.settle(
       follow,
-      () => Effect.succeed("Private thread status"),
-      (_, text) => Effect.sync(() => void notices.push(text)),
+      () => Effect.succeed({ snapshot: { text: "Private thread status" } }),
+      (_, text) => Effect.sync(() => void notices.push(text.text)),
     );
     yield* sessions.revoke({ sessionId: follow.sessionId, revokedAt: yield* DateTime.now });
     yield* settle;
@@ -199,6 +199,38 @@ it.effect.each(["stop", "re-follow"] as const)("drops queued notices after %s", 
     const delivered = yield* notices;
     assert.lengthOf(delivered, restart ? 1 : 0);
     if (restart) assert.include(delivered[0]?.text, "Run new-run.");
+  }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect("delivers the same snapshot once for a new follow instance", () =>
+  Effect.gen(function* () {
+    const { start, stop, runtime, notices } = yield* setupFollow();
+    yield* start;
+    yield* runtime.drain;
+    yield* stop;
+    yield* start;
+    yield* runtime.drain;
+    assert.lengthOf(yield* notices, 2);
+  }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect("drops legacy queued observations and continues observing a legacy follow", () =>
+  Effect.gen(function* () {
+    const { start, run, runtime, notices, sql } = yield* setupFollow();
+    yield* start;
+    yield* sql`UPDATE channel_outbox
+      SET message_json = json_remove(message_json, '$.followApproval.instance')
+      WHERE cause_key LIKE 'follow:%'`;
+    yield* sql`UPDATE channel_runtime_state
+      SET value_json = json_remove(value_json, '$.instanceId', '$.eventCursor')
+      WHERE key LIKE 'thread-follow:%'`;
+    yield* runtime.drain;
+    assert.lengthOf(yield* notices, 0);
+    yield* run("new-run", 1);
+    yield* runtime.drain;
+    const delivered = yield* notices;
+    assert.lengthOf(delivered, 1);
+    assert.include(delivered[0]?.text, "Run new-run.");
   }).pipe(Effect.provide(makeHarness().layer)),
 );
 

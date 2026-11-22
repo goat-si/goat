@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import {
   AuthSessionId,
   BotId,
@@ -28,6 +29,8 @@ const Follow = Schema.Struct({
   sessionId: AuthSessionId,
   principalId: Schema.String,
   doneMeans: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_000))),
+  instanceId: Schema.optionalKey(Schema.String),
+  eventCursor: Schema.optionalKey(Schema.Number),
   lastObservation: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4_000))),
 });
 type Follow = typeof Follow.Type;
@@ -86,6 +89,24 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
     );
   });
 
+  const mayDeliver = Effect.fn("ChannelThreadFollows.mayDeliver")(function* (
+    approval: Pick<Follow, "sessionId" | "principalId"> & {
+      instance?: { key: string; id: string };
+    },
+  ) {
+    if (approval.instance === undefined || !(yield* mayRead(approval))) return false;
+    const [row] = yield* sql<{ value_json: string }>`
+      SELECT value_json FROM channel_runtime_state WHERE key = ${approval.instance.key}
+    `;
+    if (row === undefined) return false;
+    const follow = yield* decode(row.value_json);
+    return (
+      follow.instanceId === approval.instance.id &&
+      follow.sessionId === approval.sessionId &&
+      follow.principalId === approval.principalId
+    );
+  });
+
   const start = Effect.fn("ChannelThreadFollows.start")(function* (follow: Follow) {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -99,7 +120,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
         if (capacity?.duplicate === 1) return false;
         if ((capacity?.count ?? 0) >= 100)
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
-        const value = yield* encode(follow);
+        const value = yield* encode({ ...follow, instanceId: NodeCrypto.randomUUID() });
         const now = DateTime.formatIso(yield* DateTime.now);
         const inserted = yield* sql<{ readonly key: string }>`
       INSERT INTO channel_runtime_state (key, value_json, updated_at)
@@ -119,8 +140,21 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
   // The notice write must use this SQL client so it commits with the observation.
   const settle = Effect.fn("ChannelThreadFollows.settle")(function* <E, R, E2, R2>(
     target: FollowTarget,
-    observe: (follow: Follow) => Effect.Effect<string, E, R>,
-    writeNotice: (follow: Follow, text: string, accessLost: boolean) => Effect.Effect<void, E2, R2>,
+    observe: (follow: Follow) => Effect.Effect<
+      {
+        snapshot: { text: string; terminalRunId?: string };
+        endings?: ReadonlyArray<{ text: string; terminalRunId: string }>;
+        eventCursor?: number;
+      },
+      E,
+      R
+    >,
+    writeNotice: (
+      follow: Follow,
+      notice: { text: string; terminalRunId?: string },
+      instance: { key: string; id: string },
+      accessLost: boolean,
+    ) => Effect.Effect<void, E2, R2>,
   ) {
     return yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -130,20 +164,33 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
       `;
         if (row === undefined) return;
         const follow = yield* decode(row.value_json);
+        const instance = { key, id: follow.instanceId ?? NodeCrypto.randomUUID() };
         if (!(yield* mayRead(follow))) {
           yield* writeNotice(
             follow,
-            "Stopped following because the approving session lost access.",
+            { text: "Stopped following because the approving session lost access." },
+            instance,
             true,
           );
           yield* stop(target);
           return;
         }
-        const observation = yield* observe(follow);
-        if (follow.lastObservation === observation) return;
-        const value = yield* encode({ ...follow, lastObservation: observation });
+        const { snapshot, endings = [], eventCursor } = yield* observe(follow);
+        for (const ending of endings) {
+          yield* writeNotice(follow, ending, instance, false);
+        }
+        if (follow.lastObservation !== snapshot.text) {
+          yield* writeNotice(follow, snapshot, instance, false);
+        } else if (follow.instanceId !== undefined && follow.eventCursor === eventCursor) {
+          return;
+        }
+        const value = yield* encode({
+          ...follow,
+          instanceId: instance.id,
+          ...(eventCursor === undefined ? {} : { eventCursor }),
+          lastObservation: snapshot.text,
+        });
         const now = DateTime.formatIso(yield* DateTime.now);
-        yield* writeNotice(follow, observation, false);
         yield* sql`
         UPDATE channel_runtime_state SET value_json = ${value}, updated_at = ${now}
         WHERE key = ${key}
@@ -174,5 +221,5 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
     }));
   });
 
-  return { start, stop, settle, list, records, mayRead };
+  return { start, stop, settle, list, records, mayRead, mayDeliver };
 });

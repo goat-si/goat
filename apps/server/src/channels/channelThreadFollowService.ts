@@ -8,12 +8,14 @@ import {
   type ChannelListFollowedThreadsInput,
   type EnvironmentId,
   isGoatBotSessionThreadId,
+  type OrchestrationV2RunStatus,
   type ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { isTerminalRunStatus } from "../orchestration-v2/ThreadManagementService.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor } from "./channelIds.ts";
@@ -22,6 +24,26 @@ import { makeThreadFollows } from "./channelThreadFollows.ts";
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const isGatewayError = Schema.is(ChannelGatewayError);
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
+function observation(
+  threadId: ThreadId,
+  status: OrchestrationV2RunStatus | "idle",
+  runId: string | null,
+  pullRequest: string | null,
+) {
+  return {
+    text: [
+      "Followed thread " + threadId + " is " + status + ".",
+      ...(runId === null ? [] : ["Run " + runId + "."]),
+      ...(pullRequest === null ? [] : ["PR " + pullRequest]),
+    ]
+      .join(" ")
+      .slice(0, 4_000),
+    ...(runId !== null && status !== "idle" && isTerminalRunStatus(status)
+      ? { terminalRunId: runId }
+      : {}),
+  };
+}
+
 const missing = () => new ChannelGatewayError({ reason: "not_found" });
 
 export const makeThreadFollowService = Effect.fn("ChannelThreadFollowService.make")(function* (
@@ -32,7 +54,7 @@ export const makeThreadFollowService = Effect.fn("ChannelThreadFollowService.mak
   const read = Effect.fn("ChannelThreadFollowService.read")(function* (threadId: ThreadId) {
     const [row] = yield* sql<{
       run_id: string | null;
-      status: string;
+      status: OrchestrationV2RunStatus | "idle";
       pull_request: string | null;
     }>`
       SELECT run.run_id, coalesce(run.status, 'idle') AS status,
@@ -79,34 +101,61 @@ export const makeThreadFollowService = Effect.fn("ChannelThreadFollowService.mak
   ) {
     yield* store.settle(
       target,
-      (follow) =>
-        read(follow.threadId).pipe(
-          Effect.map((row) =>
-            row === undefined
-              ? "Followed thread is unavailable."
-              : [
-                  "Followed thread " + follow.threadId + " is " + row.status + ".",
-                  ...(row.run_id === null ? [] : ["Run " + row.run_id + "."]),
-                  ...(typeof row.pull_request === "string" ? ["PR " + row.pull_request] : []),
-                ]
-                  .join(" ")
-                  .slice(0, 4_000),
-          ),
-        ),
-      (follow, text, accessLost) =>
+      Effect.fn("ChannelThreadFollowService.observe")(function* (follow) {
+        const row = yield* read(follow.threadId);
+        if (row === undefined) {
+          return {
+            snapshot: { text: "Followed thread is unavailable." },
+            eventCursor: follow.eventCursor,
+          };
+        }
+        const snapshot = observation(follow.threadId, row.status, row.run_id, row.pull_request);
+        if (follow.eventCursor === undefined) {
+          const [head] = yield* sql<{ sequence: number }>`
+            SELECT coalesce(max(sequence), 0) AS sequence FROM orchestration_events
+            WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+              AND stream_id = ${follow.threadId}
+          `;
+          return { snapshot, eventCursor: head?.sequence ?? 0 };
+        }
+        const events = yield* sql<{
+          sequence: number;
+          run_id: string | null;
+          status: OrchestrationV2RunStatus | null;
+        }>`
+          SELECT sequence,
+            CASE WHEN event_type IN ('run.created', 'run.updated')
+              THEN json_extract(payload_json, '$.id') END AS run_id,
+            CASE WHEN event_type IN ('run.created', 'run.updated')
+              THEN json_extract(payload_json, '$.status') END AS status
+          FROM orchestration_events
+          WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+            AND stream_id = ${follow.threadId} AND sequence > ${follow.eventCursor}
+          ORDER BY sequence LIMIT 100
+        `;
+        const endings = events.flatMap(({ run_id, status }) =>
+          run_id !== null && status !== null && isTerminalRunStatus(status)
+            ? [
+                {
+                  ...observation(follow.threadId, status, run_id, row.pull_request),
+                  terminalRunId: run_id,
+                },
+              ]
+            : [],
+        );
+        return { snapshot, endings, eventCursor: events.at(-1)?.sequence ?? follow.eventCursor };
+      }),
+      (follow, { text, terminalRunId }, instance, accessLost) =>
         Effect.gen(function* () {
           const bot = yield* ledger.getBotById(follow.ownerId, follow.botId);
           if (bot === undefined || bot.bot.environmentId !== follow.environmentId) return;
           const causeKey =
             "follow:" +
-            encodeJson([
-              follow.ownerId,
-              follow.botId,
-              follow.environmentId,
-              follow.threadId,
-              follow.taskId,
-              text,
-            ]);
+            encodeJson(
+              terminalRunId === undefined
+                ? [instance.id, "snapshot", text]
+                : [instance.id, "terminal", terminalRunId],
+            );
           const deliveryId = deliveryIdFor(causeKey);
           yield* ledger.enqueueDeliveries(
             [
@@ -129,6 +178,7 @@ export const makeThreadFollowService = Effect.fn("ChannelThreadFollowService.mak
                         followApproval: {
                           sessionId: follow.sessionId,
                           principalId: follow.principalId,
+                          instance,
                         },
                       }),
                   taskId: follow.taskId,

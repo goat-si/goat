@@ -168,7 +168,9 @@ export const layerGoatTransport = Layer.effectDiscard(
         const threadId = current?.bot.threadId ?? destination.threadId;
         if (
           message.followApproval !== undefined &&
-          !(yield* follows.mayRead(message.followApproval).pipe(Effect.mapError(persistenceFailed)))
+          !(yield* follows
+            .mayDeliver(message.followApproval)
+            .pipe(Effect.mapError(persistenceFailed)))
         ) {
           return {
             deliveryId: message.deliveryId,
