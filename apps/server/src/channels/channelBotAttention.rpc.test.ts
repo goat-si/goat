@@ -170,7 +170,9 @@ const setup = Effect.fnUntraced(function* (legacy: boolean, answerOwner = task.r
             Effect.provide(
               attentionRpcs.toLayer({
                 [getTask]: read,
-                [listBotAttention]: ChannelBotMembers.rpcHandlers(members, owner)[listBotAttention],
+                [listBotAttention]: ChannelBotMembers.rpcHandlers(members, owner, Effect.void)[
+                  listBotAttention
+                ],
               }),
             ),
           );

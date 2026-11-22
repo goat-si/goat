@@ -1,4 +1,5 @@
 import { useMobileBotTemplateDraft } from "./useMobileBotTemplateDraft";
+import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
@@ -128,6 +129,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
   /** The bot's computer is offline: a card's Open task stays listed but closed. */
   readonly taskOffline?: boolean;
+  readonly resolveProposal?: Parameters<typeof GoatBotProposalCard>[0]["resolve"];
   /** Where an event line's routine or task opens; undefined leaves the line plain. */
   readonly onOpenEvent?: ((subject: GoatBotEventSubject) => (() => void) | undefined) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
@@ -147,6 +149,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    if (row.botProposal) {
+      return <GoatBotProposalCard card={row.botProposal} resolve={props.resolveProposal} />;
+    }
     const subject = row.subject;
     const span = goatBotEventSubjectSpan(row);
     const open =
@@ -400,9 +405,7 @@ export function GoatBotScreen(props: {
   const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
   // Android hides the native header and draws edge to edge, so the Home chip starts below the status bar.
   const homeChipTop = Platform.OS === "android" ? insets.top : topInset;
-  // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
-  // conversation by the header height and its last message starts below the composer's top.
-  const listTopInset = 0;
+  // LegendList can't see UIKit's adjusted inset, so leave its top padding at zero.
   const templateDraft = useMobileBotTemplateDraft(member, taskId);
   const [text, setText] = useState(templateDraft);
   const [homeOpen, setHomeOpen] = useState(false);
@@ -535,6 +538,7 @@ export function GoatBotScreen(props: {
             onSelectThread={onSelectThread}
             onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
             taskOffline={taskOffline}
+            resolveProposal={session.resolveProposal}
             onOpenEvent={onOpenEvent}
             environmentId={session.historyEnvironmentId}
             botName={title}
@@ -561,6 +565,7 @@ export function GoatBotScreen(props: {
       taskOffline,
       onOpenEvent,
       session.supportsTaskThreads,
+      session.resolveProposal,
       session.historyEnvironmentId,
       title,
       botEmoji,
@@ -818,7 +823,7 @@ export function GoatBotScreen(props: {
             keyboardShouldPersistTaps="handled"
             // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
             contentInsetAdjustmentBehavior="automatic"
-            contentInsetStartAdjustment={listTopInset}
+            contentInsetStartAdjustment={0}
             contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
             scrollEventThrottle={100}
             onScroll={(event) => {

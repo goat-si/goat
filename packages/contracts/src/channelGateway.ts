@@ -1,3 +1,4 @@
+import { BotProposalFields } from "./botProfile.ts";
 import * as Schema from "effect/Schema";
 
 import { BotColor, BotId, BotProfile, BotRole } from "./botProfile.ts";
@@ -447,6 +448,19 @@ export const ChannelUpdateBotInput = Schema.Struct({
   color: Schema.optionalKey(Schema.NullOr(BotColor)),
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
+
+export const ChannelProposeBotInput = Schema.Struct({
+  ...BotProposalFields.fields,
+  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  templateId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type ChannelProposeBotInput = typeof ChannelProposeBotInput.Type;
+export const ChannelProposeBotResult = Schema.Struct({ proposalId: TrimmedNonEmptyString });
+export const ChannelResolveBotProposalInput = Schema.Struct({
+  proposalId: TrimmedNonEmptyString.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  accept: Schema.Boolean,
+});
+export type ChannelResolveBotProposalInput = typeof ChannelResolveBotProposalInput.Type;
 
 /** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
 export const ChannelCreateBotInput = Schema.Struct({
@@ -936,6 +950,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",
   createBot: "channel.createBot",
+  resolveBotProposal: "channel.resolveBotProposal",
   setBotHidden: "channel.setBotHidden",
   deleteBot: "channel.deleteBot",
   restoreBot: "channel.restoreBot",
