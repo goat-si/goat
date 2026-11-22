@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 
 export class CommitGuardRefused extends Schema.TaggedError<CommitGuardRefused>()(
   "CommitGuardRefused",
-  { reason: Schema.String },
+  { reason: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
 
 export interface CommitGuardInput {

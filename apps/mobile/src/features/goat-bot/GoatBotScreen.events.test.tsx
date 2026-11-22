@@ -7,6 +7,8 @@ import { expect, it, vi } from "vite-plus/test";
 
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],

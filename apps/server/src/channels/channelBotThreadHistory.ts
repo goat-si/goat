@@ -11,7 +11,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import {
+  joinRemoteLaunch,
+  remotePullRequestColumns,
   threadPullRequestColumns,
+  type RemotePullRequestColumns,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
 
@@ -84,7 +87,7 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
  * finished. Counted states move only to counted ones. The terms are channel_child_work_launches'
  * own; INDEXED BY makes a mismatch fail instead of scanning every child record.
  */
-const openableLaunch = (sql: SqlClient.SqlClient) =>
+export const openableLaunch = (sql: SqlClient.SqlClient) =>
   sql`s.key >= 'child-work:' AND s.key < 'child-work;'
     AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
     AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL
@@ -94,7 +97,12 @@ const openableLaunch = (sql: SqlClient.SqlClient) =>
 /** A task's newest openable launches, read from their index; one more tells whether there are more. */
 export const launchesStatement = (
   sql: SqlClient.SqlClient,
-  input: { readonly ownerId: string; readonly taskId: string; readonly limit: number },
+  input: {
+    readonly ownerId: string;
+    readonly taskId: string;
+    readonly limit: number;
+    readonly finished?: boolean;
+  },
 ) =>
   sql<
     {
@@ -103,18 +111,21 @@ export const launchesStatement = (
       readonly title: string | null;
       readonly project_id: string | null;
       readonly work_kind: unknown;
-    } & ThreadPullRequestColumns
+    } & ThreadPullRequestColumns &
+      RemotePullRequestColumns
   >`SELECT s.key, s.value_json, p.title, p.project_id,
-      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
+      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}, ${remotePullRequestColumns(sql)}
     FROM channel_runtime_state s INDEXED BY channel_child_work_launches
     -- Only a local launch's thread is in this machine's projection.
     LEFT JOIN orchestration_v2_projection_threads p
       ON json_extract(s.value_json, '$.surface') = 'thread_launch'
       AND json_extract(s.value_json, '$.destination.host') IS NULL
       AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+    ${joinRemoteLaunch(sql)}
     WHERE json_extract(s.value_json, '$.taskId') = ${input.taskId} AND ${openableLaunch(sql)}
       AND json_extract(s.value_json, '$.ownerId') = ${input.ownerId}
-    ORDER BY json_extract(s.value_json, '$.createdAt') DESC, s.key DESC
+      ${input.finished ? sql`AND json_extract(s.value_json, '$.state') IN ('completed', 'failed', 'cancelled')` : sql``}
+    ORDER BY ${input.finished ? sql`json_extract(s.value_json, '$.updatedAt')` : sql`json_extract(s.value_json, '$.createdAt')`} DESC, s.key DESC
     LIMIT ${input.limit}`;
 
 /**

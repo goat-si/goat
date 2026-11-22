@@ -42,16 +42,13 @@ import {
 } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
-import {
-  channelTaskIdFromAgent,
-  deliveryIdFor,
-  questionIdFor,
-  workerLaunchIdsFor,
-} from "./channelIds.ts";
+import { channelTaskIdFromAgent, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
+import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
+import { STALLED_AFTER_MS, stallDelivery } from "./channelWorkerStall.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
 import { commitWorkerObserved, reconcileLateApprovals } from "./channelLateApprovals.ts";
@@ -94,51 +91,12 @@ const workerRunStatus = (
   }
 };
 
-/**
- * How long a running run can sit without thread activity before it is stalled. Same bound as
- * fleet thread health (`STALL_AFTER_MS`).
- */
-export const STALLED_AFTER_MS = 20 * 60_000;
-
 /** How far back, and how many per pass, finished tasks have their runs read into history. */
 const RUN_HISTORY_DAYS = 7;
 const RUN_HISTORY_PER_PASS = 20;
 
 const openWorkerRun = (status: ChannelWorkerRunStatus) =>
   status === "running" || status === "waiting" || status === "stalled";
-
-const stallNotice = (title: string) =>
-  '"' +
-  title +
-  '" has made no progress for ' +
-  STALLED_AFTER_MS / 60_000 +
-  ' minutes. It may be stuck: say "stop" to stop it, or keep waiting.';
-
-/** One notice per quiet period. A later period has a new activity time, so it notifies again. */
-const stallDelivery = (
-  task: ChannelTask,
-  runId: string,
-  activityAt: string,
-): ChannelLedger.ChannelOutboxInsert => {
-  const causeKey = "stall:" + task.taskId + ":" + runId + ":" + activityAt;
-  const deliveryId = deliveryIdFor(causeKey);
-  const mentionActorId =
-    task.originAddress.kind === "slack" ? task.requester.externalActorId : undefined;
-  return {
-    deliveryId,
-    causeKey,
-    taskId: task.taskId,
-    message: {
-      deliveryId,
-      destination: task.originAddress,
-      kind: "receipt",
-      text: stallNotice(task.title),
-      taskId: task.taskId,
-      taskVersion: task.version,
-      ...(mentionActorId === undefined ? {} : { mentionActorId }),
-    },
-  };
-};
 
 /** How long a finished task without a thread waits for a launch that may still land. */
 const NO_THREAD_GRACE_MS = 120_000;
@@ -713,6 +671,13 @@ const make = Effect.gen(function* () {
         );
         return true;
       }
+      const releaseReason =
+        latest.task.routineWork === true && current.status === "failed"
+          ? routineWorkerReleaseReason(
+              yield* threads.getThreadShell(worker.threadId).pipe(Effect.orElseSucceed(() => null)),
+              current.id,
+            )
+          : undefined;
       yield* commitTransition(
         ledger,
         latest,
@@ -721,7 +686,9 @@ const make = Effect.gen(function* () {
           payload: {
             generation: task.generation,
             reason: current.status,
-            summary: "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
+            summary:
+              releaseReason ??
+              "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
           },
         },
         { owner, narrate: true, completionHold: null },
@@ -871,9 +838,12 @@ const make = Effect.gen(function* () {
       }
       // In a GOAT Bot session only the task's newest result run may report for it; an earlier
       // run's delayed report, another task's, or a background command's notice is refused.
-      if (isGoatBotSessionThreadId(worker.threadId)) {
+      const sessionWorker = isGoatBotSessionThreadId(worker.threadId);
+      if (sessionWorker) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
+        if (input.doneMeans !== undefined && runId === undefined)
+          return yield* new ChannelGatewayError({ reason: "forbidden" });
         if (runId !== undefined) {
           const records = yield* threads
             .getThreadRecords(worker.threadId, ["runs", "messages"])
@@ -885,6 +855,11 @@ const make = Effect.gen(function* () {
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }
+      if (
+        input.doneMeans !== undefined &&
+        (!sessionWorker || stored.task.kind !== "turn" || input.status !== "running")
+      )
+        return yield* new ChannelGatewayError({ reason: "invalid_input" });
       if (yield* ledger.hasTaskEvent(input.eventId)) return;
       const eventId = input.eventId as ChannelTaskEventId;
       const task = stored.task;
@@ -901,6 +876,9 @@ const make = Effect.gen(function* () {
               payload: {
                 generation: task.generation,
                 summary: input.summary,
+                ...(task.doneMeans === undefined && input.doneMeans !== undefined
+                  ? { doneMeans: input.doneMeans }
+                  : {}),
                 ...(milestone === undefined ? {} : { milestone }),
               },
             },
@@ -981,5 +959,7 @@ const make = Effect.gen(function* () {
 
   return ChannelWorkerReports.of({ reconcile, isWorkerThread, report });
 });
+
+export { STALLED_AFTER_MS };
 
 export const layer = Layer.effect(ChannelWorkerReports, make);

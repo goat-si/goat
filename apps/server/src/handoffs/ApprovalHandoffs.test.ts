@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import { sessionStore } from "../channels/channelBotSessionRuns.ts";
-import { writeChannelTaskEvent } from "../channels/channelTaskEventCommit.ts";
+import { makeTaskEventWriter } from "../channels/channelTaskEventStore.ts";
 import { applyChannelTaskEvent } from "../channels/channelTaskTransitions.ts";
 import { makeTaskEvent } from "../channels/channelTaskWrites.ts";
 import { insertTask } from "../channels/testkit/botThreadHistory.fixture.ts";
@@ -66,7 +66,7 @@ const bind = (task: ChannelTask, worker: ThreadId, runId: RunId) =>
     const transition = applyChannelTaskEvent(task, event);
     if (!transition.ok) throw new Error(transition.reason);
     yield* sql.withTransaction(
-      writeChannelTaskEvent(sql, { expectedVersion: task.version, event, next: transition.task }),
+      makeTaskEventWriter(sql)({ expectedVersion: task.version, event, next: transition.task }),
     );
     return transition.task;
   });

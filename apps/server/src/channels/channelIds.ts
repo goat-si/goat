@@ -102,12 +102,17 @@ export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
 export const deliveryIdFor = (causeKey: string) =>
   stableId("channel-delivery", [causeKey]) as ChannelDeliveryId;
 
+const WORKER_LAUNCH_MESSAGE_PREFIX = "channel-worker-message";
+
 /** The launch of one task generation: the same command, thread, and message on every retry. */
 export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
   commandId: CommandId.make(stableId("channel-launch", [taskId, String(generation)])),
   threadId: ThreadId.make(CHANNEL_WORKER_THREAD_PREFIX + digest([taskId, String(generation)])),
-  messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
+  messageId: MessageId.make(stableId(WORKER_LAUNCH_MESSAGE_PREFIX, [taskId, String(generation)])),
 });
+
+export const isChannelWorkerLaunchMessageId = (messageId: MessageId) =>
+  messageId.startsWith(WORKER_LAUNCH_MESSAGE_PREFIX + ":");
 
 /** One generation of a conversation's GOAT Bot session thread. */
 export const goatBotSessionThreadIdFor = (

@@ -7,6 +7,7 @@ import {
   goatBotOpenQuestionPlaceholder,
   goatBotTaskWait,
   isRetryableTaskStatus,
+  mergeBotRemoteWorkers,
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
@@ -25,6 +26,8 @@ import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotTaskActivity } from "./GoatBotTaskActivity";
+import { GoatBotTaskSnooze } from "./GoatBotTaskSnooze";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
@@ -71,16 +74,20 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh, established, pending, chips } = useBotThreads(
-    environmentId,
-    memberThreadsKey(member),
-  );
+  const { rows, remoteWork, refresh, established, pending, chips, supportsSnooze, workRevision } =
+    useBotThreads(environmentId, memberThreadsKey(member));
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
+  const botId = member?.botId ?? BotId.make("main");
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
-    member?.botId ?? BotId.make("main"),
-    { established, refreshing: pending, holdsTask: listedTask !== undefined },
+    botId,
+    {
+      established,
+      refreshing: pending,
+      holdsTask: listedTask !== undefined,
+      revision: workRevision,
+    },
     member?.state !== "deleted",
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
@@ -267,6 +274,14 @@ export function GoatBotTaskPane({
             >
               {task.view.doneAt ? "Reopen" : "Mark done"}
             </Button>
+            {supportsSnooze && (
+              <GoatBotTaskSnooze
+                environmentId={environmentId}
+                botId={botId}
+                view={task.view}
+                onChange={() => finish(sentFor)}
+              />
+            )}
             {lookup.supported && (
               <Button
                 variant="ghost"
@@ -301,6 +316,12 @@ export function GoatBotTaskPane({
             </Button>
           </>
         )}
+        {taskSummary?.doneMeans !== undefined && (
+          <p className="order-last w-full text-sm text-muted-foreground">
+            <strong className="font-medium text-foreground">Done means</strong>{" "}
+            <span>{taskSummary.doneMeans}</span>
+          </p>
+        )}
       </header>
       {found?.state === "unavailable" && (
         <p id="task-view-unavailable" role="status">
@@ -313,7 +334,7 @@ export function GoatBotTaskPane({
       {lookup.value?.partial && listedTask === undefined && (
         <p role="status">Some task details could not be checked.</p>
       )}
-      {lookup.loading && (
+      {lookup.loading && listedTask === undefined && (
         <p role="status" className="px-3 pt-3 text-sm text-muted-foreground">
           Loading task…
         </p>
@@ -351,13 +372,16 @@ export function GoatBotTaskPane({
           </Button>
         </div>
       )}
+      {lookup.value?.activity && <GoatBotTaskActivity work={lookup.value} />}
       {task !== undefined && listedTask !== undefined && (
         <div className="px-3">
           <GoatBotWorkDetails
             environmentId={environmentId}
             taskId={taskId}
             rows={rows}
-            remoteWork={remoteWork}
+            remoteWork={
+              lookup.value ? mergeBotRemoteWorkers(remoteWork, lookup.value.remoteWork) : remoteWork
+            }
           />
         </div>
       )}

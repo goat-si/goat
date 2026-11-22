@@ -1,25 +1,31 @@
 import {
   applyHistoryPress,
   botThreadKey,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
   botThreadsHistoryInput,
+  botWorkHistorySnoozeInput,
   botWorkHistoryView,
   EMPTY_WALK,
+  type GoatBotTaskCard,
   markWalkRead,
   readBotThreadHistory,
   writeThrough,
 } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
-import type {
-  BotId,
-  ChannelListBotThreadsResult,
+import {
   ChannelTaskId,
-  EnvironmentId,
-  ExecutionEnvironmentCapabilities,
+  type BotId,
+  type ChannelListBotThreadsResult,
+  type EnvironmentId,
+  type ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentQuery } from "../../state/query";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
 
 const NO_LIST: ChannelListBotThreadsResult = { rows: [], remoteWork: [], mainMessageCount: 0 };
 const UNWRITTEN = "[[],[],[]]";
@@ -39,12 +45,14 @@ export function useMobileBotWorkHistory(input: {
   readonly current: ChannelListBotThreadsResult | null;
   /** A settled read of the current list. */
   readonly loaded: boolean;
+  readonly home: { readonly isPending: boolean; readonly refresh: () => void };
   /** The computer is connected and lists this bot's tasks; offline nothing is read. */
   readonly enabled: boolean;
   /** One opening of Home on one computer for one bot: pages belong to it. */
   readonly scope: string;
   /** The computer and bot alone: an accepted read mark is a fact about them, whichever walk shows. */
   readonly owner: string;
+  readonly fallbackTasks?: ReadonlyArray<GoatBotTaskCard> | undefined;
 }) {
   const { environmentId, botId, enabled, scope, owner } = input;
   const current = input.current ?? NO_LIST;
@@ -97,19 +105,83 @@ export function useMobileBotWorkHistory(input: {
   const listedCapabilities = walk.started
     ? { ...input.capabilities, goatBotTaskThreadsPaged: true }
     : input.capabilities;
+  const fallbackTaskIds = useMemo(
+    () => input.fallbackTasks?.map((task) => ChannelTaskId.make(task.key)),
+    [input.fallbackTasks],
+  );
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const pages = snoozedPages?.scope === owner ? snoozedPages : undefined;
+  if (snoozedPages !== pages) setSnoozedPages(undefined);
+  const snoozeInput = useMemo(
+    () =>
+      botWorkHistorySnoozeInput(
+        walk,
+        current,
+        input.capabilities,
+        botId,
+        fallbackTaskIds,
+        pages?.rows,
+      ),
+    [walk, current, input.capabilities, botId, fallbackTaskIds, pages?.rows],
+  );
+  const checkEnabled = environmentId !== null && enabled && snoozeInput !== null;
+  const snoozeQuery = useEnvironmentQuery(
+    checkEnabled ? channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }) : null,
+  );
+  const snoozes = snoozeQuery.data?.activeSnoozes;
+  const retrySnoozeCheck =
+    checkEnabled && (snoozeQuery.error != null || (snoozeQuery.isSuccess && snoozes === undefined))
+      ? snoozeQuery.refresh
+      : undefined;
+  const checked = useKeptWhileOffline(snoozes ?? null, scope, !enabled);
+  const snoozeCheck =
+    snoozeInput === null || snoozes === undefined
+      ? undefined
+      : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
+  const activeSnoozes = useMemo(() => new Set(checked?.map(({ taskId }) => taskId)), [checked]);
+  const uncheckedSnoozes = useMemo(
+    () =>
+      checked === null && snoozeInput !== null ? new Set(snoozeInput.checkSnoozes) : undefined,
+    [checked, snoozeInput],
+  );
+  const fold = botSnoozeFold({
+    scope: owner,
+    first: current,
+    loaded: input.loaded,
+    home: input.home,
+    activeSnoozes: checked ?? undefined,
+    pages,
+    setPages: setSnoozedPages,
+    read:
+      !enabled || environmentId === null || input.capabilities?.goatBotTaskSnooze !== true
+        ? null
+        : async (cursor) => {
+            const result = await runAtomCommand(
+              appAtomRegistry,
+              channelEnvironment.listBotThreadsPage,
+              {
+                environmentId,
+                input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
+              },
+              { reportFailure: false },
+            );
+            return result._tag === "Success" ? result.value : undefined;
+          },
+  });
   const view = botWorkHistoryView({
     walk,
     current,
     capabilities: listedCapabilities as ExecutionEnvironmentCapabilities | undefined,
     botId,
     loaded: input.loaded && enabled,
+    snoozeCheck,
   });
   const hasMore = view.hasMore && paged;
   if (held.scope === scope && view.reported !== held.written) {
     const id = held.id;
     setHeld((state) =>
       state.id === id
-        ? { ...state, written: view.reported, walk: writeThrough(state.walk, current) }
+        ? { ...state, written: view.reported, walk: writeThrough(state.walk, current, snoozeCheck) }
         : state,
     );
   }
@@ -167,6 +239,14 @@ export function useMobileBotWorkHistory(input: {
   }
   return {
     supported: view.supported,
+    snoozeList: {
+      snoozed: fold.rows,
+      snoozedContinuation: fold.continuation,
+      snoozedLimitReached: fold.limitReached,
+      activeSnoozes,
+      uncheckedSnoozes,
+      retrySnoozeCheck,
+    },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

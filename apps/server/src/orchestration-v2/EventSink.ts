@@ -7,6 +7,7 @@ import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { makeCloudResultItemGuard } from "./CloudResultItemGuard.ts";
+import { makeChannelWorkerCommitGuard } from "../channels/channelWorkerReleaseAuthority.ts";
 import {
   CommandId,
   OrchestrationV2ProviderThreadJson,
@@ -73,6 +74,7 @@ const layerBase: Layer.Layer<
   EventSinkV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const guardChannelWorkerRelease = yield* makeChannelWorkerCommitGuard();
     const scheduledRuns = yield* ScheduledTaskRuns.ScheduledTaskRuns;
     type CommitOutcomes = {
       readonly runs: ReadonlyArray<RunOutcome>;
@@ -657,6 +659,7 @@ const layerBase: Layer.Layer<
           }
           const outcomes = yield* applyStoredEvents(storedEvents);
           if (input.guard !== undefined) yield* input.guard(storedEvents);
+          yield* guardChannelWorkerRelease(input);
           yield* effectOutbox.enqueue(yield* stampComputerUseStop(input.effects, eventStore));
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,

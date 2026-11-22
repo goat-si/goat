@@ -202,6 +202,7 @@ vi.mock("../../native/StackHeader", () => ({
     )),
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },

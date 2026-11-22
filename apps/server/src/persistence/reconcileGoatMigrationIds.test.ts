@@ -3,10 +3,12 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
+import { migrationLedgerProblem } from "./migrationPreflight.ts";
 import channelBotAttention from "./Migrations/181_ChannelBotAttention.ts";
 
 import {
   assertMemoryMigrationsCompatible,
+  canonicalMigrationName,
   fenceWorkTriggerRollback,
   GOAT_MIGRATION_NAMES,
   reconcileGoatMigrationIds,
@@ -56,6 +58,15 @@ const history = Effect.gen(function* () {
   `;
   return rows.map((row) => [row.migration_id, row.name] as const);
 });
+
+const preflight = (ledger: ReadonlyArray<readonly [number, string]>) =>
+  migrationLedgerProblem(
+    {
+      history: ledger.map(([migration_id, name]) => ({ migration_id, name })),
+      hasMemoryTables: true,
+    },
+    "test",
+  );
 
 const goatNames = migrationEntries.flatMap(([id, name]) =>
   GOAT_MIGRATION_NAMES.has(name) && id <= FIXTURE_LEDGER_GOAT_END ? [name] : [],
@@ -139,7 +150,7 @@ const prePenMemberMemoryNames = [
   "MemoryOriginCatchup",
 ];
 
-it.effect.each([176, 177])(
+it.effect.each([176, 177, 180] as const)(
   "upgrades a dev database at migration %s without replacing earlier history",
   (id) =>
     Effect.gen(function* () {
@@ -147,6 +158,7 @@ it.effect.each([176, 177])(
       if (id === 177) yield* fenceWorkTriggerRollback();
       const sql = yield* SqlClient.SqlClient;
       const before = yield* history;
+      assert.isUndefined(preflight(before));
       assert.deepStrictEqual(
         before.at(-1),
         migrationManifest.find(([entry]) => entry === id),
@@ -157,12 +169,23 @@ it.effect.each([176, 177])(
         yield* runMigrations(),
         migrationManifest.filter(([entry]) => entry > id),
       );
-      assert.deepStrictEqual((yield* history).slice(0, before.length), before);
-      assert.deepStrictEqual((yield* history).slice(-3), [
-        [176, "ChannelWorkerLaunchHeads"],
-        [177, "WorkTriggerAuthorityFence"],
-        [181, "ChannelBotAttention"],
-      ]);
+      const after = yield* history;
+      assert.deepStrictEqual(
+        after.slice(0, before.length),
+        before.map(
+          ([migrationId, name]) =>
+            [
+              migrationId,
+              name === "ChannelLedgerRequiresWorkTriggerAuthority"
+                ? "ChannelLedgerRequiresWorkerReleaseAuthority"
+                : name,
+            ] as const,
+        ),
+      );
+      assert.deepStrictEqual(
+        after.map(([migrationId, name]) => [migrationId, canonicalMigrationName(name)] as const),
+        migrationManifest,
+      );
       assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM channel_bot_attention`, []);
       assert.isFalse(yield* hasPendingMigrations());
@@ -198,6 +221,7 @@ describe("bot attention preview ledgers", () => {
         yield* sql`INSERT INTO channel_bot_attention (
         owner_id, bot_id, task_id, event_id, kind, generation, occurred_at
       ) VALUES ('owner', 'main', 'task', 'alert', 'question', 1, '2026-11-21T00:00:00Z')`;
+        assert.isUndefined(preflight(yield* history));
         assert.isTrue(yield* hasPendingMigrations());
 
         yield* runMigrations();

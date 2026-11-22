@@ -14,13 +14,14 @@ function WithLongPress(props: {
 }
 
 /**
- * A Work row's actions with every choice. Android uses the native menu view (the anchored menu
+ * Work actions with every choice. Android uses the native menu view (the anchored menu
  * draws behind the Home modal); it takes every touch of what it wraps and opens on touch only, so
  * TalkBack and a long press of the row open it through its ref, and the row stays outside it.
  */
 export function MobileBotRowMenu(props: {
   readonly label: string;
   readonly title: string;
+  readonly triggerText?: string;
   readonly actions: readonly MenuAction[];
   readonly onSelect: (id: string) => void;
   readonly row?: LongPressable;
@@ -40,9 +41,13 @@ export function MobileBotRowMenu(props: {
             },
           }
         : {})}
-      className="h-11 w-11 items-center justify-center"
+      className={`h-11 items-center justify-center ${props.triggerText === undefined ? "w-11" : "min-w-11"}`}
     >
-      <Text className="text-foreground-muted">…</Text>
+      <Text
+        className={props.triggerText === undefined ? "text-foreground-muted" : "text-foreground"}
+      >
+        {props.triggerText ?? "…"}
+      </Text>
     </View>
   );
   const select = ({ nativeEvent }: { nativeEvent: { event: string } }) =>

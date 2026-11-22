@@ -28,6 +28,7 @@ export function GoatBotWorkPeek({
   taskId,
   title,
   statusLabel,
+  doneMeans,
   rows,
   environmentId,
   unreadThrough = null,
@@ -39,6 +40,7 @@ export function GoatBotWorkPeek({
   readonly taskId: ChannelTaskId;
   readonly title: string;
   readonly statusLabel: string;
+  readonly doneMeans?: string | undefined;
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly environmentId: EnvironmentId;
   /** The activity this task has not been read up to; null when nothing is unread. */
@@ -81,6 +83,11 @@ export function GoatBotWorkPeek({
           <span className="truncate">{title}</span>
         </Button>
         <p className="px-3 text-xs text-muted-foreground">{statusLabel}</p>
+        {doneMeans && (
+          <p className="px-3 pt-2 text-sm text-muted-foreground">
+            <strong className="font-medium text-foreground">Done means</strong> {doneMeans}
+          </p>
+        )}
       </div>
       {/* The chat's activity lines are the bot's, not this task's; the one way on is below. */}
       <GoatBotActivityContext value={null}>

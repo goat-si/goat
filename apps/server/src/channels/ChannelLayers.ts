@@ -55,8 +55,6 @@ import * as ImessageChannelRuntime from "./imessage/ImessageChannelRuntime.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 
 const layerFoundation = Layer.mergeAll(
-  // The ledger wakes the channel loop when a receipt deadline frees work held behind it.
-  ChannelLedger.layer.pipe(Layer.provideMerge(ChannelWake.layer)),
   ChannelChildWorkStore.layer,
   MemoryStore.layer,
   ChannelBotHome.layer,
@@ -64,6 +62,9 @@ const layerFoundation = Layer.mergeAll(
   ChannelBotProfiles.layer,
   ChannelTaskViews.layer,
   ChannelTransport.layer,
+).pipe(
+  // The ledger wakes the channel loop when a receipt deadline frees work held behind it.
+  Layer.provideMerge(ChannelLedger.layer.pipe(Layer.provideMerge(ChannelWake.layer))),
 );
 
 const layerTimeline = Layer.mergeAll(
