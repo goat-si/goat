@@ -285,13 +285,16 @@ export const layer: Layer.Layer<
           ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
           : undefined;
       const profileRefusal =
-        !observeOnly &&
-        attempt.reason === "initial" &&
-        (attempt.inputDelivery === undefined || attempt.inputDelivery === "unsent") &&
-        run.startedAt === null &&
-        isGoatBotSessionThreadId(run.threadId) &&
-        Option.isSome(sql)
-          ? channelSessionProfileRefusal(sql.value, run.threadId, message.id)
+        !observeOnly && Option.isSome(sql)
+          ? channelSessionProfileRefusal(
+              sql.value,
+              run.threadId,
+              message.id,
+              run.providerInstanceId,
+              attempt.reason === "initial" &&
+                (attempt.inputDelivery === undefined || attempt.inputDelivery === "unsent") &&
+                run.startedAt === null,
+            )
           : undefined;
       const profileFailure = profileRefusal === undefined ? undefined : yield* profileRefusal;
       if (profileFailure !== undefined) {

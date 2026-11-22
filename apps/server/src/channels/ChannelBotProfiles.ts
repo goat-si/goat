@@ -1,3 +1,4 @@
+import { botToolsNarrowed } from "./channelBotTools.ts";
 import {
   BotId,
   BotProfile,
@@ -23,6 +24,7 @@ const MainRecord = Schema.Struct({
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
   instructions: BotProfile.fields.instructions,
+  tools: BotProfile.fields.tools,
   defaultModelSelection: BotProfile.fields.defaultModelSelection,
   defaultProjectId: BotProfile.fields.defaultProjectId,
   createdAt: BotProfile.fields.createdAt,
@@ -53,6 +55,7 @@ export interface BotIdentity {
   readonly name: string;
   readonly purpose: string;
   readonly instructions?: string;
+  readonly tools?: BotProfile["tools"];
 }
 export const DEFAULT_BOT_IDENTITY: BotIdentity = { name: "GOAT Bot", purpose: "" };
 
@@ -74,7 +77,11 @@ export class ChannelBotProfiles extends Context.Service<
       input: ChannelUpdateBotInput,
       owner: ProfileOwner,
     ) => Effect.Effect<
-      { readonly bot: BotProfile; readonly changed: ReadonlyArray<"name" | "purpose"> },
+      {
+        readonly bot: BotProfile;
+        readonly changed: ReadonlyArray<"name" | "purpose">;
+        readonly toolsNarrowed: boolean;
+      },
       ChannelGatewayError
     >;
     /** A bot's identity; an absent main row was never edited, so it is the default. */
@@ -291,6 +298,7 @@ const make = Effect.gen(function* () {
             ...(input.name === undefined ? {} : { name: input.name }),
             ...(input.avatar === undefined ? {} : { avatar: input.avatar }),
             ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+            ...(input.tools === undefined ? {} : { tools: input.tools }),
             ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
             ...(input.defaultModelSelection === undefined
               ? {}
@@ -307,7 +315,11 @@ const make = Effect.gen(function* () {
           const changed = (["name", "purpose"] as const).filter(
             (field) => input[field] !== undefined && input[field] !== record[field],
           );
-          return { bot: withColor({ ...listed, ...changes }, input.color), changed };
+          return {
+            bot: withColor({ ...listed, ...changes }, input.color),
+            changed,
+            toolsNarrowed: input.tools !== undefined && botToolsNarrowed(record.tools, input.tools),
+          };
         }),
       )
       .pipe(
@@ -332,6 +344,7 @@ const make = Effect.gen(function* () {
           ? Effect.succeed({
               name: profile.name,
               purpose: profile.purpose,
+              ...(profile.tools === undefined ? {} : { tools: profile.tools }),
               ...(profile.instructions === undefined ? {} : { instructions: profile.instructions }),
             })
           : botId === MAIN_BOT_ID

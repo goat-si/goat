@@ -1,3 +1,4 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 /** Dispatches and tracks channel workers on linked machines. */
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
@@ -1410,6 +1411,17 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
+      const identity = yield* profiles.identity(stored.ownerId, stored.botId).pipe(Effect.option);
+      if (Option.isNone(identity))
+        return yield* failTask(
+          owner,
+          stored,
+          "permission_changed",
+          "Could not read the bot profile.",
+        );
+      const refusal = botToolsRefusal(identity.value, remote.host);
+      if (refusal !== undefined)
+        return yield* failTask(owner, stored, "permission_changed", refusal);
       const dispatchRequester = requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
@@ -2524,9 +2536,7 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
-      // Runs last in authorize, which the SSH layer repeats right before each request, so requester
-      // and sender are judged together at that point. Whether an earlier attempt reached the host
-      // stays unknown either way.
+      // SSH repeats this gate immediately before sending.
       const senderGate = requesterForDelivery(
         stored.task,
         event.payload.sender,
@@ -2646,24 +2656,18 @@ const make = Effect.gen(function* () {
           );
           let threadId = state.remoteThreadId ?? stored.task.worker?.threadId;
           if (threadId === undefined) {
-            // The launch may have been in flight when the stop was asked, and its binding never
-            // committed here. The remote stores the binding before it creates the thread, so
-            // ask it; a binding it still does not know after the grace means no launch landed.
+            // The destination records its binding before it creates the thread.
             const seen = yield* probe(state, authorize, true).pipe(Effect.result);
             if (seen._tag === "Success") {
               threadId = seen.success.threadId;
             } else {
-              // Only the remote saying there is no such binding shows no launch landed; any
-              // other failure says nothing, so the stop keeps looking.
               if (remoteCode(seen.failure) !== "thread_not_found") return;
               const age = (yield* Clock.currentTimeMillis) - Date.parse(pending.event.occurredAt);
               if (age > 120_000) yield* done;
               return;
             }
           }
-          // Stops the thread there as local Stop does: its queue is held and the tasks it
-          // delegated stop too. An older remote refuses the stopCascade argument before anything
-          // runs; it then gets the plain interrupt, and its subagents run on until they end.
+          // Older destinations reject the cascade flag before running the command.
           const interrupt = (stopCascade: boolean) =>
             callHost(
               {
@@ -2748,11 +2752,7 @@ const make = Effect.gen(function* () {
     });
 
   let lastSweep = 0;
-  /**
-   * At most hourly. Finished tasks that moved still watch the machines they left (after a
-   * restart nothing else would), and copies no unfinished task refers to are removed once
-   * nobody rewrote them for a week.
-   */
+  /** Finished moves still watch the previous host; unclaimed copies expire after a week. */
   const hourly = (owner: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -2792,11 +2792,7 @@ const make = Effect.gen(function* () {
       }
     });
 
-  /**
-   * Watches the machines a move left behind. The task never reads their reports again (the
-   * old binding belongs to the old generation); once one answers, its running turn is stopped
-   * so it does not keep diverging, its work stays where it is, and the requester hears once.
-   */
+  /** Stop an old generation once its former host answers again. */
   const fence = (taskId: ChannelTaskId, owner: string) =>
     Effect.gen(function* () {
       let backoff = BACKOFF_START_MS;

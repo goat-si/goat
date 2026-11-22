@@ -1,3 +1,4 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
 import { readRecords, rejected } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
 /** Warm sessions are bound per conversation, bot and requester. */
@@ -142,7 +143,6 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const { stateDir } = yield* ServerConfig.ServerConfig;
-  // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
@@ -295,7 +295,6 @@ const make = Effect.gen(function* () {
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    // Only a requester at full access may act through the supervisor's owner profile.
     if (settings.goatclaw.enabled && requester.runtimeModeCeiling === "full-access")
       yield* permissions
         .bind(
@@ -455,7 +454,8 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const target = yield* requireTarget(initial.task);
-    const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
+    const instance = yield* providers.getInstance(target.modelSelection.instanceId);
+    const driver = instance?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
     const sent = yield* sentRun(initial.task);
     if (sent === "unknown") return "deferred" as const;
@@ -471,14 +471,17 @@ const make = Effect.gen(function* () {
     if (requester === undefined) return yield* failPermission(initial, owner);
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
+    const refusal = botToolsRefusal(
+      identity.value,
+      instance?.displayName ?? target.modelSelection.instanceId,
+    );
+    if (refusal !== undefined) return yield* fail(initial, owner, refusal, "permission_changed");
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ceiling = { ...target, memoryGrantCeiling };
     const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
     let row = yield* currentRow(key);
     const read = yield* Rotation.readSessionRecords(threads, row?.thread_id);
     const records = read === "unknown" ? Option.none() : read;
-    // A generation that never finished launching belongs to the task that started it: only that
-    // task resumes its launch, while it can still run; otherwise the row is retired unused.
     if (
       row?.state === "starting" &&
       (row.task_id !== initial.task.taskId || row.task_generation !== initial.task.generation)
@@ -776,7 +779,6 @@ const make = Effect.gen(function* () {
       );
       return;
     }
-    // A stopped run is not restarted: the follow-up is dropped and its fence lifted.
     if (yield* bindAfterSend(ledger, event.taskId, own, result.run, owner)) yield* done;
   });
 

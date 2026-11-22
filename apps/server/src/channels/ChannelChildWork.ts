@@ -1,3 +1,5 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
+import { readProfileRecord } from "./ChannelBotProfiles.ts";
 /**
  * ChannelChildWork - admission, ownership, and reconciliation for work a channel-owned thread
  * launches: delegated subagents and bot-launched GOAT threads, local or on another machine.
@@ -90,7 +92,12 @@ export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkEr
 
 export type ChannelChildWorkOwnership =
   | { readonly _tag: "not_channel_owned" }
-  | { readonly _tag: "worker"; readonly task: ChannelTask; readonly ownerId: string }
+  | {
+      readonly _tag: "worker";
+      readonly task: ChannelTask;
+      readonly ownerId: string;
+      readonly botId: ChannelLedger.ChannelStoredTask["botId"];
+    }
   | { readonly _tag: "child"; readonly record: ChannelChildWorkRecord }
   /** The worker of an attempt a person retried; it launches nothing more. */
   | { readonly _tag: "retired_worker" };
@@ -254,6 +261,7 @@ const make = Effect.gen(function* () {
         _tag: "worker",
         task: stored.task,
         ownerId: stored.ownerId,
+        botId: stored.botId,
       } as const satisfies ChannelChildWorkOwnership;
     }
     const records = yield* threads
@@ -281,6 +289,7 @@ const make = Effect.gen(function* () {
       _tag: "worker",
       task: stored.task,
       ownerId: stored.ownerId,
+      botId: stored.botId,
     } as const satisfies ChannelChildWorkOwnership;
   });
 
@@ -302,6 +311,7 @@ const make = Effect.gen(function* () {
         _tag: "worker",
         task: stored.task,
         ownerId: stored.ownerId,
+        botId: stored.botId,
       } as const satisfies ChannelChildWorkOwnership;
     }
     const retired = yield* sql<{ readonly key: string }>`
@@ -339,6 +349,15 @@ const make = Effect.gen(function* () {
           "This thread is itself recorded child work of a channel task and cannot launch its own" +
           " subagents or threads. Return findings to the coordinating worker instead.",
       });
+    }
+    if (ownership._tag === "worker") {
+      const profile = yield* readProfileRecord(sql, ownership.ownerId, ownership.botId).pipe(
+        Effect.mapError((cause) => toError("Could not read the bot's tool limits.", cause)),
+      );
+      const refusal =
+        profile === undefined ? undefined : botToolsRefusal(profile, "delegated work");
+      if (refusal !== undefined)
+        return yield* new ChannelChildWorkError({ reason: "owner_terminal", detail: refusal });
     }
     // A terminal task's worker still answering a late turn launches nothing new. A cancel
     // racing this check is resolved by the stop traversal (reserved records release) and by

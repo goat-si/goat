@@ -1,8 +1,16 @@
-import { MAIN_BOT_ID, type MessageId, type ThreadId } from "@goat/contracts";
+import {
+  MAIN_BOT_ID,
+  isGoatBotSessionThreadId,
+  type MessageId,
+  type ThreadId,
+} from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { DEFAULT_BOT_IDENTITY, readProfileRecord } from "./ChannelBotProfiles.ts";
+import { botToolsRefusal } from "./channelBotTools.ts";
+import { isChannelWorkerThreadId } from "./channelIds.ts";
+import { workerContextOwner } from "./channelProviderBrief.ts";
 import { PROFILE_UNREADABLE, sessionProfileIsCurrent } from "./channelBotSessionRotation.ts";
 
 export const CHANNEL_SESSION_PROFILE_CHANGED = "channel_session_profile_changed";
@@ -21,8 +29,55 @@ const profileUnreadable = makeProviderFailure({
   retryable: false,
 });
 
+const toolFailure = (profile: typeof DEFAULT_BOT_IDENTITY | undefined, destination: string) => {
+  if (profile === undefined) return profileUnreadable;
+  const refusal = botToolsRefusal(profile, destination);
+  return refusal === undefined
+    ? undefined
+    : makeProviderFailure({
+        class: "validation_error",
+        code: "channel_bot_tool_limits",
+        message: refusal,
+        retryable: false,
+      });
+};
+
 export const channelSessionProfileRefusal = Effect.fn("ChannelBotSession.checkStartProfile")(
-  function* (sql: SqlClient.SqlClient, threadId: ThreadId, messageId: MessageId) {
+  function* (
+    sql: SqlClient.SqlClient,
+    threadId: ThreadId,
+    messageId: MessageId,
+    destination: string,
+    checkFrozenProfile: boolean,
+  ) {
+    if (isChannelWorkerThreadId(threadId)) {
+      const worker = yield* workerContextOwner(sql, threadId);
+      if (worker === undefined) return;
+      const [task] = yield* sql<{ readonly owner_id: string; readonly bot_id: string }>`
+        SELECT owner_id, bot_id FROM channel_tasks WHERE task_id = ${worker.task_id}
+      `;
+      if (task === undefined) return profileUnreadable;
+      const profile = yield* readProfileRecord(sql, task.owner_id, task.bot_id);
+      return toolFailure(
+        profile ?? (task.bot_id === MAIN_BOT_ID ? DEFAULT_BOT_IDENTITY : undefined),
+        destination,
+      );
+    }
+    if (!isGoatBotSessionThreadId(threadId)) return;
+    const [bound] = yield* sql<{ readonly owner_id: string; readonly bot_id: string }>`
+      SELECT t.owner_id, t.bot_id
+      FROM channel_bot_sessions s JOIN channel_tasks t ON t.task_id = s.task_id
+      WHERE s.thread_id = ${threadId}
+    `;
+    if (bound !== undefined) {
+      const profile = yield* readProfileRecord(sql, bound.owner_id, bound.bot_id);
+      const failure = toolFailure(
+        profile ?? (bound.bot_id === MAIN_BOT_ID ? DEFAULT_BOT_IDENTITY : undefined),
+        destination,
+      );
+      if (failure !== undefined) return failure;
+    }
+    if (!checkFrozenProfile) return;
     const [session] = yield* sql<{
       readonly context_text: string | null;
       readonly owner_id: string;

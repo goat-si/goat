@@ -1,17 +1,6 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
 import { sameRequester } from "./channelRequesterIdentity.ts";
-/**
- * ChannelDispatcher - the ledger's central decision maker.
- *
- * A deterministic service, not a hidden agent thread: it reads one task from the ledger, picks a
- * project and launch settings within what the requester may use, records that choice, and starts
- * one coding thread through the normal launch service. When the choice is ambiguous or not
- * allowed it asks the requester instead of guessing. It also forwards answers to worker threads.
- *
- * Launch ids derive from the task and its generation, so a restart re-runs the same launch and
- * lands on the same thread.
- *
- * @module ChannelDispatcher
- */
+/** Launch IDs derive from a task's generation, so retries land on the same thread. */
 import {
   type ChannelDispatchTarget,
   type CommandId,
@@ -420,6 +409,12 @@ const make = Effect.gen(function* () {
       const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
       const identity = yield* profiles.identity(initial.ownerId, initial.botId).pipe(Effect.option);
       if (Option.isNone(identity)) return yield* refuseDispatch(initial, owner);
+      const instance = yield* providers.getInstance(initial.task.target.modelSelection.instanceId);
+      const refusal = botToolsRefusal(
+        identity.value,
+        instance?.displayName ?? initial.task.target.modelSelection.instanceId,
+      );
+      if (refusal !== undefined) return yield* refuseDispatch(initial, owner, refusal);
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const { standingInstructions } = resolveProjectSettings(
         settings,
@@ -744,6 +739,7 @@ const make = Effect.gen(function* () {
   const refuseDispatch = Effect.fn("ChannelDispatcher.refuseDispatch")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     owner: string,
+    summary?: string,
   ) {
     yield* unlessMovedOn(
       commitTransition(
@@ -755,6 +751,7 @@ const make = Effect.gen(function* () {
             generation: stored.task.generation,
             reason: "permission_changed",
             summary:
+              summary ??
               (yield* routineFailure(stored.task)) ??
               "The requester’s permission to start this work changed.",
           },
