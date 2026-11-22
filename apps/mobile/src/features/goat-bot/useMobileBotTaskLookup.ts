@@ -5,6 +5,7 @@ import type {
   BotId,
   BotWorkResult,
   ChannelChildWorkGroup,
+  ChannelTaskChip,
   ChannelTaskId,
   EnvironmentId,
 } from "@goat/contracts";
@@ -17,6 +18,10 @@ import { channelEnvironment } from "../../state/channels";
 const NO_PERMISSION = Atom.make(false);
 
 type Unavailable = Extract<BotWorkResult["task"], { readonly state: "unavailable" }>;
+
+export type MobileTaskApprovalObservation = Pick<ChannelTaskChip, "taskId" | "title" | "worker"> & {
+  readonly observed: Pick<NonNullable<ChannelTaskChip["observed"]>, "needsYou">;
+};
 
 /** What a task's own screen knows about a task its bot's current list does not hold. */
 export type MobileTaskLookup =
@@ -34,7 +39,7 @@ export type TaskLookupFacts = {
   /** The server looks tasks up, the computer is connected, and this device may read. */
   readonly able: boolean;
   readonly permitted: boolean;
-  /** A current-list read has succeeded for this computer and bot. */
+  /** The current list has data, or its failure allows a lookup for approvals. */
   readonly established: boolean;
   /** A current-list read is in flight. */
   readonly refreshing: boolean;
@@ -42,7 +47,7 @@ export type TaskLookupFacts = {
   readonly holdsTask: boolean;
   /** The saved answer is this task's; a failed read is an answer too. */
   readonly held: boolean;
-  /** An action on this task completed after its last read started. */
+  /** An action or approval refresh signal followed the start of the last read. */
   readonly stale: boolean;
   /** A read for this task is running. */
   readonly inFlight: boolean;
@@ -50,9 +55,7 @@ export type TaskLookupFacts = {
 
 /**
  * What the task screen shows, and whether a read starts by itself. Nothing else starts a read
- * except Try again; so a task change during a refresh waits for it, an action's reread waits for
- * its refresh to settle (success or failure), and a refresh that returns the task reads nothing.
- * A held answer, a failure included, is read again only once an action made it stale.
+ * except Try again. Rereads wait for the current-list refresh and any in-flight read to settle.
  */
 export function taskLookupDecision(facts: TaskLookupFacts): {
   readonly view: "off" | "row" | "denied" | "answer" | "loading";
@@ -66,10 +69,11 @@ export function taskLookupDecision(facts: TaskLookupFacts): {
 }
 
 /** The last answer for one task: what it read, or why it could not. */
-type Saved = { readonly revision: unknown } & (
-  | { readonly key: string; readonly value: BotWorkResult }
-  | { readonly key: string; readonly error: "missing" | "denied" | "failed" }
-);
+type Saved = {
+  readonly key: string;
+  readonly revision: unknown;
+  readonly approvalRevision: string | undefined;
+} & ({ readonly value: BotWorkResult } | { readonly error: "missing" | "denied" | "failed" });
 
 /** not_found, a refusal by the server's access check, or any other failure. */
 function failureKind(error: unknown): "missing" | "denied" | "failed" {
@@ -100,10 +104,12 @@ export function useMobileBotTaskLookup(input: {
   readonly refreshing: boolean;
   readonly revision?: unknown;
   readonly holdsTask: boolean;
+  /** Changes while the task needs approval observations from the lookup. */
+  readonly approvalRevision?: string | undefined;
   /** Child work read for this task, for its subagents. */
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
-}): { readonly lookup: MobileTaskLookup; readonly invalidate: () => void } {
-  const { environmentId, botId, taskId } = input;
+}) {
+  const { environmentId, botId, taskId, approvalRevision } = input;
   const able = input.supported && environmentId !== null && taskId !== null;
   const permitted = useAtomValue(
     able && environmentId !== null
@@ -126,7 +132,10 @@ export function useMobileBotTaskLookup(input: {
     refreshing: input.refreshing,
     holdsTask: input.holdsTask,
     held: saved?.key === key,
-    stale: staleKey === key || (saved?.key === key && saved.revision !== input.revision),
+    stale:
+      staleKey === key ||
+      (saved?.key === key &&
+        (saved.approvalRevision !== approvalRevision || saved.revision !== input.revision)),
     inFlight: inFlight?.key === key,
   });
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
@@ -150,8 +159,13 @@ export function useMobileBotTaskLookup(input: {
       // A failure replaces the answer, so an action's failed reread never leaves the old state.
       setSaved(
         result._tag === "Success"
-          ? { key: sentKey, revision, value: result.value }
-          : { key: sentKey, revision, error: failureKind(squashAtomCommandFailure(result)) },
+          ? { key: sentKey, revision, approvalRevision, value: result.value }
+          : {
+              key: sentKey,
+              revision,
+              approvalRevision,
+              error: failureKind(squashAtomCommandFailure(result)),
+            },
       );
     });
   };
@@ -213,5 +227,18 @@ export function useMobileBotTaskLookup(input: {
     return task === undefined ? { state: "missing" } : { state: "known", task, result };
   };
   const invalidate = () => setStaleKey(key);
-  return { lookup: present(), invalidate };
+  const result =
+    decision.view === "answer" && saved?.key === key && "value" in saved ? saved.value : null;
+  const observation = result?.approvalObservation;
+  const summary = result?.task.state === "known" ? result.task.row.task : result?.task.task;
+  const approvalTask: MobileTaskApprovalObservation | undefined =
+    observation && summary && observation.needsYou.length > 0
+      ? {
+          taskId: summary.taskId,
+          title: summary.title,
+          worker: observation.worker,
+          observed: observation,
+        }
+      : undefined;
+  return { lookup: present(), approvalTask, invalidate };
 }

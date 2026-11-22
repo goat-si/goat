@@ -169,6 +169,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   WORKER_GENERATIONS_MIGRATION_NAME,
   "ChannelBotTaskSnooze",
   BOT_ATTENTION_MIGRATION_NAME,
+  "RemoteDispatchEnvironment",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -12,11 +12,15 @@ const cloudConfig = resolveCloudPublicConfig();
 // Build-time constant: null when this build has no cloud config.
 const publishableKey = hasCloudPublicConfig() ? cloudConfig.clerk.publishableKey : null;
 
-if (publishableKey) {
+export function installCloudAccountService(): () => void {
+  if (publishableKey === null) return () => {};
+
   // The same native singleton ClerkProvider renders with, so the service
   // observes it for the app's lifetime without a React subscription.
-  cloudAccountService.attach(getClerkInstance({ publishableKey }));
-} else {
+  return cloudAccountService.attach(getClerkInstance({ publishableKey }));
+}
+
+if (publishableKey === null) {
   // Disabling Connect detaches the active token without signing the account out.
   releaseAgentAwarenessRelayTokenProvider();
   setManagedRelaySession(appAtomRegistry, null);

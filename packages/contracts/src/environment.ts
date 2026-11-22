@@ -297,6 +297,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotTemplates: Schema.optionalKey(Schema.Boolean),
   goatBotPackages: Schema.optionalKey(Schema.Boolean),
   goatBotProfileColor: Schema.optionalKey(Schema.Boolean),
+  goatBotProposals: Schema.optionalKey(Schema.Boolean),
   /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
   goatBotMembers: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */

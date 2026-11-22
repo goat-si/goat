@@ -1,3 +1,4 @@
+import { BotProposalFields } from "./botProfile.ts";
 import * as Schema from "effect/Schema";
 
 import { BotColor, BotId, BotProfile, BotRole } from "./botProfile.ts";
@@ -36,11 +37,12 @@ import {
   ChannelBotRef,
   ChannelTask,
   ChannelTaskChip,
-  ChannelTaskDoneMeans,
   ChannelTaskStatus,
+  ChannelWorkerRef,
+  ChannelTaskDoneMeans,
 } from "./channelLedger.ts";
 import { ChannelSkillProposal } from "./channelSkillProposal.ts";
-import { ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
+import { ChannelTaskNeedsYou, ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { GoatBotHomeClaim } from "./settings.ts";
 
@@ -450,19 +452,21 @@ export const ChannelUpdateBotInput = Schema.Struct({
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 
-/** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
-export const ChannelCreateBotInput = Schema.Struct({
+export const ChannelProposeBotInput = Schema.Struct({
+  ...BotProposalFields.fields,
   clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
-  templateId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
-  retryForBotId: Schema.optionalKey(BotId),
-  name: BotProfile.fields.name,
-  avatar: BotProfile.fields.avatar,
-  purpose: BotProfile.fields.purpose,
-  defaultModelSelection: BotProfile.fields.defaultModelSelection,
-  /** Read by servers with `goatBotProfileColor`; absent leaves the bot neutral. */
-  color: Schema.optionalKey(BotColor),
+  templateId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
 });
-export type ChannelCreateBotInput = typeof ChannelCreateBotInput.Type;
+export type ChannelProposeBotInput = typeof ChannelProposeBotInput.Type;
+export const ChannelProposeBotResult = Schema.Struct({ proposalId: TrimmedNonEmptyString });
+export const ChannelResolveBotProposalInput = Schema.Struct({
+  proposalId: TrimmedNonEmptyString.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  accept: Schema.Boolean,
+});
+export type ChannelResolveBotProposalInput = typeof ChannelResolveBotProposalInput.Type;
+
+export { ChannelBotResult, ChannelCreateBotInput } from "./channelBotCreate.ts";
+
 export const ChannelSetBotHiddenInput = Schema.Struct({ botId: BotId, hidden: Schema.Boolean });
 export type ChannelSetBotHiddenInput = typeof ChannelSetBotHiddenInput.Type;
 /** Refused with bot_busy while the bot has open work; its thread is archived, not removed. */
@@ -470,11 +474,6 @@ export const ChannelDeleteBotInput = Schema.Struct({ botId: BotId });
 export type ChannelDeleteBotInput = typeof ChannelDeleteBotInput.Type;
 export const ChannelRestoreBotInput = Schema.Struct({ botId: BotId });
 export type ChannelRestoreBotInput = typeof ChannelRestoreBotInput.Type;
-export const ChannelBotResult = Schema.Struct({
-  bot: BotProfile,
-  templateAutomationPending: Schema.optional(Schema.Literal(true)),
-});
-export type ChannelBotResult = typeof ChannelBotResult.Type;
 export type ChannelUpdateBotInput = typeof ChannelUpdateBotInput.Type;
 export type ChannelUpdateBotResult = typeof ChannelUpdateBotResult.Type;
 
@@ -612,6 +611,7 @@ export const BotCodingRow = Schema.Struct({
   lastActivityAt: IsoDateTime,
   workKind: Schema.optional(GoatBotWorkKind),
 });
+export const CHANNEL_BOT_TASK_APPROVAL_LIMIT = 64;
 export const CHANNEL_BOT_TASK_ACTIVITY_LIMIT = 50;
 const activityFields = {
   id: TrimmedNonEmptyString,
@@ -670,6 +670,20 @@ export const BotWorkResult = Schema.Struct({
   activity: Schema.optionalKey(ChannelBotTaskActivity),
   launchesTruncated: Schema.Boolean,
   partial: Schema.Boolean,
+  approvalObservation: Schema.optional(
+    Schema.Struct({
+      worker: Schema.optional(
+        Schema.Struct({
+          environmentId: ChannelWorkerRef.fields.environmentId,
+          threadId: ChannelWorkerRef.fields.threadId,
+          host: ChannelWorkerRef.fields.host,
+        }),
+      ),
+      needsYou: Schema.Array(ChannelTaskNeedsYou).check(
+        Schema.isMaxLength(CHANNEL_BOT_TASK_APPROVAL_LIMIT),
+      ),
+    }),
+  ),
 });
 export type BotWorkResult = typeof BotWorkResult.Type;
 export const ChannelGetBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, botId: BotId });
@@ -941,6 +955,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   exportBotPackage: "channel.exportBotPackage",
   reviewBotPackage: "channel.reviewBotPackage",
   importBotPackage: "channel.importBotPackage",
+  resolveBotProposal: "channel.resolveBotProposal",
   setBotHidden: "channel.setBotHidden",
   deleteBot: "channel.deleteBot",
   restoreBot: "channel.restoreBot",

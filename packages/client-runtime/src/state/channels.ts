@@ -442,6 +442,10 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
     }),
     listBots,
+    readBotRoster: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:read-bot-roster",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
+    }),
     listedBotWork,
     homeCurrentOpenableWorkAtom,
     homeCurrentUnreadAtom,
@@ -484,6 +488,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.importBotPackage,
       onSuccess: refreshBots,
     }),
+    resolveBotProposal: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:resolve-bot-proposal",
+      tag: CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal,
+      onSuccess: refreshBots,
+    }),
     setBotHidden: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:set-bot-hidden",
       tag: CHANNEL_GATEWAY_WS_METHODS.setBotHidden,
@@ -511,10 +520,12 @@ export function createChannelEnvironmentAtoms<R, E>(
     followThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:followThread",
       tag: CHANNEL_GATEWAY_WS_METHODS.followThread,
+      onSuccess: bumpBotThreads,
     }),
     stopFollowingThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:stopFollowingThread",
       tag: CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread,
+      onSuccess: bumpBotThreads,
     }),
     listFollowedThreads: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:listFollowedThreads",

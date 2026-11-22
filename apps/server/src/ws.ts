@@ -157,6 +157,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { reauthorizeSession } from "./auth/McpClientAuthority.ts";
 import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -1646,6 +1647,7 @@ export const layerWsRpc = (
         ...ChannelBotMembers.rpcHandlers(
           channelBotMembers,
           channelOwner,
+          reauthorizeSession(sessions, currentSessionId)([AuthOrchestrationOperateScope]),
           {
             service: scheduledTasks,
             capture: scheduledTaskAccess.capture(captureTaskMemoryCeiling),

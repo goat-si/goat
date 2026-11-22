@@ -28,6 +28,7 @@ import {
   ChannelUpdateBotResult,
   ChannelBotResult,
   ChannelCreateBotInput,
+  ChannelResolveBotProposalInput,
   ChannelDeleteBotInput,
   ChannelRestoreBotInput,
   ChannelSetBotHiddenInput,
@@ -145,6 +146,12 @@ const BotPackageReviewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage
 const BotPackageImportRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.importBotPackage, {
   payload: BotPackageImportInput,
   success: BotPackageImportResult,
+  error: ChannelRpcError,
+});
+
+const ChannelResolveBotProposalRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal, {
+  payload: ChannelResolveBotProposalInput,
+  success: Schema.Void,
   error: ChannelRpcError,
 });
 
@@ -321,6 +328,7 @@ export const ChannelRpcs = RpcGroup.make(
   BotPackageExportRpc,
   BotPackageReviewRpc,
   BotPackageImportRpc,
+  ChannelResolveBotProposalRpc,
   ChannelSetBotHiddenRpc,
   ChannelDeleteBotRpc,
   ChannelRestoreBotRpc,

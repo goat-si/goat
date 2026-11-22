@@ -292,6 +292,34 @@ export const layer = McpToolAccess.toLayer(
           return yield* home.read.pipe(Effect.mapError(failureFor));
         }),
       ),
+      goat_channel_bot_propose: McpToolAccess.proposesForReview((input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const reauthorize = scope.reauthorize?.(["orchestration:read"]);
+          if (reauthorize !== undefined) {
+            yield* reauthorize.pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: "Posting a bot proposal requires access to GOAT Bot on this machine.",
+                  }),
+              ),
+            );
+          }
+          if (input.templateId !== undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "This host does not support bot templates. Supply explicit fields and omit templateId.",
+            });
+          }
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          return yield* runtime
+            .proposeBot(input, { ownerId: yield* ownerIdOf }, scope.requestNamespace)
+            .pipe(Effect.mapError(failureFor));
+        }),
+      ),
       goat_channel_bot_list: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
           const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;

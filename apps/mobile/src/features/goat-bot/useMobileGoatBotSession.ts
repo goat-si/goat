@@ -1,3 +1,4 @@
+import { useMobileBotProposalDecision } from "./useMobileBotProposalDecision";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   buildGoatBotTimeline,
@@ -806,8 +807,14 @@ export function useMobileGoatBotSession(
         machine: retryGoatBotEnsure(current.machine),
       });
   }, [environmentId, homeKey, settingsSnapshot]);
+  const resolveProposal = useMobileBotProposalDecision(
+    connected && target?.environmentId === environmentId && capabilities?.goatBotProposals
+      ? environmentId
+      : null,
+  );
   return {
     rows,
+    ...(resolveProposal === undefined ? {} : { resolveProposal }),
     /** The conversation's items the rows were built from; empty while the chat is hidden. */
     visibleTurnItems,
     /** The history's server sends a thread's newest part, so GOAT Bot's steps may be read. */

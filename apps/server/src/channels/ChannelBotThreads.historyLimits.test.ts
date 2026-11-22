@@ -1,8 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   BotId,
+  BotWorkResult,
+  CHANNEL_BOT_TASK_APPROVAL_LIMIT,
   ChannelSnoozeBotTaskInput,
   ChannelTaskId,
+  EnvironmentId,
+  RuntimeRequestId,
+  ThreadId,
   type ChannelListBotThreadsResult,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -41,6 +46,51 @@ import {
 const decodeSnoozeInput = Schema.decodeEffect(ChannelSnoozeBotTaskInput);
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("keeps a bounded approval observation in the task lookup response", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("approval-lookup", { status: "running", createdAt: at(1) });
+        const worker = {
+          environmentId: EnvironmentId.make("remote-environment"),
+          threadId: ThreadId.make("worker"),
+          host: "remote",
+        };
+        const approvals = Array.from(
+          { length: CHANNEL_BOT_TASK_APPROVAL_LIMIT + 1 },
+          (_, index) => ({
+            kind: "approval" as const,
+            since: at(1),
+            approval: {
+              requestId: RuntimeRequestId.make(`request-${index}`),
+              ...worker,
+            },
+          }),
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json,
+          '$.worker', json(${JSON.stringify({ ...worker, generation: 1 })}),
+          '$.observed', json(${JSON.stringify({
+            pullRequests: [],
+            needsYou: [{ kind: "sign_in", since: at(1) }, ...approvals],
+          })})) WHERE task_id = 'approval-lookup'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("approval-lookup"), botId: BotId.make("main") },
+          owner,
+        );
+        const codec = Schema.toCodecJson(BotWorkResult);
+        const decoded = yield* Schema.decodeEffect(codec)(
+          yield* Schema.encodeEffect(codec)(result),
+        );
+        assert.deepStrictEqual(decoded.approvalObservation, {
+          worker,
+          needsYou: approvals.slice(0, CHANNEL_BOT_TASK_APPROVAL_LIMIT),
+        });
+      }),
+    ),
+  );
+
   it.effect("pages the 51st snoozed task and checks it outside the fold", () =>
     provide(
       Effect.gen(function* () {

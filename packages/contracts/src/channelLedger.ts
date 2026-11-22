@@ -1,3 +1,4 @@
+import { BotProposalCard } from "./botProfile.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -529,6 +530,7 @@ export const ChannelTimelineRecord = Schema.Struct({
       type: Schema.Literal("event"),
       text: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
       subject: Schema.optionalKey(GoatBotEventSubject),
+      botProposal: Schema.optionalKey(BotProposalCard),
     }),
   ]),
 });

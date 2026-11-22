@@ -94,7 +94,9 @@ vi.mock("../../state/use-composer-drafts", () => ({
 vi.mock("../../lib/composerAttachmentFiles", () => ({
   retainComposerAttachmentFile: () => () => {},
 }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("react-native", () => ({
+  ActivityIndicator: () => null,
   StyleSheet: { hairlineWidth: 1 },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,

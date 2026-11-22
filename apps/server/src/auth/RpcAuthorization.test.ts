@@ -107,6 +107,7 @@ describe("RPC authorization scopes", () => {
     Effect.gen(function* () {
       for (const [method, input] of [
         [CHANNEL_GATEWAY_WS_METHODS.createBot, { clientRequestId: "c1", name: "Helper" }],
+        [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal, { proposalId: "proposal", accept: true }],
         [CHANNEL_GATEWAY_WS_METHODS.setBotHidden, { botId: "b1", hidden: true }],
         [CHANNEL_GATEWAY_WS_METHODS.deleteBot, { botId: "b1" }],
         [CHANNEL_GATEWAY_WS_METHODS.restoreBot, { botId: "b1" }],

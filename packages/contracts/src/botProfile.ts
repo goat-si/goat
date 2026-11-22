@@ -66,3 +66,18 @@ export const BotProfile = Schema.Struct({
   color: Schema.optionalKey(BotColor),
 });
 export type BotProfile = typeof BotProfile.Type;
+
+export const BotProposalFields = Schema.Struct({
+  name: BotProfile.fields.name,
+  avatar: BotProfile.fields.avatar,
+  purpose: BotProfile.fields.purpose,
+  instructions: BotInstructions,
+  why: TrimmedNonEmptyString.check(Schema.isMaxLength(1000)),
+});
+export const BotProposalCard = Schema.Struct({
+  proposalId: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  fields: BotProposalFields,
+  status: Schema.Literals(["pending", "accepted", "dismissed"]),
+});
+export type BotProposalCard = typeof BotProposalCard.Type;

@@ -44,7 +44,9 @@ type Read =
 vi.mock("./MobileNewBotNameRow", () => ({
   useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
 }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("react-native", () => ({
+  ActivityIndicator: () => null,
   StyleSheet: { hairlineWidth: 1 },
   // Views report where they sit, as native layout does once they mount.
   View: function View({
