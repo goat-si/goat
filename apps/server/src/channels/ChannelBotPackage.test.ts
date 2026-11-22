@@ -32,6 +32,7 @@ const sample = {
   automations: [
     {
       title: "Build check",
+      notificationPolicy: "important_updates",
       prompt: "Review the build.",
       schedule: { type: "interval", everyMs: 60_000 },
     },
@@ -73,7 +74,19 @@ it.effect("blocks export of bot instructions containing a token-shaped string", 
       status: "blocked",
       fields: ["/instructions"],
     });
-    yield* members.update({ botId: bot.botId, instructions: "Use the build dashboard." }, owner);
+    yield* members.update(
+      {
+        botId: bot.botId,
+        instructions: "Use the build dashboard.",
+        purpose: "abc123XYZ789qWeRtyM54N6uxBxL0",
+      },
+      owner,
+    );
+    assert.deepStrictEqual(yield* members.exportPackage({ botId: bot.botId }, owner), {
+      status: "blocked",
+      fields: ["/purpose"],
+    });
+    yield* members.update({ botId: bot.botId, purpose: "Check build health." }, owner);
     const exported = yield* members.exportPackage({ botId: bot.botId }, owner);
     assert.strictEqual(exported.status, "ready");
     if (exported.status === "ready") {
@@ -113,6 +126,7 @@ it.effect("binds confirmation to the reviewed package and resumes paused automat
           yield* members.importPackage(input, owner, context).pipe(Effect.flip);
           const partial = (yield* members.list({}, owner)).find((bot) => bot.name === sample.name);
           assert.isDefined(partial);
+          assert.deepStrictEqual((yield* service.list()).tasks, []);
           yield* sql`DROP TRIGGER fail_bot_import`;
 
           const result = yield* members.importPackage(input, owner, context);
@@ -121,12 +135,21 @@ it.effect("binds confirmation to the reviewed package and resumes paused automat
             (yield* members.importPackage(input, owner, context)).bot.botId,
             result.bot.botId,
           );
+          const different = yield* members.reviewPackage({ text: text + " " });
+          const reused = yield* members
+            .importPackage({ ...input, text: text + " ", digest: different.digest }, owner, context)
+            .pipe(Effect.flip);
+          assert.strictEqual(reused.reason, "invalid_input");
           assert.deepStrictEqual(result.bot.tools, { mcpServers: [], skills: [] });
           assert.deepStrictEqual(result.bot.importedToolNames, sample.tools);
           const { tasks } = yield* service.list();
           assert.lengthOf(tasks, 2);
           assert.isTrue(
             tasks.every((task) => !task.enabled && task.threadId === result.bot.sessionThreadId),
+          );
+          assert.strictEqual(
+            tasks.find((task) => task.title === "Build check")?.notificationPolicy,
+            "important_updates",
           );
           const trigger = tasks.find((task) => task.schedule.type === "webhook");
           assert.isDefined(trigger);
@@ -138,10 +161,18 @@ it.effect("binds confirmation to the reviewed package and resumes paused automat
           });
           const grant = yield* capture;
           const save = {
-            ...trigger,
+            id: trigger.id,
             requireExisting: true,
+            title: trigger.title,
+            prompt: trigger.prompt,
             enabled: true,
-            schedule: { type: "webhook", signature },
+            projectId: trigger.projectId,
+            threadId: trigger.threadId,
+            workspaceStrategy: trigger.workspaceStrategy,
+            modelSelection: trigger.modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            schedule: { type: "webhook", signature: { ...signature, secretSet: true } },
           } as const;
           for (const attempt of [
             service.setEnabled({ id: trigger.id, enabled: true }, grant),
@@ -185,6 +216,9 @@ it.effect("refuses a restricted imported bot's local worker at dispatch", () => 
   return Effect.gen(function* () {
     yield* setupBot;
     const members = yield* ChannelBotMembers;
+    const ledger = yield* ChannelLedger;
+    const gateway = yield* ChannelGateway;
+    const runtime = yield* ChannelRuntime;
     const sql = yield* SqlClient.SqlClient;
     yield* withWebhookService(
       ({ service }) =>
@@ -196,9 +230,6 @@ it.effect("refuses a restricted imported bot's local worker at dispatch", () => 
             owner,
             { service, capture },
           );
-          const ledger = yield* ChannelLedger;
-          const gateway = yield* ChannelGateway;
-          const runtime = yield* ChannelRuntime;
           yield* gateway.ingest(
             {
               ...goatInput("do: use the deploy tool", "local-denied"),

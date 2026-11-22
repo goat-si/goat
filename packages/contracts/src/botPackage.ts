@@ -5,6 +5,7 @@ import { BotColor, BotId, BotInstructions, BotProfile, BotToolNames } from "./bo
 import {
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskNotificationPolicy,
   ScheduledTaskWebhookDedupe,
   ScheduledTaskWebhookFilters,
   WebhookMaxDeliveryAgeMinutes,
@@ -41,6 +42,7 @@ const PackageWebhook = Schema.Struct({
 });
 const Automation = Schema.Struct({
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  notificationPolicy: Schema.optionalKey(ScheduledTaskNotificationPolicy),
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(16 * 1024)),
   schedule: Schema.Union([
     Schema.Struct({
@@ -51,7 +53,7 @@ const Automation = Schema.Struct({
     PackageWebhook,
   ]),
 });
-const BotPackage = Schema.Struct({
+export const BotPackage = Schema.Struct({
   version: Schema.Literal(1),
   name: BotProfile.fields.name,
   face: BotProfile.fields.avatar,
@@ -64,6 +66,9 @@ const BotPackage = Schema.Struct({
 export type BotPackage = typeof BotPackage.Type;
 
 const decode = Schema.decodeUnknownSync(BotPackage);
+const parseJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+const encodePretty = Schema.encodeSync(Schema.fromJsonString(BotPackage, { space: 2 }));
+const encodeCompact = Schema.encodeSync(Schema.fromJsonString(BotPackage));
 const isText = Schema.is(BotPackageText);
 const pointer = (key: string) => key.replaceAll("~", "~0").replaceAll("/", "~1");
 const dropUnknown = (raw: unknown, clean: unknown, path: string, dropped: string[]): void => {
@@ -86,11 +91,19 @@ export function decodeBotPackage(text: string): {
   readonly droppedFields: readonly string[];
 } {
   if (!isText(text)) throw new Error("Bot package exceeds the 64 KB size limit.");
-  const raw: unknown = JSON.parse(text);
+  const raw = parseJson(text);
   const botPackage = decode(raw);
   const droppedFields: string[] = [];
   dropUnknown(raw, botPackage, "", droppedFields);
   return { botPackage, droppedFields: droppedFields.sort() };
+}
+
+export function encodeBotPackage(botPackage: BotPackage): string {
+  const pretty = encodePretty(botPackage) + "\n";
+  if (isText(pretty)) return pretty;
+  const compact = encodeCompact(botPackage);
+  if (!isText(compact)) throw new Error("Bot package exceeds the 64 KB size limit.");
+  return compact;
 }
 
 export const BotPackageExportInput = Schema.Struct({ botId: BotId });

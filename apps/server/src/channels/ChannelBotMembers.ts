@@ -417,6 +417,7 @@ const make = Effect.gen(function* () {
             return { record: created, receipt };
           }),
         );
+        if (record.state === "deleted" && imported !== undefined) return yield* fail("not_found");
         if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
         const bot = ChannelBotProfiles.memberProfile(record);
         if (

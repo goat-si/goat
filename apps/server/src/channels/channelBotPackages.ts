@@ -1,4 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- SHA-256 binds confirmation to the reviewed file bytes.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- SHA-256 binds confirmation to the reviewed package text.
 import * as NodeCrypto from "node:crypto";
 import {
   BOT_PACKAGE_MAX_AUTOMATIONS,
@@ -7,7 +7,8 @@ import {
   CommandId,
   ScheduledTask,
   decodeBotPackage,
-  type BotPackage,
+  BotPackage,
+  encodeBotPackage,
   type BotPackageExportResult,
   type BotPackageReviewInput,
   type BotProfile,
@@ -58,6 +59,7 @@ function secretFields(value: unknown, path = ""): readonly string[] {
   return Object.entries(value).flatMap(([key, entry]) => secretFields(entry, path + "/" + key));
 }
 
+const decodePortable = Schema.decodeUnknownSync(BotPackage);
 const decodeSchedule = Schema.decodeUnknownSync(
   Schema.fromJsonString(ScheduledTask.fields.schedule),
 );
@@ -77,10 +79,11 @@ export const exportBotPackage = Effect.fn("ChannelBotPackages.export")(function*
 ): Effect.fn.Return<BotPackageExportResult, ChannelGatewayError> {
   const rows = yield* sql<{
     readonly title: string | null;
+    readonly notification_policy: string;
     readonly prompt: string | null;
     readonly schedule_json: string | null;
   }>`
-    SELECT
+    SELECT notification_policy,
       CASE WHEN length(CAST(title AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN title END AS title,
       CASE WHEN length(CAST(prompt AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN prompt END AS prompt,
       CASE WHEN length(CAST(schedule_json AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN schedule_json END AS schedule_json
@@ -97,6 +100,7 @@ export const exportBotPackage = Effect.fn("ChannelBotPackages.export")(function*
           throw new Error("Automation exceeds the size limit.");
         return {
           title: row.title,
+          notificationPolicy: row.notification_policy,
           prompt: row.prompt,
           schedule: portableSchedule(row.schedule_json),
         };
@@ -110,24 +114,21 @@ export const exportBotPackage = Effect.fn("ChannelBotPackages.export")(function*
           ]),
         ];
       };
-      const { botPackage } = decodeBotPackage(
-        JSON.stringify({
-          version: 1,
-          name: bot.name,
-          face: bot.avatar,
-          color: bot.color ?? null,
-          purpose: bot.purpose,
-          instructions: bot.instructions ?? "",
-          automations,
-          tools: { mcpServers: names("mcpServers"), skills: names("skills") },
-        }),
-      );
+      const botPackage = decodePortable({
+        version: 1,
+        name: bot.name,
+        face: bot.avatar,
+        color: bot.color ?? null,
+        purpose: bot.purpose,
+        instructions: bot.instructions ?? "",
+        automations,
+        tools: { mcpServers: names("mcpServers"), skills: names("skills") },
+      });
+      const contents = encodeBotPackage(botPackage);
       const fields = secretFields(botPackage);
-      if (fields.length > 0) return { status: "blocked", fields } as const;
-      const contents = JSON.stringify(botPackage, null, 2) + "\n";
-      if (Buffer.byteLength(contents) > BOT_PACKAGE_MAX_BYTES)
-        return { status: "ready", contents: JSON.stringify(botPackage) } as const;
-      return { status: "ready", contents } as const;
+      return fields.length > 0
+        ? ({ status: "blocked", fields } as const)
+        : ({ status: "ready", contents } as const);
     },
     catch: invalidPackage,
   });
