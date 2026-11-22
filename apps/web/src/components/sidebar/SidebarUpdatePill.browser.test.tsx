@@ -86,12 +86,14 @@ describe("SidebarUpdatePill release notes", () => {
     setup(update);
     await using _screen = await render(<SidebarUpdatePill />);
     const notice = () => document.querySelector('aside[aria-label="Update available"]');
-    expect(notice()?.textContent).toContain(update.availableVersion);
+    const versionChange = `${update.currentVersion}→${update.availableVersion}`;
+    expect(notice()?.textContent).toContain(versionChange);
     await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
     await publish({ ...update, status: "downloading", downloadPercent: 80 });
     expect(notice()).toBeNull();
     await publish({ ...update, errorContext: "download", canRetry: true });
     expect(notice()?.textContent).toContain("Retry");
+    expect(notice()?.textContent).toContain(versionChange);
     sessionStorage.removeItem("desktop-update-notice");
   });
 
