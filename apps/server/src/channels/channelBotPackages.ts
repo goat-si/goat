@@ -87,7 +87,7 @@ export const exportBotPackage = Effect.fn("ChannelBotPackages.export")(function*
       CASE WHEN length(CAST(title AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN title END AS title,
       CASE WHEN length(CAST(prompt AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN prompt END AS prompt,
       CASE WHEN length(CAST(schedule_json AS BLOB)) <= ${BOT_PACKAGE_MAX_BYTES} THEN schedule_json END AS schedule_json
-    FROM scheduled_tasks WHERE thread_id = ${bot.sessionThreadId} AND owner_json IS NOT NULL
+    FROM scheduled_tasks WHERE thread_id = ${bot.sessionThreadId}
     ORDER BY created_at, task_id LIMIT ${BOT_PACKAGE_MAX_AUTOMATIONS + 1}
   `.pipe(Effect.mapError(persistenceFailed));
 

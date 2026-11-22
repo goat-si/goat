@@ -66,7 +66,7 @@ export const BotPackage = Schema.Struct({
 export type BotPackage = typeof BotPackage.Type;
 
 const decode = Schema.decodeUnknownSync(BotPackage);
-const parseJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodePretty = Schema.encodeSync(Schema.fromJsonString(BotPackage, { space: 2 }));
 const encodeCompact = Schema.encodeSync(Schema.fromJsonString(BotPackage));
 const isText = Schema.is(BotPackageText);
