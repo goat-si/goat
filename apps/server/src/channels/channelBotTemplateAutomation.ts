@@ -1,6 +1,7 @@
 import {
   ChannelGatewayError,
   CommandId,
+  type EnvironmentAuthorizationError,
   type BotProfile,
   type ModelSelection,
   type ProjectId,
@@ -17,7 +18,7 @@ type Template = NonNullable<ReturnType<typeof goatBotTemplate>>;
 
 export interface TemplateCreation {
   readonly service: ScheduledTaskService["Service"];
-  readonly capture: Effect.Effect<CapturedTaskMemoryGrant, unknown>;
+  readonly capture: Effect.Effect<CapturedTaskMemoryGrant, EnvironmentAuthorizationError>;
 }
 
 export const templateAuthority = Effect.fn("ChannelBotTemplates.authority")(function* (
