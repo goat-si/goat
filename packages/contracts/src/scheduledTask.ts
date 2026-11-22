@@ -432,6 +432,10 @@ export const ScheduledTaskListWebhookDeliveriesResult = Schema.Struct({
 export type ScheduledTaskListWebhookDeliveriesResult =
   typeof ScheduledTaskListWebhookDeliveriesResult.Type;
 
+export const ScheduledTaskMcpListWebhookDeliveriesInput = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+});
+
 export const ScheduledTaskGetWebhookDeliveryInput = Schema.Struct({
   id: ScheduledTaskId,
   deliveryId: ScheduledTaskWebhookDeliveryId,

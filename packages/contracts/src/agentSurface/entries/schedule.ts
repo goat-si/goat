@@ -69,6 +69,25 @@ export const scheduleEntries = {
       openWorldHint: true,
     },
   }),
+  "schedule.delivery_list": entry({
+    resource: "schedule",
+    verb: "delivery_list",
+    name: "goat_schedule_delivery_list",
+    toolkit: "orchestrator",
+    summary: "List scheduled task webhook delivery summaries",
+    description:
+      "Read retained webhook delivery summaries for a scheduled task, including filtered and duplicate requests that did not start a run. Requires live orchestration:operate access.",
+    parameters: { scheduledTaskId: "The scheduled task ID from goat_schedule_list." },
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
   "schedule.update": entry({
     resource: "schedule",
     verb: "update",

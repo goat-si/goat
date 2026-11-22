@@ -1,9 +1,15 @@
-import { type HandoffError, OrchestratorMcpFailure, handoffSummary } from "@goat/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type HandoffError,
+  OrchestratorMcpFailure,
+  handoffSummary,
+} from "@goat/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import type { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { isTerminalRunStatus } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
@@ -170,6 +176,31 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.listScheduledTasks(scope, input);
+    }),
+  ),
+  goat_schedule_delivery_list: McpToolAccess.reads(({ scheduledTaskId }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const refused = () =>
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Webhook delivery summaries require live orchestration:operate access.",
+        });
+      if (!scope.grantedScopes?.includes(AuthOrchestrationOperateScope) || !scope.reauthorize)
+        return yield* refused();
+      yield* scope.reauthorize([AuthOrchestrationOperateScope]).pipe(Effect.mapError(refused));
+      const service = yield* ScheduledTasks.ScheduledTaskService;
+      return yield* service
+        .listWebhookDeliveries({ id: scheduledTaskId, acceptAnyOutcome: true })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: "Could not list webhook deliveries.",
+              }),
+          ),
+        );
     }),
   ),
   update_scheduled_task: McpToolAccess.destructive(
