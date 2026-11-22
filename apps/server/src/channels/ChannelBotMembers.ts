@@ -11,6 +11,7 @@ import {
   type BotProfile,
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelCreateBotInput,
+  type ChannelResolveBotProposalInput,
   type ChannelDeleteBotInput,
   ChannelGatewayError,
   type ChannelListOpenAsksResult,
@@ -40,6 +41,7 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
+import { botProposalOperations, type BotProposalCreate } from "./channelBotProposals.ts";
 import { recordMemberGreeting } from "./channelMemberGreeting.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -59,6 +61,8 @@ type MemberRecord = ChannelBotProfiles.MemberRecord;
 export class ChannelBotMembers extends Context.Service<
   ChannelBotMembers,
   {
+    readonly propose: ReturnType<typeof botProposalOperations>["propose"];
+    readonly resolveProposal: ReturnType<typeof botProposalOperations>["resolveProposal"];
     readonly create: (
       input: ChannelCreateBotInput,
       owner: Owner,
@@ -276,55 +280,71 @@ const make = Effect.gen(function* () {
     Effect.catchCause((cause) => Effect.logWarning("GOAT Bot member reconcile failed", { cause })),
   );
 
-  const create: ChannelBotMembers["Service"]["create"] = (input, owner) =>
-    serial(
+  const createMember = Effect.fn("ChannelBotMembers.create")(function* (
+    input: ChannelCreateBotInput,
+    owner: Owner,
+    proposal?: BotProposalCreate,
+  ) {
+    yield* home.requireHome;
+    const at = yield* now;
+    const environmentId = yield* environment.getEnvironmentId;
+    const record = yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* home.requireHome;
-        const at = yield* now;
-        const environmentId = yield* environment.getEnvironmentId;
-        const record = yield* sql.withTransaction(
-          Effect.gen(function* () {
-            const key = createKey(owner.ownerId, input.clientRequestId);
-            const known = yield* sql<{ readonly value_json: string }>`
+        const key =
+          proposal === undefined
+            ? createKey(owner.ownerId, input.clientRequestId)
+            : "bot-proposal-create:" + encodeURIComponent(owner.ownerId) + ":" + proposal.id;
+        const known = yield* sql<{ readonly value_json: string }>`
               SELECT value_json FROM channel_runtime_state WHERE key = ${key}`;
-            if (known[0] !== undefined) {
-              const existing = yield* readMember(
-                owner.ownerId,
-                decodeCreate(known[0].value_json).botId,
-              );
-              if (existing === undefined) return yield* fail("persistence_failed");
-              return existing;
-            }
-            const counts = yield* memberCounts(owner.ownerId);
-            if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
-              return yield* fail("bot_limit");
-            yield* ChannelBotProfiles.assertBotNameAvailable(sql, owner.ownerId, input.name);
-            const botId = newBotId();
-            const created: MemberRecord = {
-              botId,
-              role: "member",
-              name: input.name,
-              avatar: input.avatar,
-              purpose: input.purpose,
-              defaultModelSelection: input.defaultModelSelection,
-              defaultProjectId: null,
-              environmentId,
-              sessionThreadId: memberBotLaunchIdsFor(owner.ownerId, botId).threadId,
-              createdAt: at,
-              updatedAt: at,
-              ...(input.color === undefined ? {} : { color: input.color }),
-            };
-            yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
+        if (known[0] !== undefined) {
+          const existing = yield* readMember(
+            owner.ownerId,
+            decodeCreate(known[0].value_json).botId,
+          );
+          if (existing === undefined) return yield* fail("persistence_failed");
+          return existing;
+        }
+        const counts = yield* memberCounts(owner.ownerId);
+        if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
+          return yield* fail("bot_limit");
+        yield* ChannelBotProfiles.assertBotNameAvailable(sql, owner.ownerId, input.name);
+        const botId = newBotId();
+        const created: MemberRecord = {
+          botId,
+          role: "member",
+          name: input.name,
+          avatar: input.avatar,
+          purpose: input.purpose,
+          defaultModelSelection: input.defaultModelSelection,
+          defaultProjectId: null,
+          environmentId,
+          sessionThreadId: memberBotLaunchIdsFor(owner.ownerId, botId).threadId,
+          ...(proposal === undefined ? {} : { instructions: proposal.instructions }),
+          createdAt: at,
+          updatedAt: at,
+          ...(input.color === undefined ? {} : { color: input.color }),
+        };
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
               (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;
-            yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
               VALUES (${key}, ${encodeCreate({ botId })}, ${at})`;
-            return created;
-          }),
-        );
-        if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
-        return ChannelBotProfiles.memberProfile(record);
-      }).pipe(Effect.mapError(failed)),
+        if (proposal !== undefined) yield* proposal.commit;
+        return created;
+      }),
     );
+    if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
+    return ChannelBotProfiles.memberProfile(record);
+  }, Effect.mapError(failed));
+  const create: ChannelBotMembers["Service"]["create"] = (input, owner) =>
+    serial(createMember(input, owner));
+  const proposals = botProposalOperations({
+    sql,
+    ledger,
+    timeline,
+    serial,
+    requireHome: home.requireHome,
+    create: createMember,
+  });
 
   /** One committed change to a member, then its thread step if the change set one. */
   const change = (
@@ -469,6 +489,7 @@ const make = Effect.gen(function* () {
     openAsks,
     taskChanges: (owner) => ledger.taskChangeRevisions(owner.ownerId),
     create,
+    ...proposals,
     setHidden,
     remove,
     restore,
@@ -499,6 +520,8 @@ export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner)
       service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
       service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: (input: ChannelResolveBotProposalInput) =>
+      service.resolveProposal(input, owner),
     [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
       service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>

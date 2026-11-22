@@ -192,6 +192,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
   // Adding, hiding, removing and bringing back a bot are the same standing kind of change.
   [CHANNEL_GATEWAY_WS_METHODS.createBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: AuthOrchestrationOperateScope,

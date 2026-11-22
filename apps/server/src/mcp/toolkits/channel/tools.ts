@@ -5,6 +5,8 @@ import {
   ChannelBotHomeClaimResult,
   ChannelBotHomeStatus,
   ChannelBotListResult,
+  ChannelProposeBotInput,
+  ChannelProposeBotResult,
   ChannelIngestResult,
   ChannelInputId,
   ChannelInputSnapshot,
@@ -123,6 +125,14 @@ const ChannelBotListTool = Tool.make(agentSurfaceRegistry["channel.bot_list"].na
   success: ChannelBotListResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.bot_list"]));
 
+const ChannelBotProposeTool = Tool.make(agentSurfaceRegistry["channel.bot_propose"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, ChannelRuntime.ChannelRuntime],
+  description: agentSurfaceRegistry["channel.bot_propose"].description,
+  parameters: ChannelProposeBotInput,
+  success: ChannelProposeBotResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.bot_propose"]));
+
 const ChannelBotHomeClaimTool = Tool.make(agentSurfaceRegistry["channel.bot_home_claim"].name, {
   ...shared,
   dependencies: [...shared.dependencies, ChannelBotHome.ChannelBotHome],
@@ -198,5 +208,6 @@ export const ChannelToolkit = Toolkit.make(
   ChannelTaskMoveTool,
   ChannelBotHomeTool,
   ChannelBotListTool,
+  ChannelBotProposeTool,
   ChannelBotHomeClaimTool,
 );
