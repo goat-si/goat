@@ -1,3 +1,4 @@
+import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -399,7 +400,13 @@ export function GoatBotScreen(props: {
   // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
-  const [text, setText] = useState("");
+  const templateDraft = () =>
+    taskId ? "" : (readBotTemplateDraft(member?.environmentId, member?.sessionThreadId) ?? "");
+  const [text, setText] = useState(templateDraft);
+  // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the bot screen commits.
+  useEffect(() => {
+    if (!taskId) clearBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
+  }, [taskId, member?.environmentId, member?.sessionThreadId]);
   const [homeOpen, setHomeOpen] = useState(false);
   const openHome = useCallback(() => setHomeOpen(true), []);
   // An event line opens the home on its routine or listed task, or a task that left the list on its
@@ -429,7 +436,7 @@ export function GoatBotScreen(props: {
       environmentId: session.sendEnvironmentId,
       threadId: session.sendThreadId,
     },
-    () => setText(""),
+    () => setText(templateDraft()),
   );
   const files = useGoatBotDraftAttachments(props.visible, draftOwner);
   const { attachments, intake } = files;

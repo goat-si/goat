@@ -1,3 +1,5 @@
+import { MobileBotTemplateSheet } from "./MobileBotTemplateSheet";
+import { useEnvironmentScope } from "../../state/session";
 import { RegistryContext } from "@effect/atom-react";
 import {
   useContext,
@@ -22,7 +24,12 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import {
+  AuthSettingsWriteScope,
+  type BotProfile,
+  type ChannelTaskId,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } from "react-native";
@@ -100,6 +107,9 @@ export function MobileBotRoster(props: {
     );
   };
   const environmentId = roster.environmentId;
+  const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
+  const mayConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const supportsTemplates = roster.supportsTemplates && mayConfigure;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
   const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
@@ -246,6 +256,15 @@ export function MobileBotRoster(props: {
       : undefined;
   return (
     <View className="flex-1">
+      {supportsTemplates && templateHost !== null && templateHost === environmentId && (
+        <MobileBotTemplateSheet
+          key={templateHost}
+          environmentId={templateHost}
+          canCreate={() => manage.canCreate && readableNow()}
+          close={() => setTemplateHost(null)}
+          openBot={(bot) => onOpenBot({ kind: "member", profile: bot })}
+        />
+      )}
       <MobileBotRosterView
         header={
           <>
@@ -282,6 +301,13 @@ export function MobileBotRoster(props: {
                           ? "Unavailable until a computer with GOAT Bot connects"
                           : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
                     }),
+                ...(supportsTemplates
+                  ? {
+                      onTemplates: () => {
+                        if (readableNow()) setTemplateHost(environmentId);
+                      },
+                    }
+                  : {}),
                 onNewBot: () => {
                   if (readableNow() && environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);

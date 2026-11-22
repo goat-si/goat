@@ -59,6 +59,14 @@ bots can't be added or changed until the computer is back. Closing the app forge
 **Settings → GOAT Bot** also shows the bot's settings as the phone last read them; they can't be
 changed until the computer is back.
 
+Choose **From a template** when creating a bot to start with instructions for CI monitoring,
+pull request reviews, release notes, standups, or issue triage. The picker previews the
+instructions, the paused automation, and the first message. You can edit the message in
+the composer before sending it. To start an automation, open the bot's Home and resume
+the routine. For a webhook trigger, configure its signing secret and connect the source
+before enabling it. If setup reports that it could not add the routine, choose **Retry**
+to finish setting up the same bot.
+
 ## The face
 
 Each bot's avatar shows what it is doing:
