@@ -40,7 +40,6 @@ import {
 } from "./provider-catalog-refresh";
 import { ModelRow } from "./ThreadSettingsRows";
 import {
-  FAVORITES_PROVIDER_FILTER,
   useThreadSettingsSession,
   type ThreadSettingsSessionValue,
 } from "./thread-settings-session";
@@ -201,11 +200,7 @@ function buildThreadSettingsCatalogItems(
   session: ThreadSettingsSessionValue,
 ): ReadonlyArray<ThreadSettingsCatalogItem> {
   return session.providerGroups.flatMap((group) => {
-    if (
-      session.providerFilter !== null &&
-      session.providerFilter !== FAVORITES_PROVIDER_FILTER &&
-      group.providerKey !== session.providerFilter
-    ) {
+    if (session.providerFilter !== null && group.providerKey !== session.providerFilter) {
       return [];
     }
     const driver = group.models[0]?.providerDriver ?? group.providerKey;
@@ -214,12 +209,12 @@ function buildThreadSettingsCatalogItems(
       providerLabel: group.providerLabel,
       query: session.searchQuery,
       favoriteKeys: session.favoriteKeys,
-      favoritesOnly: session.providerFilter === FAVORITES_PROVIDER_FILTER,
+      favoritesOnly: session.favoritesOnly,
       showLegacy: session.manageHidden || session.showLegacy,
       isDisplayed: session.isApplied,
     });
     const updateRequiredNotice =
-      group.updateRequired && session.providerFilter !== FAVORITES_PROVIDER_FILTER
+      group.updateRequired && !session.favoritesOnly
         ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)
         : null;
     if (visibleModels.length === 0 && !updateRequiredNotice) {
@@ -227,7 +222,10 @@ function buildThreadSettingsCatalogItems(
     }
     const isPrimary = driver !== undefined && PRIMARY_PROVIDER_DRIVERS.has(driver);
     const containsAppliedSelection = group.models.some(session.isApplied);
-    const isNarrowed = session.providerFilter !== null || session.searchQuery.trim().length > 0;
+    const isNarrowed =
+      session.favoritesOnly ||
+      session.providerFilter !== null ||
+      session.searchQuery.trim().length > 0;
     const collapsible = !isNarrowed;
     const collapsed = providerSectionIsCollapsed({
       defaultExpanded: isPrimary || containsAppliedSelection,
@@ -323,7 +321,9 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
   const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
   const catalogItems = buildThreadSettingsCatalogItems(session);
   const hasActiveCatalogFilter =
-    session.providerFilter !== null || session.searchQuery.trim().length > 0;
+    session.favoritesOnly ||
+    session.providerFilter !== null ||
+    session.searchQuery.trim().length > 0;
   const listItems: ReadonlyArray<ThreadSettingsCatalogItem> =
     catalogItems.length === 0 ? [{ kind: "empty", key: "empty" }] : catalogItems;
   // Both iOS search layouts float a bottom toolbar over the list's last rows.
@@ -349,7 +349,8 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
       content = (
         <View className="items-center px-8 py-14">
           <Text className="text-center text-sm text-foreground-muted">
-            {session.providerFilter === FAVORITES_PROVIDER_FILTER &&
+            {session.favoritesOnly &&
+            session.providerFilter === null &&
             session.searchQuery.trim().length === 0
               ? "No favorite models"
               : hasActiveCatalogFilter
@@ -469,10 +470,12 @@ export function ThreadSettingsCatalogScreen(props: {
   const session = useThreadSettingsSession();
   const usesNativeMailSearchToolbar = useThreadSettingsMailSearchToolbar();
   const hasCustomCatalogFilter =
-    session.providerFilter !== null || session.showLegacy || session.manageHidden;
+    session.favoritesOnly ||
+    session.providerFilter !== null ||
+    session.showLegacy ||
+    session.manageHidden;
   const providerFilters = [
     { id: "all-providers", title: "All providers", value: null },
-    { id: "favorites", title: "Favorites", value: FAVORITES_PROVIDER_FILTER },
     ...session.providerGroups.map((group) => ({
       id: `provider:${group.providerKey}`,
       title: group.providerLabel,
@@ -480,6 +483,12 @@ export function ThreadSettingsCatalogScreen(props: {
     })),
   ];
   const toggles = [
+    {
+      id: "favorites-only",
+      title: "Favorites only",
+      isOn: session.favoritesOnly,
+      toggle: () => session.setFavoritesOnly(!session.favoritesOnly),
+    },
     ...(session.hasLegacyModels
       ? [
           {
@@ -569,6 +578,7 @@ export function ThreadSettingsCatalogScreen(props: {
       ) : null}
       <NativeStackScreenOptions
         optionsVersion={[
+          session.favoritesOnly,
           session.providerFilter,
           session.providerGroups.map((group) => group.providerKey),
           session.showLegacy,
