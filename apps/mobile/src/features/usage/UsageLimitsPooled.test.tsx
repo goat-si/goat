@@ -64,7 +64,7 @@ it("shows the zero spend cap on the pooled account detail with no windows", asyn
       root.render(
         <UsageLimitAccountScreen
           route={{
-            params: { accountKey: "a", environmentIds: null, now: 0 },
+            params: { accountKey: "a", environmentIds: null },
           }}
         />,
       ),

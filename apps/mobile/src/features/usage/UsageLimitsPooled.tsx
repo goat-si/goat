@@ -1,4 +1,5 @@
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { useNowMinuteMs } from "../../lib/clock";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { getProviderClient } from "../../lib/providerClients";
@@ -141,7 +142,6 @@ function LimitRow({
           accountKey: account.key,
           ...(first ? { windowId: first.pool.id, windowKind: first.pool.kind } : {}),
           environmentIds,
-          now,
         })
       }
       className="active:opacity-60"
@@ -353,13 +353,13 @@ type AccountScreenProps = StaticScreenProps<{
   windowId?: string;
   windowKind?: LimitPoolWindow["kind"];
   environmentIds: readonly string[] | null;
-  now: number;
 }>;
 
 export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
   const insets = useSafeAreaInsets();
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const { accountKey, windowId, windowKind, environmentIds, now } = route.params;
+  const { accountKey, windowId, windowKind, environmentIds } = route.params;
+  const now = useNowMinuteMs();
   const selectedIds =
     environmentIds === null ? null : new Set(environmentIds.map((id) => EnvironmentId.make(id)));
   const selected =
