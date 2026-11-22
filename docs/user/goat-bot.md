@@ -42,7 +42,10 @@ under its own name and purpose from its next conversation session.
   history. A bot with open tasks can't be deleted until they finish or you stop them.
 - [Slack](./slack.md) can reach bots you add through channel bindings or by name.
   iMessage reaches the main bot.
-- Skills are shared by all bots on the machine GOAT Bot lives on.
+- In **Edit bot → Tools** on web and desktop, you can choose which MCP servers and skills a bot
+  may use. Leaving an allowlist empty permits none. Narrowing a list stops active work.
+  For now, a bot with tool limits can't start work. To run it again, allow all MCP servers
+  and all skills. Mobile shows the bot's current tool settings.
 - A bot can read files on the machine it lives on. It looks at private data such as browser
   history, mail, messages or saved credentials only when you ask about it.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to

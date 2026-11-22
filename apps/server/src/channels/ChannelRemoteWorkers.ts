@@ -1,3 +1,5 @@
+import { dropOldest } from "./channelRemoteAttempt.ts";
+import { remoteBotToolsRefusal } from "./channelBotTools.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";
@@ -1409,6 +1411,9 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
+      const refusal = yield* remoteBotToolsRefusal(profiles, stored, remote.host);
+      if (refusal !== undefined)
+        return yield* failTask(owner, stored, "permission_changed", refusal);
       const dispatchRequester = requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
@@ -3031,19 +3036,5 @@ const make = Effect.gen(function* () {
     move,
   });
 });
-
-/** Progress goes first, then the oldest of the rest. */
-const dropOldest = (reports: ReadonlyArray<RemoteReport>, count: number) => {
-  const dropped = new Set<number>();
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    if (report.kind === "progress") dropped.add(report.sequence);
-  }
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    dropped.add(report.sequence);
-  }
-  return reports.filter((report) => !dropped.has(report.sequence));
-};
 
 export const layer = Layer.effect(ChannelRemoteWorkers, make);

@@ -24,6 +24,14 @@ export const BotInstructions = Schema.String.check(
       "Instructions must fit in 16 KB.",
   ),
 );
+const BotToolAllowlist = Schema.Union([
+  Schema.Literal("all"),
+  Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).check(Schema.isMaxLength(256)),
+]);
+const BotTools = Schema.Struct({
+  mcpServers: BotToolAllowlist,
+  skills: BotToolAllowlist,
+});
 export const BotProfile = Schema.Struct({
   botId: BotId,
   role: BotRole,
@@ -31,6 +39,7 @@ export const BotProfile = Schema.Struct({
   avatar: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(16))),
   purpose: Schema.String.check(Schema.isMaxLength(4000)),
   instructions: Schema.optionalKey(BotInstructions),
+  tools: Schema.optionalKey(BotTools),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultProjectId: Schema.NullOr(ProjectId),
   environmentId: EnvironmentId,

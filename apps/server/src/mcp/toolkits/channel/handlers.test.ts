@@ -434,7 +434,7 @@ const listBotsAs = (caller: EnvironmentId) =>
     }),
   );
 
-it.effect("agents list only their owner's active bots and only who each bot is", () => {
+it.effect("agents list their owner's active bots and their tool limits", () => {
   const harness = makeHarness();
   const other = EnvironmentId.make("environment:other-owner");
   return Effect.gen(function* () {
@@ -452,6 +452,8 @@ it.effect("agents list only their owner's active bots and only who each bot is",
         who,
       );
     const helper = yield* create("Helper");
+    const tools = { mcpServers: ["build"], skills: [] } as const;
+    yield* members.update({ botId: helper.botId, tools }, owner);
     const quiet = yield* create("Quiet");
     yield* members.setHidden({ botId: quiet.botId, hidden: true }, owner);
     const gone = yield* create("Gone");
@@ -474,7 +476,7 @@ it.effect("agents list only their owner's active bots and only who each bot is",
 
     const summary = (bot: typeof helper, hidden: boolean) => ({
       botId: bot.botId,
-      role: "member",
+      role: "member" as const,
       name: bot.name,
       purpose: bot.purpose,
       hidden,
@@ -482,14 +484,14 @@ it.effect("agents list only their owner's active bots and only who each bot is",
     });
     assert.deepStrictEqual(yield* listBotsAs(environmentId), [
       {
-        botId: "main",
+        botId: BotId.make("main"),
         role: "main",
         name: "GOAT Bot",
         purpose: "",
         hidden: false,
         sessionThreadId: botThreadId,
       },
-      summary(helper, false),
+      { ...summary(helper, false), tools },
       summary(quiet, true),
     ]);
     assert.deepStrictEqual(yield* listBotsAs(other), [summary(theirs, false)]);
