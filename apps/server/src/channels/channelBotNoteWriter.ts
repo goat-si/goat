@@ -2,7 +2,7 @@
  * The one writer of GOAT Bot's notes for this server. Reception's saves, the Memory tab's edits and
  * a session turn's saves share it, so they take one lock instead of one per caller.
  */
-import { BotId, ChannelInputId, MAIN_BOT_ID } from "@goat/contracts";
+import { ChannelInputId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -33,7 +33,7 @@ export const layer = Layer.effect(
           if (input === undefined || input.message.kind === "goat") return;
           yield* events.emit({
             ownerId: input.ownerId,
-            botId: BotId.make(MAIN_BOT_ID),
+            botId: input.botId,
             kind: "memory-updated",
             id: inputId,
             text: "Memory updated",

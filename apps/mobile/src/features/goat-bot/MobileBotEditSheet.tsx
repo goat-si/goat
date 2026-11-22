@@ -1,5 +1,7 @@
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { environmentPresentations } from "../../state/presentation";
 
 import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
 import { MobileNewBotModel } from "./MobileNewBotModel";
@@ -22,6 +24,7 @@ export function MobileBotEditSheet(props: {
   readonly onClose: () => void;
 }) {
   const { bot, manage } = props;
+  const presentationById = useAtomValue(environmentPresentations.presentationsAtom);
   const initialModel = bot.defaultModelSelection;
   const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(initialModel);
   // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
@@ -39,6 +42,10 @@ export function MobileBotEditSheet(props: {
       unavailableReason={manage.connected ? undefined : manage.offlineReason}
       extraChanged={modelChanged}
       colorEditable={colorEditable}
+      instructionsEditable={
+        presentationById.get(props.environmentId)?.serverConfig?.environment.capabilities
+          .goatBotInstructions === true
+      }
       onClose={props.onClose}
       onSubmit={(changes) => manage.update(bot, changes, modelChanged ? model : undefined)}
     >

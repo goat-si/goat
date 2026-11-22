@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import { useState, useSyncExternalStore } from "react";
 import React, { act, type ReactNode } from "react";
@@ -233,7 +234,6 @@ vi.mock("../../state/atom-registry", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
   return { appAtomRegistry: AtomRegistry.make() };
 });
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
 }));

@@ -39,9 +39,7 @@ export const currentRow = (name: string) => {
 
 /** GOAT's migrations when its block moved (90-157); later ones no older ledger records. */
 export const shiftedGoatNames = goatNames.filter((name) => currentRow(name)[0] <= 157);
-export const laterGoatRows = goatNames
-  .filter((name) => currentRow(name)[0] > 157)
-  .map((name) => currentRow(name));
+export const laterMigrationRows = migrationManifest.filter(([id]) => id > 157);
 
 export const history = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

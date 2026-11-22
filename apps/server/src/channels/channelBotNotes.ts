@@ -1,3 +1,4 @@
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 /**
  * GOAT Bot's notes and skills: plain files on the bot's home machine that every reception pass
  * reads and every worker can open.
@@ -10,7 +11,16 @@
  *
  * @module channelBotNotes
  */
-import type { ChannelReceptionSkill } from "@goat/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- opaque bot ids are hashed to a portable file name.
+import * as NodeCrypto from "node:crypto";
+import {
+  MAIN_BOT_ID,
+  type BotId,
+  type ChannelReceptionSkill,
+  type ChannelRequester,
+  type ChannelTask,
+  type MemoryTaskGrantCeiling,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -28,6 +38,7 @@ import {
   channelBotNotesSection,
   EMPTY_NOTES,
   NOTES_SCAN_BYTES,
+  NOTES_SECTION_CHARS,
   selectChannelBotNotes,
   type ChannelBotNotesSnapshot,
 } from "./channelBotNotesRecall.ts";
@@ -36,6 +47,11 @@ import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
 const NOTE_MAX_CHARS = 500;
 const SKILLS_LIMIT = 20;
 const SKILL_SUMMARY_CHARS = 200;
+const EMPTY_SNAPSHOT = { ...EMPTY_NOTES, revision: null };
+type NotesSnapshot = ChannelBotNotesSnapshot & { readonly revision: string | null };
+
+const notesDigest = (bytes: Uint8Array | string) =>
+  NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 
 /** Told to every agent that reads the notes file itself. */
 export const NOTES_REPLACED_RULE =
@@ -44,19 +60,29 @@ export const NOTES_REPLACED_RULE =
 export interface ChannelBotFiles {
   readonly dir: string;
   readonly notes: string;
+  readonly sharedNotes?: string;
   readonly skills: string;
   readonly scratch: string;
   readonly artifacts: string;
 }
 
-export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBotFiles => {
-  const dir = path.join(stateDir, "goat-bot");
+export const channelBotFilesFor = (
+  path: Path.Path,
+  stateDir: string,
+  botId?: BotId,
+): ChannelBotFiles => {
+  const home = path.join(stateDir, "goat-bot");
+  const dir =
+    botId === undefined || botId === MAIN_BOT_ID
+      ? home
+      : path.join(home, "bots", NodeCrypto.createHash("sha256").update(botId).digest("hex"));
   return {
     dir,
     notes: path.join(dir, "memory.md"),
-    skills: path.join(dir, "skills"),
-    scratch: path.join(dir, "scratch"),
-    artifacts: path.join(dir, "artifacts"),
+    ...(dir === home ? {} : { sharedNotes: path.join(home, "memory.md") }),
+    skills: path.join(home, "skills"),
+    scratch: path.join(home, "scratch"),
+    artifacts: path.join(home, "artifacts"),
   };
 };
 
@@ -66,16 +92,19 @@ export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBo
  * failed read from a file with no notes.
  */
 export const readChannelBotNotesSnapshot = Effect.fn("channelBotNotes.readSnapshot")(
-  function* (files: ChannelBotFiles, query: string) {
+  function* (files: ChannelBotFiles, query: string, budget?: number) {
     const tail = yield* readChannelBotNotesTail(files.notes, NOTES_SCAN_BYTES);
-    if (tail === null) return EMPTY_NOTES;
-    return selectChannelBotNotes(new TextDecoder().decode(tail.bytes), query);
+    if (tail === null) return EMPTY_SNAPSHOT;
+    return {
+      ...selectChannelBotNotes(new TextDecoder().decode(tail.bytes), query, budget),
+      revision: notesDigest(tail.bytes),
+    };
   },
   (effect) =>
     effect.pipe(
       Effect.catch((cause) =>
         Effect.logWarning("GOAT Bot notes could not be read", { cause }).pipe(
-          Effect.as<ChannelBotNotesSnapshot | undefined>(undefined),
+          Effect.as<NotesSnapshot | undefined>(undefined),
         ),
       ),
     ),
@@ -86,6 +115,69 @@ export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
   Effect.map(readChannelBotNotesSnapshot(files, query), (notes) =>
     notes === undefined ? "" : channelBotNotesSection(notes),
   );
+
+export const recallChannelBotNotes = Effect.fn("channelBotNotes.recall")(function* (
+  files: ChannelBotFiles,
+  query: string,
+  mayRead: boolean,
+  combinedBudget?: number,
+) {
+  if (!mayRead) return EMPTY_SNAPSHOT;
+  const scopeBudget =
+    combinedBudget !== undefined && files.sharedNotes !== undefined
+      ? Math.floor((combinedBudget - 1) / 2)
+      : combinedBudget;
+  const own = yield* readChannelBotNotesSnapshot(files, query, scopeBudget);
+  if (files.sharedNotes === undefined) return own;
+  const shared = yield* readChannelBotNotesSnapshot(
+    { ...files, notes: files.sharedNotes },
+    query,
+    scopeBudget,
+  );
+  if (own === undefined || shared === undefined) return own ?? shared;
+  return {
+    standing: [shared.standing, own.standing].filter(Boolean).join("\n"),
+    matched: [shared.matched, own.matched].filter(Boolean).join("\n"),
+    ranked: [...own.ranked, ...shared.ranked],
+    revision:
+      own.revision === null || shared.revision === null
+        ? (own.revision ?? shared.revision)
+        : notesDigest(shared.revision + ":" + own.revision),
+  };
+});
+
+export const readReceptionBotNotes = (
+  files: ChannelBotFiles,
+  query: string,
+  viewer: ChannelRequester,
+) =>
+  recallChannelBotNotes(files, query, canReadChannelBotNotes(viewer), NOTES_SECTION_CHARS).pipe(
+    Effect.map((notes) => (notes === undefined ? "" : channelBotNotesSection(notes))),
+  );
+
+export const readSessionBotNotes = Effect.fn("channelBotNotes.readSession")(function* (
+  files: ChannelBotFiles,
+  task: ChannelTask,
+  requester: ChannelRequester,
+  ceiling: MemoryTaskGrantCeiling,
+) {
+  const read = task.routineWork !== true && ceiling !== "none" && canReadChannelBotNotes(requester);
+  const write = read && ceiling === "read_write";
+  const notes = yield* recallChannelBotNotes(files, task.instruction, read);
+  return {
+    notes,
+    memory: {
+      read,
+      write,
+      notes:
+        read &&
+        (notes === undefined ||
+          notes.standing !== "" ||
+          notes.matched !== "" ||
+          (write && task.notesChangeRequested !== undefined)),
+    },
+  };
+});
 
 export interface ChannelBotNoteSaved {
   /**

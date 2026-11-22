@@ -30,6 +30,7 @@ const files = {
   scratch: "/bot/scratch",
   artifacts: "/bot/artifacts",
 };
+const memberFiles = { ...files, sharedNotes: "/bot/shared-memory.md" };
 
 describe("channel worker brief", () => {
   it("keeps every bot and worker out of personal data the person did not ask about", () => {
@@ -84,12 +85,12 @@ describe("channel worker brief", () => {
   });
 
   it("lets a turn edit only the notes file, and only when the person asked to change a note", () => {
-    const plain = turnInstruction(task, files, true);
+    const plain = turnInstruction(task, memberFiles, true);
     assert.include(plain, "Otherwise leave the notes file unchanged.");
     assert.notInclude(plain, "Exception to the read-only rule");
     const asked = turnInstruction(
       { ...task, notesChangeRequested: "forget the draft rule" },
-      files,
+      memberFiles,
       true,
     );
     const exception = asked.indexOf("Exception to the read-only rule above");
@@ -228,7 +229,10 @@ describe("channel worker brief", () => {
     const request = { ...task, originInputId: ChannelInputId.make("channel-input:origin") };
 
     it("names the request's input so the turn can say which request a notes change is for", () => {
-      assert.include(turnInstruction(request, files, false), "Request input: channel-input:origin");
+      assert.include(
+        turnInstruction(request, memberFiles, false),
+        "Request input: channel-input:origin",
+      );
     });
 
     it("worker briefs carry no request input line", () => {
@@ -240,7 +244,7 @@ describe("channel worker brief", () => {
     });
 
     it("the notes rule covers follow-ups sent during the turn", () => {
-      const brief = turnInstruction(request, files, false);
+      const brief = turnInstruction(request, memberFiles, false);
       assert.include(brief, 'goat_call {path:"channel.notes_change"}');
       assert.include(brief, "or a follow-up GOAT sends you while you work on it");
       assert.notInclude(brief, "Leave the notes file unchanged; this message did not ask");
@@ -248,7 +252,7 @@ describe("channel worker brief", () => {
 
     it("a session turn is told not to copy personal data into the notes", () => {
       assert.include(
-        turnInstruction(request, files, false),
+        turnInstruction(request, memberFiles, false),
         "Never put data you read under the personal data rule into the notes",
       );
     });
@@ -257,7 +261,7 @@ describe("channel worker brief", () => {
     it("a granted turn makes only its own change and hands any other notes request to GOAT now", () => {
       const granted = turnInstruction(
         { ...request, notesChangeRequested: "tidy my notes" },
-        files,
+        memberFiles,
         false,
       );
       assert.include(granted, "Never carry out any other notes request yourself");
@@ -272,9 +276,20 @@ describe("channel worker brief", () => {
 
     it("a turn without a grant never acts on a notes request it only sees in the recent conversation", () => {
       assert.include(
-        turnInstruction(request, files, false),
+        turnInstruction(request, memberFiles, false),
         "A notes request you only see in the recent conversation was already answered",
       );
+    });
+
+    it("directs main bot shared-note changes to the confirmation flow", () => {
+      const prompt = turnInstruction(
+        { ...request, notesChangeRequested: "tidy my notes" },
+        files,
+        false,
+      );
+      assert.include(prompt, "Keep the shared notes file unchanged");
+      assert.include(prompt, "All bots");
+      assert.notInclude(prompt, "channel.notes_change");
     });
 
     it("a granted worker makes only its own change and sends other notes requests back", () => {

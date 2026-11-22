@@ -17,14 +17,16 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { isUnlinkedPrincipal } from "./ChannelGateway.ts";
+import { mayWriteBotNotes } from "./channelBotNoteTabEdits.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
-import { quotedFromInput } from "./channelBotNotes.ts";
+import { channelBotFilesFor, quotedFromInput } from "./channelBotNotes.ts";
 import { isSessionTask } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { currentRequester } from "./channelDispatchAuthority.ts";
@@ -85,6 +87,8 @@ const make = Effect.gen(function* () {
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const writer = yield* ChannelBotNoteWriter;
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
   const dbError = (cause: unknown) =>
     new ChannelLedger.ChannelLedgerError({ reason: "persistence", detail: "session notes", cause });
 
@@ -177,6 +181,8 @@ const make = Effect.gen(function* () {
       if (
         input === undefined ||
         input.requester === undefined ||
+        input.botId !== stored.botId ||
+        input.ownerId !== stored.ownerId ||
         input.message.intent !== "message"
       )
         return yield* fail("not_found");
@@ -222,11 +228,17 @@ const make = Effect.gen(function* () {
         return result;
       });
 
-      const who = yield* currentRequester(input.requester, message.connectionId).pipe(
+      const files = channelBotFilesFor(path, stateDir, stored.botId);
+      const currentWriter = currentRequester(
+        input.requester,
+        message.connectionId,
+        request.inputId,
+      ).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
-      if (who === undefined || who.originKind === "mcp" || isUnlinkedPrincipal(who.principalId))
+      const who = yield* currentWriter;
+      if (who === undefined || !mayWriteBotNotes(who))
         return yield* refuse("not_allowed", CHANNEL_COPY.noteEditNotAllowed);
       if (!quotedFromInput(request.quote, message.text))
         return yield* refuse("quote_not_in_input", CHANNEL_COPY.noteNotSaved);
@@ -240,23 +252,27 @@ const make = Effect.gen(function* () {
         request.kind === "edit" &&
         task.taskId === request.taskId &&
         holdsFor(task) === request.inputId;
+      const held = Effect.map(ledger.listTasksByStatus(OPEN), (open) =>
+        open.some((task) => holdsFor(task.task) !== undefined),
+      );
 
       for (let attempt = 0; attempt < 2; attempt++) {
         const latest = (yield* ledger.getTask(request.taskId)) ?? stored;
         // The run carries the generation it was bound to; a retry since then is new work.
         if (latest.task.generation !== stored.task.generation || !OPEN.includes(latest.task.status))
           return yield* refuse("task_finished", CHANNEL_COPY.noteEditTaskDone);
+        if (files.sharedNotes === undefined)
+          return (yield* held)
+            ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
+            : yield* refuse("not_saved", CHANNEL_COPY.sharedNoteConfirmationRequired);
         if (sameGrant(latest.task)) {
           const granted: NotesChangeResult = {
             outcome: "granted",
             told: false,
-            message: grantedMessage(latest.task.notesChangeRequested ?? request.quote),
+            message: grantedMessage(files.notes, latest.task.notesChangeRequested ?? request.quote),
           };
           return granted;
         }
-        const held = Effect.map(ledger.listTasksByStatus(OPEN), (open) =>
-          open.some((task) => holdsFor(task.task) !== undefined),
-        );
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
@@ -264,6 +280,8 @@ const make = Effect.gen(function* () {
           // finishes between it and the write finishes after the save.
           const written = yield* writer.saveIf(
             Effect.gen(function* () {
+              const live = yield* currentWriter;
+              if (live === undefined || !mayWriteBotNotes(live)) return "not_allowed" as const;
               const current = (yield* ledger.getTask(request.taskId)) ?? latest;
               if (
                 current.task.generation !== stored.task.generation ||
@@ -276,7 +294,10 @@ const make = Effect.gen(function* () {
             now,
             request.inputId,
             request.replaces,
+            files,
           );
+          if ("refused" in written && written.refused === "not_allowed")
+            return yield* refuse("not_allowed", CHANNEL_COPY.noteEditNotAllowed);
           if ("refused" in written)
             return written.refused === "busy"
               ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
@@ -306,9 +327,11 @@ const make = Effect.gen(function* () {
         // Checked and recorded under the writers' lock, so two tasks never both hold a grant.
         const recorded = yield* writer.exclusive(
           Effect.gen(function* () {
+            const live = yield* currentWriter;
+            if (live === undefined || !mayWriteBotNotes(live)) return "not_allowed" as const;
             if (yield* held) {
               // A Memory tab forget forwarded into a task is kept if the grant holder removes it anyway.
-              yield* writer.recordRefusedForget(message.text);
+              yield* writer.recordRefusedForget(message.text, files);
               return "busy" as const;
             }
             const prepared = prepareTransition(
@@ -337,13 +360,15 @@ const make = Effect.gen(function* () {
               );
           }),
         );
+        if (recorded === "not_allowed")
+          return yield* refuse("not_allowed", CHANNEL_COPY.noteEditNotAllowed);
         if (recorded === "busy") return yield* refuse("busy", CHANNEL_COPY.noteEditBusy);
         if (recorded === "invalid") return yield* fail("invalid_input");
         if (recorded === "granted") {
           const granted: NotesChangeResult = {
             outcome: "granted",
             told: false,
-            message: grantedMessage(request.quote.trim()),
+            message: grantedMessage(files.notes, request.quote.trim()),
           };
           return granted;
         }
@@ -359,8 +384,10 @@ const make = Effect.gen(function* () {
 // Queued before the tool answers; it is delivered like any reply, so the model must not say it arrived.
 const QUEUED = "GOAT queued this notice for the person (delivered like any reply): ";
 
-const grantedMessage = (quote: string) =>
-  "Allowed: edit the notes file now to make exactly this change and nothing else: " +
+const grantedMessage = (notesPath: string, quote: string) =>
+  "Allowed: edit " +
+  JSON.stringify(notesPath) +
+  " to make exactly this change and nothing else: " +
   JSON.stringify(quote);
 
 export const layer = Layer.effect(ChannelSessionNoteActions, make);

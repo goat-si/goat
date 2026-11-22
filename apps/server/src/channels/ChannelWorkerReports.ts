@@ -43,8 +43,8 @@ import {
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { channelTaskIdFromAgent, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
-import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
-import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
+import { channelRunFailure, failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
+import { CHANNEL_SESSION_PROFILE_CHANGED } from "./channelSessionProfileFence.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
@@ -673,13 +673,22 @@ const make = Effect.gen(function* () {
         );
         return true;
       }
-      const releaseReason =
-        latest.task.routineWork === true && current.status === "failed"
-          ? routineWorkerReleaseReason(
-              yield* threads.getThreadShell(worker.threadId).pipe(Effect.orElseSucceed(() => null)),
-              current.id,
-            )
-          : undefined;
+      const failure = yield* channelRunFailure(
+        threads,
+        current,
+        session,
+        latest.task.routineWork === true,
+      );
+      if (failure === undefined) return latest !== stored;
+      if (failure.reason === CHANNEL_SESSION_PROFILE_CHANGED && latest.task.status === "running") {
+        const redispatched = yield* commitTransition(
+          ledger,
+          latest,
+          { type: "task.retry.requested", payload: { generation: task.generation + 1 } },
+          { owner, pendingAnswerMessageId: null, completionHold: null },
+        );
+        return redispatched !== undefined || latest !== stored;
+      }
       yield* commitTransition(
         ledger,
         latest,
@@ -687,10 +696,7 @@ const make = Effect.gen(function* () {
           type: "task.failed",
           payload: {
             generation: task.generation,
-            reason: current.status,
-            summary:
-              releaseReason ??
-              "The coding thread ended with " + current.status.replaceAll("_", " ") + ".",
+            ...failure,
           },
         },
         { owner, narrate: true, completionHold: null },

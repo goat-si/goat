@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import { useState } from "react";
 import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,7 +16,8 @@ const forward = (props: Props) => ({
 });
 const nativeAlert = vi.hoisted(() => vi.fn());
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
-vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
+
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
 }));
@@ -174,7 +176,6 @@ vi.mock("../../native/StackHeader", () => ({
     )),
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
 }));

@@ -437,6 +437,10 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
     }),
     listBots,
+    readBotRoster: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:read-bot-roster",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
+    }),
     listedBotWork,
     homeCurrentOpenableWorkAtom,
     homeCurrentUnreadAtom,
@@ -478,6 +482,20 @@ export function createChannelEnvironmentAtoms<R, E>(
     }),
     listBotThreads,
     checkBotSnoozes,
+    followThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:followThread",
+      tag: CHANNEL_GATEWAY_WS_METHODS.followThread,
+      onSuccess: bumpBotThreads,
+    }),
+    stopFollowingThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:stopFollowingThread",
+      tag: CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread,
+      onSuccess: bumpBotThreads,
+    }),
+    listFollowedThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:listFollowedThreads",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listFollowedThreads,
+    }),
     getBotTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:get-bot-task",
       tag: CHANNEL_GATEWAY_WS_METHODS.getBotTask,
@@ -646,6 +664,7 @@ export interface BotProfileValues {
   readonly name: string;
   readonly avatar: string | null;
   readonly purpose: string;
+  readonly instructions?: string;
   /** A member's accent; null is the theme's neutral. Absent where the server cannot store one. */
   readonly color?: string | null;
 }
@@ -661,6 +680,7 @@ export function botProfileChanges(
     readonly name: string;
     readonly avatar: string;
     readonly purpose: string;
+    readonly instructions?: string;
     readonly color?: string | null;
   },
 ): Partial<BotProfileValues> {
@@ -675,6 +695,9 @@ export function botProfileChanges(
     ...(next.name === initial.name ? {} : { name: next.name }),
     ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
     ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
+    ...(draft.instructions === undefined || draft.instructions === (initial.instructions ?? "")
+      ? {}
+      : { instructions: draft.instructions }),
     ...(color === undefined || sameBotColor(color, initial.color) ? {} : { color }),
   };
 }

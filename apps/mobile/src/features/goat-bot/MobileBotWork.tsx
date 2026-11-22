@@ -1,3 +1,4 @@
+import { mobileBotFollowedItems, sectionLabel } from "./MobileBotFollowedThread";
 import {
   accessDenied,
   botHomeWork,
@@ -40,7 +41,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
-import { sectionLabel, message } from "./mobileBotHomeItems";
+import { message } from "./mobileBotHomeItems";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
@@ -58,7 +59,6 @@ import { MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 
-/** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
@@ -74,7 +74,6 @@ import {
   type MobileCheckInDraftUpdate,
 } from "./mobileCheckInDraft";
 
-// Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
 
 export function MobileBotWork(props: {
@@ -442,7 +441,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  // Home is one list that mounts only what is near the screen; a bot with many tasks stays light.
   const homeItems: MobileBotHomeItem[] = [
     {
       key: "identity",
@@ -521,6 +519,14 @@ export function MobileBotWork(props: {
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
     const workStart = homeItems.length;
+    homeItems.push(
+      ...mobileBotFollowedItems(
+        environmentId,
+        botId,
+        capabilities?.goatBotThreadFollows === true ? threads.data?.followedThreads : undefined,
+        props.onOpenThread,
+      ),
+    );
     if (environmentId && enabled && capabilities?.goatBotTaskLookupSearch === true)
       homeItems.push(
         message(
@@ -779,6 +785,8 @@ export function MobileBotWork(props: {
             connected={selected?.connected === true}
             supported={capabilities?.goatBotNotes === true}
             member={member !== null}
+            botId={member?.botId}
+            scoped={capabilities?.goatBotPrivateNotes === true}
             botName={botName}
             onDraft={
               props.onDraft

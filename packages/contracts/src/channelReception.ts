@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { BotInstructions } from "./botProfile.ts";
 
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
@@ -161,7 +162,13 @@ export const ChannelReceptionInput = Schema.Struct({
   /** Written procedures workers can follow. */
   skills: Schema.optional(Schema.Array(ChannelReceptionSkill)),
   /** The name and purpose people gave the bot; absent or the defaults leave the prompt as it was. */
-  identity: Schema.optional(Schema.Struct({ name: Schema.String, purpose: Schema.String })),
+  identity: Schema.optional(
+    Schema.Struct({
+      name: Schema.String,
+      purpose: Schema.String,
+      instructions: Schema.optionalKey(BotInstructions),
+    }),
+  ),
   /** A routine the person set up, not a live message: answer only, or no_update when nothing needs them. */
   routine: Schema.optional(Schema.Boolean),
   routineWork: Schema.optional(Schema.Literal(true)),

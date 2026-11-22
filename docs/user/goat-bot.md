@@ -30,7 +30,8 @@ under its own name and purpose from its next conversation session.
 - Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
   its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
   Profile**. A new name also changes how the main bot
-  introduces itself in Slack and iMessage.
+  introduces itself in Slack and iMessage. Use **Instructions** for rules the bot should follow
+  on every request. Changes reach the next turn after the current work ends.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
@@ -39,8 +40,9 @@ under its own name and purpose from its next conversation session.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.
-- Bots you add are reachable in the GOAT app only. Slack and iMessage talk to the main bot.
-- Notes and skills are shared by all bots on the machine GOAT Bot lives on.
+- [Slack](./slack.md) can reach bots you add through channel bindings or by name.
+  iMessage reaches the main bot.
+- Skills are shared by all bots on the machine GOAT Bot lives on.
 - A bot can read files on the machine it lives on. It looks at private data such as browser
   history, mail, messages or saved credentials only when you ask about it.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to
@@ -77,6 +79,10 @@ While a bot reads or works, its eyes move now and then. Only one face moves at a
 move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
+
+Tasks a member bot starts in Slack appear in its **Home → Work** on
+web, desktop and mobile. The member's Home shows its configured Slack
+channel IDs. You can change the bindings in [Slack settings](slack.md).
 
 On web and desktop, the bot's name at the top of its chat opens the bot's home, where **Edit
 bot** changes its name, face, purpose and model. **Home** is one page: a status note when
@@ -125,10 +131,11 @@ shows how many are waiting and offers **Open worker** for workers this phone can
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
   see what started it and what it said. On web and desktop, you can also open the task if it
-  started one. On mobile, an incomplete history is marked above the runs. **Check in on me** sets up a routine on the days and hours you choose: the bot
-  looks over its tasks and writes only when something needs you. On mobile, **Run now** starts a
-  timer routine on demand, even when it is paused. Webhook routines explain how an incoming delivery
-  starts them. **New routine** starts a routine request in the message box for you to finish
+  started one. On mobile, an incomplete history is marked above the runs. **Check in on me**
+  sets up a routine on the days and hours you choose. The bot looks over its tasks and writes
+  only when something needs you. On web and desktop, a timer routine whose last run failed shows
+  **Run now**. On mobile, **Run now** starts a timer routine on demand, even when it is paused.
+  Webhook routines explain how an incoming delivery starts them. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
   and files.
 - **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or
@@ -138,8 +145,15 @@ shows how many are waiting and offers **Open worker** for workers this phone can
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
   retried from here: check it on that computer, then ask the bot again.
-- **Memory** shows the notes GOAT Bot keeps, newest first, with where each was asked for. **Ask
-  to change** or **Ask to forget** puts a request quoting the note in the message box for you to
+- **Library → Memory** shows **This bot** for a member's own notes and **All bots** for shared
+  notes, including notes kept before this feature. When you ask a member to remember something,
+  it goes in **This bot**. To share new information, send `Remember for all bots: <note>` and
+  choose **For all bots** in the reply. The main bot uses this confirmation for new shared notes.
+  To edit or forget an existing shared note, choose it under **All bots**.
+  Reading or using these notes requires GOAT memory access.
+  Changing them requires memory write access. A full-access worker on the machine can still read
+  the files directly.
+- **Ask to change** or **Ask to forget** puts a request quoting the note in the message box for you to
   send. Sent as is, it changes or forgets that note at once without starting other work, and the
   bot answers "Changed that note." or "Forgot that note." If another note change is still
   running, the note can't be found, or the file is too large to edit, the bot's answer says so
@@ -175,3 +189,14 @@ let added bots finish or stop their tasks, and don't edit added bots while the o
 runs. Work that one of them had already accepted runs as the main bot there, and its replies
 stay in the main chat. After you update again, check the added bots' conversations; their tasks
 return to them, but replies already shown in the main chat stay there.
+
+### Follow an existing thread
+
+Open a thread’s actions menu and choose **Ask a bot to follow…**. Pick a bot on
+the thread’s computer, then choose the bot task that should receive updates.
+The thread stays in Threads and continues to run. The bot reports updates in
+its conversation, including when it loses access to the thread.
+
+Open the bot’s Home to find followed threads, their status, and any associated
+pull request. Choose **Stop following** from Home or the thread’s actions menu
+to remove the follow. The thread and its work stay in place.

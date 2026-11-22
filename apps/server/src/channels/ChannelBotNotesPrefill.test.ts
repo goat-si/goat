@@ -8,20 +8,22 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import {
   defaultScript,
-  goatInput,
   makeHarness,
   onlyTask,
-  rpcContext,
-  setupBot,
+  memoryRpcContext,
 } from "./testkit/ChannelHarness.ts";
+import { memberNoteInput, setupMemberNotes } from "./testkit/memberNotes.ts";
 
 const note = 'Call the build "green" only when (all) checks pass.';
 
 // An exact prefilled sentence is applied by the server (ChannelBotMemoryTabEdits.test.ts); one the
 // person extended still goes to the model, and the quote check must accept the note's punctuation.
 it.effect.each([
-  ["forget", goatBotForgetNoteMessage(note) + " and the one about CI"],
-  ["change", goatBotChangeNoteMessage(note, "Call it green when CI passes.") + ", please"],
+  ["forget", goatBotForgetNoteMessage(note, "private") + " and the one about CI"],
+  [
+    "change",
+    goatBotChangeNoteMessage(note, "Call it green when CI passes.", "private") + ", please",
+  ],
 ] as const)(
   "an extended %s message a client prefilled lets reception hand the quoted note to a worker",
   ([kind, message]) => {
@@ -41,10 +43,10 @@ it.effect.each([
           })
         : defaultScript(input);
     return Effect.gen(function* () {
-      yield* setupBot;
+      yield* setupMemberNotes;
       yield* (yield* ChannelGateway.ChannelGateway).ingest(
-        goatInput(message, "note-" + kind),
-        rpcContext,
+        yield* memberNoteInput(message, "note-" + kind),
+        memoryRpcContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual((yield* onlyTask).notesChangeRequested, JSON.stringify(note).slice(1, -1));

@@ -28,6 +28,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
 import {
   botMessages,
   defaultScript,
@@ -35,9 +36,9 @@ import {
   linkSlackUser,
   makeHarness,
   ownerId,
-  rpcContext,
+  memoryRpcContext,
   setupBot,
-  slackContext,
+  memorySlackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
@@ -53,7 +54,7 @@ const person = (overrides: Partial<ChannelRequester> = {}): ChannelRequester => 
   displayName: "Alice",
   originKind: "goat",
   runtimeModeCeiling: "auto-accept-edits",
-  grantedScopes: ["orchestration:operate"],
+  grantedScopes: ["orchestration:operate", "memory:read", "memory:write"],
   ...overrides,
 });
 
@@ -585,15 +586,17 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         yield* receptionRouting;
-        yield* linkSlackUser();
+        yield* linkSlackUser("U1", true);
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const fs = yield* FileSystem.FileSystem;
         const files = yield* serverNotes;
-        yield* gateway.ingest(
-          slackInput("remember that I deploy on Fridays", "slack-save"),
-          slackContext,
-        );
+        const message = slackInput("remember that I deploy on Fridays", "slack-save");
+        const proposal = yield* gateway.ingest(message, memorySlackContext);
+        yield* runtime.drain;
+        assert.isFalse(yield* fs.exists(files.notes));
+        assert.deepStrictEqual(yield* memoryUpdated, []);
+        yield* confirmSharedNote(proposal.inputId, message, memorySlackContext);
         yield* runtime.drain;
         assert.include(yield* fs.readFileString(files.notes), fridays);
         assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
@@ -610,7 +613,9 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
           }),
         );
         const before = yield* fs.readFileString(files.notes);
-        yield* gateway.ingest(again, slackContext);
+        const repeated = yield* gateway.ingest(again, memorySlackContext);
+        yield* runtime.drain;
+        yield* confirmSharedNote(repeated.inputId, again, memorySlackContext);
         yield* runtime.drain;
         assert.strictEqual(yield* fs.readFileString(files.notes), before);
         assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
@@ -628,11 +633,15 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
       yield* receptionRouting;
       const fs = yield* FileSystem.FileSystem;
       const files = yield* serverNotes;
-      yield* (yield* ChannelGateway.ChannelGateway).ingest(
-        goatInput("remember that I deploy on Mondays", "goat-save"),
-        rpcContext,
+      const message = goatInput("remember that I deploy on Mondays", "goat-save");
+      const proposal = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        message,
+        memoryRpcContext,
       );
-      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* runtime.drain;
+      yield* confirmSharedNote(proposal.inputId, message, memoryRpcContext);
+      yield* runtime.drain;
       assert.include(yield* fs.readFileString(files.notes), "I deploy on Mondays.");
       assert.deepStrictEqual(yield* memoryUpdated, []);
     }).pipe(Effect.provide(layer));
@@ -646,17 +655,17 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
     return Effect.gen(function* () {
       yield* setupBot;
       yield* receptionRouting;
-      yield* linkSlackUser();
+      yield* linkSlackUser("U1", true);
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const fs = yield* FileSystem.FileSystem;
       const files = yield* serverNotes;
-      yield* gateway.ingest(slackInput("hello there", "refused"), slackContext);
+      yield* gateway.ingest(slackInput("hello there", "refused"), memorySlackContext);
       yield* runtime.drain;
       assert.strictEqual(yield* fs.exists(files.notes), false);
       yield* gateway.ingest(
         slackInput(goatBotChangeNoteMessage("no such note", "Still nothing."), "missing"),
-        slackContext,
+        memorySlackContext,
       );
       yield* runtime.drain;
       assert.deepStrictEqual(yield* memoryUpdated, []);
@@ -670,7 +679,7 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         yield* receptionRouting;
-        yield* linkSlackUser();
+        yield* linkSlackUser("U1", true);
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const fs = yield* FileSystem.FileSystem;
@@ -678,7 +687,7 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
         yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00.000Z", "earlier");
         yield* gateway.ingest(
           slackInput(goatBotForgetNoteMessage(fridays), "slack-forget"),
-          slackContext,
+          memorySlackContext,
         );
         yield* runtime.drain;
         assert.notInclude(yield* fs.readFileString(files.notes), fridays);
@@ -693,7 +702,7 @@ describe("a Memory updated line when notes change outside the GOAT app", () => {
         );
         yield* gateway.ingest(
           goatInput(goatBotForgetNoteMessage("I deploy on Mondays."), "goat-forget"),
-          rpcContext,
+          memoryRpcContext,
         );
         yield* runtime.drain;
         assert.notInclude(yield* fs.readFileString(files.notes), "I deploy on Mondays.");

@@ -328,6 +328,10 @@ export function layerWithRegistry<Error>(
     readonly projects?: Layer.Layer<ProjectService.ProjectService>;
     readonly continuationRequests?: Layer.Layer<never>;
     readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
+    readonly serverConfigLayer?: Layer.Layer<
+      ServerConfig.ServerConfig,
+      PlatformError.PlatformError
+    >;
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
@@ -353,10 +357,12 @@ export function layerWithRegistry<Error>(
   | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | ReplayDatabaseError
 > {
-  const layerServerConfig = Layer.effect(
-    ServerConfig.ServerConfig,
-    makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
-  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+  const layerServerConfig =
+    options.serverConfigLayer ??
+    Layer.effect(
+      ServerConfig.ServerConfig,
+      makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
+    ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const layerRuntime =
     scenario.runtimePolicyOverride === undefined
       ? RuntimePolicy.layer
@@ -484,31 +490,40 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
-  const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerProvidedRegistry,
-        options.cloudSources ?? Layer.empty,
-        layerContextHandoffServiceProvided,
-        layerEventSinkProvided,
-        IdAllocator.layer,
-        layerStores,
-        layerProviderSessionManagerProvided,
-        Layer.mock(ProviderAuthService.ProviderAuthService)({
-          tryHandlePromptCommand: () => Effect.succeed(false),
-        }),
-        layerRunExecutionServiceProvided,
-        layerRuntime,
-        layerServerConfig,
-        layerServerSettings,
+  const layerProviderTurnStartServiceProvided =
+    ProviderTurnStartService.layerWithChannelAuthority.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerDatabase,
+          layerProvidedRegistry,
+          options.cloudSources ?? Layer.empty,
+          layerContextHandoffServiceProvided,
+          layerEventSinkProvided,
+          IdAllocator.layer,
+          layerStores,
+          layerProviderSessionManagerProvided,
+          Layer.mock(ProviderAuthService.ProviderAuthService)({
+            tryHandlePromptCommand: () => Effect.succeed(false),
+          }),
+          layerRunExecutionServiceProvided,
+          layerRuntime,
+          layerServerConfig,
+          layerServerSettings,
+        ),
       ),
-    ),
-  );
-  const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(layerStores, layerProviderSessionManagerProvided, layerEventSinkProvided),
-    ),
-  );
+    );
+  const layerProviderTurnControlServiceProvided =
+    ProviderTurnControlService.layerWithChannelAuthority.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerDatabase,
+          layerStores,
+          layerProviderSessionManagerProvided,
+          layerEventSinkProvided,
+          layerServerConfig,
+        ),
+      ),
+    );
   const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
   );

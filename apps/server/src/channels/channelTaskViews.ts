@@ -1,3 +1,4 @@
+import { botWorkConversationFilter } from "./channelBotThreadHistory.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- View events need a durable id independent of task versions.
 import * as NodeCrypto from "node:crypto";
 import {
@@ -175,7 +176,7 @@ const make = Effect.gen(function* () {
         SELECT t.status_version FROM channel_tasks t
         JOIN channel_conversations c ON c.conversation_id = t.conversation_id
         WHERE t.task_id = ${input.taskId} AND t.bot_id = ${input.botId}
-          AND t.owner_id = ${owner.ownerId} AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
+          AND t.owner_id = ${owner.ownerId} AND c.owner_id = ${owner.ownerId} AND ${botWorkConversationFilter(sql, input.botId)}
       `;
           if (task === undefined)
             return yield* new ChannelGatewayError({ reason: "task_not_found" });

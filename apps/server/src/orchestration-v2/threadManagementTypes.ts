@@ -17,6 +17,7 @@ import type {
 } from "@goat/contracts";
 
 import type * as Orchestrator from "./Orchestrator.ts";
+import type { LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import type { ThreadManagementSendMode } from "./ThreadManagementService.ts";
 
 export type ThreadManagementTerminalRunStatus = Extract<
@@ -44,6 +45,8 @@ export interface ThreadManagementSendInput {
   readonly creationSource: OrchestrationV2CreationSource;
   /** Set by the agent send tools: refuse a thread whose missing worktree cannot be restored. */
   readonly refuseUnrestorableWorktree?: boolean;
+  /** Server-side authorization that can change during message preparation. */
+  readonly confirm?: LaunchConfirm;
 }
 
 export interface ThreadManagementSendResult {

@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -25,6 +26,7 @@ import {
   type DispatchModeRefusal,
   DispatchModeLimit,
 } from "../orchestration-v2/DispatchModeLimit.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 
@@ -37,7 +39,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { LedgerCallHolds, trackPlacements } from "./testkit/dispatchRace.ts";
+import { dispatchBarrier, LedgerCallHolds, trackPlacements } from "./testkit/dispatchRace.ts";
 import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import { RemoteMachine, remoteScript } from "./testing/RemoteMachine.ts";
 import {
@@ -47,6 +49,8 @@ import {
   makeHarness,
   modelSelection,
   onlyTask,
+  owner,
+  memoryRpcContext,
   rpcContext,
   setupBot,
   slackContext,
@@ -392,6 +396,46 @@ it.effect.each([
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("refuses a local worker when Slack memory is revoked at launch", () => {
+  const harness = makeHarness({ realWorkerLaunch: true, workspaceRoot: import.meta.dirname });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const grantedScopes = [...owner.grantedScopes, "memory:read" as const];
+    yield* linkSlackUser("U1", { ...owner, grantedScopes });
+    const files = channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(files.dir, { recursive: true });
+    yield* fs.writeFileString(files.notes, "- 2026-03-01: Check with Indigo. (asked in x)\n");
+    const barrier = yield* dispatchBarrier;
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launch = launches.launch;
+    Object.assign(launches, {
+      launch: (input: ThreadLaunch.ThreadLaunchInput) =>
+        barrier.pause.pipe(Effect.andThen(Effect.suspend(() => launch(input)))),
+    });
+    yield* (yield* ChannelGateway.ChannelGateway).ingest(
+      slackInput("do: inspect the build", "revoked-local-notes"),
+      { ...slackContext, grantedScopes },
+    );
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const dispatch = yield* Effect.forkScoped(runtime.drain);
+    yield* barrier.reached;
+    const brief = yield* (yield* ChannelLedger.ChannelLedger).latestTaskBrief(
+      (yield* onlyTask).taskId,
+    );
+    assert.strictEqual(brief?.context.notesPath, files.notes);
+    assert.include(brief?.deliveredText ?? "", files.notes);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    yield* barrier.release;
+    yield* Fiber.join(dispatch);
+    assert.lengthOf(harness.world.launches, 0);
+    const failed = yield* onlyTask;
+    assert.strictEqual(failed.status, "failed");
+    assert.include(failed.resultSummary ?? "", "permission to start this work changed");
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect(
   "freezes before local launch and reuses the exact brief after interrupted acceptance",
   () => {
@@ -413,10 +457,11 @@ it.effect(
       yield* ledger.claimOwnership({ token: "local-brief-owner", now, staleBefore: now });
       const input = yield* gateway.ingest(
         goatInput("do: inspect the build", "local-brief"),
-        rpcContext,
+        memoryRpcContext,
       );
       yield* reception.receive(input.inputId, "local-brief-owner");
       const task = yield* onlyTask;
+      const sql = yield* SqlClient.SqlClient;
       let frozenTaskVersion: number | undefined;
       harness.launch.afterAccepted = (launch) =>
         Effect.gen(function* () {
@@ -424,7 +469,8 @@ it.effect(
           const brief = yield* ledger.latestTaskBrief(task.taskId);
           assert.strictEqual(stored.task.status, "dispatching");
           assert.strictEqual(stored.task.briefVersion, 1);
-          assert.strictEqual(brief?.deliveredText, launch.initialMessage?.text);
+          assert.strictEqual(brief?.deliveredText, yield* launchBrief(launch));
+          assert.strictEqual(launch.initialMessage?.text, task.instruction);
           assert.strictEqual(brief?.instruction, task.instruction);
           assert.strictEqual(brief?.intent, "inspect the build");
           assert.isDefined(brief?.context.notesPath);
@@ -437,7 +483,7 @@ it.effect(
           assert.strictEqual(brief?.target.model, launch.modelSelection.model);
           frozenTaskVersion = stored.task.version;
           return yield* Effect.die("simulated interruption after launch acceptance");
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
       const interrupted = yield* dispatcher
         .dispatch(task.taskId, "local-brief-owner")
         .pipe(Effect.exit);
@@ -448,8 +494,9 @@ it.effect(
         Effect.gen(function* () {
           assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.version, frozenTaskVersion);
           assert.deepStrictEqual(yield* ledger.latestTaskBrief(task.taskId), frozen);
-          assert.strictEqual(launch.initialMessage?.text, frozen?.deliveredText);
-        }).pipe(Effect.orDie);
+          assert.strictEqual(yield* launchBrief(launch), frozen?.deliveredText);
+          assert.strictEqual(launch.initialMessage?.text, task.instruction);
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.orDie);
       yield* dispatcher.dispatch(task.taskId, "local-brief-owner");
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "running");
       assert.lengthOf(harness.world.launches, 2);

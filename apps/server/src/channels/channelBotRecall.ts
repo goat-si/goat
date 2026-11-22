@@ -5,15 +5,31 @@
  *
  * @module channelBotRecall
  */
-import type {
-  ChannelConversationId,
-  ChannelRequester,
-  ChannelTask,
-  ChannelTaskPullRequest,
+import {
+  CHANNEL_RECEPTION_TAIL_LIMITS,
+  type ChannelConversationId,
+  type ChannelReceptionInput,
+  type ChannelRequester,
+  type ChannelTask,
+  type ChannelTaskPullRequest,
 } from "@goat/contracts";
 import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
 import { questionTextForModel } from "./channelSkillProposalText.ts";
+
+/** Keeps the newest tail entries that fit the byte budget. */
+export const boundReceptionTail = (
+  entries: ReadonlyArray<ChannelReceptionInput["tail"][number]>,
+): ChannelReceptionInput["tail"] => {
+  const kept: Array<ChannelReceptionInput["tail"][number]> = [];
+  let bytes = 0;
+  for (const entry of entries.toReversed()) {
+    bytes += entry.text.length;
+    if (bytes > CHANNEL_RECEPTION_TAIL_LIMITS.bytes) break;
+    kept.unshift(entry);
+  }
+  return kept;
+};
 
 /** Each read result is cut to this many characters before a pass sees it. */
 export const RECALL_RESULT_CHARS = 4_000;

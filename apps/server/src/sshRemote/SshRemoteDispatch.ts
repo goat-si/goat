@@ -54,7 +54,7 @@ import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
 import { declaredRequest, HostRoutableDeclarationError } from "./declaredArguments.ts";
-import { declaredLaunchArguments, launcherForRemote } from "./remoteLaunchDeclarations.ts";
+import * as LaunchDeclarations from "./remoteLaunchDeclarations.ts";
 import { readRemoteToolResult } from "./remoteToolResult.ts";
 export { readRemoteToolResult } from "./remoteToolResult.ts";
 import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
@@ -157,6 +157,7 @@ export type SshLaunchInput = SshDispatchDestination & {
   readonly workspace: SshLaunchWorkspace;
   readonly title: string;
   readonly message?: string | undefined;
+  readonly providerNotes?: string;
   readonly projectTitle?: string | undefined;
   readonly scripts?: ReadonlyArray<ProjectScript> | undefined;
   readonly modelSelection?: ModelSelection | undefined;
@@ -787,7 +788,7 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.timeout(LAUNCH_LINEAGE_PROBE_TIMEOUT)),
       );
       if (Exit.isFailure(listed)) return { capabilities: null, declared: launchArguments.get(key) };
-      const declared = declaredLaunchArguments(listed.value);
+      const declared = LaunchDeclarations.declaredLaunchArguments(listed.value);
       const advertisesMemory = advertisesMemoryTools(listed.value);
       if (advertisesMemory && !declared.has("memoryGrantCeiling"))
         return yield* memoryRefusal("Remote memory tools require explicit task ceiling admission.");
@@ -1437,14 +1438,7 @@ const make = Effect.gen(function* () {
         capabilities?.declared.has("memoryGrantCeiling") !== true
       )
         return yield* memoryRefusal("Remote GOAT does not accept task memory ceilings.");
-      return {
-        declared,
-        memoryArguments:
-          capabilities?.declared.has("memoryGrantCeiling") === true &&
-          (memoryGrantCeiling !== "none" || capabilities.advertisesMemory)
-            ? { memoryGrantCeiling }
-            : {},
-      };
+      return { declared, capabilities };
     });
     const admission = yield* launchAdmission();
     let project = yield* findProject(remote, folder);
@@ -1529,7 +1523,7 @@ const make = Effect.gen(function* () {
       );
       // Authority may have changed while the last upload completed.
       yield* beforeLaunch;
-      const launch = (withLaunchedBy: boolean, memoryArguments: typeof admission.memoryArguments) =>
+      const launch = (withLaunchedBy: boolean, current: typeof admission) =>
         callRemote({
           ...remote,
           tool: "goat_thread_launch",
@@ -1542,7 +1536,11 @@ const make = Effect.gen(function* () {
             ...(input.permissionProfileCeiling === undefined
               ? {}
               : { permissionProfileCeiling: input.permissionProfileCeiling }),
-            ...memoryArguments,
+            ...LaunchDeclarations.privateLaunchArguments(
+              current.capabilities,
+              memoryGrantCeiling,
+              forwardReport ? input.providerNotes : undefined,
+            ),
             ...(input.interactionMode === undefined
               ? {}
               : { interactionMode: input.interactionMode }),
@@ -1551,7 +1549,7 @@ const make = Effect.gen(function* () {
             ...(withLaunchedBy
               ? {
                   launchedBy: {
-                    ...launcherForRemote(input.launchedBy, declared),
+                    ...LaunchDeclarations.launcherForRemote(input.launchedBy, declared),
                     via: input.launchedBy?.via ?? "ssh_thread_launch",
                   },
                 }
@@ -1563,14 +1561,14 @@ const make = Effect.gen(function* () {
             ...PlacedLaunch.launchArguments(input.placement),
           },
         });
-      const rawLaunched = yield* launch(forwardLaunchedBy, admission.memoryArguments).pipe(
+      const rawLaunched = yield* launch(forwardLaunchedBy, admission).pipe(
         Effect.catch((error) =>
           error instanceof SshRemoteDispatchError &&
           forwardLaunchedBy &&
           error.undeclaredArguments?.includes("launchedBy") === true
             ? Effect.gen(function* () {
                 const retryAdmission = yield* launchAdmission();
-                const result = yield* launch(false, retryAdmission.memoryArguments);
+                const result = yield* launch(false, retryAdmission);
                 notes.push(
                   'This remote does not record its launcher, so scope:"launched" cannot find its questions; use host and threadId.',
                 );
