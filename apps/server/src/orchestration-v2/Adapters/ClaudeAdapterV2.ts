@@ -8,7 +8,15 @@ import {
   reserveClaudePdfBudget,
 } from "./ClaudeAttachmentBudget.ts";
 export { loggedClaudeQueryOptions } from "./ClaudeLoggedQueryOptions.ts";
-import { claudeAutoCompactThreshold, claudeMessageInputTokens } from "./ClaudeContextUsage.ts";
+import {
+  claudeAutoCompactThreshold,
+  claudeMessageInputTokens,
+  claudeProviderTurnTokenUsage,
+  mergeClaudeStreamUsage,
+  optionalClaudeUsageTokenCount,
+  type ClaudeMessageUsage,
+} from "./ClaudeContextUsage.ts";
+export { claudeProviderTurnTokenUsage } from "./ClaudeContextUsage.ts";
 import {
   isClaudeEmptyTaskNotificationSuccess,
   claudeToolResultSettlesSubagent,
@@ -127,7 +135,6 @@ import { claimClaudeQuery } from "./ClaudeQueryClaim.ts";
 import { makeClaudeMcpSessionGrants } from "./ClaudeMcpSessionGrants.ts";
 import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
-import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
 import {
@@ -397,68 +404,6 @@ export {
 } from "./ClaudeLaunchArgs.ts";
 export { claudeApprovalPresentation, permissionResultFromDecision };
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
-function claudeContextWindow(modelSelection: ModelSelection): number | null {
-  return (
-    resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? null
-  );
-}
-export function claudeProviderTurnTokenUsage(
-  usage: {
-    readonly input_tokens: number;
-    readonly cache_creation_input_tokens?: number | null;
-    readonly cache_read_input_tokens?: number | null;
-    readonly cache_creation?: ClaudeCacheCreation | null;
-    readonly output_tokens: number;
-  },
-  modelSelection: ModelSelection,
-  updatedAt: string,
-  autoCompactWindow = "",
-  requestedAt?: DateTime.Utc,
-  reportedMaxTokens?: number | null,
-) {
-  const inputTokens = claudeMessageInputTokens(usage);
-  const outputTokens = usage.output_tokens;
-  const promptCacheTtlMs = claudePromptCacheTtlMs(usage.cache_creation);
-  const maxTokens = reportedMaxTokens ?? claudeContextWindow(modelSelection) ?? null;
-  // The cache lifetime starts with the request, not when its response ends.
-  const promptCacheExpiresAt =
-    promptCacheTtlMs === undefined || requestedAt === undefined
-      ? undefined
-      : DateTime.formatIso(DateTime.add(requestedAt, { milliseconds: promptCacheTtlMs }));
-  return {
-    usedTokens: inputTokens + outputTokens,
-    maxTokens,
-    inputTokens,
-    cachedInputTokens: usage.cache_read_input_tokens ?? 0,
-    outputTokens,
-    reasoningOutputTokens: 0,
-    ...(promptCacheTtlMs === undefined ? {} : { promptCacheTtlMs }),
-    ...claudeAutoCompactThreshold(autoCompactWindow, maxTokens),
-    ...(promptCacheExpiresAt === undefined ? {} : { promptCacheExpiresAt }),
-    updatedAt,
-  };
-}
-type ClaudeMessageUsage = Parameters<typeof claudeProviderTurnTokenUsage>[0];
-// message_delta usage is per-message cumulative; null or absent fields retain message_start values and zeros replace them.
-function mergeClaudeStreamUsage(
-  current: ClaudeMessageUsage,
-  delta: {
-    readonly input_tokens?: number | null;
-    readonly cache_creation_input_tokens?: number | null;
-    readonly cache_read_input_tokens?: number | null;
-    readonly output_tokens: number;
-  },
-): ClaudeMessageUsage {
-  return {
-    ...current,
-    input_tokens: delta.input_tokens ?? current.input_tokens,
-    cache_creation_input_tokens:
-      delta.cache_creation_input_tokens ?? current.cache_creation_input_tokens ?? null,
-    cache_read_input_tokens:
-      delta.cache_read_input_tokens ?? current.cache_read_input_tokens ?? null,
-    output_tokens: delta.output_tokens,
-  };
-}
 export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_PROVIDER);
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 // Claude can consume a subagent result before the launching turn ends, leaving
@@ -6892,14 +6837,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               lastContextUsage.delete(context);
               reasoning.messageId = event.message.id;
               reasoning.streamBlocks.clear();
-              const usage: ClaudeMessageUsage | undefined = event.message.usage;
-              context.streamUsage =
-                usage === undefined ? null : { messageId: event.message.id, usage };
-              if (usage !== undefined) yield* emitContextUsage(context, usage, true);
+              const usage: ClaudeMessageUsage = event.message.usage ?? {};
+              context.streamUsage = { messageId: event.message.id, usage };
+              yield* emitContextUsage(context, usage, true);
             } else if (event.type === "message_delta") {
-              const usage: typeof event.usage | undefined = event.usage;
+              const usage: typeof event.usage | null | undefined = event.usage;
               const stream = context.streamUsage;
-              if (stream?.usage && usage !== undefined) {
+              if (stream?.usage && usage != null) {
                 stream.usage = mergeClaudeStreamUsage(stream.usage, usage);
                 yield* emitContextUsage(context, stream.usage);
               }
@@ -7289,7 +7233,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // CLI-generated <synthetic> frames report zero usage, not context usage.
             if (
               message.parent_tool_use_id === null &&
-              message.message.usage !== undefined &&
+              message.message.usage != null &&
               message.message.model !== "<synthetic>"
             ) {
               const snapshotUsage = message.message.usage;
@@ -7305,7 +7249,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ) {
                 stream.usage = {
                   ...snapshotUsage,
-                  output_tokens: Math.max(snapshotUsage.output_tokens, stream.usage.output_tokens),
+                  output_tokens: Math.max(
+                    optionalClaudeUsageTokenCount(snapshotUsage.output_tokens) ?? 0,
+                    optionalClaudeUsageTokenCount(stream.usage.output_tokens) ?? 0,
+                  ),
                 };
                 yield* emitContextUsage(context, stream.usage);
               }

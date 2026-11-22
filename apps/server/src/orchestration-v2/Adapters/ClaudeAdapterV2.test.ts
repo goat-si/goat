@@ -4762,82 +4762,83 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         : [],
     );
 
-  it.effect("reports context from final stream usage when the request starts at zero", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeWakeHarness;
-      yield* harness.runtime.startTurn(
-        makeClaudeTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now: yield* DateTime.now,
-          attemptId: RunAttemptId.make("attempt-zero-start-usage"),
-          modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "gateway-model" },
-          text: "Continue.",
-          attachments: [],
-        }),
-      );
-      // Some Anthropic-compatible proxies report zero usage at message_start
-      // and the real counts on the final message_delta.
-      const frames = [
-        usageStreamFrame({
-          type: "message_start",
-          message: { id: "msg_first", usage: zeroUsage },
-        }),
-        usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000670", zeroUsage),
-        usageStreamFrame(
-          {
+  it.effect.each([zeroUsage, undefined, null, {}])(
+    "reports final usage from partial starts: %s",
+    (startUsage) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-zero-start-usage"),
+            modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "gateway-model" },
+            text: "Continue.",
+            attachments: [],
+          }),
+        );
+        // Some Anthropic-compatible proxies report zero usage at message_start
+        // and the real counts on the final message_delta.
+        const frames = [
+          usageStreamFrame({
+            type: "message_start",
+            message: { id: "msg_first", usage: startUsage },
+          }),
+          usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000670", zeroUsage),
+          usageStreamFrame(
+            {
+              type: "message_delta",
+              delta: { stop_reason: "tool_use", stop_sequence: null },
+              usage: { ...zeroUsage, input_tokens: 999_999, output_tokens: 9 },
+            },
+            "child-tool",
+          ),
+          usageStreamFrame({
             type: "message_delta",
             delta: { stop_reason: "tool_use", stop_sequence: null },
-            usage: { ...zeroUsage, input_tokens: 999_999, output_tokens: 9 },
-          },
-          "child-tool",
-        ),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "tool_use", stop_sequence: null },
-          usage: { ...zeroUsage, input_tokens: 37_939, output_tokens: 184 },
-        }),
-        usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000671", zeroUsage),
-        usageStreamFrame({
-          type: "message_start",
-          message: { id: "msg_second", usage: zeroUsage },
-        }),
-        usageSnapshotFrame("msg_second", "00000000-0000-4000-8000-000000000672", zeroUsage),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { input_tokens: null, output_tokens: 12 },
-        }),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { input_tokens: 37_939, output_tokens: 12 },
-        }),
-        claudeSdkFrame({
-          ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
-          modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
-        }),
-      ];
-      for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
-      const terminal = yield* Queue.take(harness.terminalReceipts);
-      assert.equal(terminal.status, "completed");
-      assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
-      assert.equal(
-        harness.runtime.getModelContextWindow?.({
-          ...CLAUDE_TEST_MODEL_SELECTION,
-          model: "gateway-model",
-        }),
-        1_048_576,
-      );
-      const updates = harness.events.flatMap((event) =>
-        event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
-          ? [event.providerTurn.tokenUsage.maxTokens]
-          : [],
-      );
-      assert.deepEqual(updates, [null, null, 1_048_576]);
-    }).pipe(Effect.provide(layerAdapterTest)),
+            usage: { ...zeroUsage, input_tokens: 37_939, output_tokens: 184 },
+          }),
+          usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000671", zeroUsage),
+          usageStreamFrame({
+            type: "message_start",
+            message: { id: "msg_second", usage: zeroUsage },
+          }),
+          usageSnapshotFrame("msg_second", "00000000-0000-4000-8000-000000000672", zeroUsage),
+          usageStreamFrame({
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { input_tokens: null, output_tokens: 12 },
+          }),
+          usageStreamFrame({
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { input_tokens: 37_939, output_tokens: 12 },
+          }),
+          claudeSdkFrame({
+            ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
+            modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
+          }),
+        ];
+        for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "completed");
+        assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
+        assert.equal(
+          harness.runtime.getModelContextWindow?.({
+            ...CLAUDE_TEST_MODEL_SELECTION,
+            model: "gateway-model",
+          }),
+          1_048_576,
+        );
+        const updates = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
+            ? [event.providerTurn.tokenUsage.maxTokens]
+            : [],
+        );
+        assert.deepEqual(updates, [null, null, 1_048_576]);
+      }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("merges cumulative stream usage into the message_start counts", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -4900,7 +4901,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(reportedContextTokens(harness.events), [1_211, 1_230, 1_075, 400]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("shows a hook-dropped Claude prompt once and skips info-level lines", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
