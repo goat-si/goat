@@ -2,7 +2,10 @@ import { useRef, useState } from "react";
 import {
   applyHistoryPress,
   botThreadKey,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
   botThreadsHistoryInput,
+  botWorkHistorySnoozeInput,
   botWorkHistoryView,
   EMPTY_WALK,
   markWalkRead,
@@ -17,7 +20,9 @@ import type {
   ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
+import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useStableCallback } from "~/hooks/useStableCallback";
 
 /**
  * A bot's older work, read page by page while its Home panel is open. The panel is keyed by
@@ -29,16 +34,56 @@ export function useBotWorkHistory(
   botId: BotId | null,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   current: ChannelListBotThreadsResult,
-  loaded: boolean,
+  home: { readonly loaded: boolean; readonly isPending: boolean; readonly refresh: () => void },
 ) {
+  const { loaded } = home;
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
-  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded });
+  const [snoozedPages, setSnoozedPages] = useState<BotSnoozeFoldPages>();
+  const foldScope = JSON.stringify([environmentId, botId]);
+  const pages = snoozedPages?.scope === foldScope ? snoozedPages : undefined;
+  if (snoozedPages !== pages) setSnoozedPages(undefined);
+  const snoozeInput = botWorkHistorySnoozeInput(
+    walk,
+    current,
+    capabilities,
+    botId,
+    [],
+    pages?.rows,
+  );
+  const snoozes = useEnvironmentQuery(
+    snoozeInput === null
+      ? null
+      : channelEnvironment.checkBotSnoozes({ environmentId, input: snoozeInput }),
+  ).data?.activeSnoozes;
+  const snoozeCheck =
+    snoozeInput === null || snoozes === undefined
+      ? undefined
+      : { taskIds: snoozeInput.checkSnoozes, active: snoozes };
+  const readSnoozedPage = useStableCallback(async (cursor: string) => {
+    const result = await read({
+      environmentId,
+      input: { ...(botId === null ? {} : { botId }), snoozedAfter: cursor },
+    });
+    return result._tag === "Success" ? result.value : undefined;
+  });
+  const canReadSnoozedPages = capabilities?.goatBotTaskSnooze === true;
+  const fold = botSnoozeFold({
+    scope: foldScope,
+    first: current,
+    loaded,
+    home,
+    activeSnoozes: snoozes,
+    pages,
+    setPages: setSnoozedPages,
+    read: canReadSnoozedPages ? readSnoozedPage : null,
+  });
+  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded, snoozeCheck });
   const [written, setWritten] = useState("[[],[],[]]");
   if (view.reported !== written) {
     setWritten(view.reported);
-    setWalk((state) => writeThrough(state, current));
+    setWalk((state) => writeThrough(state, current, snoozeCheck));
   }
   // Opening an older row's peek acknowledges it; its read-through only moves forward.
   function markRead(taskId: ChannelTaskId, through: string) {
@@ -70,6 +115,11 @@ export function useBotWorkHistory(
   }
   return {
     supported: view.supported,
+    snoozeList: {
+      snoozed: fold.rows,
+      snoozedContinuation: fold.continuation,
+      snoozedLimitReached: fold.limitReached,
+    },
     markRead,
     currentTaskIds: view.currentTaskIds,
     rows: view.rows,

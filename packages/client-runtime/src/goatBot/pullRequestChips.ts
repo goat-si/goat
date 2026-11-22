@@ -1,4 +1,8 @@
-import type { BotRowPullRequest } from "@goat/contracts";
+import {
+  CHANNEL_BOT_ROW_PULL_REQUESTS,
+  type BotRowPullRequest,
+  type ThreadPullRequestLink,
+} from "@goat/contracts";
 
 export interface GoatBotRowPullRequestChip {
   readonly key: string;
@@ -57,4 +61,16 @@ export function goatBotRowPullRequests(
     });
   const more = pullRequests.length - chips.length + (row.pullRequestsOmitted ?? 0);
   return { chips, more, moreLabel: more > 0 ? `+${more} more` : null };
+}
+
+/** Links already present in the worker's shell, including shells paired from another host. */
+export function botWorkerPullRequests(links: ReadonlyArray<ThreadPullRequestLink>) {
+  const visible = links.filter((link) => link.source !== "stack-dismissed");
+  const pullRequests = visible.slice(0, CHANNEL_BOT_ROW_PULL_REQUESTS).map((link) => ({
+    repository: link.repository,
+    number: link.number,
+    watching: link.watch !== undefined,
+    ...(link.snapshot === null ? {} : { state: link.snapshot.state }),
+  }));
+  return { pullRequests, pullRequestsOmitted: Math.max(0, visible.length - pullRequests.length) };
 }

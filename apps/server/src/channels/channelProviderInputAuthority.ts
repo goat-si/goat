@@ -1,9 +1,11 @@
 import {
+  isChannelWorkerThreadId,
   isGoatBotSessionThreadId,
   type ChannelInputId,
   type ChannelRequester,
   type MessageId,
   type OrchestrationV2Run,
+  type RuntimeMode,
 } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Context from "effect/Context";
@@ -22,11 +24,7 @@ import {
   requesterForDispatch,
   sessionMemoryCeiling,
 } from "./channelDispatchAuthority.ts";
-import {
-  isChannelFollowUpMessageId,
-  isChannelWorkerThreadId,
-  workerLaunchIdsFor,
-} from "./channelIds.ts";
+import { isChannelFollowUpMessageId, workerLaunchIdsFor } from "./channelIds.ts";
 import {
   sessionCarriesNotes,
   workerContextOwner,
@@ -40,6 +38,11 @@ import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 export const CHANNEL_PERMISSION_CHANGED = "permission_changed";
 export const CHANNEL_PERMISSION_CHANGED_MESSAGE =
   "The requester’s permission to start this work changed.";
+
+export class ProviderInputRuntimeMode extends Context.Service<
+  ProviderInputRuntimeMode,
+  RuntimeMode
+>()("goat/channels/channelProviderInputAuthority/ProviderInputRuntimeMode") {}
 
 const permissionChanged = makeProviderFailure({
   class: "permission_error",
@@ -134,11 +137,11 @@ const makeProviderInputRefusal = Effect.gen(function* () {
         : slackSession && task.routineWork !== true
           ? yield* currentRequester(requester, originAddress.connectionId, task.originInputId)
           : yield* requesterForDispatch(task);
-      const mode = task.target?.runtimeMode;
+      const mode = yield* ProviderInputRuntimeMode;
       if (
         current === undefined ||
         !current.grantedScopes.includes("orchestration:operate") ||
-        (mode !== undefined && lowerRuntimeMode(mode, current.runtimeModeCeiling) !== mode) ||
+        lowerRuntimeMode(mode, current.runtimeModeCeiling) !== mode ||
         MEMORY_GRANT_RANK[sessionMemoryCeiling(current, task.target)] <
           MEMORY_GRANT_RANK[memoryGrantCeiling ?? "none"] ||
         (carriesNotes && !canReadChannelBotNotes(current))
@@ -164,6 +167,7 @@ const makeProviderInputRefusal = Effect.gen(function* () {
         const live = yield* currentRequester(snapshot, connectionId, inputId);
         if (
           live === undefined ||
+          lowerRuntimeMode(mode, live.runtimeModeCeiling) !== mode ||
           !mayDirect(live, connectionId, { ...task, requester: current }) ||
           (carriesNotes && !canReadChannelBotNotes(live))
         )

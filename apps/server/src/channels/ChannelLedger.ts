@@ -12,6 +12,7 @@ import { receptionLedger } from "./channelReceptionLedger.ts";
 import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
 import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
+import { encodeEvent, encodeTask, makeTaskEventWriter } from "./channelTaskEventStore.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
 // Inputs and decisions, task events, and their outbox deliveries commit together.
@@ -34,7 +35,6 @@ import {
   ChannelTask,
   ChannelTaskEvent,
   ChannelWorkerRun,
-  type ChannelTaskBrief,
   type ChannelTaskExportInput,
   type ChannelTaskExportResult,
   type ChannelTaskEventId,
@@ -51,6 +51,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { makeTaskHistoryReads } from "./channelBotTaskActivity.ts";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
@@ -148,9 +149,11 @@ export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelT
 
 type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
 
+type ChannelLedgerOperations = ChannelLedgerOps & ReturnType<typeof makeTaskHistoryReads>;
+
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  ChannelLedgerOps & {
+  ChannelLedgerOperations & {
     readonly recordLaunchHead: (
       input: Parameters<typeof recordChannelLaunchHead>[0],
     ) => Effect.Effect<void, ChannelLedgerError>;
@@ -295,11 +298,6 @@ export class ChannelLedger extends Context.Service<
       messageId: MessageId,
       inputId: ChannelInputId,
     ) => Effect.Effect<void, ChannelLedgerError>;
-    /** Most recently frozen brief, including earlier generations when none is specified. */
-    readonly latestTaskBrief: (
-      taskId: ChannelTaskId,
-      generation?: number,
-    ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
     /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
@@ -592,11 +590,9 @@ const FailureState = Schema.Struct({ reason: Schema.String, message: Schema.Stri
 const decodeInbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelInboundMessage));
 const decodeRequester = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelRequester));
 const decodeDecision = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReceptionResult));
-const encodeTask = Schema.encodeSync(Schema.fromJsonString(ChannelTask));
 const encodeWorkerRun = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerRun));
 const decodeWorkerRun = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelWorkerRun));
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
-const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
@@ -797,52 +793,7 @@ const make = Effect.gen(function* () {
       Effect.map((rows) => (rows[0] === undefined ? undefined : inboxSnapshot(rows[0]))),
     );
 
-  const writeTaskEvent = (write: ChannelTaskEventWrite) =>
-    Effect.gen(function* () {
-      const { next, event } = write;
-      const pendingAnswer =
-        write.pendingAnswerMessageId === undefined
-          ? sql`pending_answer_message_id`
-          : sql`${write.pendingAnswerMessageId}`;
-      const hold =
-        write.completionHold === undefined ? sql`completion_hold` : sql`${write.completionHold}`;
-      // A message may have moved updated_at past this write's clock; task activity never goes back.
-      const activeAt = sql`CASE WHEN julianday(updated_at) > julianday(${next.updatedAt})
-        THEN updated_at ELSE ${next.updatedAt} END`;
-      const updated = yield* sql<{ readonly task_id: string }>`
-        UPDATE channel_tasks SET
-          status = ${next.status},
-          version = ${next.version},
-          generation = ${next.generation},
-          worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = json_set(${encodeTask(next)}, '$.updatedAt', ${activeAt}),
-          newest_ask_at = ${newestAskAt(next)},
-          updated_at = ${activeAt},
-          pending_answer_message_id = ${pendingAnswer},
-          completion_hold = ${hold}
-        WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
-        RETURNING task_id
-      `;
-      if (updated.length === 0) {
-        return yield* new ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "Task " + next.taskId + " is not at version " + write.expectedVersion + ".",
-        });
-      }
-      const inserted = yield* sql<{ readonly sequence: number }>`
-        INSERT INTO channel_task_events (
-          event_id, task_id, task_version, type, event_json, occurred_at,
-          narration_state, forward_state
-        ) VALUES (
-          ${event.eventId}, ${event.taskId}, ${event.taskVersion}, ${event.type},
-          ${encodeEvent(event)}, ${event.occurredAt},
-          ${write.narrate === true ? "pending" : "none"},
-          ${write.forward === true ? "pending" : "none"}
-        )
-        RETURNING sequence
-      `;
-      return inserted[0]?.sequence ?? 0;
-    });
+  const writeTaskEvent = makeTaskEventWriter(sql);
 
   // A task belongs to the bot of the input that created it; no input of this owner, no task.
   const insertTask = (task: ChannelTask, ownerId: string, event: ChannelTaskEvent) =>
@@ -1074,19 +1025,7 @@ const make = Effect.gen(function* () {
     bindWorkerProviderBrief: (task, threadId) => bindWorkerProviderBrief(sql, task, threadId),
     bindWorkerFollowUpSender: (threadId, messageId, inputId) =>
       bindWorkerFollowUpSender(sql, threadId, messageId, inputId),
-    latestTaskBrief: (taskId, generation) =>
-      sql<{ readonly event_json: string }>`
-        SELECT event_json FROM channel_task_events
-        WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
-        ${generation === undefined ? sql`` : sql`AND json_extract(event_json, '$.payload.brief.generation') = ${generation}`}
-        ORDER BY sequence DESC LIMIT 1
-      `.pipe(
-        Effect.map((rows) => {
-          const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
-          return event?.type === "task.brief.frozen" ? event.payload.brief : undefined;
-        }),
-        Effect.mapError(toLedgerError("latestTaskBrief")),
-      ),
+    ...makeTaskHistoryReads(sql, toLedgerError),
 
     exportTasks: (input) =>
       Effect.gen(function* () {

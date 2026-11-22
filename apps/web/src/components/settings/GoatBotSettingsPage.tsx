@@ -20,6 +20,7 @@ import {
 import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { GoatBotAlertSettings } from "./GoatBotAlertSettings";
 import { GoatBotSettings } from "./GoatBotSettings";
 import { GoatBotStatusSettings } from "./GoatBotStatusSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -187,6 +188,7 @@ export function GoatBotSettingsPanel() {
       <GoatBotStatusSettings />
       <GoatBotProfileSection />
       <GoatBotSettings />
+      <GoatBotAlertSettings />
       <SettingsSection title="Task threads">
         <SettingsRow
           title="Open task threads beside the main chat"

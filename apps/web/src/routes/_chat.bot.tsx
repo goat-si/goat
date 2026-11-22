@@ -1,5 +1,5 @@
 import { useContext, useEffect } from "react";
-import { botRosterGroups } from "@goat/client-runtime/goatBot";
+import { botRosterGroups, decodeBotAttentionRequest } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useGlobalAgentStore } from "../globalAgentStore";
@@ -10,6 +10,7 @@ import {
   useThreadShell,
   useThreadVisibleTurnItems,
 } from "../state/entities";
+import { GoatBotAlertTask } from "../components/goatBot/GoatBotAlertTask";
 import { GoatBotTaskPane } from "../components/goatBot/GoatBotTaskPane";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
@@ -58,7 +59,16 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
-  const { task, taskTitle, bot: botId } = Route.useSearch();
+  const {
+    task,
+    taskTitle,
+    bot: botId,
+    attentionEnvironment,
+    attentionRequest,
+    attentionDetail,
+    attentionNative,
+    attentionGeneration,
+  } = Route.useSearch();
   const roster = useBotRoster();
   // A bot this client just created opens from the create's answer, even when the list read after
   // it failed.
@@ -91,13 +101,31 @@ function GoatBotRouteSession() {
   const bot =
     !memberUnknown && session.availability.kind === "ready" ? session.availability.bot : null;
   useEffect(() => {
-    if (bot && (task === undefined || !session.supportsTaskThreads))
+    if (bot && (task === undefined || (!attentionEnvironment && !session.supportsTaskThreads)))
       void navigate({
         to: "/$environmentId/$threadId",
         params: { environmentId: bot.environmentId, threadId: bot.threadId },
         replace: true,
       });
-  }, [bot, navigate, task, session.supportsTaskThreads]);
+  }, [bot, navigate, task, attentionEnvironment, session.supportsTaskThreads]);
+  if (
+    task &&
+    attentionEnvironment &&
+    (attentionDetail === "external" ||
+      attentionNative !== undefined ||
+      bot?.environmentId !== attentionEnvironment ||
+      !session.supportsTaskThreads)
+  )
+    return (
+      <GoatBotAlertTask
+        environmentId={attentionEnvironment}
+        taskId={task}
+        botId={botId}
+        requestId={attentionRequest}
+        request={decodeBotAttentionRequest(attentionNative)}
+        generation={attentionGeneration}
+      />
+    );
   if (memberUnknown && !memberResolving) return <GoatBotMemberMissing />;
   if (bot && task && session.supportsTaskThreads)
     return (
@@ -108,6 +136,7 @@ function GoatBotRouteSession() {
             session={session}
             taskId={task}
             taskTitle={taskTitle}
+            attentionRequest={attentionRequest}
           />
         </GoatBotMemberContext>
       </GoatBotMainProfileContext>
@@ -172,11 +201,13 @@ export function GoatBotTaskRoute({
   session,
   taskId,
   taskTitle,
+  attentionRequest,
 }: {
   environmentId: EnvironmentId;
   session: ReturnType<typeof useGoatBotSession>;
   taskId: ChannelTaskId;
   taskTitle?: string | undefined;
+  attentionRequest?: string | undefined;
 }) {
   const taskFocus = getTaskPaneFocus();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
@@ -233,6 +264,7 @@ export function GoatBotTaskRoute({
           session={session}
           taskId={taskId}
           taskTitle={taskTitle}
+          attentionRequest={attentionRequest}
           onClose={() => {
             requestTaskFocusReturn(taskFocus);
             void navigate({ to: "/bot", search: goatBotSearch(member) });

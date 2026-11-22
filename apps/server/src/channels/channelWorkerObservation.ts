@@ -6,6 +6,7 @@
  *
  * @module channelWorkerObservation
  */
+import { isHandoffPending, RuntimeRequestId } from "@goat/contracts";
 import type {
   OrchestrationV2Subagent,
   ChannelTaskApprovalRef,
@@ -19,6 +20,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2ThreadShell,
+  OrchestrationV2TurnItem,
   ThreadId,
   ThreadPullRequestLink,
   PullRequestState,
@@ -88,14 +90,35 @@ export const withApprovalHost = (
   host === ""
     ? needsYou
     : needsYou.map((need) =>
-        need.approval === undefined && need.question === undefined
+        need.approval === undefined && need.question === undefined && need.handoff === undefined
           ? need
           : {
               ...need,
               ...(need.approval === undefined ? {} : { approval: { ...need.approval, host } }),
+              ...(need.handoff === undefined ? {} : { handoff: { ...need.handoff, host } }),
               ...(need.question === undefined ? {} : { question: { ...need.question, host } }),
             },
       );
+
+export const needsYouFromApprovalHandoffs = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+  items.flatMap((item): ChannelTaskNeedsYou[] => {
+    if (
+      item.type !== "human_handoff" ||
+      item.handoff.kind !== "approval" ||
+      !isHandoffPending(item.handoff.state)
+    )
+      return [];
+    return [
+      {
+        kind: "approval",
+        since: DateTime.formatIso(item.handoff.createdAt),
+        handoff: {
+          threadId: item.threadId,
+          requestId: RuntimeRequestId.make(item.handoff.handoffId),
+        },
+      },
+    ];
+  });
 
 /** Approvals in `next` that `previous` did not list: each gets one card. */
 export const newApprovals = (
@@ -132,11 +155,13 @@ export const pullRequestsFromLinks = (
   links:
     | ReadonlyArray<
         Pick<ThreadPullRequestLink, "repository" | "number" | "url" | "source"> & {
+          readonly linkedAt?: string | undefined;
           readonly snapshot: { readonly state: PullRequestState } | null;
           readonly watch?: unknown;
         }
       >
     | undefined,
+  includeLinkTime = false,
 ): ReadonlyArray<ChannelTaskPullRequest> =>
   (links ?? [])
     .filter((link) => link.source !== "stack-dismissed")
@@ -144,6 +169,7 @@ export const pullRequestsFromLinks = (
       repository: link.repository,
       number: link.number,
       url: link.url,
+      ...(includeLinkTime && link.linkedAt !== undefined ? { linkedAt: link.linkedAt } : {}),
       ...(link.snapshot === null ? {} : { state: link.snapshot.state }),
       watching: link.watch !== undefined,
     }))

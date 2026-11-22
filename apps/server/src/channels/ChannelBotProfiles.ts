@@ -121,7 +121,12 @@ export const readProfileRecord = (sql: SqlClient.SqlClient, ownerId: string, bot
     ),
   );
 
-export const normalizeBotName = (name: string) => name.normalize("NFC").toLowerCase();
+export const normalizeBotName = (name: string) =>
+  name
+    .trim()
+    .replace(/[ \t]+/g, " ")
+    .normalize("NFC")
+    .toLowerCase();
 
 const MAX_PROFILE_ROWS = 501;
 

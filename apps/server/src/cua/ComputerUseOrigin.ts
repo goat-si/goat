@@ -11,6 +11,7 @@
  * @module ComputerUseOrigin
  */
 import {
+  isChannelWorkerThreadId,
   isGoatBotSessionThreadId,
   type MessageId,
   type RunId,
@@ -19,8 +20,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-
-import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 
 export class ComputerUseOriginError extends Schema.TaggedError<ComputerUseOriginError>()(
   "ComputerUseOriginError",

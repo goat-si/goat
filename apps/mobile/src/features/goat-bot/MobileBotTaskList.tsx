@@ -1,6 +1,7 @@
 import {
   COLLAPSED_FINISHED,
   type BotHomeWork,
+  type BotSnoozeFoldContinuation,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import type {
@@ -42,6 +43,14 @@ export function mobileBotTaskListItems(props: {
   /** Home is shown and the app active: rows' times follow the clock only then. */
   readonly ticking: boolean;
   readonly showAllFinished: boolean;
+  readonly snoozed?: ReadonlyArray<TaskRow>;
+  readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
+  readonly snoozedLimitReached?: boolean | undefined;
+  readonly activeSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
+  readonly retrySnoozeCheck?: (() => void) | undefined;
+  readonly uncheckedSnoozes?: ReadonlySet<ChannelTaskId> | undefined;
+  readonly showSnoozed?: boolean;
+  readonly onToggleSnoozed?: () => void;
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
   readonly onToggleExpanded: (id: ChannelTaskId) => void;
@@ -73,23 +82,54 @@ export function mobileBotTaskListItems(props: {
     (row): row is Extract<BotThreadRow, { kind: "coding" }> =>
       row.kind === "coding" && !listed.has(String(row.taskId)),
   );
-  const earlier = props.chatTasks.filter((card) => !listed.has(card.key));
-  if (listed.size + others.length + earlier.length === 0) {
-    return props.failed
+  const snoozed = props.snoozed ?? [];
+  const snoozedIds = new Set(snoozed.map((row) => String(row.task.taskId)));
+  const earlier = props.chatTasks.filter(
+    (card) =>
+      !listed.has(card.key) &&
+      !snoozedIds.has(card.key) &&
+      !props.activeSnoozes?.has(card.key as ChannelTaskId) &&
+      !props.uncheckedSnoozes?.has(card.key as ChannelTaskId),
+  );
+  const retrySnoozeCheck = props.retrySnoozeCheck;
+  const snoozeFailure: MobileBotHomeItem[] =
+    retrySnoozeCheck === undefined
       ? []
       : [
           {
-            key: "tasks-empty",
+            key: "snooze-check-failed",
             render: () => (
-              <MobileBotPanelEmpty
-                title="No recent tasks"
-                next={`Ask ${props.botName} in chat to start work.${history?.supported ? "" : " Unpinned tasks that finished more than three days ago aren't listed here."}`}
-              />
+              <>
+                <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+                  Couldn't check snoozed work.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={retrySnoozeCheck}
+                  className="min-h-[44px] justify-center"
+                >
+                  <Text className="text-foreground">Try again</Text>
+                </Pressable>
+              </>
             ),
           },
-          // Older work can still be read behind Show more when nothing recent is listed.
-          ...historyTail(props, 0),
         ];
+  if (listed.size + others.length + earlier.length + snoozed.length === 0) {
+    if (snoozeFailure.length > 0) return [...snoozeFailure, ...historyTail(props, 0)];
+    if (props.failed) return [];
+    return [
+      {
+        key: "tasks-empty",
+        render: () => (
+          <MobileBotPanelEmpty
+            title="No recent tasks"
+            next={`Ask ${props.botName} in chat to start work.${history?.supported ? "" : " Unpinned tasks that finished more than three days ago aren't listed here."}`}
+          />
+        ),
+      },
+      // Older work can still be read behind Show more when nothing recent is listed.
+      ...historyTail(props, 0),
+    ];
   }
   const act = (row: TaskRow, action: string) => {
     if (action === "pin") props.onUpdate({ taskId: row.task.taskId, pinned: !row.view.pinnedAt });
@@ -188,6 +228,58 @@ export function mobileBotTaskListItems(props: {
       if (props.expanded.has(row.task.taskId)) items.push(...props.details(row.task.taskId));
     }
   }
+  if (snoozed.length > 0) {
+    items.push({
+      key: "tasks-snoozed",
+      render: () => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: props.showSnoozed }}
+          onPress={props.onToggleSnoozed}
+          className="min-h-[44px] justify-center"
+        >
+          <Text className="font-semibold text-foreground">Snoozed</Text>
+        </Pressable>
+      ),
+    });
+    if (props.showSnoozed)
+      for (const row of snoozed)
+        items.push({
+          key: JSON.stringify(["snoozed", row.task.taskId]),
+          render: () => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !openable }}
+              disabled={!openable}
+              onPress={() => props.onOpenTask(row.task.taskId, row.task.title)}
+              className="min-h-[44px] justify-center"
+            >
+              <Text className="text-foreground">{row.task.title}</Text>
+            </Pressable>
+          ),
+        });
+    const continuation = props.snoozedContinuation;
+    if (props.showSnoozed && props.snoozedLimitReached)
+      items.push(label("snoozed-limit", "Snoozed work limit reached."));
+    if (props.showSnoozed && continuation) {
+      if (continuation.failed) items.push(label("snoozed-failed", "Couldn't load snoozed work."));
+      items.push({
+        key: "snoozed-more",
+        render: () => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show more snoozed tasks"
+            accessibilityState={{ busy: continuation.loading }}
+            disabled={continuation.loading}
+            onPress={continuation.loadMore}
+            className="min-h-[44px] items-center justify-center"
+          >
+            <Text className="text-foreground">Show more</Text>
+          </Pressable>
+        ),
+      });
+    }
+  }
   items.push(...historyTail(props, props.work.finished.length));
   if (others.length > 0) items.push(label("section:other", "Other threads"));
   for (const row of others) {
@@ -209,6 +301,7 @@ export function mobileBotTaskListItems(props: {
       ),
     });
   }
+  items.push(...snoozeFailure);
   if (earlier.length > 0) items.push(label("section:earlier", "Earlier in chat"));
   for (const card of earlier) {
     items.push({

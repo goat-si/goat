@@ -1,6 +1,16 @@
-import { MAIN_BOT_ID, type MessageId, type ThreadId } from "@goat/contracts";
+import { ProviderInputRuntimeMode } from "./channelProviderInputAuthority.ts";
+import {
+  MAIN_BOT_ID,
+  isGoatBotSessionThreadId,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunAttempt,
+  type MessageId,
+  type RuntimeMode,
+  type ThreadId,
+} from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { DEFAULT_BOT_IDENTITY, readProfileRecord } from "./ChannelBotProfiles.ts";
 import { PROFILE_UNREADABLE, sessionProfileIsCurrent } from "./channelBotSessionRotation.ts";
@@ -21,7 +31,7 @@ const profileUnreadable = makeProviderFailure({
   retryable: false,
 });
 
-export const channelSessionProfileRefusal = Effect.fn("ChannelBotSession.checkStartProfile")(
+const channelSessionProfileRefusal = Effect.fn("ChannelBotSession.checkStartProfile")(
   function* (sql: SqlClient.SqlClient, threadId: ThreadId, messageId: MessageId) {
     const [session] = yield* sql<{
       readonly context_text: string | null;
@@ -51,3 +61,45 @@ export const channelSessionProfileRefusal = Effect.fn("ChannelBotSession.checkSt
       ),
     ),
 );
+
+export function queuedChannelProfileRefusal(
+  sql: Option.Option<SqlClient.SqlClient>,
+  observeOnly: boolean,
+  attempt: OrchestrationV2RunAttempt,
+  run: OrchestrationV2Run,
+  messageId: MessageId,
+) {
+  return !observeOnly &&
+    attempt.reason === "initial" &&
+    (attempt.inputDelivery === undefined || attempt.inputDelivery === "unsent") &&
+    run.startedAt === null &&
+    isGoatBotSessionThreadId(run.threadId) &&
+    Option.isSome(sql)
+    ? channelSessionProfileRefusal(sql.value, run.threadId, messageId)
+    : undefined;
+}
+
+type ProfileRefusal = ReturnType<typeof channelSessionProfileRefusal>;
+type AuthorityRefusal = Effect.Effect<
+  Effect.Success<ProfileRefusal>,
+  never,
+  ProviderInputRuntimeMode
+>;
+
+export function providerInputFence(
+  authority: AuthorityRefusal | undefined,
+  profile: ProfileRefusal | undefined,
+  mode: RuntimeMode,
+) {
+  const liveAuthority = authority?.pipe(Effect.provideService(ProviderInputRuntimeMode, mode));
+  const refusal =
+    liveAuthority !== undefined && profile !== undefined
+      ? liveAuthority.pipe(
+          Effect.filterOrElse(
+            (failure) => failure !== undefined,
+            () => profile,
+          ),
+        )
+      : (liveAuthority ?? profile);
+  return refusal === undefined ? {} : { providerInputRefusal: refusal };
+}

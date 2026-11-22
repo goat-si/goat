@@ -17,7 +17,7 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
-import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
+import { ScheduledRelativeLabel } from "../settings/ScheduledRelativeLabel";
 import { scheduleLabel } from "@goat/client-runtime/scheduledTasks";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";

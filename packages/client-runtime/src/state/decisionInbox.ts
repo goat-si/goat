@@ -2,11 +2,19 @@ import type {
   DecisionFeed,
   DecisionHandoff,
   DecisionItem as DurableDecision,
-  EnvironmentId,
   Handoff,
+  OrchestrationV2TurnItem,
   ScopedThreadRef,
 } from "@goat/contracts";
-import { ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelTaskId,
+  EnvironmentId,
+  isHandoffPending,
+  RuntimeRequestId,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
@@ -37,6 +45,88 @@ export type DecisionItem = {
   /** An approval handoff; its card answers it through the handoff RPCs. */
   | { readonly kind: "handoff"; readonly handoff: Handoff }
 );
+
+export type DecisionRequestTarget = ScopedThreadRef & {
+  readonly requestId: RuntimeRequestId;
+  readonly requestKind?: "handoff";
+  readonly originEnvironmentId?: EnvironmentId;
+  readonly originTaskId?: ChannelTaskId;
+  readonly originBotId?: BotId;
+  readonly originDetail?: "external";
+};
+
+export function readDecisionRequestTarget(
+  search: Readonly<Record<string, unknown>> | undefined,
+): DecisionRequestTarget | undefined {
+  const { environmentId, threadId, requestId } = search ?? {};
+  if (
+    typeof environmentId !== "string" ||
+    !environmentId ||
+    typeof threadId !== "string" ||
+    !threadId ||
+    typeof requestId !== "string" ||
+    !requestId
+  )
+    return undefined;
+  return {
+    environmentId: EnvironmentId.make(environmentId),
+    threadId: ThreadId.make(threadId),
+    requestId: RuntimeRequestId.make(requestId),
+    ...(search?.requestKind === "handoff"
+      ? {
+          requestKind: "handoff",
+          ...(typeof search.originEnvironmentId === "string" &&
+          search.originEnvironmentId &&
+          typeof search.originTaskId === "string" &&
+          search.originTaskId
+            ? {
+                originEnvironmentId: EnvironmentId.make(search.originEnvironmentId),
+                originTaskId: ChannelTaskId.make(search.originTaskId),
+                ...(typeof search.originBotId === "string" && search.originBotId
+                  ? { originBotId: BotId.make(search.originBotId) }
+                  : {}),
+                ...(search.originDetail === "external" ? { originDetail: "external" } : {}),
+              }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+export function targetedHandoffRead(target: DecisionRequestTarget | undefined) {
+  return target?.requestKind === "handoff"
+    ? {
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, itemId: TurnItemId.make(target.requestId) },
+      }
+    : undefined;
+}
+
+export function targetedHandoffItem(
+  target: DecisionRequestTarget,
+  item: OrchestrationV2TurnItem | null,
+): DecisionItem | undefined {
+  if (
+    item?.type !== "human_handoff" ||
+    item.threadId !== target.threadId ||
+    item.handoff.requestedBy.threadId !== target.threadId ||
+    item.handoff.handoffId !== String(target.requestId) ||
+    item.handoff.kind !== "approval" ||
+    !isHandoffPending(item.handoff.state)
+  )
+    return undefined;
+  return handoffDecision(target.environmentId, item.handoff, PERSON);
+}
+
+export function matchesDecisionRequest(item: DecisionItem, target: DecisionRequestTarget) {
+  return (
+    item.ref.environmentId === target.environmentId &&
+    item.ref.threadId === target.threadId &&
+    (item.kind === "handoff"
+      ? String(item.handoff.handoffId) === target.requestId
+      : item.kind !== "decision" && item.request.requestId === target.requestId)
+  );
+}
 
 const PERSON: DecisionRouting = { routedTo: "person" };
 
@@ -69,6 +159,19 @@ const decisionKey = (environmentId: string, id: string) =>
   JSON.stringify(["decision", environmentId, id]);
 const handoffKey = (environmentId: string, id: string) =>
   JSON.stringify(["handoff", environmentId, id]);
+
+const handoffDecision = (
+  environmentId: EnvironmentId,
+  handoff: Handoff,
+  routing: DecisionRouting,
+): DecisionItem => ({
+  id: handoffKey(environmentId, handoff.handoffId),
+  ref: { environmentId, threadId: handoff.requestedBy.threadId },
+  kind: "handoff",
+  createdAt: DateTime.formatIso(handoff.createdAt),
+  routing,
+  handoff,
+});
 
 function handoffRouting(environmentId: EnvironmentId, entry: DecisionHandoff): DecisionRouting {
   return {
@@ -369,14 +472,9 @@ export function createDecisionInboxAtoms(input: {
     for (const [environmentId, known] of get(knownHandoffsAtom)) {
       unlistedApprovals += Math.max(known.open - known.handoffs.length, 0);
       for (const entry of known.handoffs) {
-        items.push({
-          id: handoffKey(environmentId, entry.handoff.handoffId),
-          ref: { environmentId, threadId: entry.handoff.requestedBy.threadId },
-          kind: "handoff",
-          createdAt: DateTime.formatIso(entry.handoff.createdAt),
-          routing: handoffRouting(environmentId, entry),
-          handoff: entry.handoff,
-        });
+        items.push(
+          handoffDecision(environmentId, entry.handoff, handoffRouting(environmentId, entry)),
+        );
       }
     }
     for (const ref of get(summaryAtom).refs) {

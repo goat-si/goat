@@ -13,7 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -212,6 +215,7 @@ describe("GOAT Bot thread transcripts", () => {
               originLabel: "fixture-origin",
               originThreadId: ThreadId.make("fixture-origin-thread"),
               readKeyHash: "0".repeat(64),
+              botAttention: true,
             },
           } as const;
           const execute = (caller: McpInvocationContext.McpInvocationScope) =>
@@ -241,7 +245,22 @@ describe("GOAT Bot thread transcripts", () => {
             message,
           );
           assert.notInclude(JSON.stringify(transcript), note);
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const prepared = yield* threads
+            .streamStoredEventsFrom({ threadId, afterSequence: 0, eventType: "run.updated" })
+            .pipe(
+              Stream.filterMap((stored) =>
+                stored.event.type === "run.updated" &&
+                stored.event.payload.id === runId &&
+                stored.event.payload.status !== "preparing"
+                  ? Result.succeed(stored.event.payload.status)
+                  : Result.failVoid,
+              ),
+              Stream.runHead,
+            );
+          assert.deepEqual(prepared, Option.some("starting"));
           yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
+          assert.lengthOf(provider.started, 1);
           assert.include(provider.started[0]?.message.text ?? "", note);
           assert.notInclude(JSON.stringify(yield* read), note);
         }).pipe(Effect.provide(destination));

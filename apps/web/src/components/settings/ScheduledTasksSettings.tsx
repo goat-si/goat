@@ -1,3 +1,5 @@
+import { ScheduledRelativeLabel } from "./ScheduledRelativeLabel";
+import { WebhookDeliveriesDialog } from "./WebhookDeliveriesDialog";
 import { WebhookEndpointField } from "./WebhookEndpointField";
 import { resolvePastedPath } from "@goat/shared/path";
 import * as Schema from "effect/Schema";
@@ -9,11 +11,7 @@ import {
   ScheduledTaskNotificationPolicyField,
 } from "./ScheduledTaskNotificationPolicyField";
 import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
-import {
-  formatTimeUntil,
-  scheduleLabel,
-  WEEKDAY_LABELS,
-} from "@goat/client-runtime/scheduledTasks";
+import { scheduleLabel, WEEKDAY_LABELS } from "@goat/client-runtime/scheduledTasks";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
@@ -27,7 +25,7 @@ import {
   PlusIcon,
   TrashIcon as Trash2Icon,
 } from "~/components/solar";
-import { type ReactNode, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import type {
   EnvironmentId,
@@ -36,7 +34,6 @@ import type {
   ScheduledTask,
   ScheduledTaskId,
   ScheduledTaskUpsertInput,
-  ScheduledTaskWebhookDeliverySummary,
   ThreadId,
 } from "@goat/contracts";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
@@ -57,7 +54,6 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 
-import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
@@ -66,7 +62,6 @@ import {
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { useNavigate } from "@tanstack/react-router";
-import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironment, type EnvironmentPresentation } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
@@ -85,7 +80,6 @@ import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from ".
 import {
   EMPTY_DRAFT,
   webhookDraftErrors,
-  webhookDeliveryLabel,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
   scheduleFromDraft,
@@ -148,39 +142,6 @@ function splitModelKey(value: string): ModelSelection | null {
     instanceId: ProviderInstanceId.make(value.slice(0, index)),
     model: value.slice(index + 1),
   };
-}
-
-/** formatRelativeTime handles only the past; upcoming runs need future labels. */
-function relativeLabel(value: string | null, nowMs: number): string {
-  if (!value) return "Not scheduled";
-  const diffMs = new Date(value).getTime() - nowMs;
-  if (diffMs <= 0) {
-    const relative = formatRelativeTime(value, nowMs);
-    if (!relative) return "Not scheduled";
-    return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
-  }
-  return formatTimeUntil(diffMs);
-}
-
-// Use the label's minute tick because the compiler caches render-time Date.now() on the timestamp.
-export function ScheduledRelativeLabel(props: { value: string | null }) {
-  const nowMinute = useNowMinute();
-  return relativeLabel(props.value, Date.parse(`${nowMinute}:00.000Z`));
-}
-
-function deliveryOutcomeVariant(outcome: string) {
-  if (outcome === "accepted") return "success";
-  if (
-    outcome === "duplicate" ||
-    outcome === "coalesced" ||
-    outcome === "disabled" ||
-    outcome === "rate_limited" ||
-    outcome === "expired"
-  ) {
-    return "warning";
-  }
-  if (outcome === "dispatch_failed" || outcome === "rejected_signature") return "error";
-  return "outline";
 }
 
 export function ScheduledTasksSettings(target: {
@@ -673,182 +634,6 @@ function ScheduledTaskRow({
         </div>
       }
     />
-  );
-}
-
-function WebhookDeliveriesDialog({
-  environmentId,
-  task,
-  onClose,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly task: ScheduledTask;
-  readonly onClose: () => void;
-}) {
-  const deliveriesQuery = useEnvironmentQuery(
-    serverEnvironment.scheduledTaskWebhookDeliveries({
-      environmentId,
-      input: { id: task.id, acceptAnyOutcome: true },
-    }),
-  );
-  const [selectedId, setSelectedId] = useState<ScheduledTaskWebhookDeliverySummary["id"] | null>(
-    null,
-  );
-  const selectedQuery = useEnvironmentQuery(
-    selectedId === null
-      ? null
-      : serverEnvironment.scheduledTaskWebhookDelivery({
-          environmentId,
-          input: { id: task.id, deliveryId: selectedId, acceptAnyOutcome: true },
-        }),
-  );
-  const deliveries = deliveriesQuery.data?.deliveries ?? null;
-  const selected = selectedQuery.data?.delivery ?? null;
-  const error = selectedId === null ? deliveriesQuery.error : selectedQuery.error;
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-    >
-      <DialogPopup className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Deliveries · {task.title}</DialogTitle>
-          <DialogDescription>Recent requests to this task's webhook URL.</DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          {selectedId !== null && selected === null && selectedQuery.error === null ? (
-            <p className="text-sm text-muted-foreground" role="status">
-              Loading delivery…
-            </p>
-          ) : selected ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Badge
-                  variant={deliveryOutcomeVariant(
-                    selected.pendingWindow ? "coalesced" : selected.outcome,
-                  )}
-                >
-                  {webhookDeliveryLabel(selected)}
-                </Badge>
-                <span>
-                  {selected.method} · <ScheduledRelativeLabel value={selected.receivedAt} />
-                </span>
-                {selected.signatureVerified ? (
-                  <span className="text-muted-foreground">Signature verified</span>
-                ) : null}
-              </div>
-              {selected.error ? (
-                <p
-                  className={
-                    selected.outcome === "filtered"
-                      ? "text-sm text-muted-foreground"
-                      : "text-sm text-destructive"
-                  }
-                >
-                  {selected.error}
-                </p>
-              ) : null}
-              <DeliveryBlock
-                title={selected.pendingWindow ? "Scheduled run" : "Prompt sent to the agent"}
-              >
-                {selected.renderedPrompt ??
-                  (selected.pendingWindow
-                    ? "Run scheduled when the window closes; no run started yet."
-                    : "No run was started for this request.")}
-              </DeliveryBlock>
-              {selected.missingFields.length > 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Empty placeholders: {selected.missingFields.join(", ")}
-                </p>
-              ) : null}
-              <DeliveryBlock title="Headers">
-                {Object.entries(selected.headers)
-                  .map(([name, value]) => `${name}: ${value}`)
-                  .join("\n")}
-              </DeliveryBlock>
-              {selected.query ? (
-                <DeliveryBlock title="Query">{selected.query}</DeliveryBlock>
-              ) : null}
-              <DeliveryBlock title={selected.bodyTruncated ? "Body (truncated)" : "Body"}>
-                {selected.body || "(empty)"}
-              </DeliveryBlock>
-            </div>
-          ) : selectedId !== null ? null : deliveries === null ? (
-            <p className="text-sm text-muted-foreground" role="status">
-              Loading deliveries…
-            </p>
-          ) : deliveries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No requests yet.</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {deliveries.map((delivery) => (
-                <li key={delivery.id}>
-                  <button
-                    type="button"
-                    className="flex w-full flex-wrap items-center gap-2 py-2 text-left text-sm hover:bg-accent/40"
-                    onClick={() => setSelectedId(delivery.id)}
-                  >
-                    <Badge
-                      variant={deliveryOutcomeVariant(
-                        delivery.pendingWindow ? "coalesced" : delivery.outcome,
-                      )}
-                    >
-                      {webhookDeliveryLabel(delivery)}
-                    </Badge>
-                    <span>{delivery.method}</span>
-                    <span className="text-muted-foreground">
-                      <ScheduledRelativeLabel value={delivery.receivedAt} />
-                    </span>
-                    {(delivery.outcome === "filtered" || delivery.outcome === "dispatch_failed") &&
-                    delivery.error ? (
-                      <span className="text-muted-foreground">{delivery.error}</span>
-                    ) : null}
-                    {delivery.missingFields.length > 0 ? (
-                      <span className="text-muted-foreground">
-                        {delivery.missingFields.length} empty placeholder
-                        {delivery.missingFields.length === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </DialogPanel>
-        <DialogFooter>
-          {selectedId !== null ? (
-            <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>
-              Back
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={deliveriesQuery.isPending}
-              onClick={deliveriesQuery.refresh}
-            >
-              Refresh
-            </Button>
-          )}
-          <DialogClose render={<Button size="sm" />}>Done</DialogClose>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-function DeliveryBlock({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="space-y-1">
-      <Label>{title}</Label>
-      <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap break-all">
-        {children}
-      </pre>
-    </div>
   );
 }
 

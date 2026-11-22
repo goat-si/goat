@@ -269,6 +269,39 @@ const fixtures: Fixture[] = [
 ];
 
 describe("Home and Threads two-way visibility", () => {
+  it("keeps a Home worker out of Threads through snooze and unsnooze", () => {
+    const snoozed = task("task", {
+      worker: { environmentId: source, threadId: "worker" },
+      view: {
+        taskId: "task",
+        pinnedAt: null,
+        doneAt: null,
+        readThrough: null,
+        snoozedUntil: "2026-11-04T01:00:00.000Z",
+      },
+    });
+    if (snoozed.kind !== "task") throw new Error("Expected a task row");
+    const threads = [shell("worker"), shell("other")];
+    const visibleInThreads = (current: ChannelListBotThreadsResult) => {
+      const home = selectHomeCurrentOpenableWork({
+        sourceEnvironmentId: source,
+        botId: BotId.make("main"),
+        eligible: true,
+        list: "ready",
+        current,
+        isOpenable: (id) => id === source,
+      });
+      const hidden = goatBotObservationThreadKeys({ threads, homeWork: home.links });
+      return threads.filter((thread) => !hidden.has(key(thread.environmentId, thread.id)));
+    };
+    const current = { rows: [workerTask], mainMessageCount: 0 };
+    expect(visibleInThreads(current)).toEqual([shell("other")]);
+    expect(visibleInThreads({ ...current, rows: [], snoozed: [snoozed] })).toEqual([
+      shell("other"),
+    ]);
+    expect(visibleInThreads(current)).toEqual([shell("other")]);
+  });
+
   it.each(fixtures)("$name", (fixture) => {
     const result: ChannelListBotThreadsResult = {
       rows: fixture.rows,

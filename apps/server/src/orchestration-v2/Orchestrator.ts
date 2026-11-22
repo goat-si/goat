@@ -266,6 +266,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { CommitGuard } from "./goat/CommitGuard.ts";
+import { CHANNEL_WORKER_RELEASE_DENIED } from "../channels/channelWorkerReleaseAuthority.ts";
 import { makeDispatchAdmission } from "./goat/DispatchAdmission.ts";
 import {
   applyToProjection,
@@ -9206,7 +9207,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         type: "error",
         failure: {
           ...command.failure,
-          code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+          code:
+            command.failure.code === CHANNEL_WORKER_RELEASE_DENIED
+              ? CHANNEL_WORKER_RELEASE_DENIED
+              : ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
         },
       },
     });

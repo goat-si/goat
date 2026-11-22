@@ -271,19 +271,22 @@ describe("two bots", () => {
     },
   );
 
-  it.effect("refuses creating or renaming a bot to an active name regardless of case", () => {
+  it.effect.each([
+    { stored: "Scout", create: "sCoUt", rename: "SCOUT" },
+    { stored: "Ops:  East", create: "Ops: East", rename: "Ops:\tEast" },
+  ])("refuses creating or renaming a bot to the same routing name as $stored", (names) => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* createMember("scout", { name: "Scout" });
+      yield* createMember("scout", { name: names.stored });
       assert.strictEqual(
-        yield* refusal(createMember("duplicate", { name: "sCoUt" })),
+        yield* refusal(createMember("duplicate", { name: names.create })),
         "invalid_input",
       );
       const builder = yield* createMember("builder", { name: "Builder" });
       const members = yield* ChannelBotMembers.ChannelBotMembers;
       assert.strictEqual(
-        yield* refusal(members.update({ botId: builder.botId, name: "SCOUT" }, owner)),
+        yield* refusal(members.update({ botId: builder.botId, name: names.rename }, owner)),
         "invalid_input",
       );
     }).pipe(Effect.provide(harness.layer));

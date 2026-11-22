@@ -23,7 +23,19 @@ import {
   matchesScheduledTaskScope,
   scheduleFromDraft,
   taskToDraft,
+  webhookDeliveryLabel,
 } from "./scheduledTasksSettings.logic";
+
+it("labels a work delivery Accepted until a firing is recorded", () => {
+  expect(webhookDeliveryLabel({ outcome: "accepted", firingAccepted: false }, "work")).toBe(
+    "Accepted",
+  );
+  expect(webhookDeliveryLabel({ outcome: "accepted", firingAccepted: true }, "work")).toBe("Ran");
+  expect(webhookDeliveryLabel({ outcome: "accepted", pendingWindow: true }, "work")).toBe(
+    "Opened window",
+  );
+  expect(webhookDeliveryLabel({ outcome: "accepted" })).toBe("Ran");
+});
 
 const laptopId = EnvironmentId.make("laptop");
 const serverId = EnvironmentId.make("server");
