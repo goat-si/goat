@@ -3,6 +3,14 @@ import { ChannelAttentionFeedInput, ChannelAttentionFeedResult } from "./channel
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 
+import {
+  BotPackageExportInput,
+  BotPackageExportResult,
+  BotPackageImportInput,
+  BotPackageImportResult,
+  BotPackageReviewInput,
+  BotPackageReviewResult,
+} from "./botPackage.ts";
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
@@ -117,6 +125,22 @@ const ChannelUpdateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateBot, {
 const ChannelCreateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.createBot, {
   payload: ChannelCreateBotInput,
   success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const BotPackageExportRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.exportBotPackage, {
+  payload: BotPackageExportInput,
+  success: BotPackageExportResult,
+  error: ChannelRpcError,
+});
+const BotPackageReviewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage, {
+  payload: BotPackageReviewInput,
+  success: BotPackageReviewResult,
+  error: ChannelRpcError,
+});
+const BotPackageImportRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.importBotPackage, {
+  payload: BotPackageImportInput,
+  success: BotPackageImportResult,
   error: ChannelRpcError,
 });
 
@@ -275,6 +299,9 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,
   ChannelCreateBotRpc,
+  BotPackageExportRpc,
+  BotPackageReviewRpc,
+  BotPackageImportRpc,
   ChannelSetBotHiddenRpc,
   ChannelDeleteBotRpc,
   ChannelRestoreBotRpc,

@@ -295,6 +295,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotMemberModelEdit: Schema.optionalKey(Schema.Boolean),
   /** `channel.createBot` and `channel.updateBot` store a member's `color`. Older servers drop it. */
   goatBotTemplates: Schema.optionalKey(Schema.Boolean),
+  goatBotPackages: Schema.optionalKey(Schema.Boolean),
   goatBotProfileColor: Schema.optionalKey(Schema.Boolean),
   /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
   goatBotMembers: Schema.optionalKey(Schema.Boolean),

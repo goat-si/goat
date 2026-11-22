@@ -1,3 +1,9 @@
+import {
+  AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
+  CHANNEL_GATEWAY_WS_METHODS,
+} from "@goat/contracts";
+import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -7,12 +13,12 @@ import { ChannelLedger } from "./ChannelLedger.ts";
 import { ChannelRuntime } from "./ChannelRuntime.ts";
 import { withWebhookService } from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 import {
-  linkSlackUser,
+  environmentId,
+  goatInput,
   makeHarness,
   owner,
   setupBot,
-  slackContext,
-  slackInput,
+  rpcContext,
 } from "./testkit/ChannelHarness.ts";
 
 const signature = { header: "x-example-signature", encoding: "hex", prefix: "sha256=" } as const;
@@ -178,7 +184,6 @@ it.effect("refuses a restricted imported bot's local worker at dispatch", () => 
   const harness = makeHarness();
   return Effect.gen(function* () {
     yield* setupBot;
-    yield* linkSlackUser();
     const members = yield* ChannelBotMembers;
     const sql = yield* SqlClient.SqlClient;
     yield* withWebhookService(
@@ -195,8 +200,12 @@ it.effect("refuses a restricted imported bot's local worker at dispatch", () => 
           const gateway = yield* ChannelGateway;
           const runtime = yield* ChannelRuntime;
           yield* gateway.ingest(
-            slackInput("Build Scout: do: use the deploy tool", "local-denied"),
-            slackContext,
+            {
+              ...goatInput("do: use the deploy tool", "local-denied"),
+              conversationKey: bot.sessionThreadId,
+              replyAddress: { kind: "goat", environmentId, threadId: bot.sessionThreadId },
+            },
+            rpcContext,
           );
           yield* runtime.drain;
           const { tasks } = yield* ledger.listTasks({
@@ -217,3 +226,19 @@ it.effect("refuses a restricted imported bot's local worker at dispatch", () => 
     );
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("requires settings access to export, review, or import a bot package", () =>
+  Effect.gen(function* () {
+    for (const method of [
+      CHANNEL_GATEWAY_WS_METHODS.exportBotPackage,
+      CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage,
+      CHANNEL_GATEWAY_WS_METHODS.importBotPackage,
+    ]) {
+      const denied = yield* Effect.flip(
+        RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, {}),
+      );
+      assert.strictEqual(denied.requiredPermission, AuthSettingsWriteScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthSettingsWriteScope], method, {});
+    }
+  }),
+);

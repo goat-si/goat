@@ -303,6 +303,9 @@ export const layer = McpToolAccess.toLayer(
               name: bot.name,
               purpose: bot.purpose,
               ...(bot.tools === undefined ? {} : { tools: bot.tools }),
+              ...(bot.importedToolNames === undefined
+                ? {}
+                : { importedToolNames: bot.importedToolNames }),
               hidden: bot.hidden === true,
               sessionThreadId: bot.sessionThreadId,
             })),

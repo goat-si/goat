@@ -35,7 +35,7 @@ const ScheduledTaskIntervalSchedule = Schema.Struct({
   everyMs: ScheduledTaskIntervalMs,
 });
 
-const ScheduledTaskFixedTimeSchedule = Schema.Struct({
+export const ScheduledTaskFixedTimeSchedule = Schema.Struct({
   type: Schema.Literal("fixed_time"),
   timeOfDay: TimeOfDay,
   weekdays: Schema.optional(
@@ -69,7 +69,7 @@ export type ScheduledTaskWebhookSignature = typeof ScheduledTaskWebhookSignature
 /** Matches how long the relay holds a request for an offline environment. */
 export const MAX_WEBHOOK_DELIVERY_AGE_MINUTES = 24 * 60;
 
-const WebhookMaxDeliveryAgeMinutes = Schema.Int.check(
+export const WebhookMaxDeliveryAgeMinutes = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: MAX_WEBHOOK_DELIVERY_AGE_MINUTES }),
 ).annotate({
   description: "Skip requests held offline over this many minutes. Null: run all.",
@@ -84,7 +84,7 @@ export function isWebhookDedupeTemplate(template: string): boolean {
 
 const WebhookDedupeTemplate = Schema.String.check(Schema.makeFilter(isWebhookDedupeTemplate));
 
-const ScheduledTaskWebhookDedupe = Schema.Struct({
+export const ScheduledTaskWebhookDedupe = Schema.Struct({
   replayKey: Schema.optional(WebhookDedupeTemplate),
   coalesceKey: Schema.optional(WebhookDedupeTemplate),
   coalesceWindowSeconds: Schema.optional(
@@ -127,7 +127,7 @@ export const ScheduledTaskWebhookFilter = Schema.Union([
 export type ScheduledTaskWebhookFilter = typeof ScheduledTaskWebhookFilter.Type;
 export type ScheduledTaskWebhookFilterOp = ScheduledTaskWebhookFilter["op"];
 
-const ScheduledTaskWebhookFilters = Schema.Array(ScheduledTaskWebhookFilter)
+export const ScheduledTaskWebhookFilters = Schema.Array(ScheduledTaskWebhookFilter)
   .check(Schema.isMaxLength(MAX_WEBHOOK_FILTERS))
   .annotate({
     description: "All must match. Max 16. Omitted: keep stored. [] clears.",

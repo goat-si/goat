@@ -76,6 +76,7 @@ describe("memory client guards", () => {
   });
 
   it("GOAT Bot's notes need the memory read grant before the client asks", () => {
+    expect(clientRpcRequiredScopes("channel.importBotPackage", {})).toEqual(["settings:write"]);
     expect(clientRpcRequiredScopes("channel.listBotNotes", {})).toEqual(["memory:read"]);
   });
 
