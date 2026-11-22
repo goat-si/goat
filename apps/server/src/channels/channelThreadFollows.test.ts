@@ -138,31 +138,113 @@ it.effect("lists only readable follows for the selected bot without exposing cre
   }).pipe(Effect.provide(makeHarness().layer)),
 );
 
-it.effect("queues one observation of an already ended thread and lists its PR until stopped", () =>
-  Effect.gen(function* () {
-    yield* setupBot;
-    yield* seedSessionFor(owner.principalId);
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const sql = yield* SqlClient.SqlClient;
-    yield* gateway.ingest(goatInput("do: prepare a release", "follow-task"), rpcContext);
-    yield* runtime.drain;
-    const [task] = (yield* ledger.listTasks({ ownerId, limit: 1 })).tasks;
-    if (task === undefined) return yield* Effect.die("Missing bot task");
-    const now = DateTime.formatIso(yield* DateTime.now);
-    const threadId = ThreadId.make("release-source");
-    const pr = "https://github.com/example/project/pull/42";
-    const payload = JSON.stringify({ pullRequests: [{ url: pr }] });
-    yield* sql`INSERT INTO orchestration_v2_projection_threads
+const setupFollow = Effect.fn("ChannelThreadFollows.test.setup")(function* () {
+  yield* setupBot;
+  yield* seedSessionFor(owner.principalId);
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const sql = yield* SqlClient.SqlClient;
+  yield* gateway.ingest(goatInput("do: prepare a release", "follow-task"), rpcContext);
+  yield* runtime.drain;
+  const [task] = (yield* ledger.listTasks({ ownerId, limit: 1 })).tasks;
+  if (task === undefined) return yield* Effect.die("Missing bot task");
+  const now = DateTime.formatIso(yield* DateTime.now);
+  const threadId = ThreadId.make("release-source");
+  const pr = "https://github.com/example/project/pull/42";
+  const payload = JSON.stringify({ pullRequests: [{ url: pr }] });
+  yield* sql`INSERT INTO orchestration_v2_projection_threads
       (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
       VALUES (${threadId}, ${scratchProjectId}, 'Release source', 'codex', 'full-access', 'default', ${now}, ${now}, ${payload})`;
-    yield* sql`INSERT INTO orchestration_v2_projection_runs
-      (run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json)
-      VALUES ('release-run', ${threadId}, 1, 'codex', 'completed', ${now}, ${now}, '{}')`;
-    const service = yield* makeThreadFollowService(ledger);
-    const rpc = service.rpcHandlers(owner, environmentId, follow.sessionId);
-    const input = { botId: BotId.make("main"), environmentId, threadId, taskId: task.taskId };
+  const service = yield* makeThreadFollowService(ledger);
+  const rpc = service.rpcHandlers(owner, environmentId, follow.sessionId);
+  const input = { botId: BotId.make("main"), environmentId, threadId, taskId: task.taskId };
+  const start = rpc[CHANNEL_GATEWAY_WS_METHODS.followThread](input);
+  const stop = rpc[CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread](input);
+  const run = (id: string, ordinal: number) => sql`
+      INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES (${id}, ${threadId}, ${ordinal}, 'codex', 'running', ${now}, '{}')
+    `;
+  const complete = sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed', completed_at = ${now}
+        WHERE run_id = 'release-run'`;
+      const event = JSON.stringify({ id: "release-run", status: "completed", completedAt: now });
+      yield* sql`INSERT INTO orchestration_events
+        (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+         actor_kind, payload_json, metadata_json, application_event_version)
+        VALUES ('release-run-ended', 'thread', ${threadId}, 1, 'run.updated', ${now},
+                'server', ${event}, '{}', 2)`;
+    }),
+  );
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const notices = Effect.map(orchestrator.getThreadRecords(botThreadId, ["messages"]), (bot) =>
+    bot.messages.filter((message) => message.role === "assistant" && message.text.includes(pr)),
+  );
+  return { start, stop, run, complete, notices, runtime, service, rpc, input, sql, threadId, pr };
+});
+
+it.effect.each(["stop", "re-follow"] as const)("drops queued notices after %s", (action) =>
+  Effect.gen(function* () {
+    const { start, stop, run, runtime, notices } = yield* setupFollow();
+    const restart = action === "re-follow";
+    yield* start;
+    yield* stop;
+    if (restart) {
+      yield* run("new-run", 1);
+      yield* start;
+    }
+    yield* runtime.drain;
+    const delivered = yield* notices;
+    assert.lengthOf(delivered, restart ? 1 : 0);
+    if (restart) assert.include(delivered[0]?.text, "Run new-run.");
+  }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect("reports the ending of a run superseded between passes once", () =>
+  Effect.gen(function* () {
+    const { start, run, complete, service, runtime, notices } = yield* setupFollow();
+    yield* start;
+    yield* run("release-run", 1);
+    yield* service.reconcile();
+    yield* complete;
+    yield* run("next-run", 2);
+    yield* service.reconcile();
+    yield* runtime.drain;
+    const endings = notices.pipe(
+      Effect.map((messages) =>
+        messages.filter(
+          ({ text }) => text.includes("is completed.") && text.includes("Run release-run."),
+        ),
+      ),
+    );
+    assert.lengthOf(yield* endings, 1);
+    yield* service.reconcile();
+    yield* runtime.drain;
+    assert.lengthOf(yield* endings, 1);
+  }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect("reports a persisted ending racing follow creation once", () =>
+  Effect.gen(function* () {
+    const { start, run, complete, service, runtime, notices } = yield* setupFollow();
+    yield* run("release-run", 1);
+    yield* Effect.all([start, complete], { concurrency: "unbounded" });
+    yield* service.reconcile();
+    yield* runtime.drain;
+    assert.lengthOf(
+      (yield* notices).filter(({ text }) => text.includes("is completed.")),
+      1,
+    );
+  }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect("queues one observation of an already ended thread and lists its PR until stopped", () =>
+  Effect.gen(function* () {
+    const { run, complete, runtime, service, rpc, input, sql, threadId, pr } = yield* setupFollow();
+    yield* run("release-run", 1);
+    yield* complete;
     const wrongEnvironment = yield* Effect.flip(
       rpc[CHANNEL_GATEWAY_WS_METHODS.followThread]({
         ...input,
@@ -178,7 +260,7 @@ it.effect("queues one observation of an already ended thread and lists its PR un
       {
         environmentId,
         threadId,
-        taskId: task.taskId,
+        taskId: input.taskId,
         status: "completed",
         pullRequest: pr,
       },
