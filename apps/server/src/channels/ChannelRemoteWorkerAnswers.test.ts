@@ -2,9 +2,13 @@ import { assert, describe, it } from "@effect/vitest";
 import { type RuntimeMode, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ServerConfig from "../config.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -16,6 +20,7 @@ import { trackForwards } from "./testkit/remoteForwardFibers.ts";
 import {
   linkSlackUser,
   makeHarness,
+  memorySlackContext,
   modelSelection,
   onlyTask,
   setupBot,
@@ -66,13 +71,21 @@ export const setRequesterCeiling = (ceiling: RuntimeMode) =>
   );
 
 /** A Slack requester's task on the remote machine, waiting on the question its worker asked. */
-export const askedOnRemote = (machine: RemoteMachine, request: string, key: string) =>
+export const askedOnRemote = (
+  machine: RemoteMachine,
+  request: string,
+  key: string,
+  withMemory = false,
+) =>
   Effect.gen(function* () {
     yield* setupBot;
-    yield* linkSlackUser();
+    yield* linkSlackUser("U1", withMemory);
     const writes = yield* taskWriteMilestones();
     const gateway = yield* ChannelGateway.ChannelGateway;
-    yield* gateway.ingest(slackInput(request, key + "-1"), slackContext);
+    yield* gateway.ingest(
+      slackInput(request, key + "-1"),
+      withMemory ? memorySlackContext : slackContext,
+    );
     yield* (yield* ChannelRuntime.ChannelRuntime).drain;
     yield* writes.waitFor((task) => task.status === "running");
     const correlationId = correlationOf(machine);
@@ -220,6 +233,50 @@ const answerFrom = (user: string, key: string) =>
   );
 
 describe("remote answers when the requester's or sender's authority is lost", () => {
+  it.effect("rechecks memory at the SSH boundary before answering a notes-bearing worker", () => {
+    const { machine, harness } = pinnedHarness();
+    const forwards = trackForwards();
+    return Effect.gen(function* () {
+      const note = "Use Juniper for staging.";
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* appendChannelBotNote(
+        yield* FileSystem.FileSystem,
+        files,
+        note,
+        "2026-11-21T00:00:00Z",
+        "fixture",
+      );
+      yield* askedOnRemote(machine, "do@mac-studio: ask me", "notes-answer", true);
+      assert.include(machine.launches[0]?.providerNotes ?? "", note);
+      const sql = yield* SqlClient.SqlClient;
+      const { taskId } = yield* onlyTask;
+      // The original pinned worker format could carry notes without a recorded memory ceiling.
+      yield* sql`
+        UPDATE channel_tasks SET task_json = json_remove(task_json, '$.target.memoryGrantCeiling')
+        WHERE task_id = ${taskId}
+      `;
+      onFirstSend(
+        machine,
+        sql`
+        UPDATE channel_identities
+        SET granted_scopes_json = '["orchestration:read","orchestration:operate"]'
+        WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'
+      `.pipe(Effect.asVoid, Effect.orDie),
+      );
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(
+        slackInput("answer: the first", "notes-worker-answer"),
+        memorySlackContext,
+      );
+      yield* nextAttempt(forwards);
+      assert.lengthOf(machine.sends, 0);
+      assert.isTrue((yield* openQuestionTexts).some((text) => text.includes("permission")));
+    }).pipe(forwards.observe, Effect.provide(harness.layer));
+  });
+
   it.effect(
     "regression: a requester revoked while their answer is sent ends the forward and is told",
     () => {

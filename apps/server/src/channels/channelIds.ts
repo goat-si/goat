@@ -139,9 +139,14 @@ export const sessionSendIdsFor = (taskId: ChannelTaskId, generation: number) => 
   messageId: MessageId.make(stableId("channel-session-send-message", [taskId, String(generation)])),
 });
 
+const ANSWER_MESSAGE = "channel-answer-message";
+
+export const isChannelAnswerMessageId = (messageId: MessageId) =>
+  messageId.startsWith(ANSWER_MESSAGE + ":");
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
-  messageId: MessageId.make(stableId("channel-answer-message", [eventId])),
+  messageId: MessageId.make(stableId(ANSWER_MESSAGE, [eventId])),
 });
 
 /**

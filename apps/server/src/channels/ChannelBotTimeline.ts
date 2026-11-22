@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
+import { makeThreadFollows } from "./channelThreadFollows.ts";
 import { timelineIdsFor } from "./channelIds.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
 
@@ -86,6 +87,7 @@ export const layerGoatTransport = Layer.effectDiscard(
     const registry = yield* ChannelTransport.ChannelTransportRegistry;
     const timeline = yield* ChannelBotTimeline;
     const ledger = yield* ChannelLedger.ChannelLedger;
+    const follows = yield* makeThreadFollows();
     const persistenceFailed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
     /**
@@ -164,6 +166,17 @@ export const layerGoatTransport = Layer.effectDiscard(
                   Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
                 );
         const threadId = current?.bot.threadId ?? destination.threadId;
+        if (
+          message.followApproval !== undefined &&
+          !(yield* follows
+            .mayDeliver(message.followApproval)
+            .pipe(Effect.mapError(persistenceFailed)))
+        ) {
+          return {
+            deliveryId: message.deliveryId,
+            acceptedAt: DateTime.formatIso(yield* DateTime.now),
+          };
+        }
         if (message.kind === "task_chip") {
           if (message.chip === undefined) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });

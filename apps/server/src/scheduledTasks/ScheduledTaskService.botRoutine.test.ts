@@ -889,6 +889,7 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           [180, "ChannelBotTaskSnooze"],
           [181, "ChannelBotAttention"],
           [182, "SlackConversationBot"],
+          [183, "ChannelInputSessionAuthority"],
         ]);
         for (const through of [176, 177] as const) {
           assert.include(
