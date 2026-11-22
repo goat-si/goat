@@ -312,6 +312,10 @@ export const reads = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>)
 export const dispatches = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("write", (params: P) => handle(params));
 
+/** Posts a review request. The separately authorized client action can perform the write. */
+export const proposesForReview = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) => refuseReadOnlyClient.pipe(Effect.andThen(() => handle(params))));
+
 /**
  * Receives a tool's original failure before the MCP layer flattens it into text.
  * goat_call provides one per nested call, so the envelope keeps the error's tag,

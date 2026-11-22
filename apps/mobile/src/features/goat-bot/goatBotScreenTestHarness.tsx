@@ -99,6 +99,13 @@ vi.mock("./openBotLibraryFile", () => ({
 // The thread state GOAT Bot's steps are read from: each thread's items, and when a reader holds or
 // lets go of one.
 const threadReads = vi.hoisted(() => ({
+  approvals: new Map<string, ReadonlyArray<unknown>>(),
+  shells: [] as Array<{
+    environmentId: string;
+    id: string;
+    title: string;
+    source: { launchedBy?: { environmentId: string } };
+  }>,
   held: [] as string[],
   released: [] as string[],
   itemsAtom: null as
@@ -123,11 +130,25 @@ vi.mock("../../state/threads", async () => {
     ref.environmentId + "\u0000" + ref.threadId;
   return {
     // The visit write is the transport; a test that needs it stands in for useAtomCommand.
-    threadEnvironment: { visit: "visit" },
+    threadEnvironment: { visit: "visit", respondToApproval: "respond" },
+    childThreadApprovalsAtom: () => Atom.make([]),
+    environmentThreadShells: {
+      childThreadInputsAtom: () => Atom.make([]),
+      threadShellsAtom: Atom.make(() => threadReads.shells),
+      threadShellAtom: (ref: { environmentId: string; threadId: string }) =>
+        Atom.make(
+          () =>
+            threadReads.shells.find(
+              (shell) => shell.environmentId === ref.environmentId && shell.id === ref.threadId,
+            ) ?? null,
+        ),
+    },
     environmentThreadDetails: {
       quietVisibleTurnItemsAtom: (ref: { environmentId: string; threadId: string }) =>
         quiet(keyOf(ref)),
       historyAtom: () => whole,
+      pendingRequestsAtom: (ref: { environmentId: string; threadId: string }) =>
+        Atom.make({ approvals: threadReads.approvals.get(keyOf(ref)) ?? [] }),
     },
   };
 });

@@ -88,6 +88,37 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect(
+    "preserves old remote dispatches without inferring an environment from their alias",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 177 });
+        yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+        VALUES ('legacy', 'thread', 'origin', 'box', 'worker', 'read-key', 'wake', 'running',
+          '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 184 }), [
+          ...migrationManifest.filter(([id]) => id > 177 && id < 184),
+          [184, "RemoteDispatchEnvironment"],
+        ]);
+        assert.deepStrictEqual(
+          yield* sql`
+        SELECT host, remote_thread_id, remote_environment_id, state
+        FROM remote_dispatches WHERE correlation_id = 'legacy'
+      `,
+          [
+            {
+              host: "box",
+              remote_thread_id: "worker",
+              remote_environment_id: null,
+              state: "running",
+            },
+          ],
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("drops the unused correlation index and keeps correlation values", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

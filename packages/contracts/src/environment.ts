@@ -295,7 +295,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** `channel.updateBot` takes a member's `defaultModelSelection`. Older servers drop the key. */
   goatBotMemberModelEdit: Schema.optionalKey(Schema.Boolean),
   /** `channel.createBot` and `channel.updateBot` store a member's `color`. Older servers drop it. */
+  goatBotTemplates: Schema.optionalKey(Schema.Boolean),
   goatBotProfileColor: Schema.optionalKey(Schema.Boolean),
+  goatBotProposals: Schema.optionalKey(Schema.Boolean),
   /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
   goatBotMembers: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */
@@ -313,6 +315,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `channel.listBotNotes`. */
   goatBotNotes: Schema.optionalKey(Schema.Boolean),
   goatBotPrivateNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotTools: Schema.optionalKey(Schema.Boolean),
   goatBotInstructions: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
   goatBotLibrary: Schema.optionalKey(Schema.Boolean),

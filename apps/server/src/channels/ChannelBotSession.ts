@@ -1,4 +1,5 @@
-import { readRecords, rejected } from "./channelBotSessionRecords.ts";
+import { botToolsRefusal } from "./channelBotTools.ts";
+import { asLedgerError, readRecords, rejected, requireTarget } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
 /** Warm sessions are bound per conversation, bot and requester. */
 import {
@@ -95,18 +96,7 @@ import {
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
 const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
-const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 type DispatchConfirmation = Effect.Success<ReturnType<typeof makeDispatchConfirmation>>;
-
-const requireTarget = (task: ChannelTask) =>
-  task.target === undefined
-    ? Effect.fail(
-        new ChannelLedger.ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "A GOAT Bot turn needs its dispatch target.",
-        }),
-      )
-    : Effect.succeed(task.target);
 
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
@@ -455,7 +445,8 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const target = yield* requireTarget(initial.task);
-    const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
+    const instance = yield* providers.getInstance(target.modelSelection.instanceId);
+    const driver = instance?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
     const sent = yield* sentRun(initial.task);
     if (sent === "unknown") return "deferred" as const;
@@ -471,6 +462,11 @@ const make = Effect.gen(function* () {
     if (requester === undefined) return yield* failPermission(initial, owner);
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
+    const refusal = botToolsRefusal(
+      identity.value,
+      instance?.displayName ?? target.modelSelection.instanceId,
+    );
+    if (refusal !== undefined) return yield* fail(initial, owner, refusal, "permission_changed");
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ceiling = { ...target, memoryGrantCeiling };
     const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
@@ -985,14 +981,5 @@ const make = Effect.gen(function* () {
 
   return ChannelBotSession.of({ serve, forward, eligible });
 });
-
-const asLedgerError = (operation: string) => (cause: unknown) =>
-  isLedgerError(cause)
-    ? cause
-    : new ChannelLedger.ChannelLedgerError({
-        reason: "persistence",
-        detail: "GOAT Bot session " + operation + " failed.",
-        cause,
-      });
 
 export const layer = Layer.effect(ChannelBotSession, make).pipe(Layer.provide(Profiles.layer));

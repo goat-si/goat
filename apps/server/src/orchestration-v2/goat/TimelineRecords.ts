@@ -289,6 +289,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
           },
           outcome: "updated",
           summary: entry.text,
+          ...(entry.botProposal === undefined ? {} : { botProposal: entry.botProposal }),
         };
         yield* emitEvent({
           type: "turn-item.updated",

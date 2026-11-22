@@ -42,6 +42,12 @@ export function MobileBotEditSheet(props: {
       unavailableReason={manage.connected ? undefined : manage.offlineReason}
       extraChanged={modelChanged}
       colorEditable={colorEditable}
+      tools={
+        presentationById.get(props.environmentId)?.serverConfig?.environment.capabilities
+          .goatBotTools === true
+          ? (bot.tools ?? null)
+          : undefined
+      }
       instructionsEditable={
         presentationById.get(props.environmentId)?.serverConfig?.environment.capabilities
           .goatBotInstructions === true

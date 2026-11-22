@@ -3,10 +3,10 @@ import { View } from "react-native";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { MobileBotRoster } from "./MobileBotRosterPanel";
 import { MobileHomeSegments } from "./MobileBotRosterView";
-import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { useMobileGoatBotModeWithOfflineSummary } from "./useMobileGoatBotHomeMode";
 
 export function MobileHomeModeSegments() {
-  const home = useMobileGoatBotHomeMode();
+  const home = useMobileGoatBotModeWithOfflineSummary();
   return home.known ? <MobileHomeSegments mode={home.mode} onSelect={home.setMode} /> : null;
 }
 

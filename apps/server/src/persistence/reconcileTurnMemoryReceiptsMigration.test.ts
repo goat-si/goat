@@ -7,16 +7,24 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationLedgerProblem, readMigrationSnapshot } from "./migrationPreflight.ts";
-import { hasPendingMigrations, migrationManifest, runMigrations } from "./Migrations.ts";
-import TurnMemoryReceipts from "./Migrations/184_TurnMemoryReceipts.ts";
-import { canonicalMigrationName } from "./reconcileGoatMigrationIds.ts";
+import {
+  hasPendingMigrations,
+  migrationEntries,
+  migrationManifest,
+  runMigrations,
+} from "./Migrations.ts";
+import TurnMemoryReceipts from "./Migrations/185_TurnMemoryReceipts.ts";
+import { canonicalMigrationName, skippedV2Migrations } from "./reconcileGoatMigrationIds.ts";
 
-const seedReceiptPreview = Effect.fn("seedReceiptPreview")(function* (id: 178 | 184 = 178) {
-  yield* runMigrations({ toMigrationInclusive: id === 178 ? 177 : 181 });
+const seedReceiptPreview = Effect.fn("seedReceiptPreview")(function* (
+  throughId: 177 | 181 | 183 = 177,
+) {
+  const id = throughId === 177 ? 178 : 184;
+  yield* runMigrations({ toMigrationInclusive: throughId });
   yield* TurnMemoryReceipts;
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
-    VALUES (${id}, 'TurnMemoryReceipts')`;
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at)
+    VALUES (${id}, 'TurnMemoryReceipts', '2000-01-01 00:00:00')`;
   yield* sql`INSERT INTO turn_memory_receipts
     (id, thread_id, run_id, space, kind, query_digest, refs_json)
     VALUES (7, 'preview-thread', 'preview-run', 'preview-space', 'recall', 'digest', '[]')`;
@@ -35,39 +43,35 @@ const readLedger = Effect.gen(function* () {
   return rows.map(({ migration_id, name }) => [migration_id, name] as const);
 });
 
-it.effect.each([178, 184] as const)(
-  "upgrades the receipt preview at %s without losing data on reopen",
-  (id) =>
+const readReceiptObjects = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql`SELECT * FROM sqlite_schema WHERE name IN
+    ('turn_memory_receipts', 'turn_memory_by_run', 'turn_memory_delete_thread') ORDER BY name`;
+});
+
+it.effect.each([177, 181, 183] as const)(
+  "upgrades the receipt preview based on %s without losing data on reopen",
+  (throughId) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-turn-receipt-upgrade-" });
       const filename = path.join(directory, "state.sqlite");
       const database = NodeSqliteClient.layer({ filename });
-      const receipts = yield* Effect.gen(function* () {
+      const before = yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* seedReceiptPreview(id);
+        yield* seedReceiptPreview(throughId);
         yield* sql`UPDATE effect_sql_migrations SET name = 'ChannelLedgerRequiresWorkTriggerAuthority'
         WHERE name = 'ChannelLedger'`;
-        return yield* readReceipts;
+        return { receipts: yield* readReceipts, objects: yield* readReceiptObjects };
       }).pipe(Effect.provide(database));
       const snapshot = readMigrationSnapshot(filename);
       assert.isNotNull(snapshot);
       if (snapshot === null) return;
       assert.isUndefined(migrationLedgerProblem(snapshot, "test"));
       assert.isTrue(yield* hasPendingMigrations().pipe(Effect.provide(database)));
-      assert.deepStrictEqual(yield* runMigrations().pipe(Effect.provide(database)), [
-        ...(id === 178
-          ? ([
-              [178, "WebhookDeliveryFiringEvidence"],
-              [179, "ChannelWorkerGenerations"],
-              [180, "ChannelBotTaskSnooze"],
-              [181, "ChannelBotAttention"],
-            ] as const)
-          : []),
-        [182, "SlackConversationBot"],
-        [183, "ChannelInputSessionAuthority"],
-      ]);
+      const expected = migrationManifest.filter(([id]) => id > throughId && id < 185);
+      assert.deepStrictEqual(yield* runMigrations().pipe(Effect.provide(database)), expected);
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const ledger = yield* readLedger;
@@ -108,7 +112,31 @@ it.effect.each([178, 184] as const)(
           inbox.map(({ name }) => name),
           "auth_session_id",
         );
-        assert.deepStrictEqual(yield* readReceipts, receipts);
+        const dispatches = yield* sql<{
+          readonly name: string;
+        }>`PRAGMA table_info(remote_dispatches)`;
+        assert.include(
+          dispatches.map(({ name }) => name),
+          "remote_environment_id",
+        );
+        assert.deepStrictEqual(yield* readReceipts, before.receipts);
+        assert.deepStrictEqual(yield* readReceiptObjects, before.objects);
+        assert.deepStrictEqual(
+          yield* sql`SELECT migration_id, created_at FROM effect_sql_migrations
+          WHERE name = 'TurnMemoryReceipts'`,
+          [{ migration_id: 185, created_at: "2000-01-01 00:00:00" }],
+        );
+        const previousPreviewEntries = migrationEntries.flatMap(([id, name, migration]) =>
+          id === 184 ? [] : [[id === 185 ? 184 : id, name, migration] as const],
+        );
+        assert.include(
+          skippedV2Migrations(
+            previousPreviewEntries,
+            ledger.map(([migration_id, name]) => ({ migration_id, name })),
+            185,
+          )?.message,
+          "184_TurnMemoryReceipts (recorded: RemoteDispatchEnvironment)",
+        );
         assert.isFalse(yield* hasPendingMigrations());
         assert.deepStrictEqual(yield* runMigrations(), []);
       }).pipe(Effect.provide(database));
@@ -117,8 +145,8 @@ it.effect.each([178, 184] as const)(
 
 it.effect("appends turn receipts to an up-to-date dev ledger", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 183 });
-    assert.deepStrictEqual(yield* runMigrations(), [[184, "TurnMemoryReceipts"]]);
+    yield* runMigrations({ toMigrationInclusive: 184 });
+    assert.deepStrictEqual(yield* runMigrations(), [[185, "TurnMemoryReceipts"]]);
     assert.deepStrictEqual(yield* readLedger, migrationManifest);
     assert.deepStrictEqual(yield* readReceipts, []);
     assert.deepStrictEqual(yield* runMigrations(), []);
@@ -156,28 +184,30 @@ it.effect.each(["missing earlier row", "mixed newer tail"] as const)(
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-it.effect("rolls back both missing migrations if the second cannot run", () =>
-  Effect.gen(function* () {
-    yield* seedReceiptPreview(184);
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`ALTER TABLE channel_inbox RENAME TO incomplete_channel_inbox`;
-    const before = yield* readLedger;
-    const schema = yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`;
-    const receipts = yield* readReceipts;
-    assert.include(
-      (yield* Effect.flip(runMigrations())).message,
-      "183_ChannelInputSessionAuthority",
-    );
-    assert.deepStrictEqual(yield* readLedger, before);
-    assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`, schema);
-    assert.deepStrictEqual(yield* readReceipts, receipts);
-    assert.isTrue(yield* hasPendingMigrations());
-  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+it.effect(
+  "rolls back the first two migrations and marker move if the last migration cannot run",
+  () =>
+    Effect.gen(function* () {
+      yield* seedReceiptPreview(181);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE remote_dispatches RENAME TO incomplete_remote_dispatches`;
+      const before = yield* readLedger;
+      const schema = yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`;
+      const receipts = yield* readReceipts;
+      assert.include(
+        (yield* Effect.flip(runMigrations())).message,
+        "184_RemoteDispatchEnvironment",
+      );
+      assert.deepStrictEqual(yield* readLedger, before);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`, schema);
+      assert.deepStrictEqual(yield* readReceipts, receipts);
+      assert.isTrue(yield* hasPendingMigrations());
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 it.effect("does not use the receipt preview exception for a partial late gap", () =>
   Effect.gen(function* () {
-    yield* seedReceiptPreview(184);
+    yield* seedReceiptPreview(181);
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
       VALUES (182, 'SlackConversationBot')`;
@@ -187,10 +217,13 @@ it.effect("does not use the receipt preview exception for a partial late gap", (
       history: before.map(([migration_id, name]) => ({ migration_id, name })),
       hasMemoryTables: true,
     };
-    assert.include(migrationLedgerProblem(snapshot, "test"), "183_ChannelInputSessionAuthority");
+    assert.include(
+      migrationLedgerProblem(snapshot, "test"),
+      "Unreleased memory DB is incompatible",
+    );
     assert.include(
       (yield* Effect.flip(runMigrations())).message,
-      "183_ChannelInputSessionAuthority",
+      "Unreleased memory DB is incompatible",
     );
     assert.deepStrictEqual(yield* readLedger, before);
     assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`, schema);

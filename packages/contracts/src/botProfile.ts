@@ -24,6 +24,14 @@ export const BotInstructions = Schema.String.check(
       "Instructions must fit in 16 KB.",
   ),
 );
+const BotToolAllowlist = Schema.Union([
+  Schema.Literal("all"),
+  Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).check(Schema.isMaxLength(256)),
+]);
+const BotTools = Schema.Struct({
+  mcpServers: BotToolAllowlist,
+  skills: BotToolAllowlist,
+});
 export const BotProfile = Schema.Struct({
   botId: BotId,
   role: BotRole,
@@ -31,12 +39,20 @@ export const BotProfile = Schema.Struct({
   avatar: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(16))),
   purpose: Schema.String.check(Schema.isMaxLength(4000)),
   instructions: Schema.optionalKey(BotInstructions),
+  tools: Schema.optionalKey(BotTools),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultProjectId: Schema.NullOr(ProjectId),
   environmentId: EnvironmentId,
   sessionThreadId: ThreadId,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  /** Setup the creating person can retry after a template bot already exists. */
+  templateSetup: Schema.optionalKey(
+    Schema.Struct({
+      templateId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+      clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+    }),
+  ),
   /** Left out of the roster by a person; still answers. Absent means shown. */
   hidden: Schema.optionalKey(Schema.Boolean),
   /** A deleted member keeps its id and archived thread until it is restored. Absent means active. */
@@ -45,3 +61,18 @@ export const BotProfile = Schema.Struct({
   color: Schema.optionalKey(BotColor),
 });
 export type BotProfile = typeof BotProfile.Type;
+
+export const BotProposalFields = Schema.Struct({
+  name: BotProfile.fields.name,
+  avatar: BotProfile.fields.avatar,
+  purpose: BotProfile.fields.purpose,
+  instructions: BotInstructions,
+  why: TrimmedNonEmptyString.check(Schema.isMaxLength(1000)),
+});
+export const BotProposalCard = Schema.Struct({
+  proposalId: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  fields: BotProposalFields,
+  status: Schema.Literals(["pending", "accepted", "dismissed"]),
+});
+export type BotProposalCard = typeof BotProposalCard.Type;

@@ -866,6 +866,8 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         assert.isEmpty(yield* migrate);
         yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkerReleaseAuthority'`;
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
+        yield* sql`ALTER TABLE channel_inbox DROP COLUMN auth_session_id`;
+        yield* sql`ALTER TABLE remote_dispatches DROP COLUMN remote_environment_id`;
         yield* sql`DROP TABLE channel_bot_attention`;
         yield* sql`DROP INDEX channel_bot_attention_approval_openings`;
         yield* sql`DROP TRIGGER turn_memory_delete_thread`;
@@ -892,7 +894,8 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           [181, "ChannelBotAttention"],
           [182, "SlackConversationBot"],
           [183, "ChannelInputSessionAuthority"],
-          [184, "TurnMemoryReceipts"],
+          [184, "RemoteDispatchEnvironment"],
+          [185, "TurnMemoryReceipts"],
         ]);
         for (const through of [176, 177] as const) {
           assert.include(

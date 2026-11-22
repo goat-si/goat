@@ -1,5 +1,8 @@
+import { MobileBotTemplateSheet } from "./MobileBotTemplateSheet";
 import { RegistryContext } from "@effect/atom-react";
 import {
+  lazy,
+  Suspense,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -22,13 +25,14 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { type BotProfile, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } from "react-native";
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { uuidv4 } from "../../lib/uuid";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
+import { getKeptSummaryPersistence } from "./keptPerComputerStore";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
@@ -36,6 +40,8 @@ import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { isComputerReadable, useComputerReadable } from "./useKeptPerComputer";
+
+const OfflineBotRoster = lazy(() => import("./OfflineBotRoster"));
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -100,6 +106,9 @@ export function MobileBotRoster(props: {
     );
   };
   const environmentId = roster.environmentId;
+  const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
+  const supportsTemplates = roster.supportsTemplates && manage.canUseTemplates;
+  const offline = !roster.connected && getKeptSummaryPersistence(registry) !== undefined;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
   const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
@@ -244,8 +253,41 @@ export function MobileBotRoster(props: {
           );
         }
       : undefined;
+  if (offline) {
+    return (
+      <Suspense fallback={props.header}>
+        <OfflineBotRoster
+          header={props.header}
+          environmentId={environmentId}
+          visible={visible}
+          computer={roster.computerLabel}
+          openBot={(botId, summaryEnvironmentId) => {
+            if (botId === "main") return () => onOpenBot({ kind: "main", profile: null });
+            if (summaryEnvironmentId !== environmentId) return undefined;
+            const bot = roster.bots.find(
+              (row) => row.kind === "member" && row.profile.botId === botId,
+            );
+            return bot
+              ? () => {
+                  if (readableNow()) onOpenBot(bot);
+                }
+              : undefined;
+          }}
+        />
+      </Suspense>
+    );
+  }
   return (
     <View className="flex-1">
+      {supportsTemplates && templateHost !== null && templateHost === environmentId && (
+        <MobileBotTemplateSheet
+          key={templateHost}
+          createBot={manage.createTemplate}
+          canCreate={() => manage.canCreate && readableNow()}
+          close={() => setTemplateHost(null)}
+          openBot={(bot) => onOpenBot({ kind: "member", profile: bot })}
+        />
+      )}
       <MobileBotRosterView
         header={
           <>
@@ -282,6 +324,13 @@ export function MobileBotRoster(props: {
                           ? "Unavailable until a computer with GOAT Bot connects"
                           : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
                     }),
+                ...(supportsTemplates
+                  ? {
+                      onTemplates: () => {
+                        if (readableNow()) setTemplateHost(environmentId);
+                      },
+                    }
+                  : {}),
                 onNewBot: () => {
                   if (readableNow() && environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);

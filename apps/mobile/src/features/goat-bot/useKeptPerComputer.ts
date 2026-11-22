@@ -14,8 +14,11 @@ import {
   computerKey,
   connectionRefusedAtom,
   keptAtom,
+  keptReadEpochAtom,
   refuseConnection,
-  refuseList,
+  refuseKeptRead,
+  purgeKeptSummary,
+  rememberKeptAnswer,
   setReadRefresher,
   staleAtom,
   startOver,
@@ -26,6 +29,7 @@ import { openAsks } from "./openAsksRead";
 export { resetKeptPerComputerForTests } from "./keptPerComputerStore";
 
 const NO_KEPT = Atom.make<unknown>(null);
+const NO_EPOCH = Atom.make(0);
 const NOT_STALE = Atom.make<number | null>(null);
 const NOT_READABLE = Atom.make(false);
 const NOT_STARTING_OVER = Atom.make(false);
@@ -105,6 +109,7 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
       const now = new Set(catalog.entries.keys());
       for (const environmentId of known)
         if (!now.has(environmentId)) {
+          purgeKeptSummary(registry, environmentId);
           registry.set(connectionRefusedAtom(environmentId), false);
           for (const kind of KEPT_KINDS) startOver(registry, environmentId, kind);
         }
@@ -148,6 +153,7 @@ export function useKeptPerComputer<A>(
   environmentId: EnvironmentId | null,
   live: EnvironmentQueryView<A>,
   offline: boolean,
+  keepInMemory = true,
 ): A | null {
   const registry = useContext(RegistryContext);
   const readable = useComputerReadable(environmentId);
@@ -155,17 +161,19 @@ export function useKeptPerComputer<A>(
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const restart = useAtomValue(environmentId === null ? NOT_STALE : staleAtom(kind, environmentId));
+  const readEpochAtom = environmentId === null ? NO_EPOCH : keptReadEpochAtom(environmentId);
+  const readEpoch = useAtomValue(readEpochAtom);
   const stale = restart !== null;
   // Starting over, only a settled answer seen during this restart ends it.
   const answered = stale && live.successResult !== null;
   const settled = live.isSuccess ? live.data : null;
+  const answer = live.successResult;
   const denied = accessDenied(live.cause);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
-    if (environmentId === null) return;
-    // The bot list speaks for the whole computer: refused, nothing of it shows until a list settles.
-    if (kind === "bots" && denied) {
-      refuseList(registry, environmentId);
+    if (environmentId === null || registry.get(readEpochAtom) !== readEpoch) return;
+    if (denied) {
+      refuseKeptRead(registry, environmentId, kind);
       return;
     }
     if (answered) {
@@ -183,12 +191,19 @@ export function useKeptPerComputer<A>(
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
       registry.get(staleAtom(kind, environmentId)) === null &&
       !registry.get(connectionRefusedAtom(environmentId));
-    if (unchanged && settled !== null && settled !== stored) store(settled);
+    if (!unchanged) return;
+    if (keepInMemory && settled !== null && settled !== stored) store(settled);
+    if (answer !== null && !offline) rememberKeptAnswer(registry, environmentId, kind, answer);
   }, [
     registry,
     environmentId,
     kind,
     settled,
+    answer,
+    offline,
+    keepInMemory,
+    readEpochAtom,
+    readEpoch,
     stored,
     stale,
     restart,

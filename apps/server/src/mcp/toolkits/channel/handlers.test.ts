@@ -434,7 +434,7 @@ const listBotsAs = (caller: EnvironmentId) =>
     }),
   );
 
-it.effect("agents list only their owner's active bots and only who each bot is", () => {
+it.effect("agents list their owner's active bots and their tool limits", () => {
   const harness = makeHarness();
   const other = EnvironmentId.make("environment:other-owner");
   return Effect.gen(function* () {
@@ -452,6 +452,8 @@ it.effect("agents list only their owner's active bots and only who each bot is",
         who,
       );
     const helper = yield* create("Helper");
+    const tools = { mcpServers: ["build"], skills: [] } as const;
+    yield* members.update({ botId: helper.botId, tools }, owner);
     const quiet = yield* create("Quiet");
     yield* members.setHidden({ botId: quiet.botId, hidden: true }, owner);
     const gone = yield* create("Gone");
@@ -474,7 +476,7 @@ it.effect("agents list only their owner's active bots and only who each bot is",
 
     const summary = (bot: typeof helper, hidden: boolean) => ({
       botId: bot.botId,
-      role: "member",
+      role: "member" as const,
       name: bot.name,
       purpose: bot.purpose,
       hidden,
@@ -482,16 +484,61 @@ it.effect("agents list only their owner's active bots and only who each bot is",
     });
     assert.deepStrictEqual(yield* listBotsAs(environmentId), [
       {
-        botId: "main",
+        botId: BotId.make("main"),
         role: "main",
         name: "GOAT Bot",
         purpose: "",
         hidden: false,
         sessionThreadId: botThreadId,
       },
-      summary(helper, false),
+      { ...summary(helper, false), tools },
       summary(quiet, true),
     ]);
     assert.deepStrictEqual(yield* listBotsAs(other), [summary(theirs, false)]);
   }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a read-scoped caller posts a proposal and an unsupported template is refused", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const toolkit = yield* ChannelToolkit.pipe(
+      Effect.provide(McpToolAccess.HandlersLayer.layer(ChannelHandlers.layer)),
+    );
+    const input = {
+      clientRequestId: "suggest-reviewer",
+      name: "Reviewer",
+      avatar: "🔎",
+      purpose: "Review changes.",
+      instructions: "Check the tests.",
+      why: "The team needs a second look.",
+    };
+    const call = (parameters: typeof input & { templateId?: string }) =>
+      toolkit.handle("goat_channel_bot_propose", parameters).pipe(Stream.unwrap, Stream.runCollect);
+    const unsupported = (yield* call({ ...input, templateId: "reviewer" })).at(-1)?.result;
+    assert.isTrue(
+      unsupported !== undefined && "code" in unsupported && unsupported.code === "invalid_request",
+    );
+    const first = (yield* call(input)).at(-1)?.result;
+    const retry = (yield* call(input)).at(-1)?.result;
+    assert.isTrue(first !== undefined && "proposalId" in first, JSON.stringify(first));
+    assert.deepStrictEqual(retry, first);
+    const members = yield* ChannelBotMembers.ChannelBotMembers;
+    assert.lengthOf(yield* members.list({}, owner), 1);
+  }).pipe(
+    Effect.provideService(McpInvocationContext.McpInvocationContext, {
+      environmentId,
+      capabilities: new Set(["orchestration"] as const),
+      grantedScopes: ["orchestration:read"],
+      issuedAt: 0,
+      requestNamespace: "proposal-test",
+      thread: {
+        threadId: botThreadId,
+        providerSessionId: "proposal-test",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+      client: undefined,
+    }),
+    Effect.provide(harness.layer),
+  );
 });

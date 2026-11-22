@@ -136,7 +136,7 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "List GOAT bots",
     description:
-      "List the GOAT bots of this machine's owner: main and member bots with their name, purpose and conversation thread. Deleted bots are left out. Pass followedBy with a bot ID to include the threads it follows.",
+      "List the GOAT bots of this machine's owner: main and member bots with their name, purpose, conversation thread and configured tool limits. Deleted bots are left out. Pass followedBy with a bot ID to include the threads it follows.",
     guide:
       "A hidden bot is only left out of the person's roster; it still answers in its conversation. Agents can read a bot's conversation thread but cannot message, create or change bots; people do that in GOAT Bot.",
     effect: "read",
@@ -149,6 +149,28 @@ export const channelEntries = {
       idempotentHint: true,
       openWorldHint: false,
     },
+  }),
+  "channel.bot_propose": entry({
+    resource: "channel",
+    verb: "bot_propose",
+    name: "goat_channel_bot_propose",
+    toolkit: "channel",
+    summary: "Propose a GOAT bot",
+    description:
+      "Post a review card in the main GOAT Bot chat with the name, avatar, purpose, instructions, and why. A person can accept or dismiss it within seven days.",
+    guide:
+      "Retry with the same clientRequestId and fields. Supply explicit fields unless the host advertises support for bot templates.",
+    effect: "write",
+    capability: "none",
+    capabilityReason:
+      "This queues a review under a live caller's read authority. Creating the bot requires a separate authorized client request.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotency: "domain",
+    idempotencyReason: "The service binds the request key to the caller and the reviewed fields.",
+    annotations: { title: "Propose a GOAT bot", idempotentHint: true, openWorldHint: false },
   }),
   "channel.bot_home_claim": entry({
     resource: "channel",

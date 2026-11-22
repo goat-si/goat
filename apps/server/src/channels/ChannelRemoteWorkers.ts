@@ -1,3 +1,5 @@
+import { dropOldest } from "./channelRemoteAttempt.ts";
+import { remoteBotToolsRefusal } from "./channelBotTools.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";
@@ -85,7 +87,11 @@ import {
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
-import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
+import {
+  newApprovals,
+  observesUsageLimit,
+  observeRemoteWorker,
+} from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 const REMOTE_WAIT_MS = 50_000;
@@ -1409,6 +1415,9 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
+      const refusal = yield* remoteBotToolsRefusal(profiles, stored, remote.host);
+      if (refusal !== undefined)
+        return yield* failTask(owner, stored, "permission_changed", refusal);
       const dispatchRequester = requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
@@ -2047,11 +2056,7 @@ const make = Effect.gen(function* () {
       // keeps the remote's own observation, so the next wait does not see the host we stamp here.
       stored = yield* ledger.getTask(taskId);
       if (stored === undefined || !sameWorker(stored, state)) return "stop" as const;
-      const observation = watched?.observation;
-      const stamped =
-        observation === undefined
-          ? undefined
-          : { ...observation, needsYou: withApprovalHost(observation.needsYou, state.host) };
+      const stamped = observeRemoteWorker(watched?.observation, state.host, stored.task.worker);
       if (
         stamped !== undefined &&
         watched !== null &&
@@ -2074,7 +2079,7 @@ const make = Effect.gen(function* () {
       }
       // A usage limit pauses the worker; the continuation run the remote starts rebinds the task.
       const limited =
-        watched !== null && watched.status === "failed" && observesUsageLimit(observation);
+        watched !== null && watched.status === "failed" && observesUsageLimit(stamped);
 
       // 3. The inbox, oldest first, against the current run.
       if (state.dropped > 0) {
@@ -3031,19 +3036,5 @@ const make = Effect.gen(function* () {
     move,
   });
 });
-
-/** Progress goes first, then the oldest of the rest. */
-const dropOldest = (reports: ReadonlyArray<RemoteReport>, count: number) => {
-  const dropped = new Set<number>();
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    if (report.kind === "progress") dropped.add(report.sequence);
-  }
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    dropped.add(report.sequence);
-  }
-  return reports.filter((report) => !dropped.has(report.sequence));
-};
 
 export const layer = Layer.effect(ChannelRemoteWorkers, make);

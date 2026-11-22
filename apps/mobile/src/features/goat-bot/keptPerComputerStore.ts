@@ -1,25 +1,127 @@
 import { forgetNewBotEnvironment } from "@goat/client-runtime/goatBot";
 import { removedWithRelay } from "@goat/client-runtime/connection";
-import type { EnvironmentId } from "@goat/contracts";
+import {
+  ChannelListBotsResult,
+  ChannelListOpenAsksResult,
+  type EnvironmentId,
+} from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import { Atom, type AtomRegistry } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 
 import { environmentCatalog } from "../../connection/catalog";
+import { KEPT_KINDS, type KeptKind, type createKeptSummaryStore } from "./keptSummaryStore";
 
-// The last successful answer of a read, per computer, so the bot list and open asks still read while
-// that computer is offline, and whether the computer refused this phone. Apart from the readers, so
-// sign-out can mark a computer refused without loading them.
-export const KEPT_KINDS = ["bots", "asks"] as const;
-export type KeptKind = (typeof KEPT_KINDS)[number];
+export { KEPT_KINDS, type KeptKind } from "./keptSummaryStore";
+
+type Persistence = {
+  readonly store: ReturnType<typeof createKeptSummaryStore>;
+  readonly scopes: (
+    registry: AtomRegistry.AtomRegistry,
+    id: EnvironmentId,
+    live: boolean,
+  ) => Promise<ReadonlyArray<string>>;
+  readonly accountAtom: Atom.Atom<string | null>;
+  readonly observeAccount?: (accountId: string | null) => Promise<void>;
+  readonly startMaintenance?: (onChange: () => void, onFailure: () => void) => () => void;
+};
+const installed = new WeakMap<AtomRegistry.AtomRegistry, Persistence>();
+export const getKeptSummaryPersistence = (registry: AtomRegistry.AtomRegistry) =>
+  installed.get(registry);
+export const keptSummaryChangeAtom = Atom.make(0).pipe(Atom.keepAlive);
+const observed = new WeakSet<object>();
+const isBots = Schema.is(ChannelListBotsResult);
+const isAsks = Schema.is(ChannelListOpenAsksResult);
+const noteSummaryChange = (registry: AtomRegistry.AtomRegistry) =>
+  registry.update(keptSummaryChangeAtom, (value) => value + 1);
+const reportStorageFailure = () => console.warn("Could not update the offline bot summary.");
+
+export function installKeptSummaryPersistence(
+  registry: AtomRegistry.AtomRegistry,
+  persistence: Persistence,
+): () => void {
+  installed.set(registry, persistence);
+  const stopMaintenance = persistence.startMaintenance?.(
+    () => noteSummaryChange(registry),
+    reportStorageFailure,
+  );
+  return () => {
+    stopMaintenance?.();
+    installed.delete(registry);
+  };
+}
+
+export async function observeKeptSummaryAccount(
+  registry: AtomRegistry.AtomRegistry,
+  accountId: string | null,
+): Promise<void> {
+  const observe = installed.get(registry)?.observeAccount;
+  if (observe === undefined) return;
+  const work = observe(accountId);
+  noteSummaryChange(registry);
+  await work;
+  noteSummaryChange(registry);
+}
+
+export function rememberKeptAnswer(
+  registry: AtomRegistry.AtomRegistry,
+  id: EnvironmentId,
+  kind: KeptKind,
+  answer: { readonly timestamp: number; readonly value: unknown },
+): void {
+  const persistence = installed.get(registry);
+  if (persistence === undefined || observed.has(answer)) return;
+  observed.add(answer);
+  const lease = persistence.store.lease(id);
+  void persistence
+    .scopes(registry, id, true)
+    .then(async ([scope]) => {
+      if (scope === undefined || !persistence.store.isCurrent(lease)) return;
+      if (kind === "bots" && isBots(answer.value))
+        await persistence.store.keep(lease, "bots", scope, answer.timestamp, answer.value);
+      else if (kind === "asks" && isAsks(answer.value))
+        await persistence.store.keep(lease, "asks", scope, answer.timestamp, answer.value);
+      if (persistence.store.isCurrent(lease)) noteSummaryChange(registry);
+    })
+    .catch(reportStorageFailure);
+}
+
+export function purgeKeptSummary(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+): void {
+  const persistence = installed.get(registry);
+  if (persistence === undefined) return;
+  void persistence.store.purge(environmentId).catch(reportStorageFailure);
+  noteSummaryChange(registry);
+}
+
+export function purgeKeptSummaries(registry: AtomRegistry.AtomRegistry): void {
+  const persistence = installed.get(registry);
+  if (persistence === undefined) return;
+  void persistence.store.purgeAll().catch(reportStorageFailure);
+  // Direct pairings remain signed in. Refresh their queries to fence earlier answers while
+  // retaining their in-memory profiles for the screens that can still read those computers.
+  const refresh = refreshers.get(registry);
+  for (const id of registry.get(environmentCatalog.catalogValueAtom).entries.keys()) {
+    registry.set(keptReadEpochAtom(id), ++restarts);
+    for (const kind of KEPT_KINDS) refresh?.(id, kind);
+  }
+  noteSummaryChange(registry);
+}
+
 let generation = 0;
 const keptFamily = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
 const flagFamily = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
 const restartFamily = Atom.family((_key: string) =>
   Atom.make<number | null>(null).pipe(Atom.keepAlive),
 );
+const epochFamily = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
 let restarts = 0;
 /** Keys one computer in this generation. */
 export const computerKey = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
+export const keptReadEpochAtom = (environmentId: EnvironmentId) =>
+  epochFamily(computerKey(environmentId));
 export const keptAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
   keptFamily(`${kind}:${computerKey(environmentId)}`);
 // The restart a refusal or removal began, null when fresh: the read shows and keeps nothing until
@@ -50,16 +152,18 @@ export function resetKeptPerComputerForTests() {
   generation += 1;
 }
 
-/** The read starts over: what is in flight is interrupted first, so no answer from before counts. */
+/** Fence the old result before refreshing the query so an earlier answer cannot be kept. */
 export function startOver(
   registry: AtomRegistry.AtomRegistry,
   environmentId: EnvironmentId,
   kind: KeptKind,
   refresh = true,
 ) {
-  if (refresh) refreshers.get(registry)?.(environmentId, kind);
+  const restart = ++restarts;
+  registry.set(keptReadEpochAtom(environmentId), restart);
+  registry.set(staleAtom(kind, environmentId), restart);
   registry.set(keptAtom(kind, environmentId), null);
-  registry.set(staleAtom(kind, environmentId), ++restarts);
+  if (refresh) refreshers.get(registry)?.(environmentId, kind);
 }
 
 /** The connection refused this phone, or the account that reached the computer signed out. */
@@ -68,20 +172,26 @@ export function refuseConnection(
   environmentId: EnvironmentId,
 ) {
   registry.set(connectionRefusedAtom(environmentId), true);
+  purgeKeptSummary(registry, environmentId);
   for (const kind of KEPT_KINDS) startOver(registry, environmentId, kind);
   forgetNewBotEnvironment(environmentId);
 }
 
 /**
- * The bot list was refused. That refusal is its query's latest answer, with nothing in flight, so
- * the list starts over without a new request; the asks are read again. A kind already starting
- * over is left as it is, so a refusal seen again starts nothing.
+ * One read refused this pairing. A sibling that answered before the refusal must be read again.
+ * The refusing query keeps its failure, so observing the same refusal cannot cause a retry loop.
  */
-export function refuseList(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
-  if (registry.get(staleAtom("bots", environmentId)) === null)
-    startOver(registry, environmentId, "bots", false);
-  if (registry.get(staleAtom("asks", environmentId)) === null)
-    startOver(registry, environmentId, "asks");
+export function refuseKeptRead(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+  refusedKind: KeptKind,
+) {
+  const freshKinds = KEPT_KINDS.filter(
+    (kind) => registry.get(staleAtom(kind, environmentId)) === null,
+  );
+  if (freshKinds.length === 0) return;
+  purgeKeptSummary(registry, environmentId);
+  for (const kind of freshKinds) startOver(registry, environmentId, kind, kind !== refusedKind);
   forgetNewBotEnvironment(environmentId);
 }
 

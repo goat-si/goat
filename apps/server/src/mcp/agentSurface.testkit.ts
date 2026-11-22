@@ -573,3 +573,42 @@ export const serveCatalogOverHttpWithSettings = (
 export const serveEnforcingCatalogOverHttp = (
   scopes: Readonly<Record<string, McpInvocationScope>>,
 ) => serveOverHttpWithProfiles(scopes, catalog.pipe(Layer.provide(enforcingDependencies)));
+
+// Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
+// machine's SSH keys unless asked for the local answer.
+export const accessFixtureArgs: Readonly<Record<string, Record<string, unknown>>> = {
+  "browser_claim.request": { pid: 42, windowId: 7, origin: "https://example.test" },
+  "decision.list": {},
+  "decision.read": { id: "decision:fixture" },
+  "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },
+  "note.read": { path: "inbox/note.md" },
+  "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
+  "note.update": { path: "inbox/note.md", pinned: true },
+  "note.move": { from: "inbox/note.md", to: "done/note.md", baseRevision: "0".repeat(64) },
+  "note.delete": { path: "inbox/note.md", baseRevision: "0".repeat(64) },
+  "channel.bot_propose": {
+    name: "Reviewer",
+    avatar: null,
+    purpose: "Review changes.",
+    instructions: "Check the tests.",
+    why: "Catch regressions.",
+    clientRequestId: "proposal-conformance",
+  },
+  "channel.task_export": { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
+  "scheduler.status": { local: false },
+  "pending_request.list": { scope: "launched", hosts: ["box"] },
+  "provider.host_matrix": { localOnly: false },
+  "host.status": { local: null },
+  "html.preview": { html: "<!doctype html><html><body>probe</body></html>" },
+  "html.render": {
+    html: "<!doctype html><html><body>probe</body></html>",
+    title: "Probe",
+    height: 300,
+  },
+  // A sampled patch names no setting, which is refused before access matters.
+  "environment.settings_read": {},
+  "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
+  "theme.set": { themeId: "" },
+  // A sampled cursor without its query is refused before access matters.
+  "surface.describe": { query: "thread" },
+};

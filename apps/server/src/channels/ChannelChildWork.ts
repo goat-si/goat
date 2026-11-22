@@ -1,3 +1,5 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
+import { readProfileRecord } from "./ChannelBotProfiles.ts";
 /**
  * ChannelChildWork - admission, ownership, and reconciliation for work a channel-owned thread
  * launches: delegated subagents and bot-launched GOAT threads, local or on another machine.
@@ -23,6 +25,7 @@ import {
   type ChannelTask,
   type ChannelTaskEventId,
   type ChannelTaskId,
+  EnvironmentId,
   isChannelChildWorkActive,
   isChannelTaskTerminal,
   isGoatBotSessionThreadId,
@@ -72,6 +75,7 @@ const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =
     : CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS;
 
 const isThreadId = Schema.is(ThreadId);
+const isEnvironmentId = Schema.is(EnvironmentId);
 
 export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkError>()(
   "ChannelChildWorkError",
@@ -90,7 +94,12 @@ export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkEr
 
 export type ChannelChildWorkOwnership =
   | { readonly _tag: "not_channel_owned" }
-  | { readonly _tag: "worker"; readonly task: ChannelTask; readonly ownerId: string }
+  | {
+      readonly _tag: "worker";
+      readonly task: ChannelTask;
+      readonly ownerId: string;
+      readonly botId: ChannelLedger.ChannelStoredTask["botId"];
+    }
   | { readonly _tag: "child"; readonly record: ChannelChildWorkRecord }
   /** The worker of an attempt a person retried; it launches nothing more. */
   | { readonly _tag: "retired_worker" };
@@ -254,6 +263,7 @@ const make = Effect.gen(function* () {
         _tag: "worker",
         task: stored.task,
         ownerId: stored.ownerId,
+        botId: stored.botId,
       } as const satisfies ChannelChildWorkOwnership;
     }
     const records = yield* threads
@@ -281,6 +291,7 @@ const make = Effect.gen(function* () {
       _tag: "worker",
       task: stored.task,
       ownerId: stored.ownerId,
+      botId: stored.botId,
     } as const satisfies ChannelChildWorkOwnership;
   });
 
@@ -302,6 +313,7 @@ const make = Effect.gen(function* () {
         _tag: "worker",
         task: stored.task,
         ownerId: stored.ownerId,
+        botId: stored.botId,
       } as const satisfies ChannelChildWorkOwnership;
     }
     const retired = yield* sql<{ readonly key: string }>`
@@ -339,6 +351,15 @@ const make = Effect.gen(function* () {
           "This thread is itself recorded child work of a channel task and cannot launch its own" +
           " subagents or threads. Return findings to the coordinating worker instead.",
       });
+    }
+    if (ownership._tag === "worker") {
+      const profile = yield* readProfileRecord(sql, ownership.ownerId, ownership.botId).pipe(
+        Effect.mapError((cause) => toError("Could not read the bot's tool limits.", cause)),
+      );
+      const refusal =
+        profile === undefined ? undefined : botToolsRefusal(profile, "delegated work");
+      if (refusal !== undefined)
+        return yield* new ChannelChildWorkError({ reason: "owner_terminal", detail: refusal });
     }
     // A terminal task's worker still answering a late turn launches nothing new. A cancel
     // racing this check is resolved by the stop traversal (reserved records release) and by
@@ -415,7 +436,7 @@ const make = Effect.gen(function* () {
     from: ReadonlyArray<ChannelChildWorkState>,
     to: ChannelChildWorkState,
     destination?: ChannelChildWorkDestination,
-    threadIdIfMissing?: ThreadId,
+    acknowledgement?: ChannelChildWorkStore.AcknowledgedRemoteDestination,
   ): Effect.Effect<boolean> =>
     nowIso.pipe(
       Effect.flatMap((now) =>
@@ -425,7 +446,7 @@ const make = Effect.gen(function* () {
           from,
           to,
           ...(destination === undefined ? {} : { destination }),
-          ...(threadIdIfMissing === undefined ? {} : { threadIdIfMissing }),
+          ...(acknowledgement === undefined ? {} : { acknowledgement }),
           now,
         }),
       ),
@@ -665,11 +686,14 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<{
       readonly state: string;
       readonly kind: string;
+      readonly host: string;
       readonly known_run_status: string | null;
       readonly end_reason: string | null;
       readonly remote_thread_id: string | null;
+      readonly remote_environment_id: string | null;
     }>`
-      SELECT state, kind, known_run_status, end_reason, remote_thread_id FROM remote_dispatches
+      SELECT state, kind, host, known_run_status, end_reason, remote_thread_id, remote_environment_id
+      FROM remote_dispatches
       WHERE correlation_id = ${correlationId}
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
@@ -679,21 +703,36 @@ const make = Effect.gen(function* () {
       if (!launchEnded) return false;
       return yield* transition(record, ["launched"], "released");
     }
-    const { state, kind, known_run_status: runStatus, end_reason: endReason } = rows[0];
-    // The coordinator stores a remote thread launch's acknowledged thread before the launch binds
-    // it, so a pass that gets here first, or after a crash, fills it in; a set one is kept.
-    const remoteThreadId = rows[0].remote_thread_id;
-    const acknowledged =
-      record.surface === "ssh_thread_launch" &&
-      record.destination?.threadId === undefined &&
-      isThreadId(remoteThreadId)
-        ? remoteThreadId
+    const {
+      state,
+      kind,
+      host,
+      known_run_status: runStatus,
+      end_reason: endReason,
+      remote_thread_id: threadId,
+      remote_environment_id: environmentId,
+    } = rows[0];
+    const acknowledgement =
+      ((record.surface === "ssh_thread_launch" && kind === "thread") ||
+        (record.surface === "delegate_remote" && kind === "task")) &&
+      host === record.destination?.host &&
+      isThreadId(threadId) &&
+      (record.destination.threadId === undefined ||
+        (record.destination.threadId === threadId &&
+          record.destination.environmentId === undefined &&
+          isEnvironmentId(environmentId)))
+        ? {
+            correlationId,
+            host,
+            threadId,
+            ...(isEnvironmentId(environmentId) ? { environmentId } : {}),
+          }
         : undefined;
     const move = (from: ReadonlyArray<ChannelChildWorkState>, to: ChannelChildWorkState) =>
-      transition(record, from, to, undefined, acknowledged);
+      transition(record, from, to, undefined, acknowledgement);
     if (state === "running" || state === "idle") {
       if (record.state !== "bound") return yield* move(["launched", "unknown"], "bound");
-      return acknowledged === undefined ? false : yield* move(["bound"], "bound");
+      return acknowledgement === undefined ? false : yield* move(["bound"], "bound");
     }
     // A task's row settles for every result; the run status it keeps says which.
     if (state === "settled")
@@ -709,15 +748,13 @@ const make = Effect.gen(function* () {
       // The outcome is uncertain until the coordinator's resolve pass settles the row with the
       // destination: rebound (running) or fenced (cancelled).
       if (record.state !== "unknown") return yield* move(["launched", "bound"], "unknown");
-      return acknowledged === undefined ? false : yield* move(["unknown"], "unknown");
+      return acknowledgement === undefined ? false : yield* move(["unknown"], "unknown");
     }
     return false;
   });
 
-  // A remote launch that settled before its bind kept no thread, and the pass above only visits
-  // active records; its dispatch row still holds the thread the host acknowledged. Binds fill
-  // every newer record, so the walk stops once a whole walk fills nothing, and walks again only
-  // after REMOTE_THREAD_REPAIR_REARM_MS, when a recovered launch's dispatch may have its thread.
+  // A recovered dispatch can gain an acknowledgement after the child settled and left the active
+  // pass. The bounded walk stops when it fills nothing and rearms to find later acknowledgements.
   const repairWalk = yield* Ref.make({
     after: "",
     filled: 0,
@@ -730,11 +767,23 @@ const make = Effect.gen(function* () {
       return 0;
     const page = yield* store.pageSettledLaunches(walk.after, REMOTE_THREAD_REPAIR_PAGE);
     let filled = 0;
-    for (const { record, remoteThreadId } of page.candidates) {
-      const correlationId = record.destination?.correlationId;
-      if (correlationId === undefined || !isThreadId(remoteThreadId)) continue;
-      const fill = { ...record, correlationId, threadId: remoteThreadId };
-      if (yield* store.fillSettledLaunchThread(fill)) filled += 1;
+    for (const { record, remoteThreadId, remoteEnvironmentId } of page.candidates) {
+      const { correlationId, host } = record.destination ?? {};
+      if (correlationId === undefined || host === undefined || !isThreadId(remoteThreadId))
+        continue;
+      if (
+        yield* store.fillSettledLaunchDestination({
+          taskId: record.taskId,
+          childWorkId: record.childWorkId,
+          acknowledgement: {
+            correlationId,
+            host,
+            threadId: remoteThreadId,
+            ...(isEnvironmentId(remoteEnvironmentId) ? { environmentId: remoteEnvironmentId } : {}),
+          },
+        })
+      )
+        filled += 1;
     }
     const ended = page.inspected < REMOTE_THREAD_REPAIR_PAGE || page.lastKey === undefined;
     yield* Ref.set(

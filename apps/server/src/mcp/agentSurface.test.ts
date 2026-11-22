@@ -40,6 +40,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
 import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
+  accessFixtureArgs,
   catalog,
   client,
   dependencies,
@@ -75,7 +76,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(312);
+  expect(entries).toHaveLength(313);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -366,36 +367,6 @@ const callers = {
 type Caller = keyof typeof callers;
 const TARGET_THREAD = "thread:conformance-target";
 
-// Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
-// machine's SSH keys unless asked for the local answer.
-const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
-  "browser_claim.request": { pid: 42, windowId: 7, origin: "https://example.test" },
-  "decision.list": {},
-  "decision.read": { id: "decision:fixture" },
-  "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },
-  "note.read": { path: "inbox/note.md" },
-  "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
-  "note.update": { path: "inbox/note.md", pinned: true },
-  "note.move": { from: "inbox/note.md", to: "done/note.md", baseRevision: "0".repeat(64) },
-  "note.delete": { path: "inbox/note.md", baseRevision: "0".repeat(64) },
-  "channel.task_export": { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
-  "scheduler.status": { local: false },
-  "pending_request.list": { scope: "launched", hosts: ["box"] },
-  "provider.host_matrix": { localOnly: false },
-  "host.status": { local: null },
-  "html.preview": { html: "<!doctype html><html><body>probe</body></html>" },
-  "html.render": {
-    html: "<!doctype html><html><body>probe</body></html>",
-    title: "Probe",
-    height: 300,
-  },
-  // A sampled patch names no setting, which is refused before access matters.
-  "environment.settings_read": {},
-  "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
-  "theme.set": { themeId: "" },
-  "surface.describe": { query: "thread" },
-};
-
 const REASONS = {
   sshFanOut:
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
@@ -478,10 +449,10 @@ const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
 // One decodable input per entry: sampled from the tool's own schema with a seed from its path,
 // then encoded through the JSON codec production decodes with (McpHttpServer decodeAsAdvertised).
 const argumentsFor = Effect.fn(function* (entry: Entry) {
-  const fixture = FIXTURE_ARGS[entry.path];
+  const fixture = accessFixtureArgs[entry.path];
   if (fixture !== undefined) return fixture;
   const tool = toolOf(entry);
-  // A schema the sampler cannot derive needs an entry in FIXTURE_ARGS.
+  // A schema the sampler cannot derive needs an entry in accessFixtureArgs.
   const [sample] = yield* Arbitrary.sampleEffect(Arbitrary.schema(tool.parametersSchema), {
     count: 1,
     seed: entry.path,

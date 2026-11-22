@@ -9,6 +9,7 @@ import {
   type ChannelChildWork,
   type ChannelTaskNeedsYou,
   ChannelWorkerObservation,
+  type EnvironmentId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -27,7 +28,19 @@ const REMOTE_LAUNCH_SURFACES: ReadonlySet<ChannelChildWork["surface"]> = new Set
 export interface RemoteChildRef {
   readonly correlationId: string;
   readonly host: string;
+  readonly environmentId?: EnvironmentId | undefined;
 }
+
+export const remoteLaunchChild = (
+  record: ChannelChildWork,
+  generation: number,
+): RemoteChildRef | undefined => {
+  if (record.generation !== generation || !REMOTE_LAUNCH_SURFACES.has(record.surface))
+    return undefined;
+  const { correlationId, host, environmentId } = record.destination ?? {};
+  if (correlationId === undefined || host === undefined) return undefined;
+  return { correlationId, host, environmentId };
+};
 
 type StoredRead =
   | { readonly status: "unread" }
@@ -41,12 +54,10 @@ export const remoteLaunchChildren = (
   if (records === "unknown") return [];
   const seen = new Set<string>();
   return records.flatMap((record) => {
-    if (record.generation !== generation || !REMOTE_LAUNCH_SURFACES.has(record.surface)) return [];
-    const correlationId = record.destination?.correlationId;
-    const host = record.destination?.host;
-    if (correlationId === undefined || host === undefined || seen.has(correlationId)) return [];
-    seen.add(correlationId);
-    return [{ correlationId, host }];
+    const child = remoteLaunchChild(record, generation);
+    if (child === undefined || seen.has(child.correlationId)) return [];
+    seen.add(child.correlationId);
+    return [child];
   });
 };
 
@@ -99,7 +110,7 @@ export const storedRemoteNeeds = Effect.fn("channelRemoteChildNeeds.stored")(fun
 
 const mergeLaunchNeeds = (
   previous: ReadonlyArray<ChannelTaskNeedsYou> | undefined,
-  reads: ReadonlyArray<{ readonly host: string; readonly read: StoredRead }>,
+  reads: ReadonlyArray<RemoteChildRef & { readonly read: StoredRead }>,
 ): ReadonlyArray<ChannelTaskNeedsYou> => {
   const fresh: Array<ChannelTaskNeedsYou> = [];
   const seen = new Map<string, "read" | "unread">();
@@ -107,7 +118,8 @@ const mergeLaunchNeeds = (
     const prior = seen.get(item.host);
     if (item.read.status === "unread") seen.set(item.host, "unread");
     else if (prior !== "unread") seen.set(item.host, "read");
-    if (item.read.status === "read") fresh.push(...withApprovalHost(item.read.needsYou, item.host));
+    if (item.read.status === "read")
+      fresh.push(...withApprovalHost(item.read.needsYou, item.host, item.environmentId));
   }
   const freshIds = new Set(fresh.flatMap((need) => need.approval?.requestId ?? []));
   const kept = (previous ?? []).filter((need) => {
@@ -128,7 +140,7 @@ export const launchObservationNeeds = Effect.fn("channelRemoteChildNeeds.launch"
   const reads = yield* Effect.forEach(
     children,
     (child) =>
-      readStored(sql, child.correlationId).pipe(Effect.map((read) => ({ host: child.host, read }))),
+      readStored(sql, child.correlationId).pipe(Effect.map((read) => ({ ...child, read }))),
     { concurrency: 1 },
   );
   return mergeLaunchNeeds(previous, reads);

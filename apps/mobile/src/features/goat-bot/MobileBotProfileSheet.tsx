@@ -1,3 +1,4 @@
+import type { BotProfile } from "@goat/contracts";
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useRef, useState, type ReactNode } from "react";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -29,6 +30,7 @@ export function MobileBotProfileSheet(props: {
   /** The server stores a member's colour; absent or false shows no swatches and sends none. */
   readonly colorEditable?: boolean | undefined;
   readonly instructionsEditable?: boolean;
+  readonly tools?: BotProfile["tools"] | null;
   /** Starts the name field from words typed elsewhere; changes still count against `initial`. */
   readonly draftName?: string | undefined;
   /** Why `canSubmit` is false, shown by Save while it is off for that reason. */
@@ -208,6 +210,17 @@ export function MobileBotProfileSheet(props: {
                 {error}
               </Text>
             ) : null}
+            {!create && props.tools !== undefined ? (
+              <View className="gap-1">
+                <Text className="text-foreground">Tools</Text>
+                <Text className="text-foreground-muted">
+                  MCP servers · {toolNames(props.tools?.mcpServers)}
+                </Text>
+                <Text className="text-foreground-muted">
+                  Skills · {toolNames(props.tools?.skills)}
+                </Text>
+              </View>
+            ) : null}
             {!create && props.instructionsEditable === true ? (
               <>
                 <Text className="text-foreground">Instructions</Text>
@@ -230,4 +243,9 @@ export function MobileBotProfileSheet(props: {
       </MobileSheetSafeArea>
     </Modal>
   );
+}
+
+function toolNames(value: "all" | readonly string[] | undefined) {
+  if (value === undefined || value === "all") return "All";
+  return value.length === 0 ? "None" : value.join(", ");
 }
