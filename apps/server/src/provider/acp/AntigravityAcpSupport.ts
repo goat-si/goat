@@ -26,9 +26,11 @@ import {
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import {
   acpPermissionDisposition,
+  unknownRecord,
   type AcpRuntimePolicy,
 } from "@goat/provider-acp/server/clientPolicy";
 import type { AcpSessionModeState } from "@goat/provider-acp/server/runtimeModel";
+import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
 import packageJson from "../../../package.json" with { type: "json" };
 import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
 
@@ -200,12 +202,35 @@ export function antigravitySessionMode(
   return modeId === "yolo" || modeId === "auto_edit" ? "default" : modeId;
 }
 
+const ANTIGRAVITY_GOAT_MCP_TITLE = /^Run mcp_goat_(?<tool>[A-Za-z0-9_]+)\??$/;
+
+function isAntigravityGoatMcpRequest(request: EffectAcpSchema.RequestPermissionRequest): boolean {
+  const rawInput = unknownRecord(request.toolCall.rawInput);
+  if (rawInput?.ServerName !== undefined) {
+    return (
+      rawInput.ServerName === "goat" &&
+      typeof rawInput.ToolName === "string" &&
+      GOAT_MCP_TOOL_NAMES.has(rawInput.ToolName)
+    );
+  }
+  if (typeof rawInput?.CommandLine === "string") return false;
+  const tool = ANTIGRAVITY_GOAT_MCP_TITLE.exec(request.toolCall.title?.trim() ?? "")?.groups?.tool;
+  return tool !== undefined && GOAT_MCP_TOOL_NAMES.has(tool);
+}
+
 export function antigravityPermissionDisposition(
   policy: AcpRuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
 ) {
   const disposition = acpPermissionDisposition(policy, request);
-  return policy.runtimeMode === "auto" && disposition !== "deny" ? "ask" : disposition;
+  if (disposition === "deny") return "deny";
+  if (
+    (policy.runtimeMode === "auto" || policy.runtimeMode === "auto-accept-edits") &&
+    (policy.approvalPolicy === undefined || policy.approvalPolicy === "never") &&
+    isAntigravityGoatMcpRequest(request)
+  )
+    return "allow";
+  return policy.runtimeMode === "auto" ? "ask" : disposition;
 }
 
 export function antigravityRuntimeModeForSessionMode(modeId: string): RuntimeMode | undefined {
