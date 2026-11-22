@@ -314,7 +314,7 @@ export const dispatches = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E
 
 /** Posts a review request. The separately authorized client action can perform the write. */
 export const proposesForReview = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", handle);
+  declare("write", (params: P) => refuseReadOnlyClient.pipe(Effect.andThen(() => handle(params))));
 
 /**
  * Receives a tool's original failure before the MCP layer flattens it into text.

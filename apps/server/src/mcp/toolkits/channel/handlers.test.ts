@@ -530,8 +530,12 @@ it.effect("a read-scoped caller posts a proposal and an unsupported template is 
       grantedScopes: ["orchestration:read"],
       issuedAt: 0,
       requestNamespace: "proposal-test",
-      thread: undefined,
-      client: { sessionId: "proposal-test", label: "Agent", access: "read-only" },
+      thread: {
+        threadId: botThreadId,
+        providerSessionId: "proposal-test",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+      client: undefined,
     }),
     Effect.provide(harness.layer),
   );
