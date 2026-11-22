@@ -740,10 +740,7 @@ export function makeHarness(
       isScratchProject: () => Effect.succeed(false),
     }),
     layerSettings,
-  ).pipe(
-    // Server config, platform services, and the attachment files the gateway claims into.
-    Layer.provideMerge(layerFiles),
-  );
+  ).pipe(Layer.provideMerge(layerFiles));
 
   const layerLaunchDependencies = Layer.mergeAll(
     layerOrchestrator,
@@ -846,7 +843,6 @@ export function makeHarness(
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
     Layer.provideMerge(layerDatabase),
   );
-  /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {
     const index = shells.findIndex((shell) => shell.id === id);
     if (index !== -1) shells.splice(index, 1);
@@ -938,15 +934,26 @@ export const slackContext = {
   ...owner,
   caller: { type: "transport" as const, kind: "slack" as const, connectionId: "slack-1" },
 };
-
-/** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
-export const linkSlackUser = (user = "U1", linkOwner = owner) =>
+export const memoryRpcContext = {
+  ...rpcContext,
+  grantedScopes: [...rpcContext.grantedScopes, "memory:read", "memory:write"] as const,
+};
+export const memorySlackContext = {
+  ...slackContext,
+  grantedScopes: memoryRpcContext.grantedScopes,
+};
+export const linkSlackUser = (user = "U1", withMemory: boolean | typeof owner = false) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
+    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...withMemory };
     const { code } = yield* identities.createLink(
-      { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
-      linkOwner,
+      {
+        connectionId: "slack-1",
+        runtimeModeCeiling: "auto-accept-edits",
+        ...(withMemory ? { grantedScopes: context.grantedScopes } : {}),
+      },
+      context,
     );
     yield* gateway.linkIdentity(
       {
@@ -962,7 +969,7 @@ export const linkSlackUser = (user = "U1", linkOwner = owner) =>
           rootTs: "1",
         },
       },
-      { ...slackContext, grantedScopes: linkOwner.grantedScopes },
+      context,
     );
   });
 

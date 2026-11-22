@@ -193,6 +193,7 @@ describe("V2 preview upgrade", () => {
         [180, "ChannelBotTaskSnooze"],
         [181, "ChannelBotAttention"],
         [182, "SlackConversationBot"],
+        [183, "ChannelInputSessionAuthority"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -396,6 +397,7 @@ describe("V2 preview upgrade", () => {
         [180, "ChannelBotTaskSnooze"],
         [181, "ChannelBotAttention"],
         [182, "SlackConversationBot"],
+        [183, "ChannelInputSessionAuthority"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

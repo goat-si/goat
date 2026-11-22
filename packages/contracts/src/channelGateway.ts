@@ -440,6 +440,7 @@ export const ChannelUpdateBotInput = Schema.Struct({
   name: Schema.optionalKey(BotProfile.fields.name),
   avatar: Schema.optionalKey(BotProfile.fields.avatar),
   purpose: Schema.optionalKey(BotProfile.fields.purpose),
+  instructions: BotProfile.fields.instructions,
   defaultModelSelection: Schema.optionalKey(BotProfile.fields.defaultModelSelection),
   color: Schema.optionalKey(Schema.NullOr(BotColor)),
 });

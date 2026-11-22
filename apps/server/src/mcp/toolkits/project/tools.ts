@@ -31,6 +31,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
+import { REMOTE_WORKER_NOTES_CHARS } from "../../../channels/channelBotNotesRecall.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -192,6 +193,12 @@ export const ThreadLaunchParameters = Schema.Struct({
     RemoteReportBindingInput.annotate({
       description:
         "Set only by another machine's GOAT when it launches this thread over SSH, so the thread can report back to its origin. Agents omit it.",
+    }),
+  ),
+  providerNotes: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(REMOTE_WORKER_NOTES_CHARS)).annotate({
+      description:
+        "Scoped GOAT Bot notes for the first provider turn of an outside dispatch. Agents omit it.",
     }),
   ),
   placement: Schema.optional(

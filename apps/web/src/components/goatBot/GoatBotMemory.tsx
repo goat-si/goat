@@ -12,7 +12,7 @@ import {
   goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
+import type { BotId, ChannelBotNote, ChannelBotNoteScope, EnvironmentId } from "@goat/contracts";
 import { useEffect, useId, useState } from "react";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { channelEnvironment } from "~/state/channels";
@@ -26,23 +26,66 @@ import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
-export function GoatBotMemory({
+interface MemoryProps {
+  readonly environmentId: EnvironmentId;
+  readonly onDraft?: ((text: string) => void) | undefined;
+  readonly refreshKey?: string | null | undefined;
+}
+
+export function GoatBotMemory(props: MemoryProps) {
+  const member = useGoatBotMember();
+  const capabilities = useServerConfigs().get(props.environmentId)?.environment.capabilities;
+  const scoped = capabilities?.goatBotPrivateNotes === true;
+  return (
+    <div className="space-y-4">
+      {scoped ? (
+        <>
+          {member === null ? null : (
+            <NotesSection
+              key={member.botId}
+              {...props}
+              supported
+              title="This bot"
+              botId={member.botId}
+            />
+          )}
+          <NotesSection {...props} supported title="All bots" shared />
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_COPY}</p>
+          {member === null ? null : (
+            <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_SHARED_COPY}</p>
+          )}
+          <NotesSection {...props} supported={capabilities?.goatBotNotes === true} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function NotesSection({
   environmentId,
   onDraft,
   refreshKey = null,
-}: {
-  environmentId: EnvironmentId;
-  /** Puts a message in the chat's composer; absent while the chat cannot send. */
-  onDraft?: ((text: string) => void) | undefined;
-  /** Changes when the bot answers or a task moves on, which may have changed the notes. */
-  refreshKey?: string | null | undefined;
+  supported,
+  title,
+  botId,
+  shared = false,
+}: MemoryProps & {
+  readonly supported: boolean;
+  readonly title?: string;
+  readonly botId?: BotId;
+  readonly shared?: boolean;
 }) {
-  const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const supported =
-    useServerConfigs().get(environmentId)?.environment.capabilities.goatBotNotes === true;
   const notes = useEnvironmentQuery(
-    supported ? channelEnvironment.listBotNotes({ environmentId, input: {} }) : null,
+    supported
+      ? channelEnvironment.listBotNotes({
+          environmentId,
+          input: botId === undefined ? {} : { botId },
+        })
+      : null,
   );
   const refresh = notes.refresh;
   // Null while there is nothing to read; otherwise the latest answer or task change.
@@ -54,10 +97,7 @@ export function GoatBotMemory({
   const failure = notes.failure === null ? null : botNotesFailure(notes.failure, botName);
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_COPY}</p>
-      {member !== null && (
-        <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_SHARED_COPY}</p>
-      )}
+      {title === undefined ? null : <h3 className="text-sm font-medium">{title}</h3>}
       {!supported ? (
         <p>Notes need a newer GOAT server.</p>
       ) : failure !== null ? (
@@ -77,6 +117,7 @@ export function GoatBotMemory({
           notes={notes.data.notes}
           truncated={notes.data.truncated}
           onDraft={onDraft}
+          scope={shared ? "shared" : botId === undefined ? undefined : "private"}
         />
       )}
     </div>
@@ -88,10 +129,12 @@ function NoteList({
   notes,
   truncated,
   onDraft,
+  scope,
 }: {
   revision: string | null;
   notes: ReadonlyArray<ChannelBotNote>;
   truncated: boolean;
+  scope: ChannelBotNoteScope | undefined;
   onDraft: ((text: string) => void) | undefined;
 }) {
   const botName = useGoatBotName();
@@ -109,7 +152,11 @@ function NoteList({
       {view.empty === "none" ? (
         <GoatBotPanelEmpty
           title="No notes yet"
-          next={`Ask ${botName} to remember a standing rule.`}
+          next={
+            scope === "shared"
+              ? "Ask to “remember for all bots” to save a shared note."
+              : `Ask ${botName} to remember a standing rule.`
+          }
         />
       ) : view.empty === "none_in_window" ? (
         <p>No complete note fits in the newest 64 KB of memory.md.</p>
@@ -125,6 +172,7 @@ function NoteList({
               heldBack={heldBack.get(note.index)}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={onDraft}
+              scope={scope}
             />
           ))}
         </ul>
@@ -174,7 +222,9 @@ function NoteRow({
   heldBack,
   source,
   onDraft,
+  scope,
 }: {
+  scope: ChannelBotNoteScope | undefined;
   note: ChannelBotNote;
   /** Why a request naming this note by its words could reach another note, if it could. */
   heldBack: GoatBotNoteHeldBack | undefined;
@@ -184,7 +234,7 @@ function NoteRow({
   const [wording, setWording] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState(false);
   const textId = useId();
-  const draft = wording === null ? null : changeNoteDraft(note, wording);
+  const draft = wording === null ? null : changeNoteDraft(note, wording, scope);
   return (
     <li className="space-y-1 border-b border-border pb-3" aria-describedby={textId}>
       <p className="text-xs text-muted-foreground">{noteDateLabel(note)}</p>
@@ -218,7 +268,7 @@ function NoteRow({
             variant="ghost"
             disabled={onDraft === undefined}
             onClick={() =>
-              heldBack === undefined ? onDraft?.(forgetNoteDraft(note)) : setForgetting(true)
+              heldBack === undefined ? onDraft?.(forgetNoteDraft(note, scope)) : setForgetting(true)
             }
           >
             Ask to forget

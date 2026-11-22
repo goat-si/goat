@@ -10,7 +10,50 @@ import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
 
 import { host, initialize, withRemote } from "./SshRemoteDispatch.hostCall.testkit.ts";
+import { launchAgainst } from "./SshRemoteDispatch.lineage.testkit.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
+
+it.effect.each([false, true])(
+  "forwards SSH worker notes only with live support (%s)",
+  (supported) =>
+    Effect.gen(function* () {
+      const note = "Use the synthetic Juniper runbook.";
+      const { launches } = yield* launchAgainst({
+        declaresLaunchedBy: false,
+        declaresMemoryCeiling: true,
+        declaresReport: true,
+        declaresProviderNotes: supported,
+        withReport: true,
+        providerNotes: note,
+        memoryCeilings: ["read"],
+      });
+      expect(launches).toHaveLength(1);
+      expect(launches[0]?.message).toBe("Do the work\n\nReport back.");
+      if (supported) expect(launches[0]?.providerNotes).toBe(note);
+      else expect(JSON.stringify(launches[0])).not.toContain(note);
+    }),
+);
+
+it.effect("withholds notes when the fresh catalog loses support before the SSH launch retry", () =>
+  Effect.gen(function* () {
+    const note = "Use the synthetic Juniper runbook.";
+    const { launches } = yield* launchAgainst({
+      declaresLaunchedBy: true,
+      refuseLaunchedBy: true,
+      afterLaunchedByRefusal: { advertisesMemory: false, declaresMemoryCeiling: true },
+      declaresMemoryCeiling: true,
+      declaresReport: true,
+      declaresProviderNotes: true,
+      withReport: true,
+      providerNotes: note,
+      memoryCeilings: ["read"],
+    });
+    expect(launches).toHaveLength(2);
+    expect(launches[0]?.providerNotes).toBe(note);
+    expect(launches[1]?.message).toBe("Do the work\n\nReport back.");
+    expect(JSON.stringify(launches[1])).not.toContain(note);
+  }),
+);
 
 describe("SSH dispatch origin routing", () => {
   const withExistingManager = <A, E>(

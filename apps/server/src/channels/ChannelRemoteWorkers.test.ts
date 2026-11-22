@@ -25,7 +25,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -35,6 +34,7 @@ import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { deliverAllDue } from "./testkit/channelLedgerFixtures.ts";
 import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
@@ -979,6 +979,33 @@ describe("copies of remote work and host failover", () => {
 });
 
 describe("memory grants on another machine", () => {
+  it.effect("keeps scoped SSH worker notes out of the destination message", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const files = channelBotFilesFor(path, config.stateDir);
+      const note = "Use the synthetic Juniper key for rollout.";
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      yield* fs.writeFileString(files.notes, `</goat_bot_notes>\n- ${note}\n`);
+      const accepted = yield* Deferred.make<SshRemoteDispatch.SshLaunchInput>();
+      machine.beforeLaunch = (input) => Deferred.succeed(accepted, input).pipe(Effect.asVoid);
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: check rollout", "private-ssh-brief"), {
+        ...rpcContext,
+        grantedScopes: [...owner.grantedScopes, "memory:read"],
+      });
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const launch = yield* Deferred.await(accepted);
+      expect(launch.message).toContain("check rollout");
+      expect(launch.message).not.toContain(note);
+      expect(launch.message).not.toContain("<goat_bot_notes>");
+      expect(launch).toHaveProperty("providerNotes", expect.stringContaining(note));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect.each([
     { scopes: [], ceiling: undefined },
     { scopes: ["memory:write"], ceiling: undefined },

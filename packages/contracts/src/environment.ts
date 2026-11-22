@@ -311,6 +311,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotNotes`. */
   goatBotNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotPrivateNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotInstructions: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
   goatBotLibrary: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.retryTask`: a person runs a failed or stopped task again. */

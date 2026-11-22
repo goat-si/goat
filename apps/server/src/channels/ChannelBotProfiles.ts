@@ -22,6 +22,7 @@ const MainRecord = Schema.Struct({
   name: BotProfile.fields.name,
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
+  instructions: BotProfile.fields.instructions,
   defaultModelSelection: BotProfile.fields.defaultModelSelection,
   defaultProjectId: BotProfile.fields.defaultProjectId,
   createdAt: BotProfile.fields.createdAt,
@@ -51,6 +52,7 @@ const decodeBot = Schema.decodeUnknownSync(
 export interface BotIdentity {
   readonly name: string;
   readonly purpose: string;
+  readonly instructions?: string;
 }
 export const DEFAULT_BOT_IDENTITY: BotIdentity = { name: "GOAT Bot", purpose: "" };
 
@@ -294,6 +296,7 @@ const make = Effect.gen(function* () {
             ...(input.name === undefined ? {} : { name: input.name }),
             ...(input.avatar === undefined ? {} : { avatar: input.avatar }),
             ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+            ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
             ...(input.defaultModelSelection === undefined
               ? {}
               : { defaultModelSelection: input.defaultModelSelection }),
@@ -331,7 +334,11 @@ const make = Effect.gen(function* () {
     return yield* readProfileRecord(sql, ownerId, botId).pipe(
       Effect.flatMap((profile) =>
         profile !== undefined
-          ? Effect.succeed({ name: profile.name, purpose: profile.purpose })
+          ? Effect.succeed({
+              name: profile.name,
+              purpose: profile.purpose,
+              ...(profile.instructions === undefined ? {} : { instructions: profile.instructions }),
+            })
           : botId === MAIN_BOT_ID
             ? Effect.succeed(DEFAULT_BOT_IDENTITY)
             : Effect.fail(new ChannelGatewayError({ reason: "not_found" })),

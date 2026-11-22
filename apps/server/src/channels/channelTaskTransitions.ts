@@ -3,6 +3,7 @@ import {
   type ChannelTaskStatus,
   type ChannelTask,
   type ChannelTaskEvent,
+  isGoatBotSessionThreadId,
 } from "@goat/contracts";
 
 /**
@@ -100,7 +101,16 @@ export function applyChannelTaskEvent(
   if (event.taskVersion !== task.version + 1) {
     return reject(`Expected task version ${task.version + 1}, got ${event.taskVersion}.`);
   }
-  if (!allowedFrom[event.type].includes(task.status)) {
+  // Reconcile uses the existing retry event to redispatch a fenced, unsubmitted session turn.
+  const redispatchUnstartedSession =
+    event.type === "task.retry.requested" &&
+    event.actor === "system" &&
+    task.status === "running" &&
+    task.kind === "turn" &&
+    task.worker !== undefined &&
+    task.worker.host === undefined &&
+    isGoatBotSessionThreadId(task.worker.threadId);
+  if (!allowedFrom[event.type].includes(task.status) && !redispatchUnstartedSession) {
     return reject(`${event.type} is not allowed while the task is ${task.status}.`);
   }
   const proposalRule = skillProposalRule(task, event);

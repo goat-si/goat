@@ -45,6 +45,10 @@ import { frameRemoteReport } from "./reportFrame.ts";
 import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import {
+  bindRemoteWorkerNotes,
+  unbindRemoteWorkerNotes,
+} from "../channels/channelProviderBrief.ts";
+import {
   completionHoldCount,
   needsYouFromApprovalHandoffs,
   needsYouFromRuntimeRequests,
@@ -184,6 +188,7 @@ export class RemoteReportService extends Context.Service<
     readonly bind: (
       threadId: ThreadId,
       input: RemoteReportBindingInput,
+      providerNotes?: { readonly messageId: MessageId; readonly notes: string },
     ) => Effect.Effect<void, RemoteReportError>;
     readonly unbind: (threadId: ThreadId) => Effect.Effect<void, RemoteReportError>;
     /** The machine and thread this thread was launched from, when it reports to one. */
@@ -258,6 +263,7 @@ const make = Effect.gen(function* () {
   const bind = Effect.fn("RemoteReportService.bind")(function* (
     threadId: ThreadId,
     input: RemoteReportBindingInput,
+    providerNotes?: { readonly messageId: MessageId; readonly notes: string },
   ) {
     const value = yield* decodeBindingInput(input).pipe(Effect.mapError(invalid));
     const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -275,6 +281,8 @@ const make = Effect.gen(function* () {
               (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
             VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
           `;
+          if (providerNotes !== undefined)
+            yield* bindRemoteWorkerNotes(sql, threadId, providerNotes, createdAt);
         }),
       )
       .pipe(Effect.mapError(storageUnlessReport));
@@ -288,6 +296,7 @@ const make = Effect.gen(function* () {
           yield* sql`DELETE FROM remote_relay_requests WHERE correlation_id IN
         (SELECT correlation_id FROM remote_report_bindings WHERE thread_id = ${threadId})`;
           yield* sql`DELETE FROM remote_report_bindings WHERE thread_id = ${threadId}`;
+          yield* unbindRemoteWorkerNotes(sql, threadId);
         }),
       )
       .pipe(Effect.mapError(storage));

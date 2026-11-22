@@ -25,6 +25,7 @@ export function GoatBotEditBotDialog({
 } & Pick<ComponentProps<typeof GoatBotProfileDialog>, "draftName" | "finalFocus">) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
   const mainName = useGoatBotMainName();
+  const presentation = useEnvironment(bot.environmentId);
   const modelEditable = useGoatBotMemberModelEditable(bot);
   const colorEditable = useGoatBotMemberColorEditable(bot);
   const [model, setModel] = useState(bot.defaultModelSelection);
@@ -37,6 +38,9 @@ export function GoatBotEditBotDialog({
       canSubmit={canSubmit}
       extraChanged={modelChanged}
       colorEditable={colorEditable}
+      instructionsEditable={
+        presentation?.serverConfig?.environment.capabilities.goatBotInstructions === true
+      }
       onClose={onClose}
       onSubmit={async (changes) => {
         const result = await update({

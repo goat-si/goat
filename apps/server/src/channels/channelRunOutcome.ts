@@ -10,11 +10,16 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 
+import { PROFILE_UNREADABLE } from "./channelBotSessionRotation.ts";
 import { questionIdFor } from "./channelIds.ts";
 import {
   CHANNEL_PERMISSION_CHANGED,
   CHANNEL_PERMISSION_CHANGED_MESSAGE,
 } from "./channelProviderInputAuthority.ts";
+import {
+  CHANNEL_SESSION_PROFILE_CHANGED,
+  CHANNEL_SESSION_PROFILE_UNREADABLE,
+} from "./channelSessionProfileFence.ts";
 import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import type { ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 
@@ -50,6 +55,29 @@ export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
       )
     ) {
       return { reason: CHANNEL_PERMISSION_CHANGED, summary: CHANNEL_PERMISSION_CHANGED_MESSAGE };
+    }
+    if (
+      errors.value.turnItems.some(
+        (item) => item.type === "error" && item.failure.code === CHANNEL_SESSION_PROFILE_UNREADABLE,
+      )
+    )
+      return { reason: CHANNEL_SESSION_PROFILE_UNREADABLE, summary: PROFILE_UNREADABLE };
+    const profileChanged = errors.value.turnItems.some(
+      (item) => item.type === "error" && item.failure.code === CHANNEL_SESSION_PROFILE_CHANGED,
+    );
+    if (profileChanged) {
+      // A provider failure cannot replay a prompt it may already have accepted.
+      if (run.startedAt === null) return { reason: CHANNEL_SESSION_PROFILE_CHANGED };
+      if (run.activeAttemptId !== null) {
+        const attempts = yield* threads
+          .getThreadRecords(run.threadId, ["attempts"], {
+            attemptIds: [run.activeAttemptId],
+          })
+          .pipe(Effect.option);
+        if (Option.isNone(attempts)) return undefined;
+        if (attempts.value.attempts[0]?.inputDelivery === "unsent")
+          return { reason: CHANNEL_SESSION_PROFILE_CHANGED };
+      }
     }
   }
   const releaseReason =

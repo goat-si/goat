@@ -8,6 +8,15 @@ const decodeEvent = Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTask
 const forwardEventKey = (threadId: string, messageId: string) =>
   `channel-session-forward:${threadId}:${messageId}`;
 
+export const sessionForwardDelivery = (
+  sequence: number,
+  event: Extract<ChannelTaskEvent, { type: "task.followup.received" | "task.question.answered" }>,
+) => ({
+  sequence,
+  sender: event.payload.sender,
+  inputId: event.actor === "user" ? event.payload.inputId : undefined,
+});
+
 export const recordSessionForwardEvent = (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,

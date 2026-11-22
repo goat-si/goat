@@ -9,26 +9,17 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
+import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
+import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
 import { encodeEvent, encodeTask, makeTaskEventWriter } from "./channelTaskEventStore.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
-/**
- * ChannelLedger - durable state for channel input, tasks, and deliveries.
- *
- * One SQLite transaction commits an input with its decision, a task with its event, and the
- * outbox rows those changes need, so a crash never leaves a task without its event or a reply
- * without its delivery. Model calls, thread launches, and transport sends happen outside these
- * transactions, after commit.
- *
- * Background workers run in the one process that holds the worker ownership row. Their writes
- * pass that token and each transaction re-checks it first, so a process that lost ownership
- * (for example after being suspended past the heartbeat window) cannot commit a claim.
- *
- * @module ChannelLedger
- */
+// Inputs and decisions, task events, and their outbox deliveries commit together.
 import {
   AuthEnvironmentScopes,
+  type AuthEnvironmentScope,
+  type AuthSessionId,
   BotId,
   type ChannelAnswerProjectChoice,
   type ChannelConversationId,
@@ -49,6 +40,7 @@ import {
   type ChannelTaskEventId,
   type ChannelTaskId,
   type ChannelTaskStatus,
+  type MessageId,
   RuntimeMode,
   MAIN_BOT_ID,
   type ThreadId,
@@ -165,6 +157,9 @@ export class ChannelLedger extends Context.Service<
     readonly recordLaunchHead: (
       input: Parameters<typeof recordChannelLaunchHead>[0],
     ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly inputSessionScopes: (
+      inputId: ChannelInputId,
+    ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope> | undefined, ChannelLedgerError>;
     readonly routineWorkAuthority: Effect.Success<ReturnType<typeof makeRoutineWorkAuthority>>;
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
@@ -177,6 +172,7 @@ export class ChannelLedger extends Context.Service<
       /** Undefined stores the input as rejected. */
       readonly requester: ChannelRequester | undefined;
       readonly acceptedAt: string;
+      readonly authSessionId?: AuthSessionId | undefined;
       /** The bot the input is for; main when absent. */
       readonly botId?: BotId | undefined;
       readonly slackRouting?: ChannelIngressContext["slackRouting"];
@@ -293,6 +289,15 @@ export class ChannelLedger extends Context.Service<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
     >;
+    readonly bindWorkerProviderBrief: (
+      task: ChannelTask,
+      threadId: ThreadId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly bindWorkerFollowUpSender: (
+      threadId: ThreadId,
+      messageId: MessageId,
+      inputId: ChannelInputId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
@@ -848,12 +853,15 @@ const make = Effect.gen(function* () {
       return next;
     });
 
+  const inputSessionScopes = yield* makeChannelInputSessionAuthority;
   const changes = yield* makeChannelTaskChanges(sql);
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
     acceptInput: (input) =>
       acceptChannelInput(sql, readInbox, input).pipe(Effect.mapError(toLedgerError("acceptInput"))),
+    inputSessionScopes: (id) =>
+      inputSessionScopes(id).pipe(Effect.mapError(toLedgerError("inputSessionScopes"))),
     routineWorkAuthority: yield* makeRoutineWorkAuthority(),
     recordLaunchHead: (input) =>
       recordChannelLaunchHead(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
@@ -1014,6 +1022,9 @@ const make = Effect.gen(function* () {
         };
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
 
+    bindWorkerProviderBrief: (task, threadId) => bindWorkerProviderBrief(sql, task, threadId),
+    bindWorkerFollowUpSender: (threadId, messageId, inputId) =>
+      bindWorkerFollowUpSender(sql, threadId, messageId, inputId),
     ...makeTaskHistoryReads(sql, toLedgerError),
 
     exportTasks: (input) =>

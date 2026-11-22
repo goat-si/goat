@@ -1,4 +1,4 @@
-import type { OrchestrationV2ThreadLauncher } from "@goat/contracts";
+import type { MemoryTaskGrantCeiling, OrchestrationV2ThreadLauncher } from "@goat/contracts";
 
 import type { AcpMcpListedTool } from "../mcp/AcpMcpStdioBridge.ts";
 
@@ -14,6 +14,30 @@ export const declaredLaunchArguments = (tools: ReadonlyArray<AcpMcpListedTool>) 
       fields.map((field) => argument + "." + field),
     ),
   ]);
+};
+
+export const privateLaunchArguments = (
+  capabilities: {
+    readonly declared: ReadonlySet<string>;
+    readonly advertisesMemory: boolean;
+  } | null,
+  memoryGrantCeiling: MemoryTaskGrantCeiling,
+  providerNotes: string | undefined,
+) => {
+  if (
+    capabilities?.declared.has("memoryGrantCeiling") !== true ||
+    (memoryGrantCeiling === "none" && !capabilities.advertisesMemory)
+  )
+    return {};
+  return {
+    memoryGrantCeiling,
+    ...(providerNotes !== undefined &&
+    memoryGrantCeiling !== "none" &&
+    capabilities.declared.has("report") &&
+    capabilities.declared.has("providerNotes")
+      ? { providerNotes }
+      : {}),
+  };
 };
 
 /**

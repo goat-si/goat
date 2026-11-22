@@ -1,25 +1,9 @@
-/**
- * ChannelReceptionService - reads one channel input and answers it right away.
- *
- * Each input gets its own pass with its own reception id; nothing waits on another input or on
- * a provider session. The model (a tool-free one-shot text generation) proposes a reply and an
- * action; this service checks the action against the ledger and the requester's permissions,
- * then commits the reply, any new task, and their deliveries in one transaction.
- *
- * The same service words task updates for the requester (`narrate`) when the ledger records a
- * result, failure, or question.
- *
- * @module ChannelReceptionService
- */
+/** Interprets channel messages and commits replies and task changes. */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- reception ids only need a random UUID.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import {
-  canReadChannelBotNotes,
-  readNotesForRequester as readNotesFor,
-  recheckReceptionNotes,
-} from "./slack/slackNoteAccess.ts";
+import { canReadChannelBotNotes, recheckReceptionNotes } from "./channelBotNoteAccess.ts";
 import {
   type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -37,6 +21,7 @@ import {
   ChannelReceptionId,
   CommandId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
+  MAIN_BOT_ID,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import {
@@ -71,20 +56,25 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
-import { isUnlinkedPrincipal, mayDirect } from "./ChannelGateway.ts";
+import { mayDirect } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { currentRequester } from "./channelDispatchAuthority.ts";
 import { type ApprovalVia, senderOf } from "./channelSenderAuthority.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
-import { channelBotFilesFor, listChannelBotSkills, quotedFromInput } from "./channelBotNotes.ts";
-import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
+import {
+  channelBotFilesFor,
+  listChannelBotSkills,
+  quotedFromInput,
+  readReceptionBotNotes,
+} from "./channelBotNotes.ts";
+import { confirmMainBotNote, sharedBotNoteReply } from "./channelSharedBotNote.ts";
+import { droppedNoteNotice, mayWriteBotNotes } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
   boundReceptionTail,
@@ -205,14 +195,6 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const routineInputs = yield* makeRoutineInputs;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
-  const identityNow = (input: {
-    readonly connectionId: string;
-    readonly externalActorId: string;
-  }) =>
-    currentChannelIdentity(input).pipe(
-      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-    );
   const home = yield* ChannelBotHome.ChannelBotHome;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -228,6 +210,9 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
+  const filesFor = (botId: BotId) => channelBotFilesFor(path, serverConfig.stateDir, botId);
+  const notesFor = (botId: BotId, viewer: ChannelRequester, query: string) =>
+    readReceptionBotNotes(filesFor(botId), query, viewer);
   const botNotes = yield* ChannelBotNoteWriter;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
@@ -341,7 +326,10 @@ const make = Effect.gen(function* () {
       });
   };
 
-  const generateOutcome = (input: ChannelReceptionInput, connectionId?: string) =>
+  const generateOutcome = (
+    input: ChannelReceptionInput,
+    authority?: { connectionId: string; inputId: ChannelInputId },
+  ) =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.option);
       const generateReception = textGeneration.generateChannelReception;
@@ -349,12 +337,13 @@ const make = Effect.gen(function* () {
         yield* Effect.logWarning("channel reception failed", { kind: "unavailable" });
         return receptionFailure("unavailable");
       }
+      const viewer =
+        authority && viewerNow(input.requester, authority.connectionId, authority.inputId);
       return yield* generateReception({
         cwd: serverConfig.stateDir,
-        input:
-          connectionId === undefined
-            ? input
-            : yield* recheckReceptionNotes(input, scopesNow(input.requester, connectionId)),
+        input: viewer === undefined ? input : yield* recheckReceptionNotes(input, viewer),
+        recheckInput:
+          viewer === undefined ? undefined : (current) => recheckReceptionNotes(current, viewer),
         modelSelection: settings.value.textGenerationModelSelection,
       }).pipe(
         Effect.timeoutOption(CHANNEL_RECEPTION_TIMEOUT_MS),
@@ -376,7 +365,6 @@ const make = Effect.gen(function* () {
         }),
       );
     });
-  // Narration falls back to the worker's own words when the model cannot phrase them.
   const generate = (input: ChannelReceptionInput) =>
     generateOutcome(input).pipe(
       Effect.map((outcome) => (outcome.ok ? Option.some(outcome.result) : Option.none())),
@@ -410,65 +398,56 @@ const make = Effect.gen(function* () {
     });
 
   /** The owner's newest tasks this requester may see. */
-  const visibleTasks = (viewer: ChannelRequester, conversationId: ChannelConversationId) =>
+  const visibleTasks = (
+    viewer: ChannelRequester,
+    conversationId: ChannelConversationId,
+    botId?: BotId,
+  ) =>
     ledger
-      .listTasks({ ownerId: viewer.ownerId, limit: RECALL_TASK_SCAN })
+      .listTasks({ ownerId: viewer.ownerId, limit: RECALL_TASK_SCAN, botId })
       .pipe(
         Effect.map((page) => page.tasks.filter((task) => canSeeTask(viewer, task, conversationId))),
       );
 
-  /**
-   * The scopes a requester holds now. A Slack or iMessage link is read again, so a link removed
-   * or narrowed since the message arrived counts; an in-app requester keeps the scopes its
-   * session had. Agents over MCP read GOAT memory with their own memory tools, not through the bot.
-   */
-  const scopesNow = (viewer: ChannelRequester, connectionId: string) =>
-    Effect.gen(function* () {
-      if (viewer.originKind === "mcp") return [];
-      if (viewer.originKind !== "slack" && viewer.originKind !== "imessage") {
-        return viewer.grantedScopes;
-      }
-      if (viewer.externalActorId === undefined) return [];
-      const linked = yield* identityNow({
-        connectionId,
-        externalActorId: viewer.externalActorId,
-      });
-      return linked === undefined || linked.principalId !== viewer.principalId
-        ? []
-        : viewer.grantedScopes.filter((scope) => linked.grantedScopes.includes(scope));
-    });
-
-  /**
-   * The requester as reads judge them now. A Slack or iMessage link removed or moved to another
-   * person since the message arrived leaves only this conversation's work visible.
-   */
-  const viewerNow = (requester: ChannelRequester, connectionId: string) =>
-    Effect.gen(function* () {
-      const scopes = yield* scopesNow(requester, connectionId).pipe(
-        Effect.orElseSucceed((): ReadonlyArray<string> => []),
-      );
-      const external = requester.originKind === "slack" || requester.originKind === "imessage";
-      const linkedNow =
-        !external ||
-        (requester.externalActorId !== undefined &&
-          (yield* identityNow({ connectionId, externalActorId: requester.externalActorId }).pipe(
-            Effect.orElseSucceed(() => undefined),
-          ))?.principalId === requester.principalId);
-      return {
-        ...requester,
-        grantedScopes: requester.grantedScopes.filter((scope) => scopes.includes(scope)),
-        ...(linkedNow ? {} : { principalId: "unlinked:" + (requester.externalActorId ?? "") }),
-      } satisfies ChannelRequester;
-    });
+  const liveRequester = (
+    requester: ChannelRequester,
+    connectionId: string,
+    inputId: ChannelInputId,
+  ) =>
+    currentRequester(requester, connectionId, inputId).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      Effect.orElseSucceed(() => undefined),
+    );
+  const viewerNow = (requester: ChannelRequester, connectionId: string, inputId: ChannelInputId) =>
+    liveRequester(requester, connectionId, inputId).pipe(
+      Effect.map((live): ChannelRequester => {
+        if (live !== undefined && live.originKind !== "mcp") return live;
+        return {
+          ...requester,
+          grantedScopes: [],
+          ...(live === undefined
+            ? { principalId: "unlinked:" + (requester.externalActorId ?? "") }
+            : {}),
+        };
+      }),
+    );
 
   /**
    * GOAT memory items for a query, under the requester's memory access as it stands now. Empty
    * when memory is off, not set up, or the requester may not read it.
    */
-  const searchGoatMemory = (viewer: ChannelRequester, connectionId: string, query: string) =>
+  const searchGoatMemory = (
+    viewer: ChannelRequester,
+    connectionId: string,
+    query: string,
+    inputId: ChannelInputId,
+  ) =>
     Effect.gen(function* () {
       if (Option.isNone(memoryService) || Option.isNone(memorySync)) return [];
-      const live = scopesNow(viewer, connectionId);
+      const live = viewerNow(viewer, connectionId, inputId).pipe(
+        Effect.map((current) => current.grantedScopes),
+      );
       if (!(yield* live).includes("memory:read")) return [];
       const settings = yield* serverSettings.getSettings;
       if (!settings.memoryEnabled) return [];
@@ -514,14 +493,15 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     connectionId: string,
     inputId: ChannelInputId,
+    botId: BotId,
   ) =>
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readNotesFor(viewer, botFiles, read.query);
+          const notes = yield* notesFor(botId, viewer, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
-            yield* visibleTasks(viewer, conversationId),
+            yield* visibleTasks(viewer, conversationId, botId),
             RECALL_TASK_SCAN,
             Number.POSITIVE_INFINITY,
           );
@@ -530,7 +510,7 @@ const make = Effect.gen(function* () {
             notes + "\n" + journal.split("\n").toReversed().join("\n"),
             read.query,
           );
-          const goat = yield* searchGoatMemory(viewer, connectionId, read.query);
+          const goat = yield* searchGoatMemory(viewer, connectionId, read.query, inputId);
           if (local.length === 0 && goat.length === 0) return "Nothing in memory matches.";
           return [
             ...(local.length === 0 ? [] : ["GOAT Bot notes and journal:", ...local]),
@@ -641,13 +621,14 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     connectionId: string,
     inputId: ChannelInputId,
+    botId: BotId,
   ): Effect.Effect<
     ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
   > =>
     Effect.forEach(
       reads,
       (read) =>
-        runRead(read, viewer, conversationId, connectionId, inputId).pipe(
+        runRead(read, viewer, conversationId, connectionId, inputId, botId).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
           Effect.map((value) =>
             ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
@@ -883,7 +864,6 @@ const make = Effect.gen(function* () {
         return;
       }
       if (origin.kind === "goat" && !routine) {
-        // The task and answer the accepted copy decided stay on the message (TimelineRecords).
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -895,10 +875,13 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.ignore);
       }
-      const judgedNow = currentRequester(requester, message.connectionId).pipe(
-        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      const judgedNow = liveRequester(requester, message.connectionId, inputId);
+      const allowedNotesWrite = judgedNow.pipe(
+        Effect.map((who) => who !== undefined && mayWriteBotNotes(who)),
       );
+      const sharedNote = routine
+        ? undefined
+        : yield* sharedBotNoteReply(stored, judgedNow, ledger, botNotes, readAt);
       const directs = (who: ChannelRequester | undefined, task: ChannelTask) =>
         who !== undefined && mayDirect(who, message.connectionId, task);
       const tasks = yield* ledger.listConversationTasks(conversationId);
@@ -930,10 +913,17 @@ const make = Effect.gen(function* () {
             ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
             : undefined;
       const answer =
+        sharedNote ??
         numberRefused ??
         nativeAnswer ??
         (approvalReply === undefined
-          ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
+          ? yield* botNotes.tabEdit(
+              message,
+              inputId,
+              readAt,
+              routine ? undefined : judgedNow,
+              filesFor(stored.botId),
+            )
           : yield* decideApprovalReply(approvalReply, conversationId, inputId, judgedNow, message));
       if (answer !== undefined) {
         yield* ledger.completeReception({
@@ -955,7 +945,7 @@ const make = Effect.gen(function* () {
               kind: answer.options === undefined ? "receipt" : "question",
               text: answer.text,
               inputId,
-              task: answer.task,
+              task: "task" in answer ? answer.task : undefined,
               mentionActorId: mention,
               options: answer.options,
               byWord: "byWord" in answer && answer.byWord === true,
@@ -1006,13 +996,13 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const viewer = yield* viewerNow(requester, message.connectionId);
-                const notes = yield* readNotesFor(viewer, botFiles, message.text);
+                const viewer = yield* viewerNow(requester, message.connectionId, inputId);
+                const notes = yield* notesFor(stored.botId, viewer, message.text);
                 const recent = viewer.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
                 const journal = journalFor(
-                  yield* visibleTasks(viewer, conversationId).pipe(
+                  yield* visibleTasks(viewer, conversationId, stored.botId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
@@ -1078,7 +1068,7 @@ const make = Effect.gen(function* () {
                   requester,
                 };
                 const generateForInput = (input: ChannelReceptionInput) =>
-                  generateOutcome(input, message.connectionId);
+                  generateOutcome(input, { connectionId: message.connectionId, inputId });
                 const first = yield* generateForInput({
                   ...base,
                   readsAllowed: workProject === undefined,
@@ -1088,17 +1078,18 @@ const make = Effect.gen(function* () {
                 // One round of reads, then the answer. Reads run within what this requester
                 // may see; a second request to read is answered with what the pass wrote.
                 // The first pass can take most of a minute; judge the link again before reading.
-                const reader = yield* viewerNow(requester, message.connectionId);
+                const reader = yield* viewerNow(requester, message.connectionId, inputId);
                 const results = yield* runReads(
                   first.result.action.reads,
                   reader,
                   conversationId,
                   message.connectionId,
                   inputId,
+                  stored.botId,
                 );
                 // Reads take time too: results read under a link that narrowed meanwhile are dropped,
                 // and everything else in the answer is judged by who the person is now.
-                const current = yield* viewerNow(requester, message.connectionId);
+                const current = yield* viewerNow(requester, message.connectionId, inputId);
                 const narrowedDuringReads =
                   current.principalId !== reader.principalId ||
                   reader.grantedScopes.some((scope) => !current.grantedScopes.includes(scope));
@@ -1114,7 +1105,7 @@ const make = Effect.gen(function* () {
                     : results;
                 recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
                 const journalNow = journalFor(
-                  yield* visibleTasks(current, conversationId).pipe(
+                  yield* visibleTasks(current, conversationId, stored.botId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
@@ -1188,11 +1179,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // Notes are the owner's standing rules for every conversation, so only a person linked now
-      // may change them; someone let in without a link, or whose access ended, may not.
-      const noteWriter = requester.originKind === "mcp" ? undefined : yield* judgedNow;
-      const mayChangeNotes =
-        noteWriter !== undefined && !isUnlinkedPrincipal(noteWriter.principalId);
+      const mayChangeNotes = !routine && (yield* allowedNotesWrite);
       // Notes shape every later reply, so a note is kept only when a person asked for it in this
       // input: the quote the model returns must occur in the message itself, never in the tail.
       // This records the request; it does not prove intent, and it fails closed.
@@ -1211,26 +1198,37 @@ const make = Effect.gen(function* () {
       if (decision.remember !== undefined && rememberRefusal !== undefined) {
         yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
-      // Saved before the result commits so a restart re-runs this input and saves it then; the note
-      // names its input, so a second pass for the same input does not add it twice.
       const asked = "notesChangeRequested" in decision.action ? decision.action : undefined;
       const editRefusal =
         asked?.notesChangeRequested === undefined
           ? undefined
           : !mayChangeNotes
             ? "not_linked"
-            : quotedFromInput(asked.notesChangeRequested, message.text)
-              ? undefined
-              : "quote_not_in_input";
+            : !quotedFromInput(asked.notesChangeRequested, message.text)
+              ? "quote_not_in_input"
+              : stored.botId === MAIN_BOT_ID &&
+                  (asked.type === "run_turn" || asked.type === "create_task")
+                ? "shared_confirmation_required"
+                : undefined;
+      const sharedProposal = yield* confirmMainBotNote(stored, decision, rememberRefusal, botNotes);
       const saved =
-        decision.remember !== undefined && rememberRefusal === undefined
-          ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
+        decision.remember !== undefined &&
+        rememberRefusal === undefined &&
+        sharedProposal === undefined
+          ? yield* botNotes.save(
+              decision.remember,
+              readAt,
+              inputId,
+              decision.replacesNote,
+              filesFor(stored.botId),
+              allowedNotesWrite,
+            )
           : undefined;
       const noteNotice =
         (saved === undefined ? droppedNoteNotice(rememberRefusal) : saved.notice) ??
         droppedNoteNotice(editRefusal);
-      let replyText = decision.replyText;
-      let finalDecision = decision;
+      let finalDecision = sharedProposal ?? decision;
+      let replyText = finalDecision.replyText;
       if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
@@ -1272,11 +1270,7 @@ const make = Effect.gen(function* () {
           // A new turn is its own task, queued as its own run in the conversation's session;
           // only a follow_up naming a task joins that task's run.
           const notesChangeRequested =
-            mayChangeNotes &&
-            action.notesChangeRequested !== undefined &&
-            quotedFromInput(action.notesChangeRequested, message.text)
-              ? action.notesChangeRequested
-              : undefined;
+            editRefusal === undefined ? action.notesChangeRequested : undefined;
           createdTasks = makeCreatedTasks({
             action,
             inputId,
@@ -1332,7 +1326,7 @@ const make = Effect.gen(function* () {
                 text: message.text,
                 from: sender.displayName,
                 generation: storedTask.task.generation,
-                sender: senderOf(sender, message.connectionId),
+                sender: senderOf(sender, message.connectionId, inputId),
               },
             },
             now,
@@ -1358,7 +1352,7 @@ const make = Effect.gen(function* () {
       // subagents from the ledger, so a crash after the reply still stops them.
       if (action.type === "stop_work") {
         const sender = requester.originKind === "mcp" ? undefined : yield* judgedNow;
-        const viewer = yield* viewerNow(requester, message.connectionId);
+        const viewer = yield* viewerNow(requester, message.connectionId, inputId);
         const named =
           action.taskId === undefined ? undefined : yield* ledger.getTask(action.taskId);
         const candidates =
@@ -1481,7 +1475,7 @@ const make = Effect.gen(function* () {
                 questionId: action.questionId,
                 answer: action.answer,
                 inputId,
-                sender: senderOf(answerer, message.connectionId),
+                sender: senderOf(answerer, message.connectionId, inputId),
               },
             },
             now,
@@ -1536,6 +1530,7 @@ const make = Effect.gen(function* () {
           inputId,
           task: relatedTask,
           mentionActorId: mention,
+          byWord: sharedProposal !== undefined,
           options:
             finalDecision.action.type === "clarify" ? finalDecision.action.options : undefined,
         }),

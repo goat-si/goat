@@ -365,10 +365,11 @@ export function makeTaskHistoryReads(
   return {
     /** Most recently frozen brief, including earlier generations for version allocation. */
     latestTaskBrief: Effect.fn("ChannelLedger.latestTaskBrief")(
-      function* (taskId: ChannelTaskId) {
+      function* (taskId: ChannelTaskId, generation?: number) {
         const [row] = yield* sql<{ readonly event_json: string }>`
         SELECT event_json FROM channel_task_events
         WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
+        ${generation === undefined ? sql`` : sql`AND json_extract(event_json, '$.payload.brief.generation') = ${generation}`}
         ORDER BY sequence DESC LIMIT 1
       `;
         const event = row === undefined ? undefined : decodeEvent(row.event_json);

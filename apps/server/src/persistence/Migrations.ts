@@ -195,6 +195,7 @@ import Migration0179 from "./Migrations/179_ChannelWorkerGenerations.ts";
 import Migration0180 from "./Migrations/180_ChannelBotTaskSnooze.ts";
 import Migration0181 from "./Migrations/181_ChannelBotAttention.ts";
 import Migration0182 from "./Migrations/182_SlackConversationBot.ts";
+import Migration0183 from "./Migrations/183_ChannelInputSessionAuthority.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -383,6 +384,7 @@ export const migrationEntries = [
   [180, "ChannelBotTaskSnooze", Migration0180],
   [181, "ChannelBotAttention", Migration0181],
   [182, "SlackConversationBot", Migration0182],
+  [183, "ChannelInputSessionAuthority", Migration0183],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

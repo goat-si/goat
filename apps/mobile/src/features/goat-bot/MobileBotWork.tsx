@@ -57,7 +57,6 @@ import { MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 
-/** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
@@ -73,7 +72,6 @@ import {
   type MobileCheckInDraftUpdate,
 } from "./mobileCheckInDraft";
 
-// Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
 
 export function MobileBotWork(props: {
@@ -782,6 +780,8 @@ export function MobileBotWork(props: {
             connected={selected?.connected === true}
             supported={capabilities?.goatBotNotes === true}
             member={member !== null}
+            botId={member?.botId}
+            scoped={capabilities?.goatBotPrivateNotes === true}
             botName={botName}
             onDraft={
               props.onDraft

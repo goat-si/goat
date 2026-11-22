@@ -6,6 +6,7 @@
 import {
   AuthOrchestrationOperateScope,
   type AuthEnvironmentScope,
+  type AuthSessionId,
   type EnvironmentId,
 } from "@goat/contracts";
 
@@ -18,8 +19,10 @@ export const channelOwnerIdFor = (environmentId: EnvironmentId) => "environment:
 export const ownerFromSession = (
   environmentId: EnvironmentId,
   session: { readonly subject: string; readonly scopes: ReadonlyArray<AuthEnvironmentScope> },
+  authSessionId?: AuthSessionId,
 ): ChannelConnectionOwner => ({
   ownerId: channelOwnerIdFor(environmentId),
+  ...(authSessionId === undefined ? {} : { authSessionId }),
   principalId: session.subject,
   displayName: "Owner",
   grantedScopes: [...session.scopes],

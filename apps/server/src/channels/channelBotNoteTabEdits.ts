@@ -10,6 +10,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
+  type ChannelBotNoteScope,
   type ChannelRequester,
   type ChannelTaskStatus,
 } from "@goat/contracts";
@@ -19,6 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { isUnlinkedPrincipal } from "./ChannelGateway.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import {
   collapseNoteText,
   currentNoteNamedBy,
@@ -49,14 +51,24 @@ const OPEN_STATUSES: ReadonlyArray<ChannelTaskStatus> = [
 ];
 
 // The fixed words around the notes, taken from the sentences the clients build.
-const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -2);
-const CHANGE_SAMPLE = goatBotChangeNoteMessage("", "");
-const CHANGE_PREFIX = CHANGE_SAMPLE.slice(0, CHANGE_SAMPLE.indexOf('"'));
-const CHANGE_TO = CHANGE_SAMPLE.slice(CHANGE_PREFIX.length + 2, -2);
+const forgetPrefix = (scope: ChannelBotNoteScope | undefined) =>
+  goatBotForgetNoteMessage("", scope).slice(0, -2);
+const changePrefix = (scope: ChannelBotNoteScope | undefined) =>
+  goatBotChangeNoteMessage("", "", scope).split('"')[0] ?? "";
+const CHANGE_TO = " to: ";
 
 type TabRequest =
-  | { readonly kind: "forget"; readonly note: string }
-  | { readonly kind: "change"; readonly note: string; readonly next: string };
+  | {
+      readonly kind: "forget";
+      readonly note: string;
+      readonly scope: ChannelBotNoteScope | undefined;
+    }
+  | {
+      readonly kind: "change";
+      readonly note: string;
+      readonly next: string;
+      readonly scope: ChannelBotNoteScope | undefined;
+    };
 
 /** The JSON string literal starting at `from`, and the index just after it. */
 const jsonStringAt = (text: string, from: number) => {
@@ -78,19 +90,24 @@ const jsonStringAt = (text: string, from: number) => {
 /** The Memory tab's sentences, recognised only when they are the whole message. */
 const tabRequest = (text: string): TabRequest | undefined => {
   const message = text.trim();
-  if (message.startsWith(FORGET_PREFIX)) {
-    const note = jsonStringAt(message, FORGET_PREFIX.length);
-    return note?.end === message.length && note.value !== ""
-      ? { kind: "forget", note: note.value }
+  for (const scope of [undefined, "private", "shared"] as const) {
+    const forget = forgetPrefix(scope);
+    if (message.startsWith(forget)) {
+      const note = jsonStringAt(message, forget.length);
+      return note?.end === message.length && note.value !== ""
+        ? { kind: "forget", note: note.value, scope }
+        : undefined;
+    }
+    const change = changePrefix(scope);
+    if (!message.startsWith(change)) continue;
+    const note = jsonStringAt(message, change.length);
+    if (note === undefined || !message.startsWith(CHANGE_TO, note.end)) return undefined;
+    const next = jsonStringAt(message, note.end + CHANGE_TO.length);
+    return next?.end === message.length && next.value.trim() !== ""
+      ? { kind: "change", note: note.value, next: next.value, scope }
       : undefined;
   }
-  if (!message.startsWith(CHANGE_PREFIX)) return undefined;
-  const note = jsonStringAt(message, CHANGE_PREFIX.length);
-  if (note === undefined || !message.startsWith(CHANGE_TO, note.end)) return undefined;
-  const next = jsonStringAt(message, note.end + CHANGE_TO.length);
-  return next?.end === message.length && next.value.trim() !== ""
-    ? { kind: "change", note: note.value, next: next.value }
-    : undefined;
+  return undefined;
 };
 
 /** Whether a message is one of the Memory tab's sentences, which reception answers itself. */
@@ -140,6 +157,7 @@ export interface KeptNote {
 interface RefusedForget {
   readonly note: string;
   readonly raw: string;
+  readonly files: ChannelBotFiles;
   readonly holders: ReadonlySet<string>;
 }
 
@@ -221,9 +239,14 @@ const withoutNote = (
 const linesAmong = (fileText: string, raws: ReadonlySet<string>) =>
   parseChannelBotNoteLines(fileText).filter((line) => raws.has(line.raw)).length;
 
+export const mayWriteBotNotes = (who: ChannelRequester) =>
+  canReadChannelBotNotes(who) &&
+  !isUnlinkedPrincipal(who.principalId) &&
+  who.grantedScopes.includes("memory:write");
+
 export const makeChannelBotNoteWriter = (
   fs: FileSystem.FileSystem,
-  files: ChannelBotFiles,
+  sharedFiles: ChannelBotFiles,
   ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus">,
   hooks: NoteWriterHooks = {},
 ) =>
@@ -233,11 +256,12 @@ export const makeChannelBotNoteWriter = (
     );
     // Forgets refused while a grant was open, by note text. In memory: a restart forgets them.
     const refused = new Map<string, RefusedForget>();
+    const maxRefused = 1024;
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
      * answer, read from the file and never written again: a task holding a grant may be editing it.
      */
-    const savedBefore = (inputId: string, replaces: string | undefined) =>
+    const savedBefore = (files: ChannelBotFiles, inputId: string, replaces: string | undefined) =>
       readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES).pipe(
         Effect.map((read): NoteSaveAnswer | undefined => {
           const source = noteSource(inputId);
@@ -250,7 +274,13 @@ export const makeChannelBotNoteWriter = (
         }),
         Effect.orElseSucceed(() => undefined),
       );
-    const append = (note: string, readAt: string, inputId: string, replaces?: string) =>
+    const append = (
+      files: ChannelBotFiles,
+      note: string,
+      readAt: string,
+      inputId: string,
+      replaces?: string,
+    ) =>
       appendChannelBotNote(fs, files, note, readAt, inputId, replaces).pipe(
         Effect.map(({ correction, alike, wrote }) => {
           const answer: NoteSaveAnswer =
@@ -288,16 +318,27 @@ export const makeChannelBotNoteWriter = (
      * task holding a notes grant may be editing the file by hand or that the correction's words
      * name several notes, so nothing was saved.
      */
-    const save = (note: string, readAt: string, inputId: string, replaces?: string) =>
+    const save = (
+      note: string,
+      readAt: string,
+      inputId: string,
+      replaces?: string,
+      files = sharedFiles,
+      allowed: Effect.Effect<boolean> = Effect.succeed(true),
+    ) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
+          if (!(yield* allowed)) {
+            const denied: NoteSaveAnswer = { notice: CHANNEL_COPY.noteEditNotAllowed, held: true };
+            return denied;
+          }
           const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
           if (busy) {
-            const prior = yield* savedBefore(inputId, replaces);
+            const prior = yield* savedBefore(files, inputId, replaces);
             const held: NoteSaveAnswer = { notice: CHANNEL_COPY.noteEditBusy, held: true };
             return prior ?? held;
           }
-          const saved = yield* append(note, readAt, inputId, replaces);
+          const saved = yield* append(files, note, readAt, inputId, replaces);
           if (saved.wrote) yield* reportWrote(inputId);
           return saved.answer;
         }),
@@ -314,12 +355,16 @@ export const makeChannelBotNoteWriter = (
       readAt: string,
       inputId: string,
       replaces?: string,
+      files = sharedFiles,
     ) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
           const refused = yield* guard;
-          if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
-          const saved = yield* append(note, readAt, inputId, replaces);
+          if (refused !== undefined) {
+            if (refused === "not_allowed") return { refused };
+            return (yield* savedBefore(files, inputId, replaces)) ?? { refused };
+          }
+          const saved = yield* append(files, note, readAt, inputId, replaces);
           if (saved.wrote) yield* reportWrote(inputId);
           return saved.answer;
         }),
@@ -328,7 +373,10 @@ export const makeChannelBotNoteWriter = (
     /** Runs `effect` under the writers' lock, so a notes grant is checked and recorded as one step. */
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => gate.withPermits(1)(effect);
 
-    const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
+    const readNotes = (files: ChannelBotFiles) =>
+      readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
+    const keyFor = (files: ChannelBotFiles, note: string) =>
+      files.notes + "\0" + collapseNoteText(note);
 
     /**
      * Records a Memory tab forget refused while tasks hold a notes grant, with the line as it stands,
@@ -337,28 +385,32 @@ export const makeChannelBotNoteWriter = (
     const recordRefused = Effect.fn("channelBotNoteTabEdits.recordRefused")(function* (
       note: string,
       open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+      files: ChannelBotFiles,
     ) {
       const holders = open
         .filter((stored) => stored.task.notesChangeRequested !== undefined)
         .map((stored) => stored.task.taskId as string);
-      const read = yield* readNotes;
+      const read = yield* readNotes(files);
       if (holders.length === 0 || read === null || read.truncated) return;
       // A forget the words could not have carried out is not one to put back later.
       const { line } = addressedNote(parseChannelBotNoteLines(decode(read.bytes)), note);
       if (line === undefined) return;
-      const key = collapseNoteText(line.text);
+      const key = keyFor(files, line.text);
       const prior = refused.get(key);
+      if (prior === undefined && refused.size >= maxRefused) return;
       refused.set(key, {
         note: line.text,
         raw: prior?.raw ?? line.raw,
+        files,
         holders: new Set([...(prior?.holders ?? []), ...holders]),
       });
     });
     const recordRefusedQuietly = (
       note: string,
       open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+      files: ChannelBotFiles,
     ) =>
-      recordRefused(note, open).pipe(
+      recordRefused(note, open, files).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("GOAT Bot refused forget not recorded", { cause }),
         ),
@@ -366,11 +418,19 @@ export const makeChannelBotNoteWriter = (
 
     /** recordRefused for a message refused elsewhere; only a whole tab forget sentence counts. */
     const refusedMessage = Effect.fn("channelBotNoteTabEdits.refusedMessage")(
-      function* (message: string) {
+      function* (message: string, files = sharedFiles) {
         const request = tabRequest(message);
-        if (request?.kind !== "forget") return;
+        if (
+          request?.kind !== "forget" ||
+          (request.scope === "private" && files.sharedNotes === undefined)
+        )
+          return;
         const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
-        yield* recordRefusedQuietly(request.note, open);
+        yield* recordRefusedQuietly(
+          request.note,
+          open,
+          request.scope === "shared" ? sharedFiles : files,
+        );
       },
       Effect.catch((cause) => Effect.logWarning("GOAT Bot refused forget not recorded", { cause })),
     );
@@ -392,35 +452,43 @@ export const makeChannelBotNoteWriter = (
           const quiet = [...refused].filter(([, record]) =>
             [...record.holders].every((task) => !open.has(task) && !runsOpen.has(task)),
           );
-          if (quiet.length === 0) return [];
-          const read = yield* readNotes;
-          if (read?.truncated === true) return [];
-          const text = read === null ? "" : decode(read.bytes);
-          const inForce = new Set(
-            parseChannelBotNoteLines(text)
-              .filter((line) => line.replacedBy === undefined)
-              .map((line) => collapseNoteText(line.text)),
-          );
-          const granted = yield* grantOpen;
-          const kept: Array<KeptNote & { readonly raw: string }> = [];
-          for (const [key, record] of quiet) {
-            // Still there: nothing to put back, and a later change to it must stand.
-            if (inForce.has(key)) refused.delete(key);
-            else if (!granted)
-              kept.push({ note: record.note, holders: [...record.holders], raw: record.raw });
+          if (quiet.length === 0 || (yield* grantOpen)) return [];
+          const kept: Array<KeptNote> = [];
+          const byFile = Map.groupBy(quiet, ([, record]) => record.files.notes);
+          for (const entries of byFile.values()) {
+            const files = entries[0]?.[1].files;
+            if (files === undefined) continue;
+            const read = yield* readNotes(files);
+            if (read?.truncated === true) continue;
+            const text = read === null ? "" : decode(read.bytes);
+            const inForce = new Set(
+              parseChannelBotNoteLines(text)
+                .filter((line) => line.replacedBy === undefined)
+                .map((line) => collapseNoteText(line.text)),
+            );
+            const missing = entries.filter(
+              ([, record]) => !inForce.has(collapseNoteText(record.note)),
+            );
+            if (missing.length > 0) {
+              yield* fs.writeFileString(
+                files.notes,
+                appendPrefix(read !== null, text) +
+                  missing.map(([, record]) => record.raw).join("\n") +
+                  "\n",
+                { flag: "a" },
+              );
+              kept.push(
+                ...missing.map(([, { note, holders }]) => ({ note, holders: [...holders] })),
+              );
+            }
+            for (const [key] of entries) refused.delete(key);
           }
-          if (kept.length === 0) return [];
-          yield* fs.writeFileString(
-            files.notes,
-            appendPrefix(read !== null, text) + kept.map((note) => note.raw).join("\n") + "\n",
-            { flag: "a" },
-          );
-          for (const note of kept) refused.delete(collapseNoteText(note.note));
-          return kept.map(({ note, holders }): KeptNote => ({ note, holders }));
+          return kept;
         }),
       );
 
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
+      files: ChannelBotFiles,
       note: string,
       next: string,
       read: NotesTail | null,
@@ -436,7 +504,7 @@ export const makeChannelBotNoteWriter = (
       if (line === undefined) return CHANNEL_COPY.noteNotFound;
       // A line written since the read could take the correction's binding; start over instead.
       yield* hooks.beforeCompare ?? Effect.void;
-      if (!sameRead(yield* readNotes, read)) return undefined;
+      if (!sameRead(yield* readNotes(files), read)) return undefined;
       yield* fs.writeFileString(files.notes, appendPrefix(read !== null, text) + line + "\n", {
         flag: "a",
       });
@@ -447,6 +515,7 @@ export const makeChannelBotNoteWriter = (
     // Residuals, accepted: a write that lands between the compare and the rename is lost, and a
     // writer holding a copy read before the rename can write the removed words back afterwards.
     const forget = Effect.fn("channelBotNoteTabEdits.forget")(function* (
+      files: ChannelBotFiles,
       note: string,
       original: Uint8Array,
       inputId: string,
@@ -473,14 +542,14 @@ export const makeChannelBotNoteWriter = (
         created = true;
         yield* fs.chmod(staged, mode & 0o777);
         yield* hooks.beforeCompare ?? Effect.void;
-        const current = yield* readNotes;
+        const current = yield* readNotes(files);
         if (current === null || !sameBytes(current.bytes, original)) return false;
         yield* fs.rename(staged, files.notes);
         return true;
       }).pipe(Effect.onExit(() => (created ? fs.remove(staged).pipe(Effect.ignore) : Effect.void)));
       if (!replaced) return undefined;
       yield* hooks.afterRename ?? Effect.void;
-      const check = yield* readNotes.pipe(Effect.option);
+      const check = yield* readNotes(files).pipe(Effect.option);
       if (check._tag === "None" || check.value === null || check.value.truncated) {
         yield* reportWrote(inputId);
         return CHANNEL_COPY.noteUnverified;
@@ -494,24 +563,25 @@ export const makeChannelBotNoteWriter = (
     });
 
     const apply = Effect.fn("channelBotNoteTabEdits.apply")(function* (
+      files: ChannelBotFiles,
       request: TabRequest,
       inputId: string,
       readAt: string,
     ) {
       const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
       if (open.some((stored) => stored.task.notesChangeRequested !== undefined)) {
-        if (request.kind === "forget") yield* recordRefusedQuietly(request.note, open);
+        if (request.kind === "forget") yield* recordRefusedQuietly(request.note, open, files);
         return CHANNEL_COPY.noteEditBusy;
       }
       // A request for this note that goes through now is the person's latest word on it.
-      refused.delete(collapseNoteText(request.note));
+      refused.delete(keyFor(files, request.note));
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
-        const read = yield* readNotes;
+        const read = yield* readNotes(files);
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
         const answer =
           request.kind === "change"
-            ? yield* change(request.note, request.next, read, inputId, readAt)
-            : yield* forget(request.note, read?.bytes ?? new Uint8Array(), inputId);
+            ? yield* change(files, request.note, request.next, read, inputId, readAt)
+            : yield* forget(files, request.note, read?.bytes ?? new Uint8Array(), inputId);
         if (answer !== undefined) return answer;
       }
       return CHANNEL_COPY.noteEditFailed;
@@ -527,23 +597,34 @@ export const makeChannelBotNoteWriter = (
       inputId: string,
       readAt: string,
       judged: Effect.Effect<ChannelRequester | undefined, E> | undefined,
+      files = sharedFiles,
     ) {
       const request = message.intent === "message" ? tabRequest(message.text) : undefined;
       if (request === undefined || judged === undefined) return undefined;
-      const who = yield* judged.pipe(Effect.orElseSucceed(() => undefined));
-      const allowed =
-        who !== undefined && who.originKind !== "mcp" && !isUnlinkedPrincipal(who.principalId);
-      const text = !allowed
-        ? CHANNEL_COPY.noteEditNotAllowed
-        : yield* gate
-            .withPermits(1)(apply(request, inputId, readAt))
-            .pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("GOAT Bot notes edit failed", { cause }).pipe(
-                  Effect.as(CHANNEL_COPY.noteEditFailed),
-                ),
-              ),
+      const text = yield* gate
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const who = yield* judged.pipe(Effect.orElseSucceed(() => undefined));
+            if (who === undefined || !mayWriteBotNotes(who)) return CHANNEL_COPY.noteEditNotAllowed;
+            if (request.scope === "private" && files.sharedNotes === undefined)
+              return "This bot has no private notes. Choose All bots in Memory.";
+            if (request.scope === undefined && files.sharedNotes !== undefined)
+              return "Choose This bot or All bots in Memory, then send the request again.";
+            return yield* apply(
+              request.scope === "shared" ? sharedFiles : files,
+              request,
+              inputId,
+              readAt,
             );
+          }),
+        )
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("GOAT Bot notes edit failed", { cause }).pipe(
+              Effect.as(CHANNEL_COPY.noteEditFailed),
+            ),
+          ),
+        );
       const answer: TabEditAnswer = { text };
       return answer;
     });
@@ -564,8 +645,10 @@ export const makeChannelBotNoteWriter = (
  * change it would not grant: neither is dropped without saying so.
  */
 export const droppedNoteNotice = (refusal: string | undefined) =>
-  refusal === "missing_quote" || refusal === "quote_not_in_input"
-    ? CHANNEL_COPY.noteNotSaved
-    : refusal === "not_linked" || refusal === "not_a_person"
-      ? CHANNEL_COPY.noteEditNotAllowed
-      : undefined;
+  refusal === "shared_confirmation_required"
+    ? CHANNEL_COPY.sharedNoteConfirmationRequired
+    : refusal === "missing_quote" || refusal === "quote_not_in_input"
+      ? CHANNEL_COPY.noteNotSaved
+      : refusal === "not_linked" || refusal === "not_a_person"
+        ? CHANNEL_COPY.noteEditNotAllowed
+        : undefined;

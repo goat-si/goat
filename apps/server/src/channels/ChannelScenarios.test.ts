@@ -1,3 +1,6 @@
+import { memberNoteFiles, memberNoteInput, setupMemberNotes } from "./testkit/memberNotes.ts";
+import { confirmSharedNote } from "./testkit/confirmSharedNote.ts";
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CHANNEL_HOST_WORKSPACE_LABEL,
@@ -35,7 +38,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { splitStandingInstructions } from "@goat/shared/standingInstructions";
-
 import * as ServerSettings from "../serverSettings.ts";
 import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as ServerConfig from "../config.ts";
@@ -89,6 +91,7 @@ import {
   ownerId,
   projectId,
   resultsTo,
+  memoryRpcContext,
   rpcContext,
   setupBot,
   scratchProjectId,
@@ -1296,9 +1299,7 @@ describe("what a channel worker is told", () => {
       yield* gateway.ingest(goatInput("do: tidy the docs", "standing-local"), rpcContext);
       yield* runtime.drain;
       assert.strictEqual(harness.world.launches.length, 1);
-      const first = splitStandingInstructions(
-        harness.world.launches[0]?.initialMessage?.text ?? "",
-      );
+      const first = splitStandingInstructions(yield* launchBrief(harness.world.launches[0]));
       // The same versioned block goat_thread_launch writes, so clients show it collapsed.
       assert.strictEqual(first.block?.text, "Open pull requests as drafts.");
       assert.isTrue(first.text.startsWith("tidy the docs\n"));
@@ -1963,12 +1964,12 @@ describe("who may do what (scenario 4)", () => {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const receipt = yield* gateway.ingest(
-        goatInput("Always reply in Korean, remember that", "notes-1"),
-        rpcContext,
-      );
+      const message = goatInput("Always reply in Korean, remember that", "notes-1");
+      const receipt = yield* gateway.ingest(message, memoryRpcContext);
       yield* runtime.drain;
-      yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), rpcContext);
+      yield* confirmSharedNote(receipt.inputId, message, memoryRpcContext);
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), memoryRpcContext);
       yield* runtime.drain;
       const later = seen.find((input) => input.inputText === "what machine is this?");
       assert.include(later?.notes ?? "", "Reply in Korean. (asked in " + receipt.inputId + ")");
@@ -2271,7 +2272,7 @@ describe("notes require a request in the current input", () => {
         if (scenario === "earlier message only") {
           yield* gateway.ingest(
             goatInput("Always reply in Korean, remember that", "earlier-note"),
-            rpcContext,
+            memoryRpcContext,
           );
           yield* runtime.drain;
         }
@@ -2319,7 +2320,7 @@ describe("notes require a request in the current input", () => {
                 : "What machine is this?",
               "unasked-note",
             ),
-            rpcContext,
+            memoryRpcContext,
           );
         }
         yield* runtime.drain;
@@ -2335,14 +2336,14 @@ describe("notes require a request in the current input", () => {
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         yield* runtime.drain;
         const ledger = yield* ChannelLedger.ChannelLedger;
         const gateway = yield* ChannelGateway.ChannelGateway;
         const receipt = yield* gateway.ingest(
-          goatInput("Always reply in Korean, remember that", "superseded-note"),
-          rpcContext,
+          yield* memberNoteInput("Always reply in Korean, remember that", "superseded-note"),
+          memoryRpcContext,
         );
         const newerId = ChannelReceptionId.make("reception:newer-note-pass");
         harness.script.current = () =>
@@ -2373,8 +2374,7 @@ describe("notes require a request in the current input", () => {
         assert.isUndefined(stored.snapshot.reply);
         // A note is saved before reply completion; retrying this input must not append another.
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+        const files = yield* memberNoteFiles;
         const firstNotes = yield* fs.readFileString(files.notes);
         const marker = " (asked in " + receipt.inputId + ")";
         assert.strictEqual(
@@ -2416,10 +2416,10 @@ describe("notes require a request in the current input", () => {
             })
           : defaultScript(input);
       return Effect.gen(function* () {
-        yield* setupBot;
+        yield* setupMemberNotes;
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
-          goatInput("Please forget the Korean note", "change-note"),
-          rpcContext,
+          yield* memberNoteInput("Please forget the Korean note", "change-note"),
+          memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         const task = yield* onlyTask;
@@ -2429,9 +2429,8 @@ describe("notes require a request in the current input", () => {
         }>`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.created'`;
         assert.lengthOf(rows, 1);
         const created = yield* decodeTaskEventJsonEffect(rows[0]!.event_json);
-        assert.strictEqual(created.type, "task.created");
         if (created.type !== "task.created") return yield* Effect.die("expected task.created");
-        const instruction = harness.world.launches[0]!.initialMessage!.text;
+        const instruction = yield* launchBrief(harness.world.launches.at(-1));
         if (scenario === "quoted") {
           assert.strictEqual(task.notesChangeRequested, quote);
           assert.strictEqual(created.payload.notesChangeRequested, quote);
@@ -2447,7 +2446,8 @@ describe("notes require a request in the current input", () => {
           );
           assert.notInclude(instruction, "Edit the notes file only");
         }
-        assert.isFalse(yield* notesFileExists);
+        const files = yield* memberNoteFiles;
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(files.notes));
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );

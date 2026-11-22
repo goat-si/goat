@@ -1,8 +1,13 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
 import { ChannelQuestionId, CommandId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as Stream from "effect/Stream";
 
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
@@ -647,8 +652,8 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
         const launch = harness.world.launches.find(
           (candidate) => candidate.threadId === served.worker?.threadId,
         );
-        assert.include(launch!.initialMessage!.text, "check the build");
-        assert.notInclude(launch!.initialMessage!.text, "payroll export");
+        assert.include(yield* launchBrief(launch), "check the build");
+        assert.notInclude(yield* launchBrief(launch), "payroll export");
       }).pipe(Effect.provide(harness.layer));
     },
   );
@@ -662,7 +667,7 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       const wide = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "w1"));
       const wideThread = wide.worker!.threadId;
       const wideLaunch = harness.world.launches.find((launch) => launch.threadId === wideThread);
-      assert.include(wideLaunch!.initialMessage!.text, "payroll export");
+      assert.include(yield* launchBrief(wideLaunch), "payroll export");
       harness.world.setStatus(wideThread, 1, "completed", "Done.");
       yield* settle;
       yield* narrowTeammate;
@@ -676,7 +681,7 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       const narrowLaunch = harness.world.launches.find(
         (launch) => launch.threadId === narrow.worker?.threadId,
       );
-      assert.notInclude(narrowLaunch!.initialMessage!.text, "payroll export");
+      assert.notInclude(yield* launchBrief(narrowLaunch), "payroll export");
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -707,13 +712,23 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         yield* linkTeammate;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const note = "Do the release checklist on Tuesdays.";
+        yield* appendChannelBotNote(fs, files, note, "2026-11-21T00:00:00Z", "fixture");
         // The claim recorded memory reads; the teammate's link grants none now.
         const stored = yield* claimedFromTeammate("m1", "read");
         const session = yield* ChannelBotSession.ChannelBotSession;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
         assert.lengthOf(harness.world.launches, 1);
-        assert.isUndefined(harness.world.launches[0]!.initialMessage?.memoryGrantCeiling);
+        const initial = harness.world.launches[0]?.initialMessage;
+        assert.isUndefined(initial?.memoryGrantCeiling);
+        assert.notInclude(initial?.text ?? "", note);
+        assert.notInclude(initial?.text ?? "", files.notes);
       }).pipe(Effect.provide(harness.layer));
     },
   );

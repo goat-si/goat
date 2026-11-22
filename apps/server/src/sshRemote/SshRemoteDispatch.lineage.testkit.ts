@@ -51,6 +51,7 @@ export const launchAgainst = (remote: {
   readonly afterLaunchedByRefusal?: {
     readonly advertisesMemory: boolean;
     readonly declaresMemoryCeiling: boolean;
+    readonly declaresProviderNotes?: boolean;
     readonly listFailure?: "failed" | "timeout" | "malformed" | "malformed-entry";
   };
   readonly callerRuntimeMode?: SshRemoteDispatch.SshLaunchInput["callerRuntimeMode"];
@@ -71,6 +72,8 @@ export const launchAgainst = (remote: {
   readonly onList?: () => void;
   readonly memoryCeilings?: ReadonlyArray<import("@goat/contracts").MemoryTaskGrantCeiling>;
   readonly declaresMemoryCeiling?: boolean;
+  readonly declaresProviderNotes?: boolean;
+  readonly providerNotes?: string;
   readonly advertisesMemory?: boolean;
   readonly onMemoryLaunch?: () => void;
   readonly declaresReport?: boolean;
@@ -206,6 +209,9 @@ export const launchAgainst = (remote: {
                           }
                         : {}),
                       ...(declaresReport ? { report: { type: "object" } } : {}),
+                      ...("declaresProviderNotes" in catalog && catalog.declaresProviderNotes
+                        ? { providerNotes: { type: "string" } }
+                        : {}),
                       ...(remote.declaresStandingInstructions
                         ? { standingInstructions: { type: "boolean" } }
                         : {}),
@@ -395,6 +401,7 @@ export const launchAgainst = (remote: {
             ...(remote.withReport === true
               ? { message: "Do the work", report: reportBinding, reportNote: "Report back." }
               : {}),
+            ...(remote.providerNotes === undefined ? {} : { providerNotes: remote.providerNotes }),
           };
           const coordinatorKind = remote.coordinatorKind;
           if (coordinatorKind === undefined) return dispatch.launchThread(input, Effect.void);

@@ -45,6 +45,17 @@ describe("GOAT Bot session brief", () => {
     assert.isTrue(identityIsCurrent(prefix, jarvis));
   });
 
+  it("requires a new warm session prefix after standing bot instructions are edited or cleared", () => {
+    const instructed = { ...jarvis, instructions: "Check the release checklist before reporting." };
+    const prefix = identitySection(instructed) + frozenSessionPrefix(parts);
+    assert.include(prefix, instructed.instructions);
+    assert.isTrue(identityIsCurrent(prefix, instructed));
+    assert.isFalse(identityIsCurrent(prefix, jarvis));
+    assert.isFalse(
+      identityIsCurrent(prefix, { ...instructed, instructions: "Check staging first." }),
+    );
+  });
+
   it("judges a frozen prefix against the current identity from its start only", () => {
     const plain = frozenSessionPrefix(parts);
     const named = identitySection(jarvis) + plain;

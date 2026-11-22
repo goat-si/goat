@@ -1,5 +1,6 @@
 import {
   type ChannelBotNote,
+  type ChannelBotNoteScope,
   type ChannelBotNoteSource,
   type ChannelKind,
   goatBotChangeNoteMessage,
@@ -12,14 +13,19 @@ export const GOAT_BOT_NOTES_SHARED_COPY =
   "Every bot on this computer shares these notes with GOAT Bot.";
 
 /** The message that asks GOAT Bot to forget a note; it quotes the note exactly. */
-export const forgetNoteDraft = (note: ChannelBotNote) => goatBotForgetNoteMessage(note.text);
+export const forgetNoteDraft = (note: ChannelBotNote, scope?: ChannelBotNoteScope) =>
+  goatBotForgetNoteMessage(note.text, scope);
 
 /** The message that asks for new wording, or null when there is nothing new to ask for. */
-export function changeNoteDraft(note: ChannelBotNote, newText: string): string | null {
+export function changeNoteDraft(
+  note: ChannelBotNote,
+  newText: string,
+  scope?: ChannelBotNoteScope,
+): string | null {
   const wording = newText.trim();
   return wording === "" || wording === note.text.trim()
     ? null
-    : goatBotChangeNoteMessage(note.text, wording);
+    : goatBotChangeNoteMessage(note.text, wording, scope);
 }
 
 /** Why a note's change or forget request is held back; see goatBotNotesHeldBack. */

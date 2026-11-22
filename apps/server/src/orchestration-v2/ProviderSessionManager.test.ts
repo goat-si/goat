@@ -5041,6 +5041,7 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
                   Layer.mock(ChannelLedger.ChannelLedger)({
                     getTask: () => Effect.succeed(channelTask),
+                    latestTaskBrief: () => Effect.undefined,
                     isForwardPending: (sequence) =>
                       Effect.succeed(sequence === 1 && forwardPending),
                     completeForward: ({ sequence }) =>

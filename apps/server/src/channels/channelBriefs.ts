@@ -84,6 +84,13 @@ export const channelNotesRevision = Effect.fn("channel.notesRevision")(function*
   return bytes === null ? null : NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 });
 
+const readableNotesRevision = (notesPath: string) =>
+  channelNotesRevision(notesPath).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("GOAT Bot notes revision unavailable", { cause }).pipe(Effect.as(null)),
+    ),
+  );
+
 export const localNotesBriefContext = Effect.fn("channel.localNotesBriefContext")(function* (
   files: ChannelBotFiles,
   notesAllowed: boolean,
@@ -92,7 +99,7 @@ export const localNotesBriefContext = Effect.fn("channel.localNotesBriefContext"
   return {
     ...(notesAllowed ? { notesPath: files.notes } : {}),
     notesRevision:
-      notesAllowed && briefVersion === undefined ? yield* channelNotesRevision(files.notes) : null,
+      notesAllowed && briefVersion === undefined ? yield* readableNotesRevision(files.notes) : null,
     skillsPath: files.skills,
   };
 });
