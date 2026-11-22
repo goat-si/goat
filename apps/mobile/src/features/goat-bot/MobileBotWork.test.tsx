@@ -3,7 +3,13 @@ import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  BotThreadRow,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+  type ChannelListBotThreadsResult,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -136,6 +142,15 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
+  openTask: vi.fn(),
+  snoozeCapable: false,
+  checkSnoozes: vi.fn(),
+  snoozePage: vi.fn(),
+  snoozeCheck: {
+    data: null as null | Pick<ChannelListBotThreadsResult, "activeSnoozes">,
+    error: null as string | null,
+    refresh: vi.fn(),
+  },
   // A server that looks tasks up by id and searches their titles.
   lookupCapable: false,
   lookup: vi.fn(),
@@ -202,6 +217,10 @@ vi.mock("../../state/channels", () => ({
     // Home's shared current work; its links are not read in this file.
     homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "task",
+    checkBotSnoozes: state.checkSnoozes,
+    listBotThreadsPage: { label: "work page", run: state.snoozePage },
+    snoozeBotTask: { permissionAtom: () => "permission" },
+    unsnoozeBotTask: { permissionAtom: () => "permission" },
     listChildWork: () => "child",
     listBotArtifacts: () => "artifacts",
     readBotArtifact: {},
@@ -227,6 +246,7 @@ vi.mock("../../state/server", () => ({
     },
   },
 }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
@@ -238,6 +258,7 @@ vi.mock("../../state/environments", () => ({
               capabilities: {
                 goatBotTaskThreads: true,
                 goatBotTaskRetry: true,
+                goatBotTaskSnooze: state.snoozeCapable,
                 goatBotChildWork: true,
                 goatBotMembers: true,
                 goatBotTaskLookupSearch: state.lookupCapable,
@@ -265,14 +286,16 @@ vi.mock("../../state/query", () => ({
         { ...state.task, successResult: state.task.isSuccess && !state.task.isPending ? {} : null }
       : key === "routines"
         ? state.routines
-        : {
-            data: null,
-            cause: null,
-            error: null,
-            isPending: false,
-            isSuccess: false,
-            refresh: vi.fn(),
-          },
+        : key === "snooze-check"
+          ? state.snoozeCheck
+          : {
+              data: null,
+              cause: null,
+              error: null,
+              isPending: false,
+              isSuccess: false,
+              refresh: vi.fn(),
+            },
 }));
 // The task card's renderer pulls in the native Markdown view, which cannot load under Vitest.
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
@@ -313,6 +336,13 @@ afterEach(async () => {
 
 function reset() {
   state.connected = true;
+  state.snoozeCapable = false;
+  state.checkSnoozes.mockReset();
+  state.snoozePage.mockReset();
+  state.openTask.mockClear();
+  state.snoozeCheck.data = null;
+  state.snoozeCheck.error = null;
+  state.snoozeCheck.refresh.mockReset();
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockReset();
@@ -343,7 +373,7 @@ async function render(
         turnsWaiting={turnsWaiting}
         chatTasks={chatTasks}
         chipFace={chipFace}
-        onOpenTask={() => {}}
+        onOpenTask={state.openTask}
         onOpenThread={state.openThread}
       />,
     ),
@@ -407,6 +437,182 @@ it("lists the tasks the chat shows while the work list loads or after it failed"
   Object.assign(state.task, { isPending: false, error: "failed" });
   await render(undefined, undefined, [], [card]);
   expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
+  expect(container.textContent).toContain("Earlier in chat");
+});
+
+it("checks the chat fallback task and fetches the second Snoozed page from Home", async () => {
+  reset();
+  state.snoozeCapable = true;
+  const readAt = "2026-10-12T00:00:00.000Z";
+  const until = "2026-10-12T01:00:00.000Z";
+  const snoozed = Array.from({ length: 51 }, (_, index) => {
+    const taskId = `task-${String(index).padStart(3, "0")}`;
+    return decodeRow({
+      kind: "task",
+      task: { taskId, title: `Snoozed task ${index + 1}`, status: "completed", updatedAt: readAt },
+      view: { taskId, pinnedAt: null, doneAt: null, readThrough: null, snoozedUntil: until },
+      lastActivityAt: readAt,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    });
+  });
+  const card: GoatBotTaskCard = {
+    key: "task-050",
+    revision: 1,
+    updatedAt: readAt,
+    title: "Snoozed task 51",
+    statusLabel: "Done",
+    tone: "success",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: { kind: "none", label: "No thread" },
+  };
+  Object.assign(state.task, {
+    isPending: false,
+    isSuccess: true,
+    data: { rows: [], snoozed: snoozed.slice(0, 50), snoozedNextCursor: "cursor", readAt },
+  });
+  state.checkSnoozes.mockReturnValue("snooze-check");
+  const continuation = Promise.withResolvers<unknown>();
+  state.snoozePage.mockReturnValue(continuation.promise);
+  await render(undefined, undefined, [], [card]);
+  await press("Work");
+  expect(state.checkSnoozes).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { checkSnoozes: ["task-050"] },
+  });
+  expect(container.textContent).not.toContain("Earlier in chat");
+  state.snoozeCheck.data = { activeSnoozes: [{ taskId: ChannelTaskId.make("task-050"), until }] };
+  await render(undefined, undefined, [], [card]);
+  expect(container.textContent).not.toContain("Earlier in chat");
+  await press("Snoozed");
+  expect(container.textContent).not.toContain("Snoozed task 51");
+  await press("Show more");
+  expect(state.snoozePage).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { snoozedAfter: "cursor" },
+  });
+  const refreshed = (minute: number) => ({
+    rows: [],
+    snoozed: snoozed.slice(0, 50),
+    snoozedNextCursor: "cursor",
+    readAt: `2026-10-12T00:0${minute}:00.000Z`,
+  });
+  state.task.data = refreshed(1);
+  await render(undefined, undefined, [], [card]);
+  expect(container.querySelector('[aria-label="Show more snoozed tasks"]')).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await act(async () =>
+    continuation.resolve(
+      AsyncResult.success({ rows: [], snoozed: snoozed.slice(50), mainMessageCount: 0 }),
+    ),
+  );
+  expect(container.textContent).toContain("Snoozed task 51");
+  state.task.data = refreshed(2);
+  await render(undefined, undefined, [], [card]);
+  await press("Snoozed task 51");
+  expect(state.openTask).toHaveBeenCalledWith("task-050", "Snoozed task 51");
+});
+
+it("reloads mobile Home when the Snoozed page has a newer revision", async () => {
+  reset();
+  state.snoozeCapable = true;
+  const at = "2026-10-12T00:00:00.000Z";
+  const snoozed = (taskId: string, title: string) =>
+    decodeRow({
+      kind: "task",
+      task: { taskId, title, status: "completed", updatedAt: at },
+      view: { taskId, pinnedAt: null, doneAt: null, readThrough: null, snoozedUntil: at },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    });
+  const snapshot = (snoozedRevision: string, snoozedNextCursor: string) => ({
+    rows: [],
+    mainMessageCount: 0,
+    snoozed: [snoozed("first", "First snoozed task")],
+    snoozedRevision,
+    snoozedNextCursor,
+  });
+  Object.assign(state.task, {
+    isSuccess: true,
+    isPending: false,
+    data: snapshot("before", "old-cursor"),
+  });
+  state.snoozePage
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        rows: [],
+        mainMessageCount: 0,
+        snoozedRevision: "after",
+        snoozed: [snoozed("stale", "Stale page")],
+      }),
+    )
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        rows: [],
+        mainMessageCount: 0,
+        snoozedRevision: "after",
+        snoozed: [snoozed("next", "Next snoozed task")],
+      }),
+    );
+
+  await render();
+  await press("Work");
+  await press("Snoozed");
+  await press("Show more");
+  expect(state.task.refresh).toHaveBeenCalledOnce();
+  expect(container.querySelector('[aria-label="Show more snoozed tasks"]')).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(container.textContent).not.toContain("Stale page");
+
+  Object.assign(state.task, { isPending: false, data: snapshot("after", "new-cursor") });
+  await render();
+  await press("Show more");
+  expect(container.textContent).toContain("Next snoozed task");
+  expect(state.snoozePage.mock.calls.map(([, request]) => request.input.snoozedAfter)).toEqual([
+    "old-cursor",
+    "new-cursor",
+  ]);
+});
+
+it("shows a failed snooze check and retries before showing unchecked chat work", async () => {
+  reset();
+  state.snoozeCapable = true;
+  state.checkSnoozes.mockReturnValue("snooze-check");
+  state.snoozeCheck.error = "offline";
+  Object.assign(state.task, { data: { rows: [] }, isSuccess: true, isPending: false });
+  const card: GoatBotTaskCard = {
+    key: "old-task",
+    revision: 1,
+    updatedAt: "2026-10-12T00:00:00.000Z",
+    title: "Past work",
+    statusLabel: "Done",
+    tone: "success",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: { kind: "none", label: "No thread" },
+  };
+  await render(undefined, undefined, [], [card]);
+  await press("Work");
+  expect(container.textContent).toContain("Couldn't check snoozed work.");
+  expect(container.textContent).not.toContain("No recent tasks");
+  expect(container.textContent).not.toContain("Earlier in chat");
+  await press("Try again");
+  expect(state.snoozeCheck.refresh).toHaveBeenCalledOnce();
+
+  state.snoozeCheck.error = null;
+  state.snoozeCheck.data = { activeSnoozes: [] };
+  await render(undefined, undefined, [], [card]);
+  expect(container.textContent).not.toContain("Couldn't check snoozed work.");
   expect(container.textContent).toContain("Earlier in chat");
 });
 

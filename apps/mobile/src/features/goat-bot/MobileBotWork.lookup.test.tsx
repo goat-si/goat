@@ -229,6 +229,7 @@ vi.mock("../../state/server", () => ({
     },
   },
 }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([

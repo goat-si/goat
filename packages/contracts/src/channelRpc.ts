@@ -27,6 +27,8 @@ import {
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
+  ChannelSnoozeBotTaskInput,
+  ChannelUnsnoozeBotTaskInput,
   ChannelTaskView,
   ChannelRetryTaskInput,
   ChannelRetryTaskResult,
@@ -183,6 +185,17 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
   error: ChannelRpcError,
 });
 
+const ChannelSnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask, {
+  payload: ChannelSnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
+});
+const ChannelUnsnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask, {
+  payload: ChannelUnsnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
+});
+
 const ChannelGetBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotTask, {
   payload: ChannelGetBotTaskInput,
   success: BotWorkResult,
@@ -267,6 +280,8 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelGetBotTaskRpc,
+  ChannelSnoozeBotTaskRpc,
+  ChannelUnsnoozeBotTaskRpc,
   ChannelSearchBotTasksRpc,
   ChannelListTasksRpc,
   ChannelGetInputRpc,

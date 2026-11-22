@@ -1,6 +1,7 @@
 import {
   accessDenied,
   botHomeWork,
+  withoutSnoozedBotTasks,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -184,13 +185,17 @@ export function MobileBotWork(props: {
     capabilities,
     current: props.taskId ? null : listData,
     loaded: threads.successResult !== null,
+    home: threads,
     enabled: enabled && open && !props.taskId,
     scope: JSON.stringify([workOwner, sheet.generation]),
     owner: workOwner,
+    fallbackTasks: props.chatTasks,
   });
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
-  const homeRows = props.taskId ? rows : history.rows;
+  const { snoozed } = history.snoozeList;
+  const homeRows = props.taskId ? rows : withoutSnoozedBotTasks(history.rows, snoozed);
+  const [showSnoozed, setShowSnoozed] = useState(false);
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
   const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android", workOwner);
@@ -223,6 +228,7 @@ export function MobileBotWork(props: {
     taskId: props.taskId ?? null,
     enabled,
     lookupSupported: capabilities?.goatBotTaskLookupSearch === true,
+    supportsSnooze: capabilities?.goatBotTaskSnooze === true,
     list: threads,
     holdsTask: task !== undefined,
     childGroups: childData?.groups ?? [],
@@ -616,6 +622,9 @@ export function MobileBotWork(props: {
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
+            ...history.snoozeList,
+            showSnoozed,
+            onToggleSnoozed: () => setShowSnoozed((value) => !value),
             onToggleFinished: () => setShowAllFinished((value) => !value),
             expanded: new Set(expanded),
             onToggleExpanded: toggleExpanded,

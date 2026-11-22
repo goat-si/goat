@@ -5,6 +5,7 @@ import {
   ChannelBotHomeClaimResult,
   ChannelBotHomeStatus,
   ChannelBotListResult,
+  ChannelBotTaskActivity,
   ChannelIngestResult,
   ChannelInputId,
   ChannelInputSnapshot,
@@ -71,7 +72,10 @@ const ChannelTaskGetTool = Tool.make(agentSurfaceRegistry["channel.task_read"].n
   ...shared,
   description: agentSurfaceRegistry["channel.task_read"].description,
   parameters: Schema.Struct({ taskId: ChannelTaskId }),
-  success: ChannelTask,
+  success: Schema.Struct({
+    ...ChannelTask.fields,
+    activity: Schema.optionalKey(ChannelBotTaskActivity),
+  }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_read"]));
 
 const ChannelTaskListTool = Tool.make(agentSurfaceRegistry["channel.task_list"].name, {

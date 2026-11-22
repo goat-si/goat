@@ -1,12 +1,13 @@
 import {
   CHANNEL_BOT_ROW_PULL_REQUESTS,
+  ChannelTaskPullRequest,
   PositiveInt,
+  IsoDateTime,
   PullRequestState,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
   type BotRowPullRequest,
   type ChannelTask,
-  type ChannelTaskPullRequest,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -51,6 +52,7 @@ const decodeColumns = Schema.decodeUnknownOption(
             repository: TrimmedNonEmptyString,
             number: PositiveInt,
             url: TrimmedNonEmptyString,
+            linkedAt: Schema.optionalKey(IsoDateTime),
             source: ThreadPullRequestLinkSource,
             snapshot: Schema.NullOr(
               Schema.Struct({
@@ -97,6 +99,40 @@ export const threadPullRequestSource = (
   };
 };
 
+export interface RemotePullRequestColumns {
+  readonly remote_pull_requests_json: string | null;
+  readonly remote_dispatch_state: string | null;
+}
+
+export const remotePullRequestColumns = (sql: SqlClient.SqlClient) =>
+  sql`CASE WHEN json_valid(d.observation) THEN d.observation -> '$.pullRequests'
+    END AS remote_pull_requests_json, d.state AS remote_dispatch_state`;
+
+export const joinRemoteLaunch = (sql: SqlClient.SqlClient) =>
+  sql`LEFT JOIN remote_dispatches d
+    ON json_extract(s.value_json, '$.surface') = 'ssh_thread_launch'
+    AND d.correlation_id = json_extract(s.value_json, '$.destination.correlationId')
+    AND d.origin_thread_id = json_extract(s.value_json, '$.callerThreadId')
+    AND d.host = json_extract(s.value_json, '$.destination.host')
+    AND d.remote_thread_id = json_extract(s.value_json, '$.destination.threadId')
+    AND d.kind = 'thread' AND d.reports_supported != 0`;
+
+const decodeRemotePullRequests = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(ChannelTaskPullRequest)),
+);
+
+export const remoteLaunchPullRequests = (columns: RemotePullRequestColumns) => {
+  if (columns.remote_pull_requests_json === null) return {};
+  const pullRequests = decodeRemotePullRequests(columns.remote_pull_requests_json);
+  return Option.isNone(pullRequests)
+    ? {}
+    : botRowPullRequests([], {
+        pullRequests: pullRequests.value,
+        refreshed:
+          columns.remote_dispatch_state === "running" || columns.remote_dispatch_state === "idle",
+      });
+};
+
 /** The copy the ledger keeps of the worker's links, refreshed only while the task runs or waits. */
 export const observedPullRequestSource = (task: ChannelTask): PullRequestSource => ({
   pullRequests: task.observed?.pullRequests ?? [],
@@ -105,7 +141,7 @@ export const observedPullRequestSource = (task: ChannelTask): PullRequestSource 
 
 const RANK = { open: 0, none: 1, merged: 2, closed: 3 } as const;
 const shown = (
-  { url: _url, state, ...item }: ChannelTaskPullRequest,
+  { url: _url, linkedAt: _linkedAt, state, ...item }: ChannelTaskPullRequest,
   refreshed: boolean,
 ): BotRowPullRequest =>
   // Merged and closed show from any source (a closed one can reopen, which only a refresh

@@ -141,6 +141,36 @@ it("follows the bot UI's own list when it re-reads the rows", () => {
   registry.dispose();
 });
 
+it.each([30_000, 45 * 60_000, -45 * 60_000])(
+  "refreshes a snooze once at expiry with server clock skew %s",
+  (skew) => {
+    const row = taskRow({ completedAt: START - HOUR });
+    const until = START - skew + 15 * 60_000;
+    let reads = 0;
+    server.answer = () => {
+      reads += 1;
+      const serverTime = (vi.getMockedSystemTime()?.valueOf() ?? START) - skew;
+      return {
+        mainMessageCount: 0,
+        readAt: iso(serverTime),
+        ...(serverTime < until ? { rows: [], nextSnoozeExpiry: iso(until) } : { rows: [row] }),
+      };
+    };
+    const { registry, listed } = setup();
+    try {
+      expect(listed()).toEqual([]);
+      expect(reads).toBe(1);
+      vi.advanceTimersByTime(15 * 60_000 - 1);
+      expect(reads).toBe(1);
+      vi.advanceTimersByTime(1_001);
+      expect(listed()).toEqual([worker]);
+      expect(reads).toBe(2);
+    } finally {
+      registry.dispose();
+    }
+  },
+);
+
 it("stops listing a done task when the bot UI ages it out after three days", () => {
   server.answer = () => ({
     rows: [taskRow({ completedAt: START - 80 * HOUR, doneAt: START - 71 * HOUR })],

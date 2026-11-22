@@ -6,7 +6,9 @@ import * as Queue from "effect/Queue";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
+  BotRemoteWork,
   BotWorkResult,
+  CHANNEL_BOT_ROW_PULL_REQUESTS,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
@@ -26,6 +28,7 @@ import { ChannelTaskStatus } from "./channelLedger.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
+const encodeRows = Schema.encodeSync(ChannelListBotThreadsResult);
 const decodeUpdate = Schema.decodeUnknownSync(ChannelUpdateTaskViewInput);
 const decodeChild = Schema.decodeUnknownSync(ChannelChildWork);
 const encodeChild = Schema.encodeSync(ChannelChildWork);
@@ -174,7 +177,7 @@ describe("bot thread contracts", () => {
           },
         },
         codingRows: [coding],
-        remoteWork: [remote],
+        remoteWork: [{ ...remote, pullRequests, pullRequestsOmitted: 3 }],
         launchesTruncated: false,
         partial: false,
       },
@@ -187,6 +190,73 @@ describe("bot thread contracts", () => {
       },
     ])
       expect(decode(encode(decode(result)))).toEqual(result);
+  });
+  it("keeps remote worker PR summaries optional and bounded across client versions", () => {
+    const remote = {
+      childWorkId: "child",
+      taskId: "task-1",
+      callerThreadId: "caller",
+      host: "box",
+      state: "bound",
+      lastActivityAt: at,
+    };
+    const decodeRemote = Schema.decodeUnknownSync(BotRemoteWork);
+    const decodeShipped = Schema.decodeUnknownSync(
+      BotRemoteWork.mapFields(
+        ({ pullRequests: _prs, pullRequestsOmitted: _omitted, ...fields }) => fields,
+      ),
+    );
+    expect(decodeRemote(remote)).toEqual(remote);
+    expect(decodeShipped({ ...remote, pullRequests, pullRequestsOmitted: 3 })).toEqual(remote);
+    expect(() =>
+      decodeRemote({
+        ...remote,
+        pullRequests: Array.from(
+          { length: CHANNEL_BOT_ROW_PULL_REQUESTS + 1 },
+          () => pullRequests[0],
+        ),
+      }),
+    ).toThrow();
+  });
+  it("round trips SSH Activity with a host and thread when the environment is unknown", () => {
+    const codec = Schema.toCodecJson(BotWorkResult);
+    const decode = Schema.decodeUnknownSync(codec);
+    const encode = Schema.encodeSync(codec);
+    const work = {
+      task: { state: "known", row: taskRow },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    };
+    const start = {
+      id: "start",
+      type: "worker_started",
+      actor: "bot",
+      at,
+      threadId: "ssh",
+      host: "box",
+    };
+    const entries = [
+      start,
+      { id: "end", type: "worker_finished", actor: "goat", at, threadId: "ssh", host: "box" },
+      {
+        id: "local",
+        type: "worker_started",
+        actor: "bot",
+        at,
+        threadId: "local",
+        environmentId: "env",
+      },
+    ];
+    const updated = { ...work, activity: { entries } };
+    expect(decode(encode(decode(updated)))).toEqual(updated);
+    const shippedLookup = Schema.decodeUnknownSync(
+      BotWorkResult.mapFields(({ activity: _activity, ...fields }) => fields),
+    );
+    expect(shippedLookup(updated)).toEqual(work);
+    const { host: _host, ...missingIdentity } = start;
+    expect(() => decode({ ...work, activity: { entries: [missingIdentity] } })).toThrow();
   });
   it("rejects a NUL in a bot task search query", () => {
     const decode = Schema.decodeUnknownSync(ChannelSearchBotTasksInput);
@@ -245,6 +315,34 @@ describe("bot thread contracts", () => {
     expect(decodeRows({ rows: [row], mainMessageCount: 0 }).rows).toEqual([row]);
     expect(decodeShippedTaskRow(row)).toEqual(taskRow);
     expect(decodeShippedLookupRow(row)).toEqual(taskRow);
+  });
+  it("an installed client decodes a new server list with snoozes and a server read time", () => {
+    const shippedList = Schema.Struct({
+      rows: Schema.Array(ShippedTaskRow),
+      mainMessageCount: NonNegativeInt,
+    });
+    const newResult = decodeRows({
+      rows: [{ ...taskRow, task: { ...taskRow.task, doneMeans: "Reviewed" } }],
+      snoozed: [
+        {
+          ...taskRow,
+          task: { ...taskRow.task, taskId: "snoozed-task" },
+          view: { ...taskRow.view, taskId: "snoozed-task", snoozedUntil: at },
+        },
+      ],
+      mainMessageCount: 5,
+      snoozedRevision: "example-revision",
+      nextSnoozeExpiry: at,
+      readAt: "2026-11-04T09:00:00.000Z",
+    });
+    const encoded = encodeRows(newResult);
+    expect(Schema.decodeUnknownSync(shippedList)(encoded)).toEqual({
+      rows: [taskRow],
+      mainMessageCount: 5,
+    });
+    expect(newResult.snoozed?.[0]?.view.snoozedUntil).toBe(at);
+    expect(newResult.readAt).toBe("2026-11-04T09:00:00.000Z");
+    expect(decodeRows(encoded).snoozedRevision).toBe("example-revision");
   });
   it("bounds a row's pull requests at five", () => {
     const six = Array.from({ length: 6 }, (_, index) => ({
