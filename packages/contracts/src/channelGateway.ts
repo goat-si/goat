@@ -440,7 +440,6 @@ export const ChannelUpdateBotInput = Schema.Struct({
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 
-/** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
 export const ChannelProposeBotInput = Schema.Struct({
   ...BotProposalFields.fields,
   clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
@@ -454,6 +453,7 @@ export const ChannelResolveBotProposalInput = Schema.Struct({
 });
 export type ChannelResolveBotProposalInput = typeof ChannelResolveBotProposalInput.Type;
 
+/** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
 export const ChannelCreateBotInput = Schema.Struct({
   clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   name: BotProfile.fields.name,

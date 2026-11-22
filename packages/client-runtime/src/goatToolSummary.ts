@@ -600,6 +600,9 @@ export function summarizeGoatToolCalls(
     case "channel-bot-list":
       label = phrase("Listed", "list", `GOAT bots ${times}`);
       break;
+    case "channel-bot-propose":
+      label = phrase("Proposed", "propose", quantity(selected.length, "GOAT bot"));
+      break;
     case "channel-notes-change":
       // A call may be refused or only allow an edit, so the label never claims the notes changed.
       label = phrase("Requested", "request", `GOAT Bot notes changes ${times}`);

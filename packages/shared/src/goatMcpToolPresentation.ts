@@ -730,7 +730,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_channel_bot_list: tool(["List", "Listing", "Listed", "GOAT bots"], "channel-bot-list"),
   goat_channel_bot_propose: tool(
     ["Propose", "Proposing", "Proposed", "a GOAT bot"],
-    "thread-update",
+    "channel-bot-propose",
   ),
 };
 

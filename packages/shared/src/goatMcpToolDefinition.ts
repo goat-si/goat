@@ -100,6 +100,7 @@ export type GoatMcpToolSummaryAction =
   | "channel-bot-home-read"
   | "channel-bot-home-claim"
   | "channel-bot-list"
+  | "channel-bot-propose"
   | "channel-notes-change";
 
 export interface GoatMcpToolDefinition {
