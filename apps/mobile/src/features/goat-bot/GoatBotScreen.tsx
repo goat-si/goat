@@ -1,3 +1,4 @@
+import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -145,6 +146,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    if (row.botProposal && props.environmentId) {
+      return <GoatBotProposalCard card={row.botProposal} environmentId={props.environmentId} />;
+    }
     const subject = row.subject;
     const span = goatBotEventSubjectSpan(row);
     const open =

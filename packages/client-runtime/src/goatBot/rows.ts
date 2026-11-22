@@ -1,4 +1,5 @@
 import type {
+  BotProposalCard,
   EnvironmentId,
   GoatBotEventSubject,
   MemoryReportReference,
@@ -232,6 +233,7 @@ export type GoatBotRow =
   | {
       /** A line about the bot itself, such as a rename or a paused routine. */
       readonly kind: "event";
+      readonly botProposal?: BotProposalCard;
       readonly id: string;
       readonly text: string;
       /** The routine or task the line names, which a client can open. */
@@ -664,6 +666,7 @@ export function buildGoatBotTimeline(input: {
             kind: "event",
             id: item.id,
             text: item.summary,
+            ...(item.botProposal === undefined ? {} : { botProposal: item.botProposal }),
             ...(item.source.subject === undefined ? {} : { subject: item.source.subject }),
             createdAt: itemCreatedAt(item),
           });

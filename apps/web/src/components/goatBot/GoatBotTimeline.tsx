@@ -45,6 +45,7 @@ import {
   type GoatBotTimelineActivity,
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
+import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { GoatBotEventText } from "./GoatBotEventText";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { goatBotReplySplit } from "./goatBotReplyParts";
@@ -341,6 +342,13 @@ export function GoatBotTimeline({
         );
       }
       case "event":
+        if (row.botProposal && environmentId !== null) {
+          return (
+            <li key={row.id} className="my-3">
+              <GoatBotProposalCard card={row.botProposal} environmentId={environmentId} />
+            </li>
+          );
+        }
         return (
           <li
             key={row.id}

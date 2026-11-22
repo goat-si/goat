@@ -352,6 +352,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.createBot,
       onSuccess: refreshBots,
     }),
+    resolveBotProposal: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:resolve-bot-proposal",
+      tag: CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal,
+      onSuccess: refreshBots,
+    }),
     setBotHidden: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:set-bot-hidden",
       tag: CHANNEL_GATEWAY_WS_METHODS.setBotHidden,
