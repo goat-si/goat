@@ -392,6 +392,47 @@ it("shows the paused automation and offers the first message as a draft", async 
   clearBotTemplateDraft(bot.environmentId, bot.sessionThreadId);
 });
 
+it("keeps Retry on the bot after opening it from a partial template setup", async () => {
+  setup();
+  bots.supportsMembers = true;
+  bots.supportsTemplates = true;
+  const bot = profile("partial", "CI watcher");
+  actions.create.mockImplementationOnce(async ({ input }) => {
+    const pending = {
+      ...bot,
+      templateSetup: { clientRequestId: input.clientRequestId, templateId: input.templateId },
+    };
+    bots.profiles = [pending];
+    bots.members = [pending];
+    return { _tag: "Success", value: { bot: pending, templateAutomationPending: true } };
+  });
+  actions.create.mockResolvedValueOnce({ _tag: "Success", value: { bot } });
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked while the roster re-reads the bot returned by the host.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await userEvent.click(screen.getByRole("button", { name: "From a template" }));
+  const dialog = screen.getByRole("dialog", { name: "From a template" });
+  (dialog.getByRole("button", { name: "Create bot" }).element() as HTMLButtonElement).focus();
+  await userEvent.keyboard("{Enter}");
+  const open = dialog.getByRole("button", { name: "Open bot" });
+  await expect.element(open).toBeVisible();
+  (open.element() as HTMLButtonElement).focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(dialog).not.toBeInTheDocument();
+  await screen.rerender(<GoatBotSidebarTabs />);
+  const retry = screen.getByRole("button", { name: "Retry setup for CI watcher" });
+  await expect.element(retry).toBeVisible();
+  await userEvent.click(retry);
+  await vi.waitFor(() => expect(actions.create).toHaveBeenCalledTimes(2));
+  expect(actions.create.mock.calls[1]?.[0].input).toMatchObject({
+    templateId: "ci-watcher",
+    clientRequestId: actions.create.mock.calls[0]?.[0].input.clientRequestId,
+    retryForBotId: bot.botId,
+  });
+  await expect.element(retry).not.toBeInTheDocument();
+  clearBotTemplateDraft(bot.environmentId, bot.sessionThreadId);
+});
+
 it("one click sends createBot named New bot 2 beside a deleted New bot, with no dialog, and a second click sends nothing", async () => {
   setup();
   bots.supportsMembers = true;

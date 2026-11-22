@@ -48,6 +48,13 @@ export const verifyBotTemplate = (
           })
           .pipe(Effect.flip);
         assert.strictEqual(revoked.reason, "forbidden");
+        const reopened = (yield* members.list({}, owner)).find(
+          (member) => member.botId === bot.botId,
+        );
+        assert.deepEqual(reopened?.templateSetup, {
+          templateId: input.templateId,
+          clientRequestId: input.clientRequestId,
+        });
         yield* sql`DROP TRIGGER fail_template`;
         const retry = yield* members.create(input, owner, context);
         assert.strictEqual(retry.botId, bot.botId);
