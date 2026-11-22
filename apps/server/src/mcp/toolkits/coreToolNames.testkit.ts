@@ -162,6 +162,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_repository_snapshot",
   "goat_review_findings_export",
   "goat_review_findings_record",
+  "goat_schedule_delivery_list",
   "goat_scheduler_status",
   "goat_ssh_browse",
   "goat_ssh_host_add",

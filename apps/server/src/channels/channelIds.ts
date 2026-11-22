@@ -19,6 +19,7 @@ import {
   type ChannelQuestionId,
   type ChannelTaskEventId,
   type ChannelTaskId,
+  CHANNEL_WORKER_THREAD_PREFIX,
   CommandId,
   GOAT_BOT_SESSION_THREAD_PREFIX,
   MAIN_BOT_ID,
@@ -92,24 +93,26 @@ export const taskRetryEventIdFor = (taskId: ChannelTaskId, clientRequestId: stri
 /** Keeps a retried attempt's worker thread tied to its task after the ledger lets go of it. */
 export const retiredWorkerKeyFor = (threadId: string) => "retired-worker:" + threadId;
 
+export const attentionEventIdFor = (taskId: ChannelTaskId, generation: number, identity: string) =>
+  stableId("channel-attention", [taskId, String(generation), identity]);
+
 export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-question", [taskId, String(version)]) as ChannelQuestionId;
 
 export const deliveryIdFor = (causeKey: string) =>
   stableId("channel-delivery", [causeKey]) as ChannelDeliveryId;
 
+const WORKER_LAUNCH_MESSAGE_PREFIX = "channel-worker-message";
+
 /** The launch of one task generation: the same command, thread, and message on every retry. */
 export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
   commandId: CommandId.make(stableId("channel-launch", [taskId, String(generation)])),
-  threadId: ThreadId.make(stableId("channel-worker", [taskId, String(generation)])),
-  messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
+  threadId: ThreadId.make(CHANNEL_WORKER_THREAD_PREFIX + digest([taskId, String(generation)])),
+  messageId: MessageId.make(stableId(WORKER_LAUNCH_MESSAGE_PREFIX, [taskId, String(generation)])),
 });
 
-/**
- * Whether a thread is a channel task's worker, from its id alone. The id is fixed when the
- * thread is created, before its first turn and before the ledger records the binding.
- */
-export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
+export const isChannelWorkerLaunchMessageId = (messageId: MessageId) =>
+  messageId.startsWith(WORKER_LAUNCH_MESSAGE_PREFIX + ":");
 
 /** One generation of a conversation's GOAT Bot session thread. */
 export const goatBotSessionThreadIdFor = (

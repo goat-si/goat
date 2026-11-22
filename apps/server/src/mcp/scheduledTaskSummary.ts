@@ -27,6 +27,10 @@ export function scheduledTaskSummary(
     lastRunStatus: task.lastRunStatus,
     ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
     ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
+    ...(task.recentRuns === undefined ? {} : { recentRuns: task.recentRuns }),
+    ...(task.recentRunsIncomplete === undefined
+      ? {}
+      : { recentRunsIncomplete: task.recentRunsIncomplete }),
     runCount: task.runCount,
     lastRunAt: task.lastRunAt,
     ...webhookUrlFields(task.routineMode === "work" ? undefined : task.webhook, mayRun),

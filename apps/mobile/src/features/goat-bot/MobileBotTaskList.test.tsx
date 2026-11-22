@@ -528,3 +528,44 @@ it("a row shown again reads the real time, even while another part of the app ho
     other();
   }
 });
+
+it("keeps the 51st snoozed task out of Earlier in chat and opens it from Show more", async () => {
+  const rows = Array.from({ length: 51 }, (_, index) => {
+    const id = ChannelTaskId.make(`snoozed-${index}`);
+    return {
+      ...task,
+      task: { ...task.task, taskId: id, title: `Snoozed task ${index + 1}` },
+      view: { ...task.view, taskId: id, snoozedUntil: at },
+    };
+  });
+  const last = rows[50]!;
+  const options = {
+    showSnoozed: true,
+    activeSnoozes: new Set([last.task.taskId]),
+    chatTasks: [{ ...omitted, key: last.task.taskId, title: last.task.title }],
+  };
+  const loadMore = vi.fn();
+  await show({
+    ...options,
+    snoozed: rows.slice(0, 50),
+    snoozedContinuation: { loading: false, failed: false, loadMore },
+  });
+  expect(container.textContent).not.toContain("Earlier in chat");
+  expect(container.querySelector('[aria-label="card:Snoozed task 51"]')).toBeNull();
+  const more = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Show more",
+  );
+  expect(more).toBeDefined();
+  await act(async () => more?.click());
+  expect(loadMore).toHaveBeenCalledOnce();
+
+  const calls = await show({ ...options, snoozed: rows, snoozedLimitReached: true });
+  expect(container.textContent).toContain("Snoozed work limit reached.");
+  expect(container.querySelector('[aria-label="Show more snoozed tasks"]')).toBeNull();
+  const lastRow = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === last.task.title,
+  );
+  expect(lastRow).toBeDefined();
+  await act(async () => lastRow?.click());
+  expect(calls.open).toHaveBeenCalledWith(last.task.taskId, last.task.title);
+});

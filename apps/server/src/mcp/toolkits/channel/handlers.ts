@@ -202,9 +202,17 @@ export const layer = McpToolAccess.toLayer(
         Effect.gen(function* () {
           const ledger = yield* ChannelLedger.ChannelLedger;
           const ownerId = yield* ownerIdOf;
+          const scope = yield* McpInvocationContext.McpInvocationContext;
           const stored = yield* ledger.getTask(input.taskId).pipe(Effect.mapError(failureFor));
           if (stored === undefined || stored.ownerId !== ownerId) return yield* notFound();
-          return stored.task;
+          const activity = yield* ledger
+            .readTaskActivity({
+              task: stored.task,
+              ownerId,
+              environmentId: scope.environmentId,
+            })
+            .pipe(Effect.mapError(failureFor));
+          return { ...stored.task, activity };
         }),
       ),
       channel_task_list: McpToolAccess.reads((input) =>

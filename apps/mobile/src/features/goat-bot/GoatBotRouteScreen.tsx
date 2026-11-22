@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { ChannelTaskId } from "@goat/contracts";
-import { goatBotName } from "@goat/client-runtime/goatBot";
+import { BotId, ChannelTaskId, EnvironmentId, MAIN_BOT_ID } from "@goat/contracts";
+import { decodeBotAttentionRequest, goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
@@ -12,6 +12,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileBotManage } from "./useMobileBotManage";
+import { MobileGoatBotAlertTask } from "./mobileGoatBotAlertRoute";
 import { GoatBotScreen } from "./GoatBotScreen";
 import {
   recordGoatBotLocalRead,
@@ -21,7 +22,16 @@ import {
 
 export function GoatBotRouteScreen({
   route,
-}: StaticScreenProps<{ taskId?: string; botId?: string; taskTitle?: string }>) {
+}: StaticScreenProps<{
+  taskId?: string;
+  botId?: string;
+  taskTitle?: string;
+  attentionRequest?: string;
+  attentionNative?: string;
+  attentionGeneration?: string;
+  attentionEnvironment?: string;
+  attentionDetail?: "external";
+}>) {
   const focused = useIsFocused();
   const active = useAppActive();
   const foreground = useAppForeground();
@@ -98,6 +108,31 @@ export function GoatBotRouteScreen({
     conversation,
     newestAt,
   ]);
+  const attentionEnvironment = route.params?.attentionEnvironment;
+  const attentionRequest = route.params?.attentionRequest;
+  const request = decodeBotAttentionRequest(route.params?.attentionNative);
+  const generation = Number(route.params?.attentionGeneration);
+  if (
+    taskId !== undefined &&
+    attentionEnvironment !== undefined &&
+    (route.params?.attentionDetail === "external" ||
+      request !== undefined ||
+      attentionEnvironment !== (member?.environmentId ?? environmentId) ||
+      (botId !== undefined && member === null))
+  ) {
+    return (
+      <MobileGoatBotAlertTask
+        target={{
+          environmentId: EnvironmentId.make(attentionEnvironment),
+          botId: BotId.make(botId ?? MAIN_BOT_ID),
+          taskId: ChannelTaskId.make(taskId),
+          ...(attentionRequest === undefined ? {} : { requestId: attentionRequest }),
+          ...(request === undefined ? {} : { request }),
+          ...(Number.isSafeInteger(generation) && generation >= 0 ? { generation } : {}),
+        }}
+      />
+    );
+  }
   // A named member never falls back to the main bot's conversation.
   if (botId !== undefined && member === null)
     return (
@@ -123,6 +158,7 @@ export function GoatBotRouteScreen({
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
       taskTitle={route.params?.taskTitle}
+      attentionRequest={route.params?.attentionRequest}
       readSnapshot={chat !== null ? readSnapshot : null}
     />
   );

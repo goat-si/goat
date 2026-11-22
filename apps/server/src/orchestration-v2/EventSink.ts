@@ -7,6 +7,7 @@ import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { makeCloudResultItemGuard } from "./CloudResultItemGuard.ts";
+import { makeChannelWorkerCommitGuard } from "../channels/channelWorkerReleaseAuthority.ts";
 import {
   CommandId,
   OrchestrationV2ProviderThreadJson,
@@ -16,6 +17,7 @@ import {
   NodeId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import { recordBotHandoffAttention } from "../channels/channelBotAttention.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -72,6 +74,7 @@ const layerBase: Layer.Layer<
   EventSinkV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const guardChannelWorkerRelease = yield* makeChannelWorkerCommitGuard();
     const scheduledRuns = yield* ScheduledTaskRuns.ScheduledTaskRuns;
     type CommitOutcomes = {
       readonly runs: ReadonlyArray<RunOutcome>;
@@ -237,6 +240,7 @@ const layerBase: Layer.Layer<
               updated_at = excluded.updated_at
           `;
         }
+        yield* recordBotHandoffAttention(sql, storedEvents);
         // Read lineage here, on the connection this transaction holds; see makeRunOutcomeRecorder.
         return {
           runs: yield* runOutcomes.prepare(storedEvents),
@@ -655,6 +659,7 @@ const layerBase: Layer.Layer<
           }
           const outcomes = yield* applyStoredEvents(storedEvents);
           if (input.guard !== undefined) yield* input.guard(storedEvents);
+          yield* guardChannelWorkerRelease(input);
           yield* effectOutbox.enqueue(yield* stampComputerUseStop(input.effects, eventStore));
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,

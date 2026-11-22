@@ -1,4 +1,6 @@
 import {
+  isChannelWorkerThreadId,
+  REMOTE_CHANNEL_WORKER_THREAD_PREFIX,
   ThreadId,
   type ChannelInputId,
   type ChannelTask,
@@ -10,7 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { isChannelWorkerThreadId, workerLaunchIdsFor } from "./channelIds.ts";
+import { workerLaunchIdsFor } from "./channelIds.ts";
 
 const keyFor = (threadId: ThreadId) => "channel-worker-context:" + threadId;
 const followUpKeyFor = (threadId: ThreadId, messageId: MessageId) =>
@@ -40,7 +42,8 @@ export const appendRemoteWorkerNotes = Effect.fn("channel.appendRemoteWorkerNote
   if (
     Option.isNone(sql) ||
     thread.creationSource !== "mcp" ||
-    thread.id !== ThreadId.make(messageId)
+    (thread.id !== ThreadId.make(messageId) &&
+      thread.id !== ThreadId.make(REMOTE_CHANNEL_WORKER_THREAD_PREFIX + messageId))
   )
     return text;
   const [row] = yield* sql.value<{ readonly notes: string }>`

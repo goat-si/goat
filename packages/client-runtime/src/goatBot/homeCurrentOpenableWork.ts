@@ -1,9 +1,10 @@
-import type {
-  BotId,
-  ChannelListBotThreadsResult,
-  ChannelTaskId,
-  EnvironmentId,
-  ThreadId,
+import {
+  isGoatBotConversationThreadId,
+  type BotId,
+  type ChannelListBotThreadsResult,
+  type ChannelTaskId,
+  type EnvironmentId,
+  type ThreadId,
 } from "@goat/contracts";
 import { botHomeWork, type BotHomeWork } from "./botWork.ts";
 import { resolveRemoteBotWork } from "./remoteWork.ts";
@@ -66,6 +67,16 @@ export function selectHomeCurrentOpenableWork(input: {
           remoteChildWorkId: item.childWorkId,
           launchedFrom: { environmentId: sourceEnvironmentId, threadId: item.callerThreadId },
         });
+    }
+  }
+  for (const row of current.snoozed ?? []) {
+    const worker = row.worker;
+    if (
+      worker !== undefined &&
+      !isGoatBotConversationThreadId(worker.threadId) &&
+      isOpenable(worker.environmentId)
+    ) {
+      links.push({ taskId: row.task.taskId, ...worker, kind: "worker" });
     }
   }
   return { eligible, list, work, links };

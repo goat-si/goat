@@ -1,5 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskEventId, type ThreadResultReport } from "@goat/contracts";
+import {
+  BotId,
+  ChannelTaskEventId,
+  MessageId,
+  NodeId,
+  RuntimeRequestId,
+  type ThreadResultReport,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -8,6 +15,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as BotThreads from "./ChannelBotThreads.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as TaskViews from "./channelTaskViews.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -25,11 +35,13 @@ import {
   goatInput,
   makeHarness,
   onlyTask,
+  owner,
   rpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
-const ASKED = Date.parse("2026-10-12T00:00:00.000Z");
+const time = "2026-10-12T00:00:00.000Z";
+const ASKED = Date.parse(time);
 
 /** A worker that asked the person a question; its run is still going. */
 const askedTask = Effect.gen(function* () {
@@ -192,5 +204,148 @@ describe("a worker on another machine that asked the person", () => {
       assert.strictEqual(waiting.status, "waiting_input");
       assert.lengthOf(waiting.openQuestions, 1);
     }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("worker Activity", () => {
+  it.effect("shows one worker start across a continuation on the same thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(ASKED);
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const service = yield* BotThreads.ChannelBotThreads;
+      yield* gateway.ingest(goatInput("do: prepare the build", "continuing-build"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      if (task.worker === undefined) return yield* Effect.die("Work did not start");
+      const { threadId } = task.worker;
+      yield* TestClock.adjust("1 minute");
+      const continuation = harness.world.addRun(threadId, MessageId.make("continuing-run"));
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* onlyTask).worker?.runId, continuation.id);
+      const { activity } = yield* service.getBotTask(
+        { botId: BotId.make("main"), taskId: task.taskId },
+        owner,
+      );
+      assert.deepStrictEqual(
+        activity?.entries
+          .filter((entry) => entry.type === "worker_started")
+          .map((entry) => entry.at),
+        [time],
+      );
+    }).pipe(
+      Effect.provide(
+        BotThreads.layer.pipe(
+          Layer.provideMerge(TaskViews.layer),
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps native questions and their answers in Activity after Needs you clears", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(ASKED);
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const service = yield* BotThreads.ChannelBotThreads;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: prepare the build", "native-question"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      if (task.worker === undefined) return yield* Effect.die("Work did not start");
+      const { threadId } = task.worker;
+      const target = { botId: BotId.make("main"), taskId: task.taskId };
+      const askedAt = "2026-10-12T00:01:00.000Z";
+      const answeredAt = "2026-10-12T00:02:00.000Z";
+      const request = {
+        id: RuntimeRequestId.make("native-build-question"),
+        nodeId: NodeId.make("native-build-node"),
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "user_input" as const,
+        status: "pending" as const,
+        responseCapability: { type: "message" as const },
+        createdAt: DateTime.makeUnsafe(askedAt),
+        resolvedAt: null,
+      };
+      yield* TestClock.adjust("1 minute");
+      harness.world.runtimeRequests.set(threadId, [request]);
+      yield* sql`INSERT INTO orchestration_v2_projection_runtime_requests
+        (runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json)
+        VALUES (${request.id}, ${threadId}, ${request.nodeId}, ${request.kind}, 'pending', ${askedAt}, '{}')`;
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* members.openAsks(owner)).total, 1);
+      const pending = yield* service.getBotTask(target, owner);
+      assert.include(
+        pending.activity?.entries.find((entry) => entry.type === "asked"),
+        {
+          at: askedAt,
+          requestId: request.id,
+        },
+      );
+
+      yield* TestClock.adjust("1 minute");
+      harness.world.runtimeRequests.set(threadId, [
+        {
+          ...request,
+          status: "resolved",
+          resolvedAt: DateTime.makeUnsafe(answeredAt),
+        },
+      ]);
+      yield* sql`UPDATE orchestration_v2_projection_runtime_requests
+        SET status = 'resolved', resolved_at = ${answeredAt} WHERE runtime_request_id = ${request.id}`;
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* members.openAsks(owner)).total, 0);
+      const resolved = yield* service.getBotTask(target, owner);
+      assert.deepStrictEqual(
+        resolved.activity?.entries.flatMap((entry) =>
+          entry.type === "asked" || entry.type === "answered"
+            ? [[entry.type, entry.requestId, entry.at]]
+            : [],
+        ),
+        [
+          ["answered", request.id, answeredAt],
+          ["asked", request.id, askedAt],
+        ],
+      );
+
+      const approval = {
+        ...request,
+        id: RuntimeRequestId.make("build-approval"),
+        kind: "command" as const,
+      };
+      harness.world.runtimeRequests.set(threadId, [approval]);
+      yield* reports.reconcile(runtime.ownerToken);
+      const waits = yield* members.openAsks(owner);
+      assert.strictEqual(waits.total, 1);
+      assert.include(waits.asks[0], { kind: "approval", requestId: approval.id });
+      yield* service.snooze({ ...target, until: "2026-10-12T01:00:00.000Z" }, owner);
+      const home = yield* service.list(owner);
+      assert.deepStrictEqual(home.rows, []);
+      assert.deepStrictEqual(
+        home.snoozed?.map((row) => row.task.taskId),
+        [target.taskId],
+      );
+      assert.deepStrictEqual(yield* members.openAsks(owner), waits);
+      yield* service.unsnooze(target, owner);
+      const restored = yield* service.list(owner);
+      assert.lengthOf(restored.rows, 1);
+      assert.isUndefined(restored.snoozed);
+    }).pipe(
+      Effect.provide(
+        BotThreads.layer.pipe(
+          Layer.provideMerge(TaskViews.layer),
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
   });
 });

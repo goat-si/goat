@@ -188,6 +188,10 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
         [182, "SlackConversationBot"],
         [183, "ChannelInputSessionAuthority"],
       ]);
@@ -388,22 +392,13 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
         [182, "SlackConversationBot"],
         [183, "ChannelInputSessionAuthority"],
       ]);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("moves draft Slack migration 179 to reserved id 182 without replaying it", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 179 WHERE name = 'SlackConversationBot'`;
-      assert.deepStrictEqual(yield* runMigrations(), []);
-      assert.deepStrictEqual(
-        yield* sql`SELECT migration_id FROM effect_sql_migrations WHERE name = 'SlackConversationBot'`,
-        [{ migration_id: 182 }],
-      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 

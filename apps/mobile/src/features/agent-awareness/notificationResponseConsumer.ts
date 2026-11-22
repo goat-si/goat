@@ -17,7 +17,7 @@ export class NotificationNavigationError extends Schema.TaggedError<Notification
 export async function consumeLastAgentNotificationResponse(input: {
   readonly getLastResponse: () => Promise<NotificationResponse | null>;
   readonly clearLastResponse: () => Promise<void>;
-  readonly handleResponse: (response: NotificationResponse) => void;
+  readonly handleResponse: (response: NotificationResponse) => void | Promise<void>;
 }): Promise<void> {
   let response: NotificationResponse | null;
   try {
@@ -32,7 +32,7 @@ export async function consumeLastAgentNotificationResponse(input: {
   }
 
   try {
-    input.handleResponse(response);
+    await input.handleResponse(response);
   } catch (cause) {
     console.error(
       new NotificationNavigationError({

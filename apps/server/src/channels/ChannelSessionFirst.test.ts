@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskEventId, MessageId, ProviderInstanceId } from "@goat/contracts";
+import { ChannelTaskEventId, MessageId, ProviderInstanceId, RunId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,6 +7,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ThreadResults from "../threadResults/ThreadResultService.ts";
 import type { OrchestrationV2Subagent } from "@goat/contracts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -21,6 +22,7 @@ import { noticeRunsOf } from "./testkit/harnessMessages.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import {
   defaultScript,
+  environmentId,
   goatInput,
   makeHarness,
   rpcContext,
@@ -31,6 +33,64 @@ import {
 } from "./testkit/ChannelHarness.ts";
 
 describe("session first receipts", () => {
+  it.effect("only the current Bot session run can set its criterion, once", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const receipt = yield* gateway.ingest(
+        goatInput("Prepare the release notes", "criterion"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const taskId = taskIdFor(receipt.inputId, 0);
+      const task = (yield* ledger.getTask(taskId))!.task;
+      const threadId = task.worker!.threadId;
+      const run = harness.world.latestRun(threadId)!;
+      const report = (runId: RunId, doneMeans: string, key: string) =>
+        reports
+          .report(
+            {
+              taskId,
+              eventId: ChannelTaskEventId.make(key),
+              generation: task.generation,
+              status: "running",
+              summary: "Preparing the release notes.",
+              milestone: false,
+              doneMeans,
+            },
+            threadId,
+          )
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, {
+              environmentId,
+              capabilities: new Set(["orchestration"] as const),
+              issuedAt: 0,
+              requestNamespace: "criterion",
+              grantedScopes: ["orchestration:operate"],
+              thread: {
+                threadId,
+                runId,
+                providerSessionId: "test",
+                providerInstanceId: ProviderInstanceId.make("codex"),
+              },
+              client: undefined,
+            }),
+          );
+      const denied = yield* Effect.flip(report(RunId.make("other-run"), "Wrong run.", "denied"));
+      assert.strictEqual(denied.reason, "forbidden");
+      yield* report(run.id, "The release notes are ready for review.", "criterion-one");
+      yield* report(run.id, "A replacement from a later report.", "criterion-two");
+      assert.strictEqual(
+        (yield* ledger.getTask(taskId))?.task.doneMeans,
+        "The release notes are ready for review.",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("uses the dispatch fallback binding when the configured bot account is missing", () => {
     const harness = makeHarness({
       botWorkspace: true,

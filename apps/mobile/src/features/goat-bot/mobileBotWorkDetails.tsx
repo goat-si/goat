@@ -1,6 +1,21 @@
-import type { BotWorkTask, HomeCurrentOpenableLink } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, BotWorkResult, EnvironmentId, ThreadId } from "@goat/contracts";
-import { Text } from "react-native";
+import {
+  botTaskActivityFallbackName,
+  botTaskActivityFallbackNames,
+  botTaskActivityText,
+  botTaskActivityWorkerRef,
+  type BotWorkTask,
+  type HomeCurrentOpenableLink,
+} from "@goat/client-runtime/goatBot";
+import type {
+  BotThreadRow,
+  BotWorkResult,
+  ChannelBotTaskActivityEntry,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
+import { useState } from "react";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import { useThreadShell } from "../../state/entities";
 import type { MobileBotHomeItem } from "./MobileBotTaskList";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
@@ -142,4 +157,65 @@ export function mobileBotWorkDetails(props: {
       render: () => <Text className="text-foreground-muted">No other work.</Text>,
     });
   return items;
+}
+
+function TaskActivityRow({
+  entry,
+  workers,
+  fallbackName,
+}: {
+  readonly entry: ChannelBotTaskActivityEntry;
+  readonly workers: BotWorkResult["codingRows"];
+  readonly fallbackName: string | undefined;
+}) {
+  const thread = useThreadShell(botTaskActivityWorkerRef(entry));
+  return (
+    <View className="pb-2">
+      <Text className="text-foreground">
+        {botTaskActivityText(entry, workers, thread?.title, fallbackName)}
+      </Text>
+      <Text className="text-xs text-foreground-muted">
+        {new Date(entry.at).toLocaleString()} ·{" "}
+        {entry.actor === "goat" ? "GOAT" : entry.actor === "bot" ? "Bot" : "Person"}
+      </Text>
+    </View>
+  );
+}
+
+export function MobileBotTaskActivity({ work }: { readonly work: BotWorkResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const activity = work.activity;
+  if (activity === undefined || (activity.entries.length === 0 && !activity.incompleteBefore))
+    return null;
+  const fallbackNames = botTaskActivityFallbackNames(activity.entries);
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        className="min-h-[44px] justify-center"
+        onPress={() => setExpanded((value) => !value)}
+      >
+        <Text className="font-medium text-foreground">Activity</Text>
+      </Pressable>
+      {expanded && (
+        <ScrollView className="max-h-52" nestedScrollEnabled>
+          {activity.entries.map((entry) => (
+            <TaskActivityRow
+              key={entry.id}
+              entry={entry}
+              workers={work.codingRows}
+              fallbackName={botTaskActivityFallbackName(entry, fallbackNames)}
+            />
+          ))}
+          {activity.incompleteBefore && (
+            <Text className="text-xs text-foreground-muted">
+              Activity before {new Date(activity.incompleteBefore).toLocaleDateString()} may be
+              incomplete.
+            </Text>
+          )}
+        </ScrollView>
+      )}
+    </View>
+  );
 }

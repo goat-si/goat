@@ -10,6 +10,8 @@ import type {
 import { Pressable, Text, View } from "react-native";
 
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { MobileTaskSnooze } from "./MobileTaskSnooze";
+import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { MobileTaskRetry } from "./MobileTaskRetry";
 import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
 import { workThreadLink } from "./mobileBotWorkDetails";
@@ -29,6 +31,7 @@ export function MobileTaskActions(props: {
   /** This device may change the task's view; without it Pin and Done stay closed. */
   readonly canUpdate: boolean;
   readonly canRetry: boolean;
+  readonly snooze?: ReturnType<typeof useMobileTaskScreen>["snooze"];
   readonly childError: boolean;
   readonly onUpdate: (input: ChannelUpdateTaskViewInput) => void;
   readonly onRetried: () => void;
@@ -73,6 +76,14 @@ export function MobileTaskActions(props: {
           {task.row.view.doneAt ? "Reopen" : "Mark done"}
         </Text>
       </Pressable>
+      {props.snooze && (
+        <MobileTaskSnooze
+          key={id}
+          snoozed={task.row.view.snoozedUntil !== undefined}
+          disabled={closed || !props.snooze.enabled(task.row.view)}
+          onChange={(choice) => void props.snooze?.change(task.row.view, choice)}
+        />
+      )}
       {task.threads.map((thread) => (
         <MobileWorkThreadLink
           key={`${thread.environmentId}:${thread.threadId}`}
@@ -82,6 +93,7 @@ export function MobileTaskActions(props: {
             rows: props.rows,
             taskTitle: props.taskTitle,
           })}
+          worker={thread}
           disabled={closed}
           mutedWhenDisabled
           onPress={() =>

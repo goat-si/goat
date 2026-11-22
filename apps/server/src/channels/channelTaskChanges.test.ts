@@ -179,14 +179,16 @@ describe("how many change streams stay open", () => {
 });
 
 describe("the open asks and their change stream over RPC", () => {
-  const { listOpenAsks, subscribeTaskChanges } = CHANNEL_GATEWAY_WS_METHODS;
+  const { listBotAttention, listOpenAsks, subscribeTaskChanges } = CHANNEL_GATEWAY_WS_METHODS;
   const tags = [...WsChannelRpcGroup.requests.values()].map((rpc) => rpc._tag);
   const group = WsChannelRpcGroup.omit(
     ...tags.filter(
       (
         tag,
-      ): tag is Exclude<(typeof tags)[number], typeof listOpenAsks | typeof subscribeTaskChanges> =>
-        tag !== listOpenAsks && tag !== subscribeTaskChanges,
+      ): tag is Exclude<
+        (typeof tags)[number],
+        typeof listBotAttention | typeof listOpenAsks | typeof subscribeTaskChanges
+      > => tag !== listBotAttention && tag !== listOpenAsks && tag !== subscribeTaskChanges,
     ),
   );
   type Service = ChannelBotMembers.ChannelBotMembers["Service"];
@@ -205,6 +207,7 @@ describe("the open asks and their change stream over RPC", () => {
           group.toLayer(
             group.of({
               [listOpenAsks]: handlers[listOpenAsks],
+              [listBotAttention]: handlers[listBotAttention],
               [subscribeTaskChanges]: handlers[subscribeTaskChanges],
             }),
           ),
@@ -249,6 +252,11 @@ describe("the open asks and their change stream over RPC", () => {
         .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       let reads = 0;
       const service = {
+        attentionFeed: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return { events: [], cursor: 0, hasMore: false, mode: "needs_you" as const };
+          }),
         openAsks: () =>
           Effect.sync(() => {
             reads += 1;
@@ -261,6 +269,8 @@ describe("the open asks and their change stream over RPC", () => {
           }),
       };
       const ungranted = yield* connect(service, session.scopes);
+      const attention = yield* Effect.flip(ungranted[listBotAttention]({ cursor: 0 }));
+      assert.strictEqual(attention._tag, "EnvironmentAuthorizationError");
       const asks = yield* Effect.flip(ungranted[listOpenAsks]({}));
       assert.strictEqual(asks._tag, "EnvironmentAuthorizationError");
       const revisions: Array<unknown> = [];
@@ -276,7 +286,8 @@ describe("the open asks and their change stream over RPC", () => {
       const granted = yield* connect(service, [...session.scopes, "orchestration:read"]);
       assert.strictEqual((yield* granted[listOpenAsks]({})).total, 0);
       assert.deepStrictEqual(yield* first(granted[subscribeTaskChanges]({})), { revision: 0 });
-      assert.strictEqual(reads, 2);
+      assert.deepStrictEqual((yield* granted[listBotAttention]({ cursor: 0 })).events, []);
+      assert.strictEqual(reads, 3);
     }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
   );
 });

@@ -489,6 +489,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Change", "Changing", "Changed", "this Child's connection"],
     "environment-update",
   ),
+  goat_schedule_delivery_list: tool(
+    ["List", "Listing", "Listed", "webhook deliveries"],
+    "schedule-list",
+  ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
   goat_fallback_chain_get: tool(["Read", "Reading", "Read", "fallback chains"], "environment-read"),
   goat_fallback_chain_set: tool(

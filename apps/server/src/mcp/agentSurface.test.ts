@@ -76,8 +76,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding and force stop, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list, preview stop.
-  expect(entries).toHaveLength(312);
+  expect(entries).toHaveLength(313);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -85,7 +84,6 @@ it("gives every entry a unique path, listed name and resolvable schema reference
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
     expect(path).toMatch(/^[a-z][a-z_]*\.[a-z][a-z_]*$/);
-    // The shipped name is either the one listed or one still callable unlisted.
     expect([listedToolName(entry), ...entry.legacyNames]).toContain(entry.name);
     const tools: Record<string, Tool.Any> = toolkits[entry.schemaRefs.toolkit].tools;
     const tool = tools[entry.schemaRefs.tool];
@@ -374,12 +372,11 @@ const REASONS = {
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
   dryRunDefault: "Defaults to a dry run, which reads.",
   clientOnly: "Only another GOAT's dispatch session may call it.",
-  grantChecked: "Checks a scope the test client does not hold, inside its handler.",
+  grantChecked: "Checks a scope the test caller does not hold, inside its handler.",
   dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
   childSetupOnly:
     "Accepts only a Home-issued Child setup session; ToolAdmission.childSetup.test.ts covers it.",
 } as const;
-// Where the runtime outcome differs from what requires and effect alone predict, and why.
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
@@ -501,7 +498,6 @@ const via = {
       Effect.map(asDirectResult),
     ),
 };
-// legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
 type Route = keyof typeof via | "legacy";
 const ROUTES: ReadonlyArray<Route> = [
   ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
@@ -532,7 +528,6 @@ describe("agent surface access", () => {
                 : typeof clientRequestId === "string"
                   ? { ...rest, clientRequestId: `${clientRequestId}:${caller}:${route}` }
                   : args;
-            // goat_call and goat_eval refuse to call either meta tool by design.
             if (
               (route === "goat_call" || route === "goat_eval") &&
               (entry.path === "surface.call" || entry.path === "surface.eval")

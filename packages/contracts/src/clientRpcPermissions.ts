@@ -185,6 +185,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
   // What the bots wait on is task state, the same read their waiting badges need.
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBotAttention]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: AuthOrchestrationReadScope,
@@ -202,6 +203,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,

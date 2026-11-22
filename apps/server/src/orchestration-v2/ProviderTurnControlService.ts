@@ -1,5 +1,6 @@
 import * as ServerConfig from "../config.ts";
 import {
+  isChannelWorkerThreadId,
   MessageId,
   type ModelSelection,
   type NodeId,
@@ -19,7 +20,7 @@ import * as Stream from "effect/Stream";
 
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
-import { isChannelFollowUpMessageId, isChannelWorkerThreadId } from "../channels/channelIds.ts";
+import { isChannelFollowUpMessageId } from "../channels/channelIds.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
@@ -484,11 +485,15 @@ export const layer: Layer.Layer<
             isChannelFollowUpMessageId(message.id) &&
             Option.isSome(channelInputAuthority)
           ) {
-            const refusal = yield* channelInputAuthority.value(
-              input.threadId,
-              message.id,
-              run.memoryGrantCeiling,
-            );
+            const thread = yield* projections.getThread(input.threadId);
+            const refusal = yield* channelInputAuthority
+              .value(input.threadId, message.id, run.memoryGrantCeiling)
+              .pipe(
+                Effect.provideService(
+                  ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                  thread.runtimeMode,
+                ),
+              );
             if (refusal !== undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,

@@ -85,6 +85,7 @@ export function GoatBotTimeline({
   onOpenRoutine,
   onReply,
   taskDetails = false,
+  attentionRequest,
   taskThreads = false,
   retryEnvironmentId = null,
   baselineIds,
@@ -101,6 +102,7 @@ export function GoatBotTimeline({
   readonly onExposure?: ((rows: ReadonlyArray<GoatBotRow>) => void) | undefined;
   /** When the person last read this chat, read once at open; newer rows get a "New" divider. */
   readonly unreadSince?: string | null | undefined;
+  readonly attentionRequest?: string | undefined;
   readonly taskDetails?: boolean;
   /** Task chips become task-thread pills; the caller knows whether the server supports them. */
   readonly taskThreads?: boolean;
@@ -176,6 +178,19 @@ export function GoatBotTimeline({
     listRef,
     followingRef,
     lastScrollTopRef,
+  });
+  const landedRequest = useRef<string | undefined>(undefined);
+  const landOnRequest = useStableCallback((node: HTMLLIElement | null) => {
+    if (
+      node === null ||
+      attentionRequest === undefined ||
+      landedRequest.current === attentionRequest
+    )
+      return;
+    landedRequest.current = attentionRequest;
+    follow.setFollowing(false);
+    node.scrollIntoView({ block: "center" });
+    node.focus({ preventScroll: true });
   });
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
@@ -508,6 +523,11 @@ export function GoatBotTimeline({
         return (
           <li
             key={row.id}
+            ref={
+              attentionRequest !== undefined && row.answerQuestionId === attentionRequest
+                ? landOnRequest
+                : undefined
+            }
             data-bot-row={row.id}
             data-follow-row={row.id}
             tabIndex={0}

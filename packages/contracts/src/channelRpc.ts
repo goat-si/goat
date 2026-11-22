@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ChannelAttentionFeedInput, ChannelAttentionFeedResult } from "./channelBotAttention.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 
@@ -28,6 +29,8 @@ import {
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
+  ChannelSnoozeBotTaskInput,
+  ChannelUnsnoozeBotTaskInput,
   ChannelTaskView,
   ChannelRetryTaskInput,
   ChannelRetryTaskResult,
@@ -84,6 +87,12 @@ const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus,
 const ChannelListOpenAsksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listOpenAsks, {
   payload: ChannelListOpenAsksInput,
   success: ChannelListOpenAsksResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotAttentionRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotAttention, {
+  payload: ChannelAttentionFeedInput,
+  success: ChannelAttentionFeedResult,
   error: ChannelRpcError,
 });
 
@@ -190,6 +199,17 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
   error: ChannelRpcError,
 });
 
+const ChannelSnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask, {
+  payload: ChannelSnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
+});
+const ChannelUnsnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask, {
+  payload: ChannelUnsnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
+});
+
 const ChannelGetBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotTask, {
   payload: ChannelGetBotTaskInput,
   success: BotWorkResult,
@@ -257,6 +277,7 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
   ChannelListOpenAsksRpc,
+  ChannelListBotAttentionRpc,
   ChannelSubscribeTaskChangesRpc,
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,
@@ -275,6 +296,8 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelGetBotTaskRpc,
+  ChannelSnoozeBotTaskRpc,
+  ChannelUnsnoozeBotTaskRpc,
   ChannelSearchBotTasksRpc,
   ChannelListTasksRpc,
   ChannelGetInputRpc,
