@@ -5,7 +5,7 @@ import Constants from "expo-constants";
 import { BRAND_CHANNEL_LABEL } from "@goat/shared/brandChannels";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Linking, Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -15,7 +15,6 @@ import { useDeadlinePassed } from "../../lib/clock";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
-  registerHiddenUpdateTap,
   runAppUpdateCheck,
 } from "../updates/app-updates";
 import { SettingsRow } from "./components/SettingsRow";
@@ -50,7 +49,13 @@ function AppSettingsSection() {
   const updateState =
     checkState.state === "current" && confirmationExpired ? "idle" : checkState.state;
   const updateInFlight = useRef(false);
-  const hiddenUpdateTapCount = useRef(0);
+  const betaChannel = Platform.select({
+    ios: { label: "TestFlight", url: "https://testflight.apple.com/join/4PXeSgXv" },
+    android: {
+      label: "Firebase App Distribution",
+      url: "https://appdistribution.firebase.dev/i/b6f930a2e01c9f53",
+    },
+  });
 
   const version = Constants.expoConfig?.version ?? "0.0.0";
   // Match app.config.ts's production fallback to avoid mislabeling builds as development.
@@ -80,15 +85,6 @@ function AppSettingsSection() {
       }),
     );
     updateInFlight.current = false;
-  }
-
-  function handleVersionPress() {
-    if (!updateCheckAvailable || updateInFlight.current) return;
-    const tap = registerHiddenUpdateTap(hiddenUpdateTapCount.current);
-    hiddenUpdateTapCount.current = tap.nextCount;
-    if (tap.shouldCheck) {
-      void checkForUpdate();
-    }
   }
 
   const statusLabel =
@@ -133,18 +129,27 @@ function AppSettingsSection() {
         target="SettingsOpenSourceLicenses"
       />
       <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
+      {versionRow}
       {updateCheckAvailable ? (
-        <Pressable
-          accessibilityLabel={`Version ${versionLabel}`}
-          accessibilityRole="text"
+        <SettingsRow
+          icon="arrow.clockwise"
+          label="Check for app updates"
           disabled={busy}
-          onPress={handleVersionPress}
-        >
-          {versionRow}
-        </Pressable>
-      ) : (
-        versionRow
-      )}
+          onPress={() => void checkForUpdate()}
+        />
+      ) : null}
+      {Application.applicationId === "si.goat.mobile" && betaChannel ? (
+        <SettingsRow
+          icon="arrow.up.right"
+          label="Check beta builds"
+          value={betaChannel.label}
+          onPress={() =>
+            void Linking.openURL(betaChannel.url).catch(() =>
+              Dialog.alert("Could not open beta builds", betaChannel.url),
+            )
+          }
+        />
+      ) : null}
     </SettingsSection>
   );
 }
