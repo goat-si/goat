@@ -427,12 +427,6 @@ const ACCESS_EXCEPTIONS: Readonly<
     fullClient: "denied",
   },
   "worktree.diff_file": { reason: "grantChecked", readOnlyClient: "denied", fullClient: "denied" },
-  "schedule.delivery_list": {
-    reason: "grantChecked",
-    thread: "denied",
-    readOnlyClient: "denied",
-    fullClient: "denied",
-  },
   "scheduler.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "pending_request.list": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
