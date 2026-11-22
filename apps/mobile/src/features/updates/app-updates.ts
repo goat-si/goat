@@ -79,7 +79,6 @@ interface Deferred {
   readonly resolve: () => void;
 }
 
-const HIDDEN_UPDATE_TAP_COUNT = 5;
 const UPDATE_CHECK_UNAVAILABLE_ERROR_CODES = new Set([
   "ERR_NOT_AVAILABLE_IN_DEV_CLIENT",
   "ERR_UPDATES_DISABLED",
@@ -89,23 +88,6 @@ let appUpdateCheckInFlight: AppUpdateCheckInFlight | undefined;
 /** Expo's development launcher reports updates as enabled even though its OTA APIs reject. */
 export function isAppUpdateCheckAvailable(client: Pick<AppUpdateClient, "isEnabled"> = Updates) {
   return client.isEnabled && !(typeof __DEV__ !== "undefined" && __DEV__);
-}
-
-export function registerHiddenUpdateTap(count: number): {
-  readonly nextCount: number;
-  readonly shouldCheck: boolean;
-} {
-  const nextCount = count + 1;
-  if (nextCount >= HIDDEN_UPDATE_TAP_COUNT) {
-    return {
-      nextCount: 0,
-      shouldCheck: true,
-    };
-  }
-  return {
-    nextCount,
-    shouldCheck: false,
-  };
 }
 
 export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Promise<void> {
