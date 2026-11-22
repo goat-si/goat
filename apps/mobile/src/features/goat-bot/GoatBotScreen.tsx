@@ -101,7 +101,9 @@ import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotCo
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import type { MobileBotApprovalSlot } from "./MobileBotApprovals";
 import { MobileBotWork } from "./MobileBotWork";
+import { botApprovalRenderer } from "./botApprovalRenderer";
 import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
@@ -329,6 +331,7 @@ export function GoatBotScreen(props: {
   /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
   readonly onRestoreMember?: MobileRestoreMember | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
+  readonly approvalCards?: MobileBotApprovalSlot;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
@@ -654,6 +657,8 @@ export function GoatBotScreen(props: {
       ),
     [session.rows, session.streamingReplyIds],
   );
+  const ApprovalCards = props.visible && session.homeConnected ? props.approvalCards : undefined;
+  const renderApprovals = botApprovalRenderer(ApprovalCards, session, taskId, onSelectThread);
   return (
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
@@ -730,6 +735,7 @@ export function GoatBotScreen(props: {
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
             taskChips={session.taskChips}
+            renderTaskApprovals={taskId && ApprovalCards ? renderApprovals : undefined}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
             taskTitle={props.taskTitle}
@@ -900,6 +906,7 @@ export function GoatBotScreen(props: {
           className="gap-2 border-t border-border px-4 pt-2"
           style={composerPaddingStyle}
         >
+          {(taskId === undefined || session.taskChips.has(taskId)) && renderApprovals()}
           <GoatBotAttachmentStrip
             environmentId={session.historyEnvironmentId}
             attachments={attachments}

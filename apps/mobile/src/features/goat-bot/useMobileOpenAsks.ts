@@ -22,8 +22,6 @@ export type MobileOpenAsks =
       readonly truncated: boolean;
       /** The last refresh failed; these asks are from an earlier read and may be out of date. */
       readonly staleRetry: (() => void) | null;
-      /** The computer is offline; these are the asks last read from it. */
-      readonly offline: boolean;
     };
 
 /**
@@ -44,8 +42,8 @@ export function useMobileOpenAsks(
   const asks = useEnvironmentQuery(
     supported && connected ? openAsks({ environmentId, input: {} }) : null,
   );
-  // Offline, the asks last read from this computer, kept through a later failed refresh.
-  const kept = useKeptPerComputer("asks", environmentId, asks, !connected);
+  // The offline roster reads the durable summary. Keep full asks only in the live query.
+  const kept = useKeptPerComputer("asks", environmentId, asks, !connected, false);
   const inView = useAppActive() && visible;
   const refresh = asks.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Read the open asks again each time the roster comes into view with the app in front.
@@ -55,18 +53,8 @@ export function useMobileOpenAsks(
   // Nothing read from a selected computer yet (a cold start offline) is unknown, not an older server.
   const unknown = presentation !== undefined && presentation.serverConfig == null;
   if (!supported && !(unknown && !connected)) return { state: "unsupported" };
-  if (!connected) {
-    if (kept === null)
-      return { state: "unavailable", computer: presentation?.entry.target.label ?? "its computer" };
-    return {
-      state: "ready",
-      asks: kept.asks,
-      total: kept.total,
-      truncated: kept.truncated,
-      staleRetry: null,
-      offline: true,
-    };
-  }
+  if (!connected)
+    return { state: "unavailable", computer: presentation?.entry.target.label ?? "its computer" };
   // The kept answer is the live one while connected, and nothing once access is refused.
   const earlier = kept;
   const failed = asks.error !== null;
@@ -79,7 +67,6 @@ export function useMobileOpenAsks(
       total: earlier.total,
       truncated: earlier.truncated,
       staleRetry: failed ? refresh : null,
-      offline: false,
     };
   return { state: "loading" };
 }

@@ -56,11 +56,14 @@ other requests that need your attention, including requests from hidden bots. Ex
 an item to open its task. Use the **Open next bot ask** command to move through them. When more
 wait than the list shows, **Show more** lists the next ones.
 
-On a phone, while the computer GOAT Bot runs on is offline, the Bots list and **Needs you** show
-what the phone last read from it, which may be out of date. You can open a bot's conversation, but
-bots can't be added or changed until the computer is back. Closing the app forgets that list.
-**Settings → GOAT Bot** also shows the bot's settings as the phone last read them; they can't be
-changed until the computer is back.
+On a phone, the Bots list can reopen while its computer is offline. It shows when the phone last
+read the bot names, avatars and **Needs you** counts. The phone keeps those rows and the bot, kind,
+task and time of each open request for up to seven days. Question text, approval details and card
+contents stay off the saved list. The offline list is read-only. The phone clears the saved summary
+when you sign out, remove the computer or it refuses your pairing. If someone revokes your access
+while the computer is offline, the phone learns about it the next time it contacts the computer.
+**Settings → GOAT Bot** shows the last settings the phone read and lets you change them once the
+computer is back.
 
 ## The face
 
@@ -122,7 +125,8 @@ While no Slack channel is
 connected, GOAT Bot's home also suggests connecting one; **Hide** removes the suggestion on this
 device, and **Settings → GOAT Bot → Suggestions on the bot's home** brings it back.
 **Library** holds the files the bot saved and its memory. On mobile, **Work** opens a sheet of the
-bot's tasks, and a task opens in its own view.
+bot's tasks, and a task opens in its own view. If workers are waiting for approval, the task
+shows how many are waiting and offers **Open worker** for workers this phone can reach.
 
 - The status note says why the bot can't work right now: the machine it answers on, its model,
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
@@ -130,9 +134,11 @@ bot's tasks, and a task opens in its own view.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
   see what started it and what it said. On web and desktop, you can also open the task if it
-  started one. On mobile, an incomplete history is marked above the runs. **Check in on me** sets up a routine on the days and hours you choose: the bot
-  looks over its tasks and writes only when something needs you. A timer routine whose last run failed
-  shows **Run now**. **New routine** starts a routine request in the message box for you to finish
+  started one. On mobile, an incomplete history is marked above the runs. **Check in on me**
+  sets up a routine on the days and hours you choose. The bot looks over its tasks and writes
+  only when something needs you. On web and desktop, a timer routine whose last run failed shows
+  **Run now**. On mobile, **Run now** starts a timer routine on demand, even when it is paused.
+  Webhook routines explain how an incoming delivery starts them. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
   and files.
 - **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or

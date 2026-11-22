@@ -14,6 +14,7 @@ import {
   type ChannelChildWorkId,
   type ChannelChildWorkState,
   type ChannelTaskId,
+  type EnvironmentId,
   isChannelChildWorkActive,
   localChildThreadId,
   type ThreadId,
@@ -52,7 +53,39 @@ const prefixFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ":";
 const afterFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ";";
 const isDelegateSurface = (surface: ChannelChildWork["surface"]) =>
   surface === "delegate_local" || surface === "delegate_remote";
+const isRemoteLaunchSurface = (surface: ChannelChildWork["surface"]) =>
+  surface === "ssh_thread_launch" || surface === "delegate_remote";
 const SETTLED_STATES: ReadonlyArray<ChannelChildWorkState> = ["completed", "failed", "cancelled"];
+
+export type AcknowledgedRemoteDestination = {
+  readonly correlationId: string;
+  readonly host: string;
+  readonly threadId: ThreadId;
+  readonly environmentId?: EnvironmentId;
+};
+
+function fillAcknowledgedDestination(
+  current: ChannelChildWorkDestination | undefined,
+  ack: AcknowledgedRemoteDestination,
+) {
+  if (
+    current?.correlationId !== ack.correlationId ||
+    current.host !== ack.host ||
+    (current.threadId !== undefined && current.threadId !== ack.threadId) ||
+    (current.environmentId !== undefined &&
+      ack.environmentId !== undefined &&
+      current.environmentId !== ack.environmentId) ||
+    (current.threadId !== undefined &&
+      (current.environmentId !== undefined || ack.environmentId === undefined))
+  )
+    return current;
+  const environmentId = current.environmentId ?? ack.environmentId;
+  return {
+    ...current,
+    threadId: ack.threadId,
+    ...(environmentId === undefined ? {} : { environmentId }),
+  };
+}
 
 export type ChannelChildWorkAdmitResult =
   | { readonly _tag: "admitted" }
@@ -101,9 +134,8 @@ export class ChannelChildWorkStore extends Context.Service<
     ) => Effect.Effect<ChannelChildWorkAdmitResult, ChannelChildWorkStoreError>;
     /**
      * Compare-and-set on state; returns the updated record, or undefined when the record moved
-     * on (another writer won the race) or is gone. threadIdIfMissing is written only when the
-     * current record has no thread id, so it never replaces one; a call that also passes a
-     * destination is refused, since that destination would replace the current one.
+     * on (another writer won the race) or is gone. An acknowledgement only fills missing
+     * destination fields for the same launch.
      */
     readonly transition: (input: {
       readonly taskId: ChannelTaskId;
@@ -111,13 +143,12 @@ export class ChannelChildWorkStore extends Context.Service<
       readonly from: ReadonlyArray<ChannelChildWorkState>;
       readonly to: ChannelChildWorkState;
       readonly destination?: ChannelChildWorkDestination | undefined;
-      readonly threadIdIfMissing?: ThreadId | undefined;
+      readonly acknowledgement?: AcknowledgedRemoteDestination | undefined;
       readonly now: string;
     }) => Effect.Effect<ChannelChildWork | undefined, ChannelChildWorkStoreError>;
     /**
      * Up to `limit` child-work rows after this key, in key order: the last key read, how many
-     * rows were read, and among them the settled remote thread launches with no thread whose
-     * dispatch holds the thread its host acknowledged.
+     * rows were read, and the settled remote launches with missing destination fields.
      */
     readonly pageSettledLaunches: (
       after: string,
@@ -129,19 +160,18 @@ export class ChannelChildWorkStore extends Context.Service<
         readonly candidates: ReadonlyArray<{
           readonly record: ChannelChildWork;
           readonly remoteThreadId: string;
+          readonly remoteEnvironmentId: string | null;
         }>;
       },
       ChannelChildWorkStoreError
     >;
     /**
-     * Fills a settled remote launch's missing thread when the record still names this
-     * correlation and has none; true only when this call filled it. Timestamps stay as settled.
+     * Fills a settled remote launch's missing destination fields. Timestamps stay as settled.
      */
-    readonly fillSettledLaunchThread: (input: {
+    readonly fillSettledLaunchDestination: (input: {
       readonly taskId: ChannelTaskId;
       readonly childWorkId: ChannelChildWorkId;
-      readonly correlationId: string;
-      readonly threadId: ThreadId;
+      readonly acknowledgement: AcknowledgedRemoteDestination;
     }) => Effect.Effect<boolean, ChannelChildWorkStoreError>;
   }
 >()("goat/channels/channelChildWorkStore") {}
@@ -253,13 +283,13 @@ const make = Effect.gen(function* () {
     readonly from: ReadonlyArray<ChannelChildWorkState>;
     readonly to: ChannelChildWorkState;
     readonly destination?: ChannelChildWorkDestination | undefined;
-    readonly threadIdIfMissing?: ThreadId | undefined;
+    readonly acknowledgement?: AcknowledgedRemoteDestination | undefined;
     readonly now: string;
   }) {
-    if (input.destination !== undefined && input.threadIdIfMissing !== undefined)
+    if (input.destination !== undefined && input.acknowledgement !== undefined)
       return yield* new ChannelChildWorkStoreError({
         operation: "transition",
-        detail: "A transition takes a destination or threadIdIfMissing, not both.",
+        detail: "A transition takes a destination or acknowledgement, not both.",
       });
     return yield* sql
       .withTransaction(
@@ -272,9 +302,15 @@ const make = Effect.gen(function* () {
           const current = decode(rows[0].value_json);
           if (!input.from.includes(current.state)) return undefined;
           const filled =
-            input.threadIdIfMissing === undefined || current.destination?.threadId !== undefined
+            input.acknowledgement === undefined || !isRemoteLaunchSurface(current.surface)
               ? (input.destination ?? current.destination)
-              : { ...current.destination, threadId: input.threadIdIfMissing };
+              : fillAcknowledgedDestination(current.destination, input.acknowledgement);
+          if (
+            input.acknowledgement !== undefined &&
+            current.state === input.to &&
+            filled === current.destination
+          )
+            return undefined;
           const next: ChannelChildWork = {
             ...current,
             state: input.to,
@@ -297,18 +333,23 @@ const make = Effect.gen(function* () {
       readonly key: string;
       readonly value_json: string;
       readonly remote_thread_id: string | null;
+      readonly remote_environment_id: string | null;
     }>`
-      SELECT c.key, c.value_json, d.remote_thread_id FROM (
+      SELECT c.key, c.value_json, d.remote_thread_id, d.remote_environment_id FROM (
         SELECT key, value_json FROM channel_runtime_state
         WHERE key > ${after} AND key >= ${"child-work:"} AND key < ${"child-work;"}
         ORDER BY key LIMIT ${limit}
       ) c
       LEFT JOIN remote_dispatches d
-        ON json_extract(c.value_json, '$.surface') = 'ssh_thread_launch'
+        ON d.correlation_id = json_extract(c.value_json, '$.destination.correlationId')
+        AND d.host = json_extract(c.value_json, '$.destination.host')
+        AND ((json_extract(c.value_json, '$.surface') = 'ssh_thread_launch' AND d.kind = 'thread')
+          OR (json_extract(c.value_json, '$.surface') = 'delegate_remote' AND d.kind = 'task'))
         AND json_extract(c.value_json, '$.state') IN ${sql.in(SETTLED_STATES)}
-        AND json_extract(c.value_json, '$.destination.threadId') IS NULL
-        AND d.correlation_id = json_extract(c.value_json, '$.destination.correlationId')
-        AND d.kind = 'thread' AND d.host = json_extract(c.value_json, '$.destination.host')
+        AND (json_extract(c.value_json, '$.destination.threadId') IS NULL
+          OR (d.remote_thread_id = json_extract(c.value_json, '$.destination.threadId')
+            AND d.remote_environment_id IS NOT NULL
+            AND json_extract(c.value_json, '$.destination.environmentId') IS NULL))
       ORDER BY c.key
     `.pipe(
       Effect.map((rows) => ({
@@ -317,44 +358,48 @@ const make = Effect.gen(function* () {
         candidates: rows.flatMap((row) =>
           row.remote_thread_id === null
             ? []
-            : [{ record: decode(row.value_json), remoteThreadId: row.remote_thread_id }],
+            : [
+                {
+                  record: decode(row.value_json),
+                  remoteThreadId: row.remote_thread_id,
+                  remoteEnvironmentId: row.remote_environment_id,
+                },
+              ],
         ),
       })),
       Effect.mapError(toStoreError("pageSettledLaunches")),
     );
 
-  const fillSettledLaunchThread = Effect.fn("ChannelChildWorkStore.fillSettledLaunchThread")(
-    function* (input: {
-      readonly taskId: ChannelTaskId;
-      readonly childWorkId: ChannelChildWorkId;
-      readonly correlationId: string;
-      readonly threadId: ThreadId;
-    }) {
-      const key = keyFor(input.taskId, input.childWorkId);
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rows = yield* sql<{ readonly value_json: string }>`
+  const fillSettledLaunchDestination = Effect.fn(
+    "ChannelChildWorkStore.fillSettledLaunchDestination",
+  )(function* (input: {
+    readonly taskId: ChannelTaskId;
+    readonly childWorkId: ChannelChildWorkId;
+    readonly acknowledgement: AcknowledgedRemoteDestination;
+  }) {
+    const key = keyFor(input.taskId, input.childWorkId);
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{ readonly value_json: string }>`
               SELECT value_json FROM channel_runtime_state WHERE key = ${key}
             `;
-            if (rows[0] === undefined) return false;
-            const current = decode(rows[0].value_json);
-            const destination = current.destination;
-            if (
-              current.surface !== "ssh_thread_launch" ||
-              !SETTLED_STATES.includes(current.state) ||
-              destination?.correlationId !== input.correlationId ||
-              destination.threadId !== undefined
-            )
-              return false;
-            const next = { ...current, destination: { ...destination, threadId: input.threadId } };
-            yield* sql`UPDATE channel_runtime_state SET value_json = ${encode(next)} WHERE key = ${key}`;
-            return true;
-          }),
-        )
-        .pipe(Effect.mapError(toStoreError("fillSettledLaunchThread")));
-    },
-  );
+          if (rows[0] === undefined) return false;
+          const current = decode(rows[0].value_json);
+          if (!isRemoteLaunchSurface(current.surface) || !SETTLED_STATES.includes(current.state))
+            return false;
+          const destination = fillAcknowledgedDestination(
+            current.destination,
+            input.acknowledgement,
+          );
+          if (destination === undefined || destination === current.destination) return false;
+          const next = { ...current, destination };
+          yield* sql`UPDATE channel_runtime_state SET value_json = ${encode(next)} WHERE key = ${key}`;
+          return true;
+        }),
+      )
+      .pipe(Effect.mapError(toStoreError("fillSettledLaunchDestination")));
+  });
 
   return ChannelChildWorkStore.of({
     get,
@@ -365,7 +410,7 @@ const make = Effect.gen(function* () {
     admitReserved,
     transition,
     pageSettledLaunches,
-    fillSettledLaunchThread,
+    fillSettledLaunchDestination,
   });
 });
 

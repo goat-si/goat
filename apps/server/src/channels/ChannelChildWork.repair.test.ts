@@ -1,9 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@goat/contracts";
+import { NodeId, RunId, ThreadId } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import {
+  makeFixture,
+  remote,
+  remoteEnvironment,
+} from "../remoteReports/RemoteDispatchCoordinator.testkit.ts";
+import { bindRemoteChildWork } from "../mcp/childWorkAdmission.ts";
+import * as Option from "effect/Option";
 
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
@@ -40,6 +48,121 @@ const settledWithoutThread = Effect.fn("test.settledWithoutThread")(function* (
 });
 
 describe("ChannelChildWork repair of settled remote launches", () => {
+  it.effect.each([
+    { kind: "thread", state: "running", bindFirst: false },
+    { kind: "thread", state: "settled", bindFirst: false },
+    { kind: "task", state: "running", bindFirst: false },
+    { kind: "task", state: "settled", bindFirst: false },
+    { kind: "task", state: "running", bindFirst: true },
+    { kind: "task", state: "settled", bindFirst: true },
+  ] as const)(
+    "keeps the verified destination for a $state $kind dispatch (caller binds first: $bindFirst)",
+    ({ kind, state, bindFirst }) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const fixture = yield* makeFixture(false);
+        const admission = yield* admit("remote " + kind, {
+          surface: kind === "thread" ? "ssh_thread_launch" : "delegate_remote",
+        });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const record = admission.record;
+        const correlationId = childWorkCorrelationIdFor(record.childWorkId);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            assert.isTrue(yield* childWork.claimLaunch(record, { correlationId, host: "box" }));
+            const result = yield* Coordinator.RemoteDispatchCoordinator.use((coordinator) =>
+              coordinator.launch(
+                {
+                  ...(kind === "thread"
+                    ? { kind }
+                    : {
+                        kind,
+                        task: {
+                          taskId: NodeId.make("delegate"),
+                          parentRunId: RunId.make("parent"),
+                        },
+                      }),
+                  originThreadId: record.callerThreadId,
+                  delivery: "wake",
+                  correlationId,
+                  launch: {
+                    host: "box",
+                    cwd: "/fixture",
+                    workspace: { type: "cwd" },
+                    title: "fixture",
+                    runtimeMode: "full-access",
+                    callerRuntimeMode: "full-access",
+                  },
+                },
+                Effect.void,
+              ),
+            ).pipe(Effect.provide(fixture.layer));
+            if (bindFirst) {
+              yield* bindRemoteChildWork(Option.some(childWork), admission, "box", result);
+            }
+            if (state === "settled") {
+              yield* sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = ${correlationId}`;
+            }
+            yield* childWork.reconcile;
+            const reconciled = yield* store.get(taskId, record.childWorkId);
+            if (!bindFirst) {
+              yield* bindRemoteChildWork(Option.some(childWork), admission, "box", result);
+            }
+            const saved = yield* store.get(taskId, record.childWorkId);
+            assert.strictEqual(saved?.state, state === "running" ? "bound" : "completed");
+            assert.deepStrictEqual(saved, reconciled);
+            assert.deepStrictEqual(saved?.destination, {
+              host: "box",
+              correlationId,
+              threadId: remote,
+              environmentId: remoteEnvironment,
+            });
+          }),
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect.each(["matching", "wrong-host", "wrong-correlation", "wrong-kind"] as const)(
+    "repairs an already settled remote delegate only from its own dispatch (%s)",
+    (match) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("delegate " + match, { surface: "delegate_remote" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const { record } = admission;
+        const correlationId = childWorkCorrelationIdFor(record.childWorkId);
+        yield* Effect.scoped(childWork.claimLaunch(record, { correlationId, host: "box" }));
+        yield* store.transition({
+          taskId,
+          childWorkId: record.childWorkId,
+          from: ["launched"],
+          to: "completed",
+          destination: { correlationId, host: "box", threadId: remote },
+          now: SETTLED_AT,
+        });
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, remote_thread_id, remote_environment_id, read_key, delivery, state, created_at, updated_at)
+          VALUES (${match === "wrong-correlation" ? "other-dispatch" : correlationId},
+            ${match === "wrong-kind" ? "thread" : "task"}, ${record.callerThreadId},
+            ${match === "wrong-host" ? "elsewhere" : "box"}, ${remote}, ${remoteEnvironment},
+            'read-key', 'wake', 'settled', ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, match === "matching" ? 1 : 0);
+        const saved = yield* store.get(taskId, record.childWorkId);
+        assert.strictEqual(saved?.state, "completed");
+        assert.strictEqual(saved?.updatedAt, SETTLED_AT);
+        assert.strictEqual(
+          saved?.destination?.environmentId,
+          match === "matching" ? remoteEnvironment : undefined,
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
   it.effect.each(["completed", "failed", "cancelled"] as const)(
     "regression: a %s remote launch gets back the thread its host acknowledged, state unchanged",
     (state) =>
@@ -92,11 +215,12 @@ describe("ChannelChildWork repair of settled remote launches", () => {
       });
       yield* childWork.markTerminal(admission.record, "completed");
       yield* sql`INSERT INTO remote_dispatches
-        (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
-        VALUES (${correlationId}, 'thread', ${admission.record.callerThreadId}, 'box', 'other-thread', 'read-key', 'wake', 'settled', ${NOW}, ${NOW})`;
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, remote_environment_id, read_key, delivery, state, created_at, updated_at)
+        VALUES (${correlationId}, 'thread', ${admission.record.callerThreadId}, 'box', 'other-thread', ${remoteEnvironment}, 'read-key', 'wake', 'settled', ${NOW}, ${NOW})`;
       assert.strictEqual(yield* childWork.reconcile, 0);
       const kept = yield* store.get(taskId, admission.record.childWorkId);
       assert.strictEqual(kept?.destination?.threadId, "own-thread");
+      assert.isUndefined(kept?.destination?.environmentId);
     }).pipe(Effect.provide(makeLayer())),
   );
 

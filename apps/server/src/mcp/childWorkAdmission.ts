@@ -19,6 +19,7 @@ import type * as Option from "effect/Option";
 
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import { childWorkCorrelationIdFor } from "../channels/channelIds.ts";
+import type { SshLaunchResult } from "../sshRemote/SshRemoteDispatch.ts";
 
 const childWorkFailure = (error: ChannelChildWork.ChannelChildWorkError): OrchestratorMcpFailure =>
   error.reason === "at_capacity"
@@ -202,6 +203,18 @@ export const bindChildWork = (
   settleChildWork(childWork, admission, (child, record) =>
     destination === undefined ? child.markBound(record) : child.markBound(record, destination),
   );
+
+export const bindRemoteChildWork = (
+  childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
+  admission: ChannelChildAdmission | undefined,
+  host: string,
+  { correlationId, launch }: { readonly correlationId: string; readonly launch: SshLaunchResult },
+) =>
+  bindChildWork(childWork, admission, {
+    correlationId,
+    host,
+    ...(launch.sourceEnvironmentId == null ? {} : { environmentId: launch.sourceEnvironmentId }),
+  });
 
 /** The correlation id an admitted caller's remote launch persists under. */
 export const admissionCorrelationId = (admission: ChannelChildAdmission | undefined) =>

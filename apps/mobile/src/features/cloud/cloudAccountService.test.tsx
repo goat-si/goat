@@ -15,7 +15,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import type { Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 // Signing out touches the relay, notifications and drafts; only what it does to kept answers is under test.
@@ -85,6 +85,8 @@ vi.mock("../../state/use-thread-detail", () => ({
 
 import { environmentCatalog } from "../../connection/catalog";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { installKeptSummaryPersistence } from "../goat-bot/keptPerComputerStore";
+import { createKeptSummaryStore } from "../goat-bot/keptSummaryStore";
 import { followKeptPerComputerCatalog, useKeptPerComputer } from "../goat-bot/useKeptPerComputer";
 import { useMobileBotPreview } from "../goat-bot/useMobileBotPreview";
 import { deactivateCloudRelayAccount } from "./cloudAccountService";
@@ -151,9 +153,39 @@ const reply: OrchestrationV2ProjectedTurnItem = {
   },
 };
 
-it("signing out hides, at once, the main tile line and kept bot list of a computer reached only through the relay", async () => {
+it("signing out drops the saved summaries and hides the relay-only computer at once", async () => {
   conversation.items = [reply];
   const registry = appAtomRegistry;
+  const saved = new Map<string, string>();
+  const store = createKeptSummaryStore({
+    read: async (id, kind) => saved.get(JSON.stringify([id, kind])) ?? null,
+    write: async (id, kind, value) => {
+      saved.set(JSON.stringify([id, kind]), value);
+    },
+    remove: async (id, kind) => {
+      saved.delete(JSON.stringify([id, kind]));
+    },
+    markPurge: async () => {
+      saved.clear();
+    },
+    deleteSummaries: async () => {
+      saved.clear();
+    },
+    sweep: async () => {},
+  });
+  for (const id of [RELAY_ONLY, ALSO_LAN])
+    await store.keep(store.lease(id), "asks", "paired", 1, {
+      asks: [],
+      total: 0,
+      truncated: false,
+    });
+  using _persistence = {
+    [Symbol.dispose]: installKeptSummaryPersistence(registry, {
+      store,
+      accountAtom: Atom.make<string | null>("signed-in"),
+      scopes: async () => ["paired"],
+    }),
+  };
   const stop = followKeptPerComputerCatalog(registry);
   registry.set(environmentCatalog.catalogValueAtom as unknown as Atom.Writable<unknown>, catalog);
   const seen = new Map<EnvironmentId, { line: string | null; bots: unknown }>();
@@ -196,6 +228,7 @@ it("signing out hides, at once, the main tile line and kept bot list of a comput
   await act(async () => deactivateCloudRelayAccount());
   expect(seen.get(RELAY_ONLY)).toEqual({ line: null, bots: null });
   expect(seen.get(ALSO_LAN)).toEqual({ line: "The build is waiting on you.", bots });
+  expect(saved.size).toBe(0);
   await act(async () => root.unmount());
   stop();
 });

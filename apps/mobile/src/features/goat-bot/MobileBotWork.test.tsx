@@ -1,393 +1,22 @@
-import "./goatBotNativeModules.testkit";
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
-import { useState } from "react";
-import React, { act, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
-  BotThreadRow,
-  ChannelTaskId,
-  EnvironmentId,
-  ThreadId,
-  type ChannelListBotThreadsResult,
-} from "@goat/contracts";
+  container,
+  nativePlatform,
+  press,
+  render,
+  renderWork,
+  reset,
+  state,
+  WorkWithChip,
+} from "./mobileBotWorkTestHarness";
+import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
-
-const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
-vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
-
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
-}));
-vi.mock("react-native", () => ({
-  Platform: nativePlatform,
-  Easing: { linear: (value: number) => value },
-  StyleSheet: { absoluteFill: {}, hairlineWidth: 1 },
-  useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
-  Animated: {
-    View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-    timing: () => ({}),
-    loop: () => ({ start: () => {}, stop: () => {} }),
-  },
-  Switch: ({
-    value,
-    disabled,
-    accessibilityLabel,
-    onValueChange,
-  }: {
-    value?: boolean;
-    disabled?: boolean;
-    accessibilityLabel?: string;
-    onValueChange?: (value: boolean) => void;
-  }) => (
-    <input
-      type="checkbox"
-      role="switch"
-      aria-label={accessibilityLabel}
-      checked={value}
-      disabled={disabled}
-      onChange={() => onValueChange?.(!value)}
-    />
-  ),
-  View: ({
-    children,
-    className,
-    style,
-    accessibilityLabel,
-  }: {
-    children?: ReactNode;
-    accessibilityLabel?: string;
-    className?: string;
-    style?: React.CSSProperties;
-  }) => (
-    <div className={className} style={style} aria-label={accessibilityLabel}>
-      {children}
-    </div>
-  ),
-  ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TextInput: (props: { accessibilityLabel?: string }) => (
-    <input aria-label={props.accessibilityLabel} />
-  ),
-  FlatList: (
-    props: {
-      data: ReadonlyArray<{ key: string }>;
-      renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
-    } & Record<string, unknown>,
-  ) => (
-    <div>
-      {props.data.map((item, index) => (
-        <div key={item.key}>{props.renderItem({ item, index })}</div>
-      ))}
-    </div>
-  ),
-  Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
-    visible ? <div>{children}</div> : null,
-  Alert: { alert: vi.fn() },
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  Pressable: ({
-    children,
-    onPress,
-    disabled,
-    accessibilityState,
-    accessibilityActions,
-    accessibilityLabel,
-    onAccessibilityAction,
-  }: {
-    children?: ReactNode;
-    onPress?: () => void;
-    disabled?: boolean;
-    accessibilityState?: { selected?: boolean; expanded?: boolean };
-    accessibilityActions?: { name: string; label: string }[];
-    accessibilityLabel?: string;
-    onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
-  }) => (
-    <button
-      onClick={onPress}
-      disabled={disabled}
-      aria-pressed={accessibilityState?.selected}
-      aria-expanded={accessibilityState?.expanded}
-      aria-label={accessibilityLabel}
-      data-actions={accessibilityActions?.map((item) => item.name).join(",")}
-      onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
-    >
-      {children}
-    </button>
-  ),
-}));
-// The row menu is native; these tests do not open it.
-vi.mock("./MobileBotRowMenu", () => ({
-  MobileBotRowMenu: (props: { label: string; row?: ReactNode }) => (
-    <>
-      {props.row}
-      <button aria-label={props.label} />
-    </>
-  ),
-}));
-const state = vi.hoisted(() => ({
-  connected: true,
-  task: {
-    data: null as null | { rows: BotThreadRow[] },
-    error: null as string | null,
-    isPending: true,
-    isSuccess: false,
-    refresh: vi.fn(),
-  },
-  routines: {
-    data: null as null | { tasks: unknown[] },
-    error: null as string | null,
-    isPending: true,
-    isSuccess: false,
-    refresh: vi.fn(),
-  },
-  setEnabled: vi.fn(),
-  runNow: vi.fn(),
-  retry: vi.fn(),
-  openThread: vi.fn(),
-  openTask: vi.fn(),
-  snoozeCapable: false,
-  checkSnoozes: vi.fn(),
-  snoozePage: vi.fn(),
-  snoozeCheck: {
-    data: null as null | Pick<ChannelListBotThreadsResult, "activeSnoozes">,
-    error: null as string | null,
-    refresh: vi.fn(),
-  },
-  // A server that looks tasks up by id and searches their titles.
-  lookupCapable: false,
-  lookup: vi.fn(),
-  update: vi.fn(),
-}));
-
-// The real face module draws the chip's face; only its native drawing and styling stand in.
-vi.mock("react-native-reanimated", () => {
-  const chain = { duration: () => chain, reduceMotion: () => chain };
-  return {
-    default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
-    FadeIn: chain,
-    ReduceMotion: { System: "system" },
-  };
-});
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
-vi.mock("uniwind", () => ({
-  withUniwind: (component: unknown) => component,
-  useResolveClassNames: () => ({ backgroundColor: "#f3f3f3" }),
-}));
-vi.mock("../../lib/appState", () => ({
-  useAppActive: () => true,
-  useReduceMotionEnabled: () => false,
-}));
-vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
-vi.mock("../../state/entities", () => ({
-  useThreadShell: () => null,
-  // No config: the Machines card asks as it does on a server without bot members.
-  useEnvironmentServerConfig: () => null,
-}));
-vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
-// The header's trailing items render as buttons, so tests press Work where iOS shows it.
-vi.mock("../../native/StackHeader", () => ({
-  NativeStackScreenOptions: ({
-    options,
-  }: {
-    options: {
-      unstable_headerRightItems: () => {
-        label: string;
-        accessibilityLabel: string;
-        onPress: () => void;
-      }[];
-    };
-  }) =>
-    options.unstable_headerRightItems().map((item) => (
-      <button
-        key={item.label}
-        data-header-item
-        aria-label={item.accessibilityLabel}
-        onClick={item.onPress}
-      >
-        {item.label}
-      </button>
-    )),
-}));
-vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("react-native-keyboard-controller", () => ({
-  KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
-}));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    // Home's shared current work; its links are not read in this file.
-    homeCurrentOpenableWorkAtom: () => "home-current",
-    listBotThreads: () => "task",
-    checkBotSnoozes: state.checkSnoozes,
-    listBotThreadsPage: { label: "work page", run: state.snoozePage },
-    snoozeBotTask: { permissionAtom: () => "permission" },
-    unsnoozeBotTask: { permissionAtom: () => "permission" },
-    listChildWork: () => "child",
-    listBotArtifacts: () => "artifacts",
-    readBotArtifact: {},
-    listTasks: () => "computer",
-    updateTaskView: { label: "update", permissionAtom: () => "permission", run: state.update },
-    retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
-    getBotTask: { label: "lookup", permissionAtom: () => "permission", run: state.lookup },
-    searchBotTasks: { label: "search", permissionAtom: () => "permission" },
-  },
-}));
-vi.mock("../../state/server", () => ({
-  serverEnvironment: {
-    scheduledTasksLive: () => "routines",
-    setScheduledTaskEnabled: {
-      label: "set enabled",
-      permissionAtom: () => "permission",
-      run: state.setEnabled,
-    },
-    runScheduledTaskNow: {
-      label: "run now",
-      permissionAtom: () => "permission",
-      run: state.runNow,
-    },
-  },
-}));
-vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
-vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({
-    presentationById: new Map([
-      [
-        "env",
-        {
-          serverConfig: {
-            environment: {
-              capabilities: {
-                goatBotTaskThreads: true,
-                goatBotTaskRetry: true,
-                goatBotTaskSnooze: state.snoozeCapable,
-                goatBotChildWork: true,
-                goatBotMembers: true,
-                goatBotTaskLookupSearch: state.lookupCapable,
-              },
-            },
-          },
-        },
-      ],
-    ]),
-  }),
-}));
-vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", async (original) => ({
-  ...(await original<typeof import("./goatBotHomeMode")>()),
-  pickMobileGoatBotHomeEnvironment: () => ({ environmentId: "env", connected: state.connected }),
-}));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
-}));
-vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
-vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (key: string | null) =>
-    key === "task"
-      ? // As the real query: a success counts only once settled, not while a read is waiting.
-        { ...state.task, successResult: state.task.isSuccess && !state.task.isPending ? {} : null }
-      : key === "routines"
-        ? state.routines
-        : key === "snooze-check"
-          ? state.snoozeCheck
-          : {
-              data: null,
-              cause: null,
-              error: null,
-              isPending: false,
-              isSuccess: false,
-              refresh: vi.fn(),
-            },
-}));
-// The task card's renderer pulls in the native Markdown view, which cannot load under Vitest.
-vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
-vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-vi.mock("../settings/appearance/useScaledTextRole", () => ({ useScaledTextRole: () => ({}) }));
-vi.mock("../../state/use-thread-detail", () => ({
-  useThreadDetail: () => ({ data: { _tag: "None" }, status: "empty", error: { _tag: "None" } }),
-  useThreadVisibleTurnItems: () => [],
-}));
-vi.mock("./GoatBotMarkdown", () => ({
-  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
-}));
-vi.mock("../../components/ui/Button", () => ({
-  Button: (props: { label: string; onPress: () => void }) => (
-    <button onClick={props.onPress}>{props.label}</button>
-  ),
-}));
-import { MobileBotWork } from "./MobileBotWork";
+import React, { act } from "react";
+import { expect, it } from "vite-plus/test";
 import { GoatBotChipFace } from "./GoatBotFace";
 
-// The chat's header chip opens the home; this stands in for it.
-function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      {props.taskId === undefined ? <button onClick={() => setOpen(true)}>Work</button> : null}
-      <MobileBotWork {...props} open={open} onOpenChange={setOpen} />
-    </>
-  );
-}
-const container = document.createElement("div");
-let root: ReturnType<typeof createRoot> | undefined;
-afterEach(async () => {
-  if (root) await act(async () => root?.unmount());
-  root = undefined;
-  container.remove();
-});
-
-function reset() {
-  state.connected = true;
-  state.snoozeCapable = false;
-  state.checkSnoozes.mockReset();
-  state.snoozePage.mockReset();
-  state.openTask.mockClear();
-  state.snoozeCheck.data = null;
-  state.snoozeCheck.error = null;
-  state.snoozeCheck.refresh.mockReset();
-  for (const query of [state.task, state.routines])
-    Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
-  state.task.refresh.mockReset();
-  // As the real query: asking again leaves the list waiting until a test settles it.
-  state.task.refresh.mockImplementation(() => Object.assign(state.task, { isPending: true }));
-  state.routines.refresh.mockClear();
-  state.setEnabled.mockReset();
-  state.runNow.mockReset();
-  state.retry.mockReset();
-  state.lookupCapable = false;
-  state.lookup.mockReset();
-  state.update.mockReset();
-}
-async function render(
-  taskId?: ChannelTaskId,
-  taskCard?: ReactNode,
-  turnsWaiting: readonly string[] = [],
-  chatTasks: ReadonlyArray<GoatBotTaskCard> = [],
-  chipFace?: ReactNode,
-) {
-  if (!root) root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <WorkWithChip
-        visible
-        taskId={taskId}
-        taskCard={taskCard}
-        turnsWaiting={turnsWaiting}
-        chatTasks={chatTasks}
-        chipFace={chipFace}
-        onOpenTask={state.openTask}
-        onOpenThread={state.openThread}
-      />,
-    ),
-  );
-}
-async function press(label: string) {
-  const button = [...container.querySelectorAll("button")].find((item) =>
-    item.textContent?.includes(label),
-  );
-  expect(button).toBeDefined();
-  await act(async () => button?.click());
-}
 it("distinguishes task and routine loading, empty, offline, and retry states", async () => {
   reset();
   await render();
@@ -749,30 +378,27 @@ it("shows task details in the header when a card is available for a listed task"
 it("names a task the server no longer lists from its conversation card, as older work", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
-  if (!root) root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <WorkWithChip
-        visible
-        taskId={ChannelTaskId.make("task-old")}
-        taskCardInfo={{
-          key: "task-old",
-          revision: 1,
-          updatedAt: "2026-11-11T02:00:00.000Z",
-          title: "Summarize the README",
-          statusLabel: "Needs your input",
-          tone: "attention",
-          sourceLabel: null,
-          summary: null,
-          attentionLabel: null,
-          pullRequests: [],
-          target: { kind: "none", label: "No thread" },
-        }}
-        taskCard={<span>Needs your input</span>}
-        onOpenTask={() => {}}
-        onOpenThread={state.openThread}
-      />,
-    ),
+  await renderWork(
+    <WorkWithChip
+      visible
+      taskId={ChannelTaskId.make("task-old")}
+      taskCardInfo={{
+        key: "task-old",
+        revision: 1,
+        updatedAt: "2026-11-11T02:00:00.000Z",
+        title: "Summarize the README",
+        statusLabel: "Needs your input",
+        tone: "attention",
+        sourceLabel: null,
+        summary: null,
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "No thread" },
+      }}
+      taskCard={<span>Needs your input</span>}
+      onOpenTask={() => {}}
+      onOpenThread={state.openThread}
+    />,
   );
   expect(container.textContent).toContain("Summarize the README");
   expect(container.textContent).toContain(
@@ -814,26 +440,33 @@ const routine = (id: string, lastRunStatus: string) => ({
   lastRunError: lastRunStatus === "failed" ? "Provider exited with code 1" : null,
 });
 
-it("offers Run now only for a routine whose last run failed, one run per tap", async () => {
+it("runs a healthy or paused timer on demand and gives webhook routines delivery guidance", async () => {
   reset();
+  const timer = { ...routine("fine", "succeeded"), enabled: false };
+  const trigger = {
+    ...routine("hook", "failed"),
+    title: "PR delivery",
+    schedule: { type: "webhook" },
+    routineMode: "work",
+  };
   Object.assign(state.routines, {
     isPending: false,
     isSuccess: true,
-    data: { tasks: [routine("failed", "failed"), routine("fine", "succeeded")] },
+    data: { tasks: [timer, trigger] },
   });
-  state.runNow.mockResolvedValue(AsyncResult.success({ task: routine("failed", "failed") }));
+  state.runNow.mockResolvedValue(AsyncResult.success({ task: timer }));
   await render();
   await press("Work");
-  // Routines sit on Home with machines and work.
   const runButtons = [...container.querySelectorAll("button")].filter(
     (button) => button.textContent === "Run now",
   );
   expect(runButtons).toHaveLength(1);
+  expect(container.textContent).toContain("Signed deliveries to the webhook URL start work");
   await act(async () => runButtons[0]?.click());
   expect(state.runNow).toHaveBeenCalledOnce();
   expect(state.runNow).toHaveBeenCalledWith(expect.anything(), {
     environmentId: "env",
-    input: { id: "failed" },
+    input: { id: "fine" },
   });
 });
 

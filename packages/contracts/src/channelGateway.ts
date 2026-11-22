@@ -37,11 +37,12 @@ import {
   ChannelBotRef,
   ChannelTask,
   ChannelTaskChip,
-  ChannelTaskDoneMeans,
   ChannelTaskStatus,
+  ChannelWorkerRef,
+  ChannelTaskDoneMeans,
 } from "./channelLedger.ts";
 import { ChannelSkillProposal } from "./channelSkillProposal.ts";
-import { ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
+import { ChannelTaskNeedsYou, ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { GoatBotHomeClaim } from "./settings.ts";
 
@@ -619,6 +620,7 @@ export const BotCodingRow = Schema.Struct({
   lastActivityAt: IsoDateTime,
   workKind: Schema.optional(GoatBotWorkKind),
 });
+export const CHANNEL_BOT_TASK_APPROVAL_LIMIT = 64;
 export const CHANNEL_BOT_TASK_ACTIVITY_LIMIT = 50;
 const activityFields = {
   id: TrimmedNonEmptyString,
@@ -677,6 +679,20 @@ export const BotWorkResult = Schema.Struct({
   activity: Schema.optionalKey(ChannelBotTaskActivity),
   launchesTruncated: Schema.Boolean,
   partial: Schema.Boolean,
+  approvalObservation: Schema.optional(
+    Schema.Struct({
+      worker: Schema.optional(
+        Schema.Struct({
+          environmentId: ChannelWorkerRef.fields.environmentId,
+          threadId: ChannelWorkerRef.fields.threadId,
+          host: ChannelWorkerRef.fields.host,
+        }),
+      ),
+      needsYou: Schema.Array(ChannelTaskNeedsYou).check(
+        Schema.isMaxLength(CHANNEL_BOT_TASK_APPROVAL_LIMIT),
+      ),
+    }),
+  ),
 });
 export type BotWorkResult = typeof BotWorkResult.Type;
 export const ChannelGetBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, botId: BotId });

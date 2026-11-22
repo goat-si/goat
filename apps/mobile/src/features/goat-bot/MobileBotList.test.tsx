@@ -14,7 +14,7 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => state.select,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ known: true, mode: "bot", setMode: vi.fn() }),
+  useMobileGoatBotModeWithOfflineSummary: () => ({ known: true, mode: "bot", setMode: vi.fn() }),
 }));
 vi.mock("./MobileBotRosterView", () => ({ MobileHomeSegments: () => <div>Bots | Threads</div> }));
 vi.mock("./MobileBotRosterPanel", () => ({

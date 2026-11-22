@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelChildWorkId,
   ChannelWorkerObservation,
+  EnvironmentId,
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
@@ -34,6 +35,7 @@ const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerO
 const sshHost = "mac-studio";
 const sshThread = ThreadId.make("thread:remote");
 const sshApprovalId = RuntimeRequestId.make("approval:ssh");
+const sshEnvironment = EnvironmentId.make("env:mac-studio");
 
 const sshObservation = {
   pullRequests: [],
@@ -50,6 +52,7 @@ const admitSsh = Effect.fn(function* (
   task: { readonly taskId: string; readonly generation: number },
   id: string,
   state: "bound" | "completed",
+  environmentId?: EnvironmentId,
 ) {
   const admitted = yield* (yield* ChildStore.ChannelChildWorkStore).admitReserved(
     {
@@ -61,7 +64,11 @@ const admitSsh = Effect.fn(function* (
       requestKey: id,
       promptDigest: "digest",
       surface: "ssh_thread_launch",
-      destination: { correlationId: "corr:" + id, host: sshHost },
+      destination: {
+        correlationId: "corr:" + id,
+        host: sshHost,
+        ...(environmentId === undefined ? {} : { environmentId }),
+      },
       state,
       createdAt: since,
       updatedAt: since,
@@ -101,7 +108,7 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* gateway.ingest(goatInput("do: write the release notes", "ssh-late"), rpcContext);
       yield* runtime.drain;
       const task = yield* onlyTask;
-      yield* admitSsh(task, "late", "completed");
+      yield* admitSsh(task, "late", "completed", sshEnvironment);
       harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).status, "completed");
@@ -111,7 +118,12 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* runtime.drain;
       const finished = yield* onlyTask;
       assert.strictEqual(finished.status, "completed");
-      assert.deepStrictEqual(finished.observed?.needsYou, [stampedSshApproval]);
+      assert.deepStrictEqual(finished.observed?.needsYou, [
+        {
+          ...stampedSshApproval,
+          approval: { ...stampedSshApproval.approval, environmentId: sshEnvironment },
+        },
+      ]);
       assert.strictEqual(yield* cards, cardsBefore + 1);
       const version = finished.version;
       yield* reports.reconcile(runtime.ownerToken);
@@ -203,14 +215,19 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* gateway.ingest(goatInput("do: write the release notes", "ssh-run"), rpcContext);
       yield* runtime.drain;
       const task = yield* onlyTask;
-      yield* admitSsh(task, "run", "bound");
+      yield* admitSsh(task, "run", "bound", sshEnvironment);
       yield* insertThreadDispatch("run", sshObservation);
       const cardsBefore = yield* cards;
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
       const running = yield* onlyTask;
       assert.strictEqual(running.status, "running");
-      assert.deepStrictEqual(running.observed?.needsYou, [stampedSshApproval]);
+      assert.deepStrictEqual(running.observed?.needsYou, [
+        {
+          ...stampedSshApproval,
+          approval: { ...stampedSshApproval.approval, environmentId: sshEnvironment },
+        },
+      ]);
       assert.strictEqual(yield* cards, cardsBefore + 1);
     }).pipe(Effect.provide(harness.layer));
   });

@@ -24,7 +24,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { replyDelivery } from "./channelReplyDelivery.ts";
-import { launchObservationNeeds } from "./channelRemoteChildNeeds.ts";
+import {
+  launchObservationNeeds,
+  remoteLaunchChild,
+  type RemoteChildRef,
+} from "./channelRemoteChildNeeds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   isThreadMissing,
@@ -304,7 +308,7 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
       {
         readonly stored: ChannelLedger.ChannelStoredTask;
         readonly threadIds: Array<ThreadId>;
-        readonly remote: Array<{ readonly correlationId: string; readonly host: string }>;
+        readonly remote: RemoteChildRef[];
       }
     >();
     for (const row of rows) {
@@ -314,13 +318,7 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
       const task = decodedTask.value;
       const child = decodedChild.value;
       const destination = child.destination;
-      const remote =
-        (child.surface === "ssh_thread_launch" || child.surface === "delegate_remote") &&
-        child.generation === task.generation &&
-        destination?.correlationId !== undefined &&
-        destination.host !== undefined
-          ? { correlationId: destination.correlationId, host: destination.host }
-          : undefined;
+      const remote = remoteLaunchChild(child, task.generation);
       const threadId =
         child.surface === "thread_launch" &&
         child.generation === task.generation &&

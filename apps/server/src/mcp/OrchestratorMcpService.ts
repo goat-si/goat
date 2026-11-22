@@ -67,6 +67,7 @@ import {
   admissionCorrelationId,
   admitDelegate,
   bindChildWork,
+  bindRemoteChildWork,
   existingChildWorkConflict,
   launchChildWork,
   launchRemoteChildWork,
@@ -2245,13 +2246,11 @@ const make = Effect.gen(function* () {
             yield* releaseChildWork(channelChildWork, admission);
           }
         }
-        if (admitted.enabled && launched._tag === "Success")
-          yield* permissions.complete(
-            taskId,
-            launched.success.launch.threadId,
-            launched.success.correlationId,
-          );
-        if (launched._tag === "Success") yield* bindChildWork(channelChildWork, admission);
+        if (launched._tag === "Success") {
+          const { correlationId, launch } = launched.success;
+          if (admitted.enabled) yield* permissions.complete(taskId, launch.threadId, correlationId);
+          yield* bindRemoteChildWork(channelChildWork, admission, host, launched.success);
+        }
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&

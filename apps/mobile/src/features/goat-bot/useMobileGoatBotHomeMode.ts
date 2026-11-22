@@ -11,6 +11,7 @@ import { AsyncResult } from "effect/reactivity";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import { resolveGoatBotHomeSelection } from "@goat/client-runtime/goatBot";
+import { useOfflineBotSummary } from "./useOfflineBotSummary";
 import { useMobileGoatBotEnvironments } from "./useMobileGoatBotEnvironments";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
@@ -69,9 +70,24 @@ export function useMobileGoatBotHomeMode() {
   return { mode, known, loaded, botRef, environments, home, setMode };
 }
 
+export function useMobileGoatBotModeWithOfflineSummary(restoreOffline = true) {
+  const home = useMobileGoatBotHomeMode();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const summary = useOfflineBotSummary(null, restoreOffline && !home.known);
+  if (summary === null) return home;
+  return {
+    ...home,
+    known: true,
+    mode: effectiveHomeMode(
+      AsyncResult.isSuccess(preferences) ? preferences.value.homeMode : undefined,
+      true,
+    ),
+  };
+}
+
 /** Both the compact header and the persistent sidebar return to empty detail. */
 export function useMobileGoatBotModeButton() {
-  const home = useMobileGoatBotHomeMode();
+  const home = useMobileGoatBotModeWithOfflineSummary();
   const { mode, setMode } = home;
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const threadOpen = useNavigationState(mobileGoatBotDetailOpen);
