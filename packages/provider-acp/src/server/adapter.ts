@@ -3,6 +3,7 @@ import {
   idleReportedSubagents,
   makeAcpAwaitBackgroundTasks,
   makeDeferredFinalizeScheduler,
+  makePostSettleHoldExpiry,
 } from "./deferredBackground.ts";
 import {
   AcpModelSelectionError,
@@ -166,7 +167,13 @@ import {
   type AcpToolCallState,
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
-import { appendToolContentText, textFromUnknown } from "./toolOutputText.ts";
+import {
+  appendToolContentText,
+  textFromUnknown,
+  toolOutputText,
+  setToolOutputText,
+  appendToolOutputText,
+} from "./toolOutputText.ts";
 import { parseElicitationForm } from "./elicitationForm.ts";
 import * as AdvertisedCommands from "./advertisedCommands.ts";
 import {
@@ -1028,7 +1035,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const notePromptProgress =
           /* Provider events include streaming deltas; avoid a span for each update. */
           Effect.fnUntraced(function* (notification?: EffectAcpSchema.SessionNotification) {
-            if (promptInactivityTimeoutMillis === undefined) return;
+            if (
+              promptInactivityTimeoutMillis === undefined &&
+              flavor.postSettleCommandHold === undefined
+            )
+              return;
             if (
               notification !== undefined &&
               !ACP_PROMPT_ACTIVITY_UPDATES.has(notification.update.sessionUpdate)
@@ -2544,42 +2555,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return true;
         });
 
-        const toolOutputText = (toolCall: AcpToolCallState): string => {
-          if (typeof toolCall.data.rawOutput === "string") {
-            return toolCall.data.rawOutput;
-          }
-          if (
-            typeof (toolCall.data.rawOutput as { text?: unknown } | undefined)?.text === "string"
-          ) {
-            return String((toolCall.data.rawOutput as { text: string }).text);
-          }
-          return textFromUnknown(toolCall.data.rawOutput) ?? "";
-        };
-
-        const setToolOutputText = (toolCall: AcpToolCallState, text: string): AcpToolCallState => ({
-          ...toolCall,
-          data: {
-            ...toolCall.data,
-            rawOutput: {
-              type: "Text",
-              text,
-            },
-          },
-        });
-
-        const appendToolOutputText = (
-          toolCall: AcpToolCallState,
-          appendOutput: string,
-        ): AcpToolCallState => {
-          if (appendOutput.length === 0) return toolCall;
-          return setToolOutputText(toolCall, `${toolOutputText(toolCall)}${appendOutput}`);
-        };
-
         const isMonitorEndNoticeText = (text: string): boolean =>
           /Monitor\s+["']?[0-9a-f-]{8,}/i.test(text) && /ended/i.test(text);
 
-        const hasDeferredBackgroundWork = (context: ActiveAcpTurn) =>
-          hasAcpDeferredBackgroundWork(context, flavor, agentRequests.size);
+        const hasDeferredBackgroundWork = (
+          context: ActiveAcpTurn,
+          ignoreTool?: (tool: AcpToolCallState) => boolean,
+        ) => hasAcpDeferredBackgroundWork(context, flavor, agentRequests.size, ignoreTool);
 
         const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
           [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
@@ -6758,6 +6740,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           onScheduled: options.testHooks?.onDeferredFinalizeScheduled,
         });
 
+        const schedulePostSettleHoldExpiry = makePostSettleHoldExpiry({
+          flavor,
+          hasDeferredBackgroundWork,
+          finalizeTurn,
+          sessionScope,
+        });
+
         const promptInactivityPaused = Effect.fn("AcpAdapterV2.promptInactivityPaused")(function* (
           context: ActiveAcpTurn,
         ) {
@@ -7338,6 +7327,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 return;
               }
               if (!context.finalized) {
+                yield* schedulePostSettleHoldExpiry(context);
                 if (hasDeferredBackgroundWork(context)) {
                   yield* rearmDeferredFinalize(context);
                 } else {
@@ -7521,6 +7511,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     if (context.finalized) return;
                     if (deferred || pendingReply) {
                       yield* closeTextStreams(context);
+                      yield* schedulePostSettleHoldExpiry(context);
                       if (pendingReply) {
                         context.replyOpen = true;
                         yield* scheduleDeferredFinalize(context);

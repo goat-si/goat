@@ -1,3 +1,4 @@
+import type { AcpToolCallState } from "./runtimeModel.ts";
 import { unknownRecord } from "./clientPolicy.ts";
 
 function decodeByteText(value: unknown): string | undefined {
@@ -98,3 +99,32 @@ export function retainedToolCallOutputTail(text: string): string | undefined {
   // A tail starting inside a surrogate pair is invalid Unicode.
   return text.slice(-TOOL_CALL_CONTENT_MAX_CHARS).replace(/^[\uDC00-\uDFFF]/u, "");
 }
+
+export const toolOutputText = (toolCall: AcpToolCallState): string => {
+  if (typeof toolCall.data.rawOutput === "string") {
+    return toolCall.data.rawOutput;
+  }
+  if (typeof (toolCall.data.rawOutput as { text?: unknown } | undefined)?.text === "string") {
+    return String((toolCall.data.rawOutput as { text: string }).text);
+  }
+  return textFromUnknown(toolCall.data.rawOutput) ?? "";
+};
+
+export const setToolOutputText = (toolCall: AcpToolCallState, text: string): AcpToolCallState => ({
+  ...toolCall,
+  data: {
+    ...toolCall.data,
+    rawOutput: {
+      type: "Text",
+      text,
+    },
+  },
+});
+
+export const appendToolOutputText = (
+  toolCall: AcpToolCallState,
+  appendOutput: string,
+): AcpToolCallState => {
+  if (appendOutput.length === 0) return toolCall;
+  return setToolOutputText(toolCall, `${toolOutputText(toolCall)}${appendOutput}`);
+};
