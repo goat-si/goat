@@ -65,7 +65,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.deepStrictEqual((yield* history).at(-1), [oldMax, goatNames[oldMax - 80]!]);
         assert.deepStrictEqual(yield* runMigrations(), [
           ...UPSTREAM_80S,
-          ...goatNames.slice(oldMax - 79).map(currentRow),
+          ...migrationManifest.filter(([id]) => id > oldMax + 10),
         ]);
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.includeDeepMembers(yield* history, [
