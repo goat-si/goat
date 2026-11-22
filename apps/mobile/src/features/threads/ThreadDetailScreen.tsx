@@ -1245,9 +1245,6 @@ function ThreadDetailBody(
           }
           offset={{ closed: 0, opened: composerKeyboardOffset }}
         >
-          {questionInFlow ? (
-            <Animated.View pointerEvents="none" style={questionStatusSpace} />
-          ) : null}
           <ComposerPopoverHost
             hidden={composerSlotHidden}
             popoverHeight={composerPopoverHeight}
@@ -1269,11 +1266,15 @@ function ThreadDetailBody(
                         bottom: controlInsets.bottom,
                         left: controlInsets.left,
                         right: controlInsets.right,
+                        paddingTop: FLOATING_WORKING_CONTROL_COVERAGE,
                       },
                       composerWidthStyle,
                     ]
               }
             >
+              {questionInFlow ? (
+                <Animated.View pointerEvents="none" style={questionStatusSpace} />
+              ) : null}
               {/* No paddingTop here: the overlay's measured height becomes the
                 list's bottom inset, so any padding above the pill/composer
                 pushes the resting content floor up by the same amount. */}
