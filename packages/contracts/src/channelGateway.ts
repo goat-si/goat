@@ -444,6 +444,8 @@ export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 /** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
 export const ChannelCreateBotInput = Schema.Struct({
   clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  templateId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  retryForBotId: Schema.optionalKey(BotId),
   name: BotProfile.fields.name,
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
@@ -459,7 +461,10 @@ export const ChannelDeleteBotInput = Schema.Struct({ botId: BotId });
 export type ChannelDeleteBotInput = typeof ChannelDeleteBotInput.Type;
 export const ChannelRestoreBotInput = Schema.Struct({ botId: BotId });
 export type ChannelRestoreBotInput = typeof ChannelRestoreBotInput.Type;
-export const ChannelBotResult = Schema.Struct({ bot: BotProfile });
+export const ChannelBotResult = Schema.Struct({
+  bot: BotProfile,
+  templateAutomationPending: Schema.optional(Schema.Literal(true)),
+});
 export type ChannelBotResult = typeof ChannelBotResult.Type;
 export type ChannelUpdateBotInput = typeof ChannelUpdateBotInput.Type;
 export type ChannelUpdateBotResult = typeof ChannelUpdateBotResult.Type;

@@ -12,6 +12,7 @@ const link = vi.hoisted(() => ({ phase: "connected" }));
 vi.mock("react-native", () => ({ Alert: { alert: rn.alert } }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("./goatBotComputerLink", () => ({
   useGoatBotComputerConnected: () => link.phase === "connected",
   goatBotComputerConnectedNow: () => link.phase === "connected",

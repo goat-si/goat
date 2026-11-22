@@ -1,3 +1,4 @@
+import { MobileBotTemplateRetry } from "./MobileBotTemplateRetry";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { BotId, ChannelTaskId, EnvironmentId, MAIN_BOT_ID } from "@goat/contracts";
 import { decodeBotAttentionRequest, goatBotName } from "@goat/client-runtime/goatBot";
@@ -149,6 +150,16 @@ export function GoatBotRouteScreen({
       seen={seen}
       member={member}
       main={main}
+      templateRetry={
+        !taskId && member?.templateSetup !== undefined ? (
+          <MobileBotTemplateRetry
+            key={member.botId}
+            bot={member}
+            canRetry={manage.canCreate && manage.canUseTemplates}
+            retry={manage.createTemplate}
+          />
+        ) : undefined
+      }
       onRestoreMember={
         member !== null && member.state === "deleted" && manage.mayManage
           ? manage.connected

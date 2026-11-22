@@ -1,4 +1,9 @@
-import { forgetNewBotEnvironment, newBotSlot } from "@goat/client-runtime/goatBot";
+import {
+  clearBotTemplateDraft,
+  forgetNewBotEnvironment,
+  newBotSlot,
+  readBotTemplateDraft,
+} from "@goat/client-runtime/goatBot";
 import { BotProfile, BotThreadRow, EnvironmentId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -21,6 +26,7 @@ const bots = vi.hoisted(() => ({
   profiles: [] as Array<object>,
   members: [] as Array<object>,
   supportsMembers: false,
+  supportsTemplates: false,
   memberShell: null as object | null,
   error: null as string | null,
   eligible: false,
@@ -84,8 +90,16 @@ vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => ({
     connection: { phase: "connected" },
-    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+    serverConfig: {
+      environment: {
+        capabilities: { goatBotProfileEdit: true, goatBotTemplates: bots.supportsTemplates },
+      },
+    },
   }),
+}));
+vi.mock("~/state/session", async (original) => ({
+  ...(await original<typeof import("~/state/session")>()),
+  useEnvironmentScope: () => true,
 }));
 vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
@@ -222,6 +236,7 @@ function setup() {
   bots.profiles = [];
   bots.members = [];
   bots.supportsMembers = false;
+  bots.supportsTemplates = false;
   bots.memberShell = null;
   bots.error = null;
   bots.eligible = false;
@@ -335,6 +350,87 @@ it("keeps New bot disabled until the server offers member bots and its list has 
   bots.supportsMembers = true;
   await screen.rerender(<GoatBotSidebarTabs />);
   await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
+});
+
+it("omits the template picker on an older host that supports blank member bots", async () => {
+  setup();
+  bots.supportsMembers = true;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to render the roster without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "From a template" }).query()).toBeNull();
+});
+
+it("shows the paused automation and offers the first message as a draft", async () => {
+  setup();
+  bots.supportsMembers = true;
+  bots.supportsTemplates = true;
+  const bot = profile("watcher", "CI watcher");
+  actions.create.mockResolvedValueOnce({ _tag: "Success", value: { bot } });
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to render the roster without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await userEvent.click(screen.getByRole("button", { name: "From a template" }));
+  const dialog = screen.getByRole("dialog", { name: "From a template" });
+  await expect.element(dialog.getByText("Paused", { exact: true })).toBeVisible();
+  await expect.element(dialog.getByText(/Help me decide which repository/)).toBeVisible();
+  const create = dialog.getByRole("button", { name: "Create bot" });
+  (create.element() as HTMLButtonElement).focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(actions.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "env-1",
+    input: expect.objectContaining({
+      templateId: "ci-watcher",
+      clientRequestId: expect.any(String),
+    }),
+  });
+  expect(readBotTemplateDraft(bot.environmentId, bot.sessionThreadId)).toBe(
+    "Help me decide which repository and checks to watch.",
+  );
+  clearBotTemplateDraft(bot.environmentId, bot.sessionThreadId);
+});
+
+it("keeps Retry on the bot after opening it from a partial template setup", async () => {
+  setup();
+  bots.supportsMembers = true;
+  bots.supportsTemplates = true;
+  const bot = profile("partial", "CI watcher");
+  actions.create.mockImplementationOnce(async ({ input }) => {
+    const pending = {
+      ...bot,
+      templateSetup: { clientRequestId: input.clientRequestId, templateId: input.templateId },
+    };
+    bots.profiles = [pending];
+    bots.members = [pending];
+    return { _tag: "Success", value: { bot: pending, templateAutomationPending: true } };
+  });
+  actions.create.mockResolvedValueOnce({ _tag: "Success", value: { bot } });
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked while the roster re-reads the bot returned by the host.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await userEvent.click(screen.getByRole("button", { name: "From a template" }));
+  const dialog = screen.getByRole("dialog", { name: "From a template" });
+  (dialog.getByRole("button", { name: "Create bot" }).element() as HTMLButtonElement).focus();
+  await userEvent.keyboard("{Enter}");
+  const open = dialog.getByRole("button", { name: "Open bot" });
+  await expect.element(open).toBeVisible();
+  (open.element() as HTMLButtonElement).focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(dialog).not.toBeInTheDocument();
+  await screen.rerender(<GoatBotSidebarTabs />);
+  const retry = screen.getByRole("button", { name: "Retry setup for CI watcher" });
+  await expect.element(retry).toBeVisible();
+  await userEvent.click(retry);
+  await vi.waitFor(() => expect(actions.create).toHaveBeenCalledTimes(2));
+  expect(actions.create.mock.calls[1]?.[0].input).toMatchObject({
+    templateId: "ci-watcher",
+    clientRequestId: actions.create.mock.calls[0]?.[0].input.clientRequestId,
+    retryForBotId: bot.botId,
+  });
+  await expect.element(retry).not.toBeInTheDocument();
+  clearBotTemplateDraft(bot.environmentId, bot.sessionThreadId);
 });
 
 it("one click sends createBot named New bot 2 beside a deleted New bot, with no dialog, and a second click sends nothing", async () => {

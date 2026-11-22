@@ -19,3 +19,5 @@ export function isGeneratedBotName(name: string): boolean {
   const number = Number(name.slice(BASE.length + 1));
   return Number.isSafeInteger(number) && number >= 2 && generatedName(number) === name;
 }
+
+export { GOAT_BOT_TEMPLATES, goatBotTemplate } from "./goatBotTemplates.ts";
