@@ -1,46 +1,26 @@
-import { useAtomValue } from "@effect/atom-react";
-import { botManageFailure } from "@goat/client-runtime/goatBot";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { BotProposalCard, EnvironmentId } from "@goat/contracts";
+import type { BotProposalCard, ChannelResolveBotProposalInput } from "@goat/contracts";
 import { useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
-import { appAtomRegistry } from "../../state/atom-registry";
-import { channelEnvironment } from "../../state/channels";
-import { useEnvironmentServerConfig } from "../../state/entities";
-import { useGoatBotComputerConnected } from "./goatBotComputerLink";
+import { Pressable, Text, View } from "react-native";
 
 export function GoatBotProposalCard({
   card,
-  environmentId,
+  resolve,
 }: {
   readonly card: BotProposalCard;
-  readonly environmentId: EnvironmentId;
+  readonly resolve?: ((input: ChannelResolveBotProposalInput) => Promise<boolean>) | undefined;
 }) {
-  const config = useEnvironmentServerConfig(environmentId);
-  const connected = useGoatBotComputerConnected(environmentId);
-  const permitted = useAtomValue(
-    channelEnvironment.resolveBotProposal.permissionAtom(environmentId),
-  );
   const [saving, setSaving] = useState(false);
   const [settled, setSettled] = useState<"accepted" | "dismissed">();
   const [now] = useState(Date.now);
   const expired = Date.parse(card.expiresAt) <= now;
   const status = settled ?? card.status;
-  const canResolve =
-    connected && permitted && config?.environment.capabilities.goatBotProposals === true;
   async function submit(accept: boolean) {
+    if (!resolve) return;
     setSaving(true);
     try {
-      const result = await runAtomCommand(appAtomRegistry, channelEnvironment.resolveBotProposal, {
-        environmentId,
-        input: { proposalId: card.proposalId, accept },
-      });
-      if (result._tag === "Success") setSettled(accept ? "accepted" : "dismissed");
-      else
-        Alert.alert(
-          "Couldn't resolve proposal",
-          botManageFailure(squashAtomCommandFailure(result)),
-        );
+      if (await resolve({ proposalId: card.proposalId, accept })) {
+        setSettled(accept ? "accepted" : "dismissed");
+      }
     } finally {
       setSaving(false);
     }
@@ -58,7 +38,7 @@ export function GoatBotProposalCard({
           <Text className="text-foreground">{card.fields.instructions}</Text>
         </View>
       ) : null}
-      {status === "pending" && !expired && canResolve ? (
+      {status === "pending" && !expired && resolve ? (
         <View className="flex-row gap-3">
           <Pressable
             accessibilityRole="button"
