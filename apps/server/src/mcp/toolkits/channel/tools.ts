@@ -4,6 +4,7 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   ChannelBotHomeClaimResult,
   ChannelBotHomeStatus,
+  BotId,
   ChannelBotListResult,
   ChannelProposeBotInput,
   ChannelProposeBotResult,
@@ -29,6 +30,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ChannelBotHome from "../../../channels/ChannelBotHome.ts";
+import * as ChannelBotThreads from "../../../channels/ChannelBotThreads.ts";
 import * as ChannelBotProfiles from "../../../channels/ChannelBotProfiles.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
@@ -123,9 +125,13 @@ const ChannelBotHomeTool = Tool.make(agentSurfaceRegistry["channel.bot_home_read
 
 const ChannelBotListTool = Tool.make(agentSurfaceRegistry["channel.bot_list"].name, {
   ...shared,
-  dependencies: [...shared.dependencies, ChannelBotProfiles.ChannelBotProfiles],
+  dependencies: [
+    ...shared.dependencies,
+    ChannelBotProfiles.ChannelBotProfiles,
+    ChannelBotThreads.ChannelBotThreads,
+  ],
   description: agentSurfaceRegistry["channel.bot_list"].description,
-  parameters: Tool.EmptyParams,
+  parameters: Schema.Struct({ followedBy: Schema.optionalKey(BotId) }),
   success: ChannelBotListResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.bot_list"]));
 

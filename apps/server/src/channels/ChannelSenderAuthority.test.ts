@@ -395,11 +395,16 @@ describe("a local worker's follow-up", () => {
     "before queued start",
     "agent before queued start",
     "queued before sender binding existed",
+    "answer before forward",
+    "answer before dispatch",
+    "answer before queued start",
+    "answer allowed",
     "allowed",
-  ] as const)("checks live authority for notes-bearing worker follow-ups (%s)", (phase) =>
+  ] as const)("checks live authority for notes-bearing worker deliveries (%s)", (phase) =>
     Effect.gen(function* () {
+      const answer = phase.startsWith("answer ");
       const canSteer =
-        phase.endsWith("before forward") ||
+        (!answer && phase.endsWith("before forward")) ||
         phase === "before steer dispatch" ||
         phase === "before provider steer";
       const provider = yield* nextTurnSelectionHarness(
@@ -471,8 +476,28 @@ describe("a local worker's follow-up", () => {
           );
         }
 
+        const questionId = ChannelQuestionId.make("question:disk");
+        if (answer) {
+          const stored = (yield* ledger.getTask(taskId))!;
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.question.opened",
+              payload: {
+                question: { questionId, text: "Which disk?", askedAt: "2026-11-21T00:00:00Z" },
+              },
+            },
+            { owner: runtime.ownerToken },
+          );
+        }
         const next = yield* gateway.ingest(
-          goatInput("more:" + taskId + " check again", "worker-follower"),
+          goatInput(
+            answer
+              ? "answer:" + taskId + " " + questionId + " check again"
+              : "more:" + taskId + " check again",
+            "worker-follower",
+          ),
           {
             ...memoryRpcContext,
             authSessionId: sender.sessionId,
@@ -523,11 +548,14 @@ describe("a local worker's follow-up", () => {
             yield* reception.receive(next.inputId, runtime.ownerToken);
           }
           const [pending] = yield* ledger.listPendingForwards(10);
-          assert.strictEqual(pending?.event.type, "task.followup.received");
-          if (pending === undefined) return yield* Effect.die("No follow-up was recorded");
-          if (phase === "before forward") yield* revoke;
+          assert.strictEqual(
+            pending?.event.type,
+            answer ? "task.question.answered" : "task.followup.received",
+          );
+          if (pending === undefined) return yield* Effect.die("No delivery was recorded");
+          if (phase === "before forward" || phase === "answer before forward") yield* revoke;
           if (phase === "requester before forward") yield* sessions.revoke(opener.sessionId);
-          if (phase === "before steer dispatch") {
+          if (phase === "before steer dispatch" || phase === "answer before dispatch") {
             const send = threads.sendToThread;
             Object.assign(threads, {
               sendToThread: (input: Parameters<typeof send>[0]) =>
@@ -554,6 +582,13 @@ describe("a local worker's follow-up", () => {
             requests.find((request) => request.request.type === "provider-turn.steer")?.status,
             "failed",
           );
+          return;
+        }
+        if (phase === "answer before forward" || phase === "answer before dispatch") {
+          assert.isFalse(
+            forwarded.messages.some((message) => message.text.includes("check again")),
+          );
+          assert.lengthOf((yield* task(taskId)).openQuestions, 1);
           return;
         }
         if (canSteer) {
@@ -596,7 +631,7 @@ describe("a local worker's follow-up", () => {
           "starting",
         );
         yield* starts.start({ threadId, runId: queued.id });
-        if (phase === "allowed") {
+        if (phase === "allowed" || phase === "answer allowed") {
           assert.lengthOf(provider.started, 2);
           assert.include(provider.started[1]?.message.text ?? "", "check again");
           assert.notInclude(provider.started[1]?.message.text ?? "", note);

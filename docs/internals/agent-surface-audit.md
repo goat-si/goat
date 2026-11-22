@@ -15,7 +15,7 @@ Run `node scripts/agent-surface/inventory.ts` for the JSON inventory, including 
 | Mutating tools, by enforced handler access             | 195               |
 | Mutating tools that accept clientRequestId             | 80                |
 | Mutating tools whose clientRequestId GOAT deduplicates | 74                |
-| Input parameters with a description                    | 567 of 1222 (46%) |
+| Input parameters with a description                    | 567 of 1223 (46%) |
 | Tools with a worked example                            | 76 of 312         |
 | CLI commands, listed / unlisted                        | 62 / 23           |
 | CLI commands with usage examples                       | 0 of 85           |
@@ -195,7 +195,7 @@ One intent is spelled several ways (tool counts in parentheses):
 
 ## Descriptions and examples
 
-Only 46% of input parameters carry a description. 111 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_answer`, `channel_task_export`, `channel_task_follow_up`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_stop`, `delete_scheduled_task`, and 101 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
+Only 46% of input parameters carry a description. 112 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_answer`, `channel_task_export`, `channel_task_follow_up`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_stop`, `delete_scheduled_task`, and 102 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
 76 of 312 tools show a worked call, in their description or as examples `goat_describe` serves (68 tools). 176 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
@@ -271,7 +271,7 @@ The server's `/llms.txt` lists public registry paths with their summaries. `goat
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (266 `return`, 46 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Complete the on-demand tool reference.** 160 tools appear in no doc or prompt. `/llms.txt` filters its public index for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 68 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 655 of 1222 parameters have no description, and 111 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
+4. **Describe every parameter.** 656 of 1223 parameters have no description, and 112 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 115 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 7. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.

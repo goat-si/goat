@@ -1,5 +1,6 @@
 import {
-  type ChannelGatewayError,
+  AuthOrchestrationReadScope,
+  ChannelGatewayError,
   type ChannelInboundMessage,
   type ChannelTaskEvent,
   OrchestratorMcpFailure,
@@ -9,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as ChannelBotHome from "../../../channels/ChannelBotHome.ts";
+import * as ChannelBotThreads from "../../../channels/ChannelBotThreads.ts";
 import * as ChannelBotProfiles from "../../../channels/ChannelBotProfiles.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
@@ -318,13 +320,30 @@ export const layer = McpToolAccess.toLayer(
             .pipe(Effect.mapError(failureFor));
         }),
       ),
-      goat_channel_bot_list: McpToolAccess.reads(() =>
+      goat_channel_bot_list: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
           const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
           const bots = yield* profiles
             .list({ ownerId: yield* ownerIdOf })
             .pipe(Effect.mapError(failureFor));
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          if (input.followedBy !== undefined && scope.client !== undefined) {
+            if (scope.reauthorize === undefined)
+              return yield* failureFor(new ChannelGatewayError({ reason: "forbidden" }));
+            yield* scope
+              .reauthorize([AuthOrchestrationReadScope])
+              .pipe(
+                Effect.mapError(() => failureFor(new ChannelGatewayError({ reason: "forbidden" }))),
+              );
+          }
           return {
+            ...(input.followedBy === undefined
+              ? {}
+              : {
+                  followedThreads: yield* (yield* ChannelBotThreads.ChannelBotThreads)
+                    .listFollowed(yield* ownerIdOf, input.followedBy)
+                    .pipe(Effect.mapError(failureFor)),
+                }),
             bots: bots.map((bot) => ({
               botId: bot.botId,
               role: bot.role,

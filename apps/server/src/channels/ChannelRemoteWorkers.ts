@@ -52,7 +52,7 @@ import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { makeRemoteBotBrief } from "./channelRemoteWorkerBrief.ts";
+import { makeRemoteBotBrief, remoteBriefCarriesNotes } from "./channelRemoteWorkerBrief.ts";
 import { remoteWorkerLaunchPrompt } from "./channelWorkerBrief.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import {
@@ -468,7 +468,7 @@ const make = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const freezeWorkerBrief = makeRemoteBotBrief({ ledger, profiles, fileSystem, path, stateDir });
-  const replicaDir = path.join((yield* ServerConfig.ServerConfig).stateDir, "channel-replicas");
+  const replicaDir = path.join(stateDir, "channel-replicas");
   const fibers = yield* FiberMap.make<string, void, never>();
   const locks = new Map<string, Semaphore.Semaphore>();
   const lockFor = (taskId: string) => {
@@ -2524,13 +2524,12 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
-      // Runs last in authorize, which the SSH layer repeats right before each request, so requester
-      // and sender are judged together at that point. Whether an earlier attempt reached the host
-      // stays unknown either way.
+      const brief = yield* ledger.latestTaskBrief(event.taskId, stored.task.generation);
       const senderGate = requesterForDelivery(
         stored.task,
         event.payload.sender,
         event.actor === "user" ? event.payload.inputId : undefined,
+        remoteBriefCarriesNotes(brief),
       ).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),

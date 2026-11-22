@@ -230,19 +230,21 @@ export const turnInstruction = (
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
-    memory?.write === false
-      ? ""
-      : task.notesChangeRequested === undefined
-        ? TURN_NOTES_RULE
-        : "Exception to the read-only rule above: the person asked to change or forget a note (" +
-          JSON.stringify(task.notesChangeRequested) +
-          "). Edit GOAT Bot's notes file (" +
-          files.notes +
-          ") yourself to make exactly that change, and change nothing else. " +
-          OTHER_NOTES_REQUESTS +
-          " When a follow-up asks for one, call " +
-          goatCallText("channel.notes_change") +
-          " for it right away instead of waiting: GOAT answers that it must wait and tells the person.",
+    files.sharedNotes === undefined
+      ? "Keep the shared notes file unchanged. Ask the person to make shared note changes through the All bots memory view."
+      : memory?.write === false
+        ? ""
+        : task.notesChangeRequested === undefined
+          ? TURN_NOTES_RULE
+          : "Exception to the read-only rule above: the person asked to change or forget a note (" +
+            JSON.stringify(task.notesChangeRequested) +
+            "). Edit GOAT Bot's notes file (" +
+            files.notes +
+            ") yourself to make exactly that change, and change nothing else. " +
+            OTHER_NOTES_REQUESTS +
+            " When a follow-up asks for one, call " +
+            goatCallText("channel.notes_change") +
+            " for it right away instead of waiting: GOAT answers that it must wait and tells the person.",
     ...channelWorkerRules("local", "turn"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");

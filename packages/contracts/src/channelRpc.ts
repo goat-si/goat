@@ -26,6 +26,10 @@ import {
   ChannelSetBotHiddenInput,
   ChannelListChildWorkInput,
   ChannelListChildWorkResult,
+  ChannelFollowThreadInput,
+  ChannelFollowTarget,
+  ChannelListFollowedThreadsInput,
+  ChannelListFollowedThreadsResult,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
@@ -142,6 +146,21 @@ const ChannelDeleteBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.deleteBot, {
 const ChannelRestoreBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.restoreBot, {
   payload: ChannelRestoreBotInput,
   success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelFollowThreadRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.followThread, {
+  payload: ChannelFollowThreadInput,
+  success: Schema.Boolean,
+  error: ChannelRpcError,
+});
+const ChannelStopFollowingThreadRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread, {
+  payload: ChannelFollowTarget,
+  error: ChannelRpcError,
+});
+const ChannelListFollowedThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listFollowedThreads, {
+  payload: ChannelListFollowedThreadsInput,
+  success: ChannelListFollowedThreadsResult,
   error: ChannelRpcError,
 });
 
@@ -286,6 +305,9 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelSetBotHiddenRpc,
   ChannelDeleteBotRpc,
   ChannelRestoreBotRpc,
+  ChannelFollowThreadRpc,
+  ChannelStopFollowingThreadRpc,
+  ChannelListFollowedThreadsRpc,
   ChannelListBotThreadsRpc,
   ChannelListBotNotesRpc,
   ChannelListBotArtifactsRpc,
