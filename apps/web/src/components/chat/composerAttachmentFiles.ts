@@ -209,12 +209,27 @@ function isOnlyFileNames(text: string, files: ReadonlyArray<File>): boolean {
     .every((line) => names.has(line));
 }
 
-/** A browser's Copy Image puts only an <img> in text/html; rich text sources put the text there. */
-export function isImageOnlyClipboardHtml(html: string): boolean {
-  if (html.length === 0) return false;
-  if (readSnapshotClipboardWrapper(html)) return true;
+export function clipboardHtmlImageContent(html: string): "only-image" | "image-and-text" | "none" {
+  if (!html) return "none";
+  if (readSnapshotClipboardWrapper(html)) return "only-image";
   const body = new DOMParser().parseFromString(html, "text/html").body;
-  return body.querySelector("img") !== null && (body.textContent ?? "").trim().length === 0;
+  if (!body.querySelector("img")) return "none";
+  return (body.textContent ?? "").trim().length === 0 ? "only-image" : "image-and-text";
+}
+
+function isPastedImageFile(file: File): boolean {
+  const classification = classifyComposerAttachmentFile(file);
+  return classification === "image" || classification === "unsupported-image";
+}
+
+export function imagesToAttachBesidePastedText(input: {
+  readonly files: ReadonlyArray<File>;
+  readonly plainText: string;
+  readonly bypassAutoAttachment?: boolean;
+  readonly htmlHasImageAndText: boolean;
+}): File[] {
+  if (input.bypassAutoAttachment || !input.plainText || !input.htmlHasImageAndText) return [];
+  return input.files.filter(isPastedImageFile);
 }
 
 export function shouldHandleComposerAttachmentPaste(input: {

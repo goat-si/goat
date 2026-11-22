@@ -193,3 +193,25 @@ it("holds Send while the pasted PNG is being verified", async () => {
   });
   expect(state.launch).not.toHaveBeenCalled();
 });
+
+it("pastes a chat message with its image and text", async () => {
+  await using fixture = await setupComposer();
+  await fixture.mount();
+  const editor = editorIn(fixture.container);
+  const { clipboard, record } = await snapshotClipboardFixture({ plainImage: true });
+  clipboard.setData("text/plain", "Look at this");
+  clipboard.setData("text/html", '<p>Look at this<img src="https://example.com/image.png"></p>');
+  await act(async () => {
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: clipboard, cancelable: true, bubbles: true }),
+    );
+  });
+  await vi.waitFor(() => {
+    expect(store().getComposerDraft(id)?.prompt).toContain("Look at this");
+    expect(
+      store()
+        .getComposerDraft(id)
+        ?.images.map((image) => image.name),
+    ).toEqual([record.name]);
+  });
+});

@@ -135,7 +135,8 @@ import {
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
-  isImageOnlyClipboardHtml,
+  clipboardHtmlImageContent,
+  imagesToAttachBesidePastedText,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
 import {
@@ -2683,6 +2684,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
+    const htmlImageContent =
+      activeThreadId && files.length > 0 && plainText.length > 0
+        ? clipboardHtmlImageContent(event.clipboardData.getData("text/html"))
+        : "none";
     if (
       folders.length > 0 ||
       (activeThreadId &&
@@ -2691,9 +2696,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           files,
           plainText,
           bypassAutoAttachment,
-          htmlIsOnlyImage:
-            plainText.length > 0 &&
-            isImageOnlyClipboardHtml(event.clipboardData.getData("text/html")),
+          htmlIsOnlyImage: htmlImageContent === "only-image",
         }))
     ) {
       event.preventDefault();
@@ -2726,6 +2729,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if ((readPastedComposerContext(event.clipboardData)?.records.length ?? 0) > 0) return;
+    const imagesBesideText = imagesToAttachBesidePastedText({
+      files,
+      plainText,
+      bypassAutoAttachment,
+      htmlHasImageAndText: htmlImageContent === "image-and-text",
+    });
+    if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
     if (!foldPastedText(plainText, bypassAutoAttachment)) {
       return;
     }
@@ -2887,7 +2897,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
     };
   }, []);
-
   const openModelPicker = () => {
     if (composerControlsHidden) {
       if (composerBlurFrameRef.current !== null) {
@@ -2900,7 +2909,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerModelPickerOpen(true);
   };
   const openModelPickerStable = useStableCallback(openModelPicker);
-
   useImperativeHandle(
     composerRef,
     () => ({
@@ -3207,7 +3215,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setIsComposerScrollCollapsed,
     ],
   );
-
   // Built outside the form's JSX so typing, which rebuilds that JSX, leaves them cached.
   const composerAttachmentMediaRow =
     !isComposerCollapsedMobile &&
@@ -3252,7 +3259,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onRemoveFile={removeComposerFileFromDraft}
       />
     ) : null;
-
   return (
     <form
       ref={composerReplyTargetRef}
@@ -3266,7 +3272,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           target.closest('button, a, input, select, [role="button"], [role="menuitem"]'),
         );
         if (isInteractive) return;
-
         setIsComposerScrollCollapsed(false);
         if (isComposerResting && !target.closest('[data-testid="composer-editor"]')) {
           event.preventDefault();
@@ -3500,7 +3505,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               </div>
             ) : null}
-
             <div
               ref={(node) => {
                 setComposerMenuAnchor(node);
@@ -3536,7 +3540,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </ComposerCommandMenuLayer>
               )}
-
               <div role="status" aria-atomic="true" className="sr-only">
                 {composerSuggestionsVisible && composerMenuItems.length === 0
                   ? isComposerMenuLoading
@@ -3564,7 +3567,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </ComposerCommandMenuLayer>
               )}
-
               {!isComposerCollapsedMobile &&
                 pendingUserInputs.length === 0 &&
                 editingQueuedAttachments !== null &&
@@ -3574,9 +3576,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onRemove={onRemoveEditingQueuedAttachment}
                   />
                 )}
-
               {composerAttachmentMediaRow}
-
               {composerAttachmentFileList}
 
               <div
