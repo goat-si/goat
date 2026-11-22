@@ -252,7 +252,7 @@ import {
 } from "./composerScrollGesture";
 import { observeResize } from "~/lib/observeResize";
 import { ContextWindowMeter } from "./ContextWindowMeter";
-import { ComposerAttachAction } from "./ComposerAttachAction";
+import { ComposerAttachButton, ComposerAttachInput } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { settleThreadContextsForAgent } from "~/lib/threadContextRoute";
@@ -1055,6 +1055,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const composerAttachInputRef = useRef<HTMLInputElement>(null);
   const composerReplyTargetRef = useComposerReplyTarget(composerFormRef, composerRef);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
@@ -2578,10 +2579,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       insertAttachmentReferences,
     });
   const composerAttachAction = showComposerAttachAction ? (
-    <ComposerAttachAction
-      addComposerAttachments={addComposerAttachments}
-      focusComposer={focusComposer}
-    />
+    <ComposerAttachButton onOpenPicker={() => composerAttachInputRef.current?.click()} />
   ) : null;
   const composerContextWindowMeter = settings.contextWindowMeterHidden ? null : (
     <span data-resting-fixed-control className="flex shrink-0 items-center">
@@ -2656,12 +2654,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       getModelDisabledReason={getModelDisabledReason}
     />
   );
-
   const onComposerCommandKeyStable = useStableCallback(onComposerCommandKey);
   const isPathQueryActiveStable = useStableCallback(
     () => resolveActiveComposerTrigger().trigger?.kind === "path",
   );
-
   const insertComposerTextAtEnd: ChatComposerHandle["insertTextAtEnd"] = (text, options) => {
     const inserted = insertComposerText(text, "end", options);
     if (inserted && isComposerCollapsedMobile) {
@@ -2671,7 +2667,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return inserted;
   };
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
-
   const addComposerFoldersStable = useComposerFolderDrop({
     environmentId,
     primaryEnvironmentId,
@@ -2679,7 +2674,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     insertAtEnd: insertComposerTextAtEndStable,
     focus: focusComposer,
   });
-
   const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (event, importSnapshot) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
@@ -3331,6 +3325,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
+      {showComposerAttachAction ? (
+        <ComposerAttachInput
+          ref={composerAttachInputRef}
+          addComposerAttachments={addComposerAttachments}
+          focusComposer={focusComposer}
+        />
+      ) : null}
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(
             <div
@@ -3578,7 +3579,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 )}
               {composerAttachmentMediaRow}
               {composerAttachmentFileList}
-
               <div
                 className={cn("relative", isComposerResting && "flex min-w-0 items-center gap-1")}
                 style={

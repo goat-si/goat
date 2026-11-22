@@ -51,6 +51,7 @@ const state = vi.hoisted(() => ({
   // Per-test query data by atom; null keeps every query empty.
   queryData: null as ((atom: unknown) => unknown) | null,
   narrowRightPanel: false,
+  mobileViewport: false,
   keybindings: null as ResolvedKeybindingsConfig | null,
   // Stable like the real store selectors; a fresh array per render loops the timeline.
   empty: [] as never[],
@@ -75,7 +76,8 @@ vi.mock("/src/state/environments", { spy: true });
 vi.mock("/src/state/entities", { spy: true });
 vi.mock("/src/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
-    state.narrowRightPanel && query === RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+    (state.narrowRightPanel && query === RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY) ||
+    (state.mobileViewport && query === "max-sm"),
 }));
 vi.mock("/src/hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
 vi.mock("/src/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
@@ -325,6 +327,7 @@ export async function setupSshComposer(realComposer = false) {
   state.primaryConnection = null;
   state.queryData = null;
   state.narrowRightPanel = false;
+  state.mobileViewport = false;
   state.keybindings = null;
   state.noopCommand.mockReset().mockResolvedValue({ _tag: "Success", value: { providers: [] } });
   vi.stubGlobal("matchMedia", () => ({
