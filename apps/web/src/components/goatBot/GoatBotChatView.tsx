@@ -317,16 +317,20 @@ function GoatBotChatViewContent({
   const onDraft =
     canSend && !hidden
       ? (text: string) => {
-          if (narrow) {
-            sheetClosedFor.current = "draft";
-            setPanelOpen(false);
-          }
-          if (composerRef.current?.offerDraft(text) === false) {
+          const composer = composerRef.current;
+          if (composer === null) return false;
+          if (!composer.offerDraft(text)) {
             toastManager.add({
               type: "info",
               title: "Your message box already has a message. Send or clear it, then try again.",
             });
+            return false;
           }
+          if (narrow) {
+            sheetClosedFor.current = "draft";
+            setPanelOpen(false);
+          }
+          return true;
         }
       : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
