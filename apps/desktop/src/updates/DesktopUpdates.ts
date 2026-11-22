@@ -1,8 +1,10 @@
+import { downloadWithNetworkRetry } from "./automaticDownloadRetry.ts";
 import { makeUpdateInstallRecord } from "./updateInstallRecord.ts";
 export { DESKTOP_UPDATE_INSTALL_RECORD_FILE } from "./updateInstallRecord.ts";
 import {
   checkDesktopUpdateFeed,
   decodeDownloadProgressInfo,
+  decodeUpdateInfo,
   hasDownloadOffer,
   hasInstallableDownload,
   isPersistedDownload,
@@ -101,16 +103,6 @@ type UpdateAction = "check" | "download" | "install" | "install-recovery" | "cha
 interface DesktopPreparedUpdateInstallResult extends DesktopUpdateActionResult {
   readonly failed: boolean;
 }
-
-const UpdateInfo = Schema.Struct({
-  version: Schema.String,
-  // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
-  releaseNotes: Schema.optional(Schema.Unknown),
-  releaseName: Schema.optional(Schema.NullOr(Schema.String)),
-  releaseDate: Schema.optional(Schema.String),
-});
-
-const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
 
 const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -822,22 +814,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     if (state.status === "available" && state.availableVersion) {
-      let attempt = yield* downloadAvailableUpdate(true);
-      for (const delay of ["2 seconds", "8 seconds"] as const) {
-        const failed = attempt.state;
-        if (
-          !attempt.accepted ||
-          failed.errorContext !== "download" ||
-          !/\b(?:ERR_HTTP2_PROTOCOL_ERROR|ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET|ECONNRESET|ETIMEDOUT)\b/u.test(
-            failed.message ?? "",
-          )
-        )
-          break;
-        // Release the download reservation during backoff. A manual action, channel
-        // change or fresh offer replaces this snapshot and invalidates the retry.
-        yield* Effect.sleep(delay);
-        attempt = yield* downloadAvailableUpdate(true, failed);
-      }
+      yield* downloadWithNetworkRetry((failed) => downloadAvailableUpdate(true, failed));
       return;
     }
     if (
