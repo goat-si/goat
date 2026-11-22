@@ -537,6 +537,7 @@ export const make = Effect.gen(function* () {
 
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     automatic = false,
+    retryOf?: DesktopUpdateState,
   ) {
     const admission = yield* Effect.scoped(
       admitAfterCheck(
@@ -559,7 +560,10 @@ export const make = Effect.gen(function* () {
               settings.updateInstallPolicy === "paused" ||
               current.installPolicy === "paused" ||
               settings.updateChannel !== current.channel ||
-              (yield* Ref.get(availabilityGeneration)) === (yield* Ref.get(attemptedGeneration))
+              (retryOf
+                ? current !== retryOf
+                : (yield* Ref.get(availabilityGeneration)) ===
+                  (yield* Ref.get(attemptedGeneration)))
             ) {
               return "refused" as const;
             }
@@ -818,7 +822,22 @@ export const make = Effect.gen(function* () {
       return;
     }
     if (state.status === "available" && state.availableVersion) {
-      yield* downloadAvailableUpdate(true);
+      let attempt = yield* downloadAvailableUpdate(true);
+      for (const delay of ["2 seconds", "8 seconds"] as const) {
+        const failed = attempt.state;
+        if (
+          !attempt.accepted ||
+          failed.errorContext !== "download" ||
+          !/\b(?:ERR_HTTP2_PROTOCOL_ERROR|ERR_NETWORK_CHANGED|ERR_CONNECTION_RESET|ECONNRESET|ETIMEDOUT)\b/u.test(
+            failed.message ?? "",
+          )
+        )
+          break;
+        // Release the download reservation during backoff. A manual action, channel
+        // change or fresh offer replaces this snapshot and invalidates the retry.
+        yield* Effect.sleep(delay);
+        attempt = yield* downloadAvailableUpdate(true, failed);
+      }
       return;
     }
     if (
