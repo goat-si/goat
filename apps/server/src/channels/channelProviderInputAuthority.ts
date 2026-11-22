@@ -24,7 +24,11 @@ import {
   requesterForDispatch,
   sessionMemoryCeiling,
 } from "./channelDispatchAuthority.ts";
-import { isChannelFollowUpMessageId, workerLaunchIdsFor } from "./channelIds.ts";
+import {
+  isChannelAnswerMessageId,
+  isChannelFollowUpMessageId,
+  workerLaunchIdsFor,
+} from "./channelIds.ts";
 import {
   sessionCarriesNotes,
   workerContextOwner,
@@ -87,10 +91,11 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       if (!session && !isChannelWorkerThreadId(threadId)) return undefined;
       const intent = session ? yield* sessionIntentFor(sql, threadId, messageId) : undefined;
       const worker = session ? undefined : yield* workerContextOwner(sql, threadId);
-      const workerFollowUp = !session && isChannelFollowUpMessageId(messageId);
+      const workerDelivery =
+        !session && (isChannelFollowUpMessageId(messageId) || isChannelAnswerMessageId(messageId));
       if (
         worker !== undefined &&
-        !workerFollowUp &&
+        !workerDelivery &&
         workerLaunchIdsFor(worker.task_id, worker.generation).messageId !== messageId
       )
         return undefined;
@@ -98,7 +103,7 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       const stored =
         taskId !== undefined
           ? yield* ledger.getTask(taskId)
-          : workerFollowUp
+          : workerDelivery
             ? yield* ledger.findTaskByWorkerThread(threadId)
             : undefined;
       if (stored === undefined) return taskId === undefined ? undefined : permissionChanged;
@@ -114,7 +119,7 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       const carriesNotes =
         brief?.context.notesPath !== undefined ||
         (session && (yield* sessionCarriesNotes(sql, threadId)));
-      if (workerFollowUp && !carriesNotes) return undefined;
+      if (workerDelivery && !carriesNotes) return undefined;
       if (
         !slackSession &&
         !carriesNotes &&
@@ -123,7 +128,7 @@ const makeProviderInputRefusal = Effect.gen(function* () {
       )
         return undefined;
 
-      const current = workerFollowUp
+      const current = workerDelivery
         ? yield* requesterForDelivery(
             task,
             undefined,

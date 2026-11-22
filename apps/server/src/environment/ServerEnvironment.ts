@@ -386,6 +386,7 @@ export const make = Effect.gen(function* () {
       goatBotPackages: true,
       goatBotProfileColor: true,
       goatBotMembers: true,
+      goatBotThreadFollows: true,
       goatBotTaskThreads: true,
       goatBotTaskThreadsPaged: true,
       goatBotTaskSnooze: true,

@@ -1,5 +1,5 @@
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
-import type { ChannelRequester } from "@goat/contracts";
+import type { ChannelRequester, ChannelTaskBrief } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -9,6 +9,9 @@ import { channelBotFilesFor, recallChannelBotNotes } from "./channelBotNotes.ts"
 import { identitySection } from "./channelBotSessionBrief.ts";
 import { freezeChannelBrief } from "./channelBriefs.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
+
+export const remoteBriefCarriesNotes = (brief: ChannelTaskBrief | undefined) =>
+  brief?.deliveredText.includes("<goat_bot_notes>") ?? false;
 
 export const makeRemoteBotBrief = (deps: {
   readonly ledger: ChannelLedger["Service"];
@@ -39,7 +42,7 @@ export const makeRemoteBotBrief = (deps: {
       const frozen = yield* freezeChannelBrief(deps.ledger, stored, owner, message, {
         notesRevision: notes?.revision ?? null,
       });
-      const sendsNotes = frozen.brief.deliveredText.includes("<goat_bot_notes>");
+      const sendsNotes = remoteBriefCarriesNotes(frozen.brief);
       return { ...frozen, sendsNotes, denied: sendsNotes && !mayRead };
     },
     Effect.provideService(FileSystem.FileSystem, deps.fileSystem),
