@@ -19,6 +19,7 @@ function deferred<T>() {
 
 const state = vi.hoisted(() => ({
   granted: new Set<string>(),
+  threadFollows: undefined as boolean | undefined,
   effects: [] as string[],
   completed: deferred<void>(),
   show: vi.fn<
@@ -65,7 +66,13 @@ vi.mock("../state/entities", () => ({
   }),
   useProjects: () => [{ id: "project", environmentId: "secondary" }],
 }));
-vi.mock("../state/environments", () => ({ usePrimaryEnvironmentId: () => "primary" }));
+vi.mock("../state/environments", () => ({
+  usePrimaryEnvironmentId: () => "primary",
+  readEnvironment: () => ({
+    connection: { phase: "connected" },
+    serverConfig: { environment: { capabilities: { goatBotThreadFollows: state.threadFollows } } },
+  }),
+}));
 vi.mock("../state/threads", () => ({ threadEnvironment: { updateMetadata: "metadata" } }));
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: () => async () => {
@@ -179,6 +186,7 @@ const createMenu = (options: { readonly onFind?: (threadRef: typeof target) => v
 beforeEach(() => {
   state.granted = new Set(["primary"]);
   state.effects = [];
+  state.threadFollows = undefined;
   state.completed = deferred<void>();
   state.show.mockReset().mockResolvedValue(null);
 });
@@ -195,6 +203,22 @@ describe("thread menu permissions", () => {
       choice.resolve(action);
       await state.completed.promise;
       expect(state.effects).toEqual([]);
+    },
+  );
+
+  it.each([
+    { capability: undefined, permitted: true, shown: false },
+    { capability: true, permitted: false, shown: false },
+    { capability: true, permitted: true, shown: true },
+  ])(
+    "shows follow actions only with server support and permission ($capability, $permitted)",
+    ({ capability, permitted, shown }) => {
+      state.threadFollows = capability;
+      if (permitted) state.granted.add("secondary");
+      createMenu().openMenu(position);
+      const labels = state.show.mock.calls[0]?.[0].map((item) => item.label) ?? [];
+      expect(labels.includes("Ask a bot to follow…")).toBe(shown);
+      expect(labels.includes("Stop following")).toBe(shown);
     },
   );
 

@@ -352,6 +352,7 @@ export function GoatBotWorkPanel({
             />
             <GoatBotSectionCard title="Work">
               <GoatBotHomeWork
+                followedThreads={current.followedThreads}
                 environmentId={environmentId}
                 threadId={threadId}
                 botName={botName}
