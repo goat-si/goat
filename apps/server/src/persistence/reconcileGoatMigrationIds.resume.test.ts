@@ -25,7 +25,7 @@ import {
   fresh,
   history,
   isDatabaseNewerThanBuildError,
-  laterGoatRows,
+  laterMigrationRows,
   schema,
   seedOldGoatLedger,
   seedUserData,
@@ -257,7 +257,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
-        ...laterGoatRows,
+        ...laterMigrationRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
@@ -277,7 +277,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(3),
-        ...laterGoatRows,
+        ...laterMigrationRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -301,7 +301,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(5),
-        ...laterGoatRows,
+        ...laterMigrationRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -375,7 +375,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
-        ...laterGoatRows,
+        ...laterMigrationRows,
       ]);
       const expected = yield* fresh;
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {

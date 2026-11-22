@@ -39,6 +39,7 @@ vi.mock("~/state/channels", () => ({
 }));
 
 import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { GoatBotTaskActivity } from "./GoatBotTaskActivity";
 
 const childWork = Atom.make(() => {
   state.reads += 1;
@@ -74,6 +75,115 @@ const decodeRemoteWork = Schema.decodeSync(BotRemoteWork);
 const decodeRow = Schema.decodeSync(BotThreadRow);
 const decodeLookupWork = Schema.decodeUnknownSync(BotWorkResult);
 const at = "2026-11-09T00:00:00.000Z";
+it("labels Activity with the worker's thread title or a readable fallback", async () => {
+  const threadId = "channel-worker:reception";
+  state.shellTitles = { [threadId]: "Add second hello to README" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Update the project", status: "completed", updatedAt: at },
+      worker: { environmentId: "local", threadId },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { id: "end", type: "worker_finished", actor: "goat", at, environmentId: "local", threadId },
+        { id: "start", type: "worker_started", actor: "bot", at, environmentId: "local", threadId },
+        {
+          id: "previous",
+          type: "worker_finished",
+          actor: "goat",
+          at,
+          environmentId: "local",
+          threadId: "channel-worker:previous",
+        },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect
+    .element(screen.getByText("Worker started · Add second hello to README"))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Add second hello to README"))
+    .toBeVisible();
+  await expect.element(screen.getByText("Worker finished · Work thread 1")).toBeVisible();
+  await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
+});
+
+it("shows unpaired SSH worker Activity as text even when a local thread has the same id", async () => {
+  const subject = { host: "unpaired", threadId: "channel-worker:ssh" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Work", status: "completed", updatedAt: at },
+    },
+    codingRows: [
+      {
+        kind: "coding",
+        taskId: "task-1",
+        environmentId: "local",
+        threadId: subject.threadId,
+        title: "Local work",
+        state: "completed",
+        lastActivityAt: at,
+      },
+    ],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { ...subject, id: "end", type: "worker_finished", actor: "goat", at },
+        { ...subject, id: "start", type: "worker_started", actor: "bot", at },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect.element(screen.getByText("Worker started · Work thread on unpaired")).toBeVisible();
+  await expect.element(screen.getByText("Worker finished · Work thread on unpaired")).toBeVisible();
+  await expect.element(screen.getByText(/channel-worker:/)).not.toBeInTheDocument();
+  expect(screen.getByRole("link").all()).toHaveLength(0);
+});
+
+it("tells two unnamed workers on one host apart in Activity", async () => {
+  const first = { host: "builder", threadId: "channel-worker:first" };
+  const second = { host: "builder", threadId: "channel-worker:second" };
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Work", status: "completed", updatedAt: at },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+    activity: {
+      entries: [
+        { ...second, id: "second-end", type: "worker_finished", actor: "goat", at },
+        { ...first, id: "first-end", type: "worker_finished", actor: "goat", at },
+        { ...second, id: "second-start", type: "worker_started", actor: "bot", at },
+        { ...first, id: "first-start", type: "worker_started", actor: "bot", at },
+      ],
+    },
+  });
+  await using screen = await render(<GoatBotTaskActivity work={work} />);
+  await userEvent.click(screen.getByText("Activity", { exact: true }));
+  await expect.element(screen.getByText("Worker started · Work thread 1 on builder")).toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Work thread 1 on builder"))
+    .toBeVisible();
+  await expect.element(screen.getByText("Worker started · Work thread 2 on builder")).toBeVisible();
+  await expect
+    .element(screen.getByText("Worker finished · Work thread 2 on builder"))
+    .toBeVisible();
+});
+
 const rows = [
   Schema.decodeSync(BotThreadRow)({
     kind: "task",
@@ -391,4 +501,46 @@ it("a coding thread titled like its task keeps that title", async () => {
   await expect
     .element(screen.getByRole("link", { name: "Restart the 3774 server" }))
     .toHaveAttribute("href", "/env-studio/coding-same");
+});
+
+it("shows each remote worker's own PR even when its thread is unavailable", async () => {
+  setup(["env-macbook"]);
+  const [paired] = remoteWork;
+  if (!paired) throw new Error("expected a paired worker");
+  await using screen = await render(
+    <GoatBotWorkDetails
+      environmentId={studio}
+      taskId={ChannelTaskId.make("task-1")}
+      rows={rows}
+      remoteWork={[
+        {
+          ...paired,
+          pullRequests: [{ repository: "goat-si/goat", number: 42, state: "open", watching: true }],
+        },
+        {
+          ...decodeRemoteWork({
+            childWorkId: "cw-unpaired",
+            taskId: "task-1",
+            callerThreadId: "channel-worker:task-1",
+            host: "builder",
+            state: "bound",
+            lastActivityAt: at,
+            threadId: "unpaired-thread",
+          }),
+          pullRequests: [
+            { repository: "goat-si/other", number: 73, state: "merged", watching: false },
+          ],
+        },
+      ]}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on macbookpro2" }))
+    .toBeVisible();
+  await expect.element(screen.getByText("Pull request goat-si/goat#42, open")).toBeInTheDocument();
+  await expect.element(screen.getByText("builder · Unavailable")).toBeVisible();
+  await expect
+    .element(screen.getByText("Pull request goat-si/other#73, merged"))
+    .toBeInTheDocument();
+  await expect.element(screen.getByRole("link", { name: /builder/ })).not.toBeInTheDocument();
 });

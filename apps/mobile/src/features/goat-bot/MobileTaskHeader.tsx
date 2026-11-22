@@ -1,5 +1,6 @@
 import {
   taskAttemptLabel,
+  mergeBotRemoteWorkers,
   type BotWorkTask,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
@@ -13,6 +14,7 @@ import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import { MobileBotTaskActivity } from "./mobileBotWorkDetails";
 import { MobileTaskActions } from "./MobileTaskActions";
 import {
   mobileBotTaskStatus,
@@ -57,7 +59,8 @@ export function MobileTaskHeader(props: {
   readonly screen: Pick<
     ReturnType<typeof useMobileTaskScreen>,
     "lookup" | "canUpdate" | "update" | "retried"
-  >;
+  > &
+    Partial<Pick<ReturnType<typeof useMobileTaskScreen>, "snooze">>;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
   readonly botName: string;
@@ -104,6 +107,9 @@ export function MobileTaskHeader(props: {
       ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
       : null;
   const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
+  const doneMeans = task?.row.task.doneMeans ?? unavailable?.task.task.doneMeans;
+  const result =
+    lookup.state === "known" || lookup.state === "unavailable" ? lookup.result : undefined;
   return (
     <View className="gap-2 border-b border-border px-4 py-3">
       <Text className="font-semibold text-foreground">{title}</Text>
@@ -113,6 +119,12 @@ export function MobileTaskHeader(props: {
           {taskAttemptLabel(generation) ? ` · ${taskAttemptLabel(generation)}` : null}
         </Text>
       ) : null}
+      {doneMeans !== undefined && (
+        <Text className="text-foreground-muted">
+          <Text className="font-medium text-foreground">Done means</Text> {doneMeans}
+        </Text>
+      )}
+      {result?.activity && <MobileBotTaskActivity work={result} />}
       {!props.enabled ? (
         <Text className="text-foreground-muted">
           Task is unavailable while {props.botName} is offline or unsupported.
@@ -128,7 +140,7 @@ export function MobileTaskHeader(props: {
       ) : props.loading ? (
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
-      {lookup.state === "loading" ? (
+      {props.task === undefined && lookup.state === "loading" ? (
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
       {lookup.state === "missing" ? (
@@ -171,17 +183,18 @@ export function MobileTaskHeader(props: {
       ) : null}
       {task ? (
         <MobileTaskActions
-          task={task}
-          rows={
-            props.task !== undefined || lookup.state !== "known"
-              ? props.rows
-              : lookup.result.codingRows
+          task={
+            props.task !== undefined && result
+              ? { ...task, remote: mergeBotRemoteWorkers(task.remote, result.remoteWork) }
+              : task
           }
+          rows={props.task === undefined ? (result?.codingRows ?? props.rows) : props.rows}
           taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}
           canUpdate={canUpdate}
           canRetry={props.canRetry}
+          snooze={props.screen.snooze}
           childError={props.childError}
           onUpdate={onUpdate}
           onRetried={retried}

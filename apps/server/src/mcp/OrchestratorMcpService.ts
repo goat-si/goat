@@ -115,6 +115,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { scheduledTaskReads } from "./scheduledTaskReads.ts";
 import { resolveScheduledTaskBaseRef } from "./ScheduledTaskBaseRef.ts";
 import {
   clientRuntimeModeCeiling,
@@ -1711,6 +1712,10 @@ const make = Effect.gen(function* () {
     return task;
   });
 
+  const { readScheduledTasks, listScheduledTaskDeliveries } = scheduledTaskReads(
+    scheduledTasks,
+    (scope) => loadCaller(scope, ["runs"]),
+  );
   return OrchestratorMcpService.of({
     permissionProfile: (scope) =>
       permissions.resolve(scope).pipe(Effect.map(({ narrowing: _narrowing, ...view }) => view)),
@@ -1815,23 +1820,15 @@ const make = Effect.gen(function* () {
     }),
     listScheduledTasks: Effect.fn("OrchestratorMcpService.listScheduledTasks")(
       function* (scope, input) {
-        const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        const projectId = input.projectId ?? parent?.thread.projectId;
-        const { tasks } = yield* scheduledTasks
-          .list()
-          .pipe(
-            Effect.mapError((error) =>
-              failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
-            ),
-          );
+        const { tasks, parent, limits } = yield* readScheduledTasks(scope, input.projectId);
         return {
-          tasks: yield* Effect.forEach(
-            tasks.filter((task) => projectId === undefined || task.projectId === projectId),
-            (task) => summarizeScheduledTask(scope, { parent, limits }, task),
+          tasks: yield* Effect.forEach(tasks, (task) =>
+            summarizeScheduledTask(scope, { parent, limits }, task),
           ),
         };
       },
     ),
+    listScheduledTaskDeliveries,
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(function* (
       scope,
       input,

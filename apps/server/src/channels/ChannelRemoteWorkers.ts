@@ -1,5 +1,4 @@
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
-/** Dispatches and tracks channel workers on linked machines. */
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -1689,6 +1688,7 @@ const make = Effect.gen(function* () {
               originLabel: NodeOS.hostname().slice(0, 120) || "GOAT",
               originThreadId: bot?.bot.threadId ?? ThreadId.make("channel-task:" + taskId),
               readKeyHash,
+              botAttention: true,
             },
             reportNote: REPORTING_NOTE,
           },
@@ -2057,7 +2057,7 @@ const make = Effect.gen(function* () {
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
         (stored.task.status === "running" || stored.task.status === "waiting_input") &&
-        !channelWorkerObservationEquals(stored.task.observed, stamped)
+        !channelWorkerObservationEquals(stored.task.observed, stamped, true)
       ) {
         const card =
           stored.task.requester.originKind !== "mcp" &&

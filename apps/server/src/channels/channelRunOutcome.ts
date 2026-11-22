@@ -20,6 +20,7 @@ import {
   CHANNEL_SESSION_PROFILE_CHANGED,
   CHANNEL_SESSION_PROFILE_UNREADABLE,
 } from "./channelSessionProfileFence.ts";
+import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import type { ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 
 export interface ReportedRunOutcome {
@@ -38,6 +39,7 @@ export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
   threads: ThreadManagementService["Service"],
   run: OrchestrationV2Run,
   session: boolean,
+  routineWork: boolean,
 ) {
   if (session && run.status === "failed") {
     const errors = yield* threads
@@ -78,9 +80,17 @@ export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
       }
     }
   }
+  const releaseReason =
+    routineWork && run.status === "failed"
+      ? routineWorkerReleaseReason(
+          yield* threads.getThreadShell(run.threadId).pipe(Effect.orElseSucceed(() => null)),
+          run.id,
+        )
+      : undefined;
   return {
     reason: run.status,
-    summary: "The coding thread ended with " + run.status.replaceAll("_", " ") + ".",
+    summary:
+      releaseReason ?? "The coding thread ended with " + run.status.replaceAll("_", " ") + ".",
   };
 });
 

@@ -248,7 +248,7 @@ function fixture(
     Layer.mock(Git.GitVcsDriver)({
       listWorktreePaths: () => Effect.succeed(["/repo", "/repo/worktree"]),
     }),
-    Layer.mock(Reports.RemoteReportService)({}),
+    Layer.mock(Reports.RemoteReportService)({ bind: () => Effect.void }),
     Layer.mock(Watches.LaunchWatchService)({
       resolveRoute: () =>
         Effect.sync(() => {
@@ -731,31 +731,43 @@ it.effect(
   },
 );
 
-// regression: B11-R1-01 an outside client's launch result carried no link it could open
-it.effect("an outside client's launch returns a link that opens the web app it reached", () => {
-  const f = fixture();
-  return Effect.gen(function* () {
-    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
-    const result = yield* service.launch(
-      {
-        ...scope,
-        requestNamespace: "client:web-link",
-        thread: undefined,
-        client: {
-          sessionId: "web-link",
-          label: "Claude Code",
-          access: "full-access",
-          webOrigin: "https://box.example.ts.net",
+it.effect.each([undefined, true] as const)(
+  "outside launches link to the destination and preserve bot alert ownership (%s)",
+  (botAttention) => {
+    const f = fixture();
+    return Effect.gen(function* () {
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      const result = yield* service.launch(
+        {
+          ...scope,
+          thread: undefined,
+          client: {
+            sessionId: "web-link",
+            label: "GOAT",
+            access: "full-access",
+            webOrigin: "https://box.example.ts.net",
+          },
         },
-      },
-      { title: "Child", projectId, modelSelection, standingInstructions: false },
-      { runtimeMode: "full-access", interactionMode: "default" },
-    );
-    const path = [scope.environmentId, result.threadId].map(encodeURIComponent).join("/");
-    expect(result.link).toContain("](https://box.example.ts.net/" + path + ")");
-  }).pipe(Effect.provide(f.layer));
-});
-
+        {
+          title: "Child",
+          projectId,
+          modelSelection,
+          report: {
+            correlationId: "channel-remote:task",
+            originLabel: "Origin",
+            originThreadId: callerId,
+            readKeyHash: "a".repeat(64),
+            ...(botAttention === undefined ? {} : { botAttention }),
+          },
+        },
+        { runtimeMode: "full-access", interactionMode: "default" },
+      );
+      expect(result.threadId).toMatch(botAttention ? /^remote-channel-worker:/ : /^mcp:/);
+      const path = [scope.environmentId, result.threadId].map(encodeURIComponent).join("/");
+      expect(result.link).toContain("](https://box.example.ts.net/" + path + ")");
+    }).pipe(Effect.provide(f.layer));
+  },
+);
 it.effect("thread launch forwards the caller runtime ceiling despite a full-access request", () => {
   const f = fixture(false, "published-ref", undefined, "owner", {
     runtimeMode: "approval-required",

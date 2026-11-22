@@ -286,6 +286,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotOpenAsksLimit: Schema.optionalKey(Schema.Boolean),
   /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
   goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
+  goatBotAttention: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
@@ -304,6 +305,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** `channel.listBotThreads` takes `history` and walks every task of a bot by cursor. Older
       servers drop the key and answer the current list. */
   goatBotTaskThreadsPaged: Schema.optionalKey(Schema.Boolean),
+  goatBotTaskSnooze: Schema.optionalKey(Schema.Boolean),
   goatBotTaskLookupSearch: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),

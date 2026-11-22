@@ -1,12 +1,21 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelChildWorkId, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelChildWorkId,
+  ChannelQuestionId,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
-import * as ChannelLedger from "./ChannelLedger.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
+import { commitTransition, prepareTransition } from "./channelTaskWrites.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as TaskViews from "./channelTaskViews.ts";
@@ -17,9 +26,6 @@ import {
   environmentId,
   goatInput,
   makeHarness,
-  linkSlackUser,
-  slackContext,
-  slackInput,
   owner,
   ownerId,
   rpcContext,
@@ -60,59 +66,373 @@ const insertTask = (id: string, taskOwner: string, status: string, updatedAt: st
   });
 
 describe("ChannelBotThreads", () => {
-  it.effect("lists and opens Slack work only under the member assigned to it", () => {
+  it.effect("a worker's in-flight question still commits and alerts after snoozing", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1791763200000);
       yield* setupBot;
-      const members = yield* ChannelBotMembers.ChannelBotMembers;
-      const member = yield* members.create(
-        {
-          clientRequestId: "scout",
-          name: "Scout",
-          avatar: null,
-          purpose: "",
-          defaultModelSelection: null,
-        },
-        owner,
-      );
-      yield* linkSlackUser();
       const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(slackInput("do: check the build", "slack-home"), slackContext);
-      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
       const ledger = yield* ChannelLedger.ChannelLedger;
-      const [task] = (yield* ledger.listTasks({ ownerId, limit: 2 })).tasks;
-      assert(task !== undefined);
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE channel_tasks SET bot_id = ${member.botId} WHERE task_id = ${task.taskId}`;
-      const home = yield* BotThreads.ChannelBotThreads;
-      const list = yield* home.list(owner, member.botId);
-      assert.isTrue(
-        list.rows.some((row) => row.kind === "task" && row.task.taskId === task.taskId),
+      const service = yield* BotThreads.ChannelBotThreads;
+      yield* gateway.ingest(goatInput("do: prepare the release", "question-race"), rpcContext);
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      assert.isDefined(task);
+      if (task === undefined) return yield* Effect.die("Work was not created");
+      const stored = (yield* ledger.getTask(task.taskId))!;
+      const questionId = ChannelQuestionId.make("release-question");
+      const prepared = prepareTransition(
+        stored,
+        {
+          type: "task.question.opened",
+          payload: {
+            question: { questionId, text: "Which release?", askedAt: time },
+          },
+        },
+        time,
+        undefined,
       );
-      const search = yield* home.searchBotTasks(
-        { botId: member.botId, query: "check the build" },
+      if (!prepared.ok) return yield* Effect.die(prepared.reason);
+      yield* service.snooze(
+        { taskId: task.taskId, botId: BotId.make("main"), until: "2026-10-12T01:00:00.000Z" },
         owner,
       );
-      assert.deepStrictEqual(
-        search.tasks.map((row) => row.taskId),
-        [task.taskId],
-      );
-      const history = yield* home.list(owner, member.botId, {});
-      assert.isTrue(
-        history.rows.some((row) => row.kind === "task" && row.task.taskId === task.taskId),
-      );
-      assert.strictEqual(
-        (yield* home.getBotTask({ botId: member.botId, taskId: task.taskId }, owner)).task.state,
-        "known",
-      );
-      assert.strictEqual(
-        (yield* Effect.flip(
-          home.getBotTask({ botId: BotId.make("main"), taskId: task.taskId }, owner),
-        )).reason,
-        "not_found",
-      );
-    }).pipe(Effect.provide(harness.layer));
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const { cursor } = yield* members.attentionFeed(owner, {});
+      yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: [] });
+      const { events } = yield* members.attentionFeed(owner, { cursor });
+      assert.lengthOf(events, 1);
+      assert.include(events[0], { kind: "question", taskId: task.taskId, requestId: questionId });
+      assert.include((yield* members.openAsks(owner)).asks[0], { questionId });
+      assert.lengthOf((yield* service.list(owner)).snoozed ?? [], 0);
+    }).pipe(
+      Effect.provide(
+        BotThreads.layer.pipe(
+          Layer.provideMerge(TaskViews.layer),
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
   });
+
+  it.effect("reads the bot's completion criterion and newest task activity with subjects", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1791763200000);
+      yield* setupBot;
+      const doneMeans = "The build passes and the fix has a pull request.";
+      harness.script.current = () =>
+        Effect.succeed({
+          replyText: "On it.",
+          action: {
+            type: "create_task",
+            title: "Repair build",
+            instruction: "Fix the build.",
+            doneMeans,
+          },
+        });
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const service = yield* BotThreads.ChannelBotThreads;
+      yield* gateway.ingest(goatInput("do: repair build", "done-means"), rpcContext);
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      assert.isDefined(task?.worker);
+      if (!task?.worker) return yield* Effect.die("Work did not start");
+      const read = () =>
+        service.getBotTask({ taskId: task.taskId, botId: BotId.make("main") }, owner);
+      const remoteThreadId = ThreadId.make("ssh-build-check");
+      const children = yield* ChildStore.ChannelChildWorkStore;
+      yield* children.admitReserved(
+        {
+          ownerId,
+          taskId: task.taskId,
+          childWorkId: ChannelChildWorkId.make("ssh-build"),
+          generation: task.generation,
+          callerThreadId: botThreadId,
+          surface: "ssh_thread_launch",
+          requestKey: "ssh-build",
+          promptDigest: "release",
+          state: "bound",
+          createdAt: old,
+          updatedAt: time,
+          destination: {
+            correlationId: "ssh-build-dispatch",
+            host: "builder",
+            environmentId,
+            threadId: remoteThreadId,
+          },
+        },
+        10,
+      );
+      const sql = yield* SqlClient.SqlClient;
+      const pr = {
+        repository: "example/remote-build",
+        number: 3,
+        watching: false,
+        url: "https://github.com/example/remote-build/pull/3",
+        linkedAt: time,
+      };
+      yield* sql`INSERT INTO remote_dispatches (
+        correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state,
+        reports_supported, observation, created_at, updated_at
+      ) VALUES (
+        'ssh-build-dispatch', 'thread', ${botThreadId}, 'builder', ${remoteThreadId}, 'fixture', 'wake', 'running',
+        1, ${JSON.stringify({ pullRequests: [pr], needsYou: [] })}, ${time}, ${time}
+      )`;
+      const questionId = ChannelQuestionId.make("which-build");
+      const stored = (yield* ledger.getTask(task.taskId))!;
+      yield* TestClock.adjust("1 minute");
+      yield* commitTransition(ledger, stored, {
+        type: "task.worker.observed",
+        payload: {
+          generation: task.generation,
+          observed: {
+            pullRequests: [
+              {
+                repository: "example/build",
+                number: 12,
+                watching: false,
+                url: "https://github.com/example/build/pull/12",
+                linkedAt: "2026-10-12T00:01:00.000Z",
+              },
+            ],
+            needsYou: [],
+          },
+        },
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: {
+            question: { questionId, text: "Which build?", askedAt: "2026-10-12T00:02:00.000Z" },
+          },
+        },
+        { actor: "agent" },
+      );
+      const result = yield* read();
+      assert.strictEqual(
+        result.task.state === "known" && result.task.row.task.doneMeans,
+        doneMeans,
+      );
+      const entries = result.activity?.entries ?? [];
+      assert.deepInclude(
+        entries.map(({ type }) => type),
+        "created",
+      );
+      assert.include(
+        entries.find((entry) => entry.type === "worker_started"),
+        {
+          environmentId: task.worker.environmentId,
+          threadId: task.worker.threadId,
+        },
+      );
+      assert.include(
+        entries.find((entry) => entry.type === "pr_linked"),
+        { repo: "example/build", number: 12 },
+      );
+      assert.isTrue(
+        entries.some(
+          (entry) =>
+            entry.type === "pr_linked" &&
+            entry.repo === "example/remote-build" &&
+            entry.number === 3,
+        ),
+      );
+      assert.include(entries[0], { type: "asked", requestId: questionId, actor: "bot" });
+      // An early launch can still provide the newest finish after many later starts.
+      for (let index = 0; index <= 50; index++) {
+        const finished = index === 0;
+        yield* children.admitReserved(
+          {
+            ownerId,
+            taskId: task.taskId,
+            childWorkId: ChannelChildWorkId.make("launch:" + index),
+            generation: task.generation,
+            callerThreadId: botThreadId,
+            surface: "thread_launch",
+            requestKey: "launch:" + index,
+            promptDigest: "release",
+            state: finished ? "completed" : "bound",
+            createdAt: finished ? old : time,
+            updatedAt: finished ? "2026-10-12T00:03:00.000Z" : time,
+            destination: { threadId: ThreadId.make("launch-thread:" + index) },
+          },
+          100,
+        );
+      }
+      assert.include((yield* read()).activity?.entries[0], {
+        type: "worker_finished",
+        threadId: ThreadId.make("launch-thread:0"),
+      });
+      yield* sql`UPDATE remote_dispatches SET updated_at = '2026-10-12T00:03:30.000Z'
+        WHERE correlation_id = 'ssh-build-dispatch'`;
+      assert.strictEqual((yield* read()).activity?.entries[0]?.type, "worker_finished");
+      const newer = { ...pr, number: 4, linkedAt: "2026-10-12T00:03:30.000Z" };
+      yield* sql`UPDATE remote_dispatches SET observation = ${JSON.stringify({ pullRequests: [pr, newer], needsYou: [] })}
+        WHERE correlation_id = 'ssh-build-dispatch'`;
+      assert.include((yield* read()).activity?.entries[0], {
+        type: "pr_linked",
+        repo: "example/remote-build",
+        number: 4,
+      });
+      yield* TestClock.adjust("2 minutes");
+      for (let index = 0; index < 26; index++) {
+        yield* TestClock.adjust("1 second");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId, answer: "Staging." },
+          },
+          { actor: "user" },
+        );
+        yield* TestClock.adjust("1 second");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: { questionId, text: "Which build?", askedAt: "2026-10-12T00:02:00.000Z" },
+            },
+          },
+          { actor: "agent" },
+        );
+      }
+      const latest = (yield* read()).activity?.entries ?? [];
+      assert.lengthOf(latest, 50);
+      assert.include(latest[0], { type: "asked", requestId: questionId });
+      assert.deepStrictEqual(
+        latest.map((entry) => entry.at),
+        latest
+          .map((entry) => entry.at)
+          .toSorted()
+          .reverse(),
+      );
+      const workerId = task.worker.threadId;
+      const pullRequests = [
+        {
+          repository: "example/first-worker",
+          number: 5,
+          source: "created",
+          linkedAt: "2026-10-12T00:05:00.000Z",
+        },
+      ];
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${workerId}, 'project:build', 'Build', 'codex', 'full-access', 'default', ${time}, ${time}, ${JSON.stringify({ pullRequests })})`;
+      yield* TestClock.adjust("2 minutes");
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.failed",
+        payload: { generation: task.generation, reason: "Checks failed." },
+      });
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.retry.requested",
+        payload: { generation: task.generation + 1 },
+      });
+      assert.isTrue(
+        (yield* read()).activity?.entries.some(
+          (entry) =>
+            entry.type === "pr_linked" &&
+            entry.repo === "example/first-worker" &&
+            entry.number === 5,
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        BotThreads.layer.pipe(
+          Layer.provideMerge(TaskViews.layer),
+          Layer.provideMerge(harness.layer),
+        ),
+      ),
+    );
+  });
+
+  it.effect(
+    "moves snoozed work out of the current rows until expiry and never mutes an open ask",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(1791763200000);
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* gateway.ingest(goatInput("do: choose a project", "snoozed-ask"), rpcContext);
+        yield* runtime.drain;
+        const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        assert.strictEqual(task?.status, "waiting_input");
+        if (task === undefined) return yield* Effect.die("Work was not created");
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const before = yield* members.openAsks(owner);
+        assert.strictEqual(before.total, 1);
+        const target = { taskId: task.taskId, botId: BotId.make("main") };
+        const denied = yield* Effect.flip(
+          service.snooze(
+            { ...target, until: "2026-10-12T01:00:00.000Z" },
+            { ...owner, ownerId: "another-owner" },
+          ),
+        );
+        assert.strictEqual(denied.reason, "task_not_found");
+        const wrongBot = yield* Effect.flip(
+          service.snooze(
+            { ...target, botId: BotId.make("other"), until: "2026-10-12T01:00:00.000Z" },
+            owner,
+          ),
+        );
+        assert.strictEqual(wrongBot.reason, "task_not_found");
+        const seen = yield* watchTaskChanges(owner);
+        yield* service.snooze({ ...target, until: "2026-10-12T01:00:00.000Z" }, owner);
+        assert.strictEqual(yield* nextTaskChange(seen), 1);
+        const home = yield* service.list(owner);
+        assert.deepStrictEqual(home.rows, []);
+        assert.include(home.snoozed?.[0]?.view, {
+          taskId: task.taskId,
+          snoozedUntil: "2026-10-12T01:00:00.000Z",
+        });
+        assert.isFalse(home.snoozed?.[0]?.unread ?? true);
+        assert.deepStrictEqual(yield* members.openAsks(owner), before);
+        yield* service.unsnooze(target, owner);
+        assert.lengthOf((yield* service.list(owner)).rows, 1);
+        const activity = (yield* service.getBotTask(target, owner)).activity?.entries ?? [];
+        assert.deepStrictEqual(
+          activity
+            .filter((entry) => entry.type === "snoozed" || entry.type === "unsnoozed")
+            .map(({ type, actor }) => [type, actor]),
+          [
+            ["unsnoozed", "person"],
+            ["snoozed", "person"],
+          ],
+        );
+        yield* service.snooze({ ...target, until: "2026-10-12T01:00:00.000Z" }, owner);
+        yield* TestClock.adjust("1 hour");
+        assert.lengthOf((yield* service.list(owner)).rows, 1);
+        yield* service.snooze({ ...target, until: "2026-10-12T02:00:00.000Z" }, owner);
+        yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+          type: "task.failed",
+          payload: { generation: task.generation, reason: "Stopped before selecting a project." },
+        });
+        const after = yield* service.list(owner);
+        assert.lengthOf(after.rows, 1);
+        assert.lengthOf(after.snoozed ?? [], 0);
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect(
     "keeps an old pinned task within the cap and restores the newest tasks on unpin",
@@ -408,6 +728,15 @@ describe("ChannelBotThreads", () => {
           yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${threadId}, ${projectId}, ${id}, 'codex', 'full-access', 'default', ${time}, ${time}, ${payload})`;
         }
         const service = yield* BotThreads.ChannelBotThreads;
+        const remoteTask = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("task:remote"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.include(remoteTask.remoteWork[0], {
+          host: "remote",
+          environmentId,
+          threadId: ThreadId.make("channel-worker:remote"),
+        });
         const rows = (yield* service.list(owner).pipe(
           Effect.provideService(
             ManagedProjectFolders.ManagedProjectFolders,

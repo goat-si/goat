@@ -1,4 +1,5 @@
-import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
+import { useMobileBotTemplateDraft } from "./useMobileBotTemplateDraft";
+import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -312,6 +313,7 @@ export function GoatBotScreen(props: {
   /** Focused and the app active: what the screen shows has been seen. */
   readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
+  readonly attentionRequest?: string | undefined;
   /** The title the screen that opened this task carried, for a task the list no longer holds. */
   readonly taskTitle?: string | undefined;
   /** A member bot whose conversation this is; the main bot's when absent. */
@@ -401,17 +403,8 @@ export function GoatBotScreen(props: {
   // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
-  const templateEnvironmentId = member?.environmentId;
-  const templateThreadId = member?.sessionThreadId;
-  const templateDraft = () => {
-    if (taskId) return "";
-    return readBotTemplateDraft(templateEnvironmentId, templateThreadId) ?? "";
-  };
+  const templateDraft = useMobileBotTemplateDraft(member, taskId);
   const [text, setText] = useState(templateDraft);
-  // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the bot screen commits.
-  useEffect(() => {
-    if (!taskId) clearBotTemplateDraft(templateEnvironmentId, templateThreadId);
-  }, [taskId, templateEnvironmentId, templateThreadId]);
   const [homeOpen, setHomeOpen] = useState(false);
   const openHome = useCallback(() => setHomeOpen(true), []);
   // An event line opens the home on its routine or listed task, or a task that left the list on its
@@ -485,6 +478,7 @@ export function GoatBotScreen(props: {
     reading: props.visible && props.foreground !== false && !opener.covered,
   });
   const listRef = useRef<LegendListRef>(null);
+  const attentionIndex = useMobileAttentionScroll(listRef, unread.items, props.attentionRequest);
   const { clear: clearUnread } = unread;
   const { onAnswer: answer } = session;
   const onAnswer = useCallback(
@@ -797,6 +791,12 @@ export function GoatBotScreen(props: {
             {homeError}
           </Text>
         ) : null}
+        <MobileGoatBotAlertRequest
+          requestId={attentionIndex < 0 ? props.attentionRequest : undefined}
+          environmentId={session.historyEnvironmentId}
+          botId={member?.botId}
+          taskId={taskId}
+        />
         <View style={{ flex: 1 }}>
           <LegendList
             renderScrollComponent={NativeScrollView}

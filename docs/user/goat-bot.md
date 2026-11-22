@@ -97,6 +97,15 @@ opens it in full. A task's menu pins it, marks it done or marks it read.
 A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
 open its thread to see where it stands.
 
+Open the task in full to see **Done means**, the bot's completion criterion, and **Activity**.
+Activity lists the latest status changes, worker launches, linked PRs, and questions. Each worker
+opens in its own thread.
+
+Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
+**Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
+ends or the task changes status. Questions and approvals still appear in **Needs you**.
+Use **Show more** in **Snoozed** to see up to 500 snoozed tasks.
+
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
 the first five appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,
@@ -125,7 +134,8 @@ bot's tasks, and a task opens in its own view.
   allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
-  see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
+  see what started it and what it said. On web and desktop, you can also open the task if it
+  started one. On mobile, an incomplete history is marked above the runs. **Check in on me** sets up a routine on the days and hours you choose: the bot
   looks over its tasks and writes only when something needs you. A timer routine whose last run failed
   shows **Run now**. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
@@ -166,8 +176,8 @@ A trigger starts new work only in its selected project, with approvals required.
 revoking the device session that authorized it blocks queued work. Open and save the trigger
 again from a trusted session to authorize future work.
 
-The trigger's **Deliveries** in Scheduled tasks shows why unsigned, duplicate, and own-work
-events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
+On web and desktop, open **Deliveries** on the trigger under **Home → Routines** or in Scheduled tasks to see why
+unsigned, duplicate, and own-work events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
 them in the trigger. You can pause or resume a configured trigger on mobile.
 
 ## Going back to an older GOAT

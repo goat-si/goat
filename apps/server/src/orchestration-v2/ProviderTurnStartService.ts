@@ -21,7 +21,10 @@ export {
 } from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
 import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
-import { channelSessionProfileRefusal } from "../channels/channelSessionProfileFence.ts";
+import {
+  queuedChannelProfileRefusal,
+  providerInputFence,
+} from "../channels/channelSessionProfileFence.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
@@ -44,6 +47,7 @@ import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecov
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
+  isChannelWorkerThreadId,
   CommandId,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
@@ -68,7 +72,6 @@ import {
   appendRemoteWorkerNotes,
   readChannelProviderBrief,
 } from "../channels/channelProviderBrief.ts";
-import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -284,19 +287,24 @@ export const layer: Layer.Layer<
         !observeOnly && Option.isSome(providerInputRefusal)
           ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
           : undefined;
-      const profileRefusal =
-        !observeOnly &&
-        attempt.reason === "initial" &&
-        (attempt.inputDelivery === undefined || attempt.inputDelivery === "unsent") &&
-        run.startedAt === null &&
-        isGoatBotSessionThreadId(run.threadId) &&
-        Option.isSome(sql)
-          ? channelSessionProfileRefusal(sql.value, run.threadId, message.id)
-          : undefined;
+      const profileRefusal = queuedChannelProfileRefusal(
+        sql,
+        observeOnly,
+        attempt,
+        run,
+        message.id,
+      );
       const profileFailure = profileRefusal === undefined ? undefined : yield* profileRefusal;
       if (profileFailure !== undefined) {
         const failure =
-          (memoryRefusal === undefined ? undefined : yield* memoryRefusal) ?? profileFailure;
+          memoryRefusal === undefined
+            ? profileFailure
+            : ((yield* memoryRefusal.pipe(
+                Effect.provideService(
+                  ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                  projection.thread.runtimeMode,
+                ),
+              )) ?? profileFailure);
         yield* settleRunBeforeStart({
           signal: "channel-session-profile",
           status: "failed",
@@ -1383,15 +1391,6 @@ export const layer: Layer.Layer<
                 turn.providerThreadId === providerThread.id && turn.runAttemptId === attempt.id,
             )
           : undefined;
-      const inputRefusal =
-        memoryRefusal !== undefined && profileRefusal !== undefined
-          ? memoryRefusal.pipe(
-              Effect.filterOrElse(
-                (refusal) => refusal !== undefined,
-                () => profileRefusal,
-              ),
-            )
-          : (memoryRefusal ?? profileRefusal);
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -1436,7 +1435,7 @@ export const layer: Layer.Layer<
             sameNativeThread &&
             !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
-        ...(inputRefusal === undefined ? {} : { providerInputRefusal: inputRefusal }),
+        ...providerInputFence(memoryRefusal, profileRefusal, resolvedRuntimePolicy.runtimeMode),
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,

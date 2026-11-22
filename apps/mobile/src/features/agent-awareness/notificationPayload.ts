@@ -1,3 +1,14 @@
+import { ChannelAttentionTarget } from "@goat/contracts/channel-bot-attention";
+import * as Schema from "effect/Schema";
+
+const decodeBotAttentionTarget = Schema.is(ChannelAttentionTarget);
+
+export function botAttentionTargetFromResponse(response: unknown): ChannelAttentionTarget | null {
+  const data = dataFromNotificationResponse(response);
+  if (data?.kind !== "goat-bot-attention") return null;
+  return decodeBotAttentionTarget(data) ? data : null;
+}
+
 function dataFromNotificationResponse(response: unknown): Record<string, unknown> | null {
   if (typeof response !== "object" || response === null) {
     return null;
@@ -103,16 +114,38 @@ export function routeAgentNotificationResponseOnce(input: {
   readonly handledResponseIds: Set<string>;
   readonly response: unknown;
   readonly navigate: (deepLink: string) => void;
-}): void {
+  readonly resolveBotTarget?: (target: ChannelAttentionTarget) => Promise<string | null>;
+}): void | Promise<void> {
   const responseId = identifierFromNotificationResponse(input.response);
   if (responseId && input.handledResponseIds.has(responseId)) {
     return;
+  }
+  const target = botAttentionTargetFromResponse(input.response);
+  if (target !== null && input.resolveBotTarget !== undefined) {
+    if (responseId) rememberResponse(input.handledResponseIds, responseId);
+    return input
+      .resolveBotTarget(target)
+      .then((link) => {
+        if (link !== null) input.navigate(link);
+      })
+      .catch((cause) => {
+        if (responseId) input.handledResponseIds.delete(responseId);
+        throw cause;
+      });
   }
   const deepLink = extractAgentNotificationDeepLink(input.response);
   if (deepLink) {
     input.navigate(deepLink);
   }
   if (responseId) {
-    input.handledResponseIds.add(responseId);
+    rememberResponse(input.handledResponseIds, responseId);
+  }
+}
+
+function rememberResponse(ids: Set<string>, id: string) {
+  ids.add(id);
+  if (ids.size > 128) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
   }
 }

@@ -301,6 +301,7 @@ export const ScheduledTask = Schema.Struct({
       even one replaced since. Absent for other tasks and from older servers. */
   goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
   /** Newest first, at most SCHEDULED_TASK_RECENT_RUNS. GOAT Bot routines only; absent from older servers. */
+  recentRunsIncomplete: ForwardCompatibleOptional(Schema.Literal(true)),
   recentRuns: ForwardCompatibleOptional(ForwardCompatibleArray(ScheduledTaskRecentRun)),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
@@ -397,6 +398,7 @@ export const ScheduledTaskWebhookDeliverySummary = Schema.Struct({
   outcome: Schema.Union([ScheduledTaskWebhookDeliveryOutcome, Schema.String]),
   signatureVerified: Schema.Boolean,
   pendingWindow: Schema.optional(Schema.Boolean),
+  firingAccepted: Schema.optional(Schema.Boolean),
   missingFields: Schema.Array(Schema.String),
   error: Schema.NullOr(Schema.String),
 });
@@ -429,6 +431,10 @@ export const ScheduledTaskListWebhookDeliveriesResult = Schema.Struct({
 });
 export type ScheduledTaskListWebhookDeliveriesResult =
   typeof ScheduledTaskListWebhookDeliveriesResult.Type;
+
+export const ScheduledTaskMcpListWebhookDeliveriesInput = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+});
 
 export const ScheduledTaskGetWebhookDeliveryInput = Schema.Struct({
   id: ScheduledTaskId,
