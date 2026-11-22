@@ -1,4 +1,5 @@
-import { GoatBotTemplatePicker, useGoatBotTemplateSupport } from "./GoatBotTemplatePicker";
+import { GoatBotTemplatePicker } from "./GoatBotTemplatePicker";
+import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
 import { useAtomValue } from "@effect/atom-react";
 import {
   botManageFailure,

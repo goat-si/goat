@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { goatBotMemberPicture } from "@goat/client-runtime/goatBot";
-import type { BotProfile } from "@goat/contracts";
+import { AuthSettingsWriteScope, type BotProfile } from "@goat/contracts";
 import type { useNavigate } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 
@@ -9,6 +9,7 @@ import { dispatchMenuAction } from "~/shortcuts/dispatcher";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { useGoatBotEnabled } from "./useGoatBotSession";
@@ -39,9 +40,10 @@ export function useGoatBotPaletteNewBotSource() {
   const { environment } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const configs = useServerConfigs();
-  const supported =
-    environmentId !== null &&
-    configs.get(environmentId)?.environment.capabilities.goatBotMembers === true;
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const supported = environmentId !== null && capabilities?.goatBotMembers === true;
+  const mayConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canCreate = useAtomValue(
     supported ? channelEnvironment.createBot.permissionAtom(environmentId) : NO_PERMISSION,
   );
@@ -52,7 +54,14 @@ export function useGoatBotPaletteNewBotSource() {
   );
   const send = useAtomCommand(channelEnvironment.createBot, { reportFailure: false });
   const listed = profiles.data?.bots;
-  return environmentId === null || listed === undefined ? null : { environmentId, listed, send };
+  return !supported || listed === undefined
+    ? null
+    : {
+        environmentId,
+        listed,
+        send,
+        supportsTemplates: mayConfigure && capabilities.goatBotTemplates === true,
+      };
 }
 
 /**

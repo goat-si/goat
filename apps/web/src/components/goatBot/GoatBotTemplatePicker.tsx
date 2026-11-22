@@ -1,17 +1,12 @@
-import { useGoatBotEnabled } from "./useGoatBotSession";
-import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { useAtomValue } from "@effect/atom-react";
 import { botManageFailure, offerBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { AuthSettingsWriteScope, type BotProfile, type EnvironmentId } from "@goat/contracts";
+import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { GOAT_BOT_TEMPLATES } from "@goat/shared/goatBotNames";
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
-import { PlusIcon } from "~/components/solar";
 import { randomUUID } from "~/lib/utils";
 import { channelEnvironment } from "~/state/channels";
-import { useEnvironment } from "~/state/environments";
-import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -26,29 +21,7 @@ import {
 } from "../ui/dialog";
 import { openNewBotChat } from "./goatBotNewBotOpen";
 
-export function useGoatBotTemplateSupport(environmentId: EnvironmentId | null): boolean {
-  const environment = useEnvironment(environmentId);
-  const mayConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  return (
-    mayConfigure && environment?.serverConfig?.environment.capabilities.goatBotTemplates === true
-  );
-}
-
-export function useGoatBotTemplatePaletteAction(
-  open: (environmentId: EnvironmentId) => void,
-): CommandPaletteActionItem | undefined {
-  const environmentId = useGoatBotEnabled().environment?.environmentId ?? null;
-  const supported = useGoatBotTemplateSupport(environmentId);
-  if (!supported || environmentId === null) return;
-  return {
-    kind: "action",
-    value: "action:goat-bot-template",
-    searchTerms: ["bot", "new", "starter", "template"],
-    title: "From a template",
-    icon: <PlusIcon className={ITEM_ICON_CLASS} />,
-    run: async () => open(environmentId),
-  };
-}
+import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
 
 type Template = (typeof GOAT_BOT_TEMPLATES)[number];
 

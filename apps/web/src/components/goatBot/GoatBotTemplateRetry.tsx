@@ -6,7 +6,7 @@ import { useState } from "react";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
-import { useGoatBotTemplateSupport } from "./GoatBotTemplatePicker";
+import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
 
 export function GoatBotTemplateRetry({ bot }: { bot: BotProfile }) {
   const allowed = useGoatBotTemplateSupport(bot.environmentId);
