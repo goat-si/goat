@@ -3,15 +3,20 @@ import * as NodeCrypto from "node:crypto";
 
 import { expect, it } from "@effect/vitest";
 import {
+  EnvironmentId,
+  EventId,
+  ProviderInstanceId,
   RunId,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
+  type OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
@@ -80,6 +85,9 @@ const setup = Effect.gen(function* () {
   const childStreamOpened = yield* Deferred.make<void>();
   const childEventSeen = yield* Deferred.make<string>();
   const parentEvents = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+  const handoffEvents = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+  const handoffStreamOpened = yield* Deferred.make<void>();
+  const turnItems: OrchestrationV2TurnItem[] = [];
   const records = new Map<
     string,
     {
@@ -101,14 +109,22 @@ const setup = Effect.gen(function* () {
         pullRequests: [],
       } as unknown as OrchestrationV2ThreadShell),
     getThreadEventSequence: () => Effect.succeed(4),
-    getThreadRecords: (id, fields) =>
+    getThreadRecords: (id, fields, filter) =>
       Effect.sync(() => {
         const row = records.get(id) ?? { runtimeRequests: [], subagents: [] };
         const asked = fields as ReadonlyArray<string>;
         return {
           thread: { id, deletedAt: null },
           runs: [{ id: runA, threadId, status: "running", ordinal: 1 } as OrchestrationV2Run],
-          turnItems: [],
+          turnItems: asked.includes("turnItems")
+            ? turnItems.filter(
+                (item) =>
+                  item.threadId === id &&
+                  (filter?.turnItemTypes?.includes(item.type) ?? true) &&
+                  (filter?.turnItemRunId === undefined || item.runId === filter.turnItemRunId) &&
+                  (filter?.turnItemStatuses?.includes(item.status) ?? true),
+              )
+            : [],
           runtimeRequests: asked.includes("runtimeRequests") ? row.runtimeRequests : [],
           subagents: asked.includes("subagents") ? row.subagents : [],
         } as unknown as OrchestrationV2ThreadProjection;
@@ -130,13 +146,29 @@ const setup = Effect.gen(function* () {
           ),
         );
       }
+      if (input.eventType === "turn-item.updated") {
+        return Stream.fromEffect(Deferred.succeed(handoffStreamOpened, undefined)).pipe(
+          Stream.drain,
+          Stream.concat(Stream.fromQueue(handoffEvents)),
+        );
+      }
       return Stream.fromQueue(parentEvents);
     },
   });
   const context = yield* Layer.build(RemoteReportService.layer.pipe(Layer.provide(fake)));
   const service = Context.get(context, RemoteReportService.RemoteReportService);
   yield* service.bind(threadId, binding);
-  return { service, records, subscriptions, childEvents, childStreamOpened, childEventSeen };
+  return {
+    service,
+    records,
+    subscriptions,
+    childEvents,
+    childStreamOpened,
+    childEventSeen,
+    turnItems,
+    handoffEvents,
+    handoffStreamOpened,
+  };
 });
 
 const withSetup = <A, E, R>(
@@ -181,6 +213,106 @@ it.effect("names the thread on this machine for a worker approval and a local su
       expect(subscriptions.some((input) => input?.threadId === undefined)).toBe(false);
     }),
   ),
+);
+
+it.effect(
+  "an authorized SSH report carries an approval handoff without titles or runtime requests",
+  () =>
+    withSetup(({ service, turnItems, handoffEvents, handoffStreamOpened }) =>
+      Effect.gen(function* () {
+        const id = TurnItemId.make("handoff:42");
+        const createdAt = DateTime.makeUnsafe("2026-10-12T00:04:00.000Z");
+        const item: OrchestrationV2TurnItem = {
+          type: "human_handoff",
+          id,
+          runId: runA,
+          threadId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "waiting",
+          title: null,
+          startedAt: createdAt,
+          updatedAt: createdAt,
+          completedAt: null,
+          handoff: {
+            handoffId: id,
+            kind: "approval",
+            title: "Private approval",
+            reason: "Private details",
+            requestedBy: {
+              threadId,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              path: "agent",
+            },
+            target: {
+              environmentId: EnvironmentId.make("destination"),
+              path: "ssh.runtime_update",
+            },
+            dedupeKey: "fixture",
+            state: "pending",
+            createdAt,
+            expiresAt: null,
+            actor: { type: "server" },
+          },
+        };
+        const input = {
+          correlationId: binding.correlationId,
+          readKey,
+          afterSequence: 0,
+          watchRunId: runA,
+          knownRun: {
+            runId: runA,
+            status: "running" as const,
+            pendingRequestIds: [],
+            observation: emptyObservation,
+          },
+          timeoutMs: 10_000,
+        };
+        expect(
+          (yield* Effect.flip(service.wait({ ...input, readKey: "2".repeat(64) }))).reason,
+        ).toBe("access_denied");
+        const report = yield* service.wait(input).pipe(Effect.forkChild);
+        yield* Deferred.await(handoffStreamOpened);
+        turnItems.push(item);
+        yield* Queue.offer(handoffEvents, {
+          sequence: 5,
+          commandId: null,
+          event: {
+            id: EventId.make("event:handoff"),
+            threadId,
+            runId: runA,
+            occurredAt: createdAt,
+            type: "turn-item.updated",
+            payload: item,
+          },
+        });
+        const result = yield* Fiber.join(report);
+        expect(result.observedRun?.pendingRequestIds).toEqual([]);
+        expect(result.observedRun?.observation?.needsYou).toEqual([
+          {
+            kind: "approval",
+            since: DateTime.formatIso(createdAt),
+            handoff: { threadId, requestId: id },
+          },
+        ]);
+        const legacy = yield* service.wait({
+          ...input,
+          timeoutMs: 0,
+          knownRun: {
+            ...input.knownRun,
+            observation: {
+              pullRequests: [],
+              needsYou: [{ kind: "approval", since: DateTime.formatIso(createdAt) }],
+            },
+          },
+        });
+        expect(legacy.timedOut).toBe(true);
+      }),
+    ),
 );
 
 it.effect("wakes a waiting report when a live local subagent's approval opens", () =>

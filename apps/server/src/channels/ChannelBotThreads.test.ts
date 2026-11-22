@@ -66,7 +66,7 @@ const insertTask = (id: string, taskOwner: string, status: string, updatedAt: st
   });
 
 describe("ChannelBotThreads", () => {
-  it.effect("snooze preserves the task version a worker's in-flight question will commit", () => {
+  it.effect("a worker's in-flight question still commits and alerts after snoozing", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* TestClock.setTime(1791763200000);
@@ -98,8 +98,12 @@ describe("ChannelBotThreads", () => {
         { taskId: task.taskId, botId: BotId.make("main"), until: "2026-10-12T01:00:00.000Z" },
         owner,
       );
-      yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: [] });
       const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const { cursor } = yield* members.attentionFeed(owner, {});
+      yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: [] });
+      const { events } = yield* members.attentionFeed(owner, { cursor });
+      assert.lengthOf(events, 1);
+      assert.include(events[0], { kind: "question", taskId: task.taskId, requestId: questionId });
       assert.include((yield* members.openAsks(owner)).asks[0], { questionId });
       assert.lengthOf((yield* service.list(owner)).snoozed ?? [], 0);
     }).pipe(

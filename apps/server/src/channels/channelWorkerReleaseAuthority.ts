@@ -1,5 +1,6 @@
 import {
   ChannelInputId,
+  isChannelWorkerThreadId,
   ChannelTaskId,
   MessageId,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
@@ -14,11 +15,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { EventSinkWriteError, type EventSinkV2Shape } from "../orchestration-v2/EventSinkShape.ts";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { CommitGuardRefused } from "../orchestration-v2/goat/CommitGuard.ts";
-import {
-  isChannelWorkerLaunchMessageId,
-  isChannelWorkerThreadId,
-  workerLaunchIdsFor,
-} from "./channelIds.ts";
+import { isChannelWorkerLaunchMessageId, workerLaunchIdsFor } from "./channelIds.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 
 export const CHANNEL_WORKER_RELEASE_DENIED = "channel_worker_release_denied";
