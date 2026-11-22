@@ -65,7 +65,7 @@ instructions, the paused automation, and the first message. You can edit the mes
 the composer before sending it. To start an automation, open the bot's Home and resume
 the routine. For a webhook trigger, configure its signing secret and connect the source
 before enabling it. If setup reports that it could not add the routine, choose **Retry**
-to finish setting up the same bot.
+in the picker or in the bot’s conversation to finish setting up the same bot.
 
 ## The face
 

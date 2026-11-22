@@ -60,7 +60,8 @@ import {
 } from "./channelBotTemplateAutomation.ts";
 
 export type MemberBot = BotProfile & { readonly templateAutomationPending?: true };
-type Owner = Pick<ChannelConnectionOwner, "ownerId">;
+type Owner = Pick<ChannelConnectionOwner, "ownerId"> &
+  Partial<Pick<ChannelConnectionOwner, "principalId">>;
 type MemberRecord = ChannelBotProfiles.MemberRecord;
 
 export class ChannelBotMembers extends Context.Service<
@@ -298,7 +299,10 @@ const make = Effect.gen(function* () {
         const at = yield* now;
         const environmentId = yield* environment.getEnvironmentId;
         const template = goatBotTemplate(input.templateId);
-        if (input.templateId !== undefined && template === undefined)
+        if (
+          (input.templateId !== undefined || input.retryForBotId !== undefined) &&
+          template === undefined
+        )
           return yield* fail("invalid_input");
         const authority =
           template === undefined ? undefined : yield* templateAuthority(templateCreation);
@@ -309,12 +313,15 @@ const make = Effect.gen(function* () {
               SELECT value_json FROM channel_runtime_state WHERE key = ${key}`;
             if (known[0] !== undefined) {
               const receipt = decodeCreate(known[0].value_json);
+              if (input.retryForBotId !== undefined && receipt.botId !== input.retryForBotId)
+                return yield* fail("not_found");
               if (receipt.templateId !== input.templateId) return yield* fail("invalid_input");
               if (receipt.principalId !== authority?.principalId) return yield* fail("forbidden");
               const existing = yield* readMember(owner.ownerId, receipt.botId);
               if (existing === undefined) return yield* fail("persistence_failed");
               return { record: existing, receipt };
             }
+            if (input.retryForBotId !== undefined) return yield* fail("not_found");
             const counts = yield* memberCounts(owner.ownerId);
             if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
               return yield* fail("bot_limit");
@@ -371,7 +378,13 @@ const make = Effect.gen(function* () {
           model,
           key,
         );
-        return added ? bot : { ...bot, templateAutomationPending: true as const };
+        return added
+          ? bot
+          : {
+              ...bot,
+              templateAutomationPending: true as const,
+              templateSetup: { templateId: template.id, clientRequestId: input.clientRequestId },
+            };
       }).pipe(Effect.mapError(failed)),
     );
 
@@ -476,10 +489,40 @@ const make = Effect.gen(function* () {
         : Effect.succeed({ ...record, hidden: input.hidden, updatedAt: at }),
     );
 
-  const list: ChannelBotMembers["Service"]["list"] = (input, owner) =>
-    reconcile(owner.ownerId).pipe(
-      Effect.andThen(profiles.list(owner, { includeDeleted: input.includeDeleted })),
+  const list: ChannelBotMembers["Service"]["list"] = Effect.fn("ChannelBotMembers.list")(function* (
+    input,
+    owner,
+  ) {
+    yield* reconcile(owner.ownerId);
+    const bots = yield* profiles.list(owner, { includeDeleted: input.includeDeleted });
+    if (owner.principalId === undefined || !bots.some((bot) => bot.role === "member")) return bots;
+    const prefix = createKey(owner.ownerId, "");
+    const pending = yield* sql<{ key: string; value_json: string }>`
+        SELECT key, value_json FROM channel_runtime_state
+        WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
+          AND json_extract(value_json, '$.principalId') = ${owner.principalId}
+          AND json_extract(value_json, '$.templateId') IS NOT NULL
+          AND COALESCE(json_extract(value_json, '$.automationAdded'), 0) = 0
+        LIMIT ${MEMBER_RECORD_LIMIT}`;
+    const byBot = new Map(
+      pending.map((row) => {
+        const { botId, templateId } = decodeCreate(row.value_json);
+        return [botId, { templateId, request: row.key.slice(prefix.length) }] as const;
+      }),
     );
+    return bots.map((bot) => {
+      const setup = byBot.get(bot.botId);
+      return setup?.templateId === undefined || bot.state === "deleted"
+        ? bot
+        : {
+            ...bot,
+            templateSetup: {
+              templateId: setup.templateId,
+              clientRequestId: decodeURIComponent(setup.request),
+            },
+          };
+    });
+  }, Effect.mapError(failed));
 
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",

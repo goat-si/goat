@@ -321,6 +321,7 @@ export function GoatBotScreen(props: {
   /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
   readonly main?: BotProfile | null;
   /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
+  readonly templateRetry?: React.ReactNode;
   readonly onRestoreMember?: MobileRestoreMember | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
@@ -400,13 +401,17 @@ export function GoatBotScreen(props: {
   // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
-  const templateDraft = () =>
-    taskId ? "" : (readBotTemplateDraft(member?.environmentId, member?.sessionThreadId) ?? "");
+  const templateEnvironmentId = member?.environmentId;
+  const templateThreadId = member?.sessionThreadId;
+  const templateDraft = () => {
+    if (taskId) return "";
+    return readBotTemplateDraft(templateEnvironmentId, templateThreadId) ?? "";
+  };
   const [text, setText] = useState(templateDraft);
   // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the bot screen commits.
   useEffect(() => {
-    if (!taskId) clearBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-  }, [taskId, member?.environmentId, member?.sessionThreadId]);
+    if (!taskId) clearBotTemplateDraft(templateEnvironmentId, templateThreadId);
+  }, [taskId, templateEnvironmentId, templateThreadId]);
   const [homeOpen, setHomeOpen] = useState(false);
   const openHome = useCallback(() => setHomeOpen(true), []);
   // An event line opens the home on its routine or listed task, or a task that left the list on its
@@ -897,6 +902,7 @@ export function GoatBotScreen(props: {
             onRemove={files.remove}
           />
           {editing.nameRow}
+          {props.templateRetry}
           {answering.target !== null ? (
             <GoatBotAnsweringChip
               target={answering.target}

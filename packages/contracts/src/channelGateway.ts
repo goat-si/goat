@@ -431,6 +431,7 @@ export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 export const ChannelCreateBotInput = Schema.Struct({
   clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   templateId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  retryForBotId: Schema.optionalKey(BotId),
   name: BotProfile.fields.name,
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,

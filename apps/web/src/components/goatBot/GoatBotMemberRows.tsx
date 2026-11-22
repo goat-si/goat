@@ -35,6 +35,7 @@ import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 import { GoatBotRowSignals, GoatBotWaitingMark } from "./GoatBotRowSignals";
+import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { goatBotGovernedAtom } from "./goatBotGoverned";
 
 const NO_PERMISSION = Atom.make(false);
@@ -238,7 +239,7 @@ function GoatBotMemberRow({
                 size="icon-xs"
                 variant="ghost-muted"
                 aria-label={`${bot.name} options`}
-                className="absolute top-1/2 right-1 -translate-y-1/2"
+                className="absolute top-6 right-1 -translate-y-1/2"
               />
             }
           >
@@ -258,6 +259,7 @@ function GoatBotMemberRow({
           </MenuPopup>
         </Menu>
       ) : null}
+      {bot.templateSetup !== undefined && <GoatBotTemplateRetry bot={bot} />}
     </SidebarMenuItem>
   );
 }
@@ -288,7 +290,7 @@ export function GoatBotMainMenu({
               size="icon-xs"
               variant="ghost-muted"
               aria-label={`${main.name} options`}
-              className="absolute top-1/2 right-1 -translate-y-1/2"
+              className="absolute top-6 right-1 -translate-y-1/2"
             />
           }
         >

@@ -56,10 +56,20 @@ export const verifyBotTemplate = (
           clientRequestId: input.clientRequestId,
         });
         yield* sql`DROP TRIGGER fail_template`;
-        const retry = yield* members.create(input, owner, context);
+        const retryInput = { ...input, ...reopened?.templateSetup, retryForBotId: bot.botId };
+        const missingReceipt = yield* members
+          .create({ ...retryInput, clientRequestId: "missing-template-receipt" }, owner, context)
+          .pipe(Effect.flip);
+        assert.strictEqual(missingReceipt.reason, "not_found");
+        const retry = yield* members.create(retryInput, owner, context);
         assert.strictEqual(retry.botId, bot.botId);
         assert.isUndefined(retry.templateAutomationPending);
         assert.strictEqual((yield* members.create(input, owner, context)).botId, bot.botId);
+        const listed = (yield* members.list({}, owner)).filter(
+          (member) => member.name === bot.name,
+        );
+        assert.lengthOf(listed, 1);
+        assert.isUndefined(listed[0]?.templateSetup);
         const { tasks } = yield* service.list();
         assert.lengthOf(tasks, 1);
         assert.strictEqual(tasks[0]?.threadId, bot.sessionThreadId);

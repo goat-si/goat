@@ -41,3 +41,4 @@ export * from "./botNameRowDismissal.ts";
 export { homeWorkGoverns, type HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
 export * from "./slackBindings.ts";
 export * from "./templateDraft.ts";
+export * from "./templateSetup.ts";

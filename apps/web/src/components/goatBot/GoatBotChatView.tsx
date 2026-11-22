@@ -1,3 +1,4 @@
+import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import {
@@ -662,6 +663,9 @@ function GoatBotChatViewContent({
             </GoatBotStepsReader>
           </div>
           <GoatBotNameRow composer={composerRef} />
+          {member?.templateSetup !== undefined && (
+            <GoatBotTemplateRetry key={member.botId} bot={member} />
+          )}
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
               You can read this chat but can't send messages.

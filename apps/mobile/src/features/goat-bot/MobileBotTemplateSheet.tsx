@@ -1,17 +1,14 @@
-import { botManageFailure, offerBotTemplateDraft } from "@goat/client-runtime/goatBot";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import { offerBotTemplateDraft } from "@goat/client-runtime/goatBot";
+import type { BotProfile, ChannelBotResult, ChannelCreateBotInput } from "@goat/contracts";
 import { GOAT_BOT_TEMPLATES } from "@goat/shared/goatBotNames";
 import { useState } from "react";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
-import { appAtomRegistry } from "../../state/atom-registry";
-import { channelEnvironment } from "../../state/channels";
 
 type Template = (typeof GOAT_BOT_TEMPLATES)[number];
 
 export function MobileBotTemplateSheet(props: {
-  environmentId: EnvironmentId;
+  createBot: (input: ChannelCreateBotInput) => Promise<ChannelBotResult | string>;
   canCreate: () => boolean;
   close: () => void;
   openBot: (bot: BotProfile) => void;
@@ -36,28 +33,25 @@ export function MobileBotTemplateSheet(props: {
     setRequest(clientRequestId);
     setBusy(true);
     setError(undefined);
-    const result = await runAtomCommand(appAtomRegistry, channelEnvironment.createBot, {
-      environmentId: props.environmentId,
-      input: {
-        clientRequestId,
-        templateId: template.id,
-        name: name.trim(),
-        avatar: template.face,
-        purpose: template.purpose,
-        defaultModelSelection: null,
-      },
+    const result = await props.createBot({
+      clientRequestId,
+      templateId: template.id,
+      name: name.trim(),
+      avatar: template.face,
+      purpose: template.purpose,
+      defaultModelSelection: null,
     });
     setBusy(false);
-    if (result._tag !== "Success") {
-      setError(botManageFailure(squashAtomCommandFailure(result)));
+    if (typeof result === "string") {
+      setError(result);
       return;
     }
-    if (result.value.templateAutomationPending) {
-      setCreated(result.value.bot);
+    if (result.templateAutomationPending) {
+      setCreated(result.bot);
       setError("1 routine could not be added");
       return;
     }
-    open(result.value.bot, template.firstMessage);
+    open(result.bot, template.firstMessage);
   };
 
   return (

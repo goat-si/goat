@@ -1,5 +1,4 @@
 import { MobileBotTemplateSheet } from "./MobileBotTemplateSheet";
-import { useEnvironmentScope } from "../../state/session";
 import { RegistryContext } from "@effect/atom-react";
 import {
   useContext,
@@ -24,12 +23,7 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import {
-  AuthSettingsWriteScope,
-  type BotProfile,
-  type ChannelTaskId,
-  type EnvironmentId,
-} from "@goat/contracts";
+import { type BotProfile, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } from "react-native";
@@ -108,8 +102,7 @@ export function MobileBotRoster(props: {
   };
   const environmentId = roster.environmentId;
   const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
-  const mayConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const supportsTemplates = roster.supportsTemplates && mayConfigure;
+  const supportsTemplates = roster.supportsTemplates && manage.canUseTemplates;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
   const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
@@ -259,7 +252,7 @@ export function MobileBotRoster(props: {
       {supportsTemplates && templateHost !== null && templateHost === environmentId && (
         <MobileBotTemplateSheet
           key={templateHost}
-          environmentId={templateHost}
+          createBot={manage.createTemplate}
           canCreate={() => manage.canCreate && readableNow()}
           close={() => setTemplateHost(null)}
           openBot={(bot) => onOpenBot({ kind: "member", profile: bot })}
