@@ -939,3 +939,23 @@ it("shows the next snoozed task and explains when the fold reaches its limit", a
     .element(screen.getByRole("button", { name: "Show more snoozed tasks" }))
     .not.toBeInTheDocument();
 });
+
+it("shows a followed thread's status and pull request in Home", async () => {
+  setup();
+  await using screen = await render(
+    view([], {
+      followedThreads: [
+        {
+          environmentId,
+          threadId: ThreadId.make("release"),
+          taskId: ChannelTaskId.make("release-task"),
+          status: "running",
+          pullRequest: "https://github.com/goat-si/goat/pull/3813",
+        },
+      ],
+    }),
+  );
+  await expect.element(screen.getByText("Followed threads", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("running", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText(/3813/)).toBeVisible();
+});
