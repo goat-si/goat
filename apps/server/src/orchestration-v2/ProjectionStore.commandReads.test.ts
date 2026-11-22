@@ -322,6 +322,17 @@ const commandReadsSkipSettledLeafNodes = Effect.fnUntraced(function* (
     // A command drops the node and the provider thread of each task it drops. The provider
     // thread in the shared session stays: detaching that session probes it for background work.
     const kept = ["active-run-delivered", "claimed", "no-delivery", "pending-delivery", "running"];
+    yield* sql.value`ANALYZE orchestration_v2_projection_provider_threads`;
+    yield* sql.value`DELETE FROM sqlite_stat1 WHERE tbl = 'orchestration_v2_projection_provider_threads'`;
+    for (const [index, stat] of [
+      ["sqlite_autoindex_orchestration_v2_projection_provider_threads_1", "5531 1"],
+      ["orchestration_v2_projection_provider_threads_thread_idx", "5531 1"],
+      ["orchestration_v2_projection_provider_threads_owner_idx", "5531 5531"],
+      ["orchestration_v2_projection_provider_threads_session_idx", "5531 2766"],
+    ] as const) {
+      yield* sql.value`INSERT INTO sqlite_stat1 VALUES ('orchestration_v2_projection_provider_threads', ${index}, ${stat})`;
+    }
+    yield* sql.value`ANALYZE sqlite_schema`;
     const commandTrace = traceSqlStatements();
     const commandRecords = yield* store
       .getThreadRecords(threadId, ["nodes", "providerThreads"], {
@@ -353,11 +364,16 @@ const commandReadsSkipSettledLeafNodes = Effect.fnUntraced(function* (
           "SEARCH settled USING COVERING INDEX",
           "SEARCH settled_node USING COVERING INDEX",
           "subagents_settled_idx (thread_id=?)",
+          "SEARCH run USING COVERING INDEX orchestration_v2_projection_runs_run_status_idx",
         ],
       ],
       [
         "provider_threads",
-        ["MULTI-INDEX OR", "provider_threads_session_idx (provider_session_id=?)"],
+        [
+          "SEARCH orchestration_v2_projection_provider_threads USING INTEGER PRIMARY KEY",
+          "provider_threads_session_idx (provider_session_id=?)",
+          "SEARCH run USING COVERING INDEX orchestration_v2_projection_runs_run_status_idx",
+        ],
       ],
     ] as const) {
       const plan = yield* queryPlanFor(commandTrace.statements, table);

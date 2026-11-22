@@ -1,4 +1,5 @@
 import { makeProjectionThreadReads } from "./ProjectionThreadReads.ts";
+import { providerThreadOwnershipFilter } from "./projectionProviderThreadFilter.ts";
 import { inheritsForkConversation } from "./ProjectionForkConversation.ts";
 import {
   FORK_HISTORY_TYPES,
@@ -1169,6 +1170,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       AND COALESCE(${row}.completion_delivery_state, '') IN ('acknowledged', 'delivered', 'disposed')
       AND NOT EXISTS (
         SELECT 1 FROM orchestration_v2_projection_runs AS run
+          INDEXED BY orchestration_v2_projection_runs_run_status_idx
         WHERE run.run_id = ${row}.run_id
           AND run.status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
       )
@@ -1189,6 +1191,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const todoListOfSettledRun = (row: Statement.Fragment) => sql`(
       ${row}.kind = 'todo_list' AND ${row}.run_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM orchestration_v2_projection_runs AS todo_run
+          INDEXED BY orchestration_v2_projection_runs_run_status_idx
         WHERE todo_run.run_id = ${row}.run_id
           AND todo_run.status IN ('queued','preparing','starting','running','waiting')
       ))`;
@@ -3000,37 +3003,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_provider_threads
-            WHERE (thread_id = ${threadId}
-               OR owner_node_id IN (${nodesOwningProviderThreads(threadId)})
-               OR ${
-                 filter?.omitSettledSubagentRecords === true
-                   ? // A dispatcher thread holds thousands of settled tasks. Their provider
-                     // threads belong to the child threads; only a session this thread also
-                     // uses is probed for background work when the thread detaches it.
-                     sql`provider_thread_id IN (
-                 SELECT provider_thread_id
-                 FROM orchestration_v2_projection_subagents
-                 WHERE rowid IN (${unsettledSubagentRowids(threadId)})
-                   AND provider_thread_id IS NOT NULL
-               )
-               OR (provider_session_id IN (
-                   SELECT provider_session_id
-                   FROM orchestration_v2_projection_provider_session_bindings
-                   WHERE thread_id = ${threadId}
-                 )
-                 AND EXISTS (
-                   SELECT 1 FROM orchestration_v2_projection_subagents AS owner
-                   WHERE owner.provider_thread_id =
-                       orchestration_v2_projection_provider_threads.provider_thread_id
-                     AND owner.thread_id = ${threadId}
-                 ))`
-                   : sql`provider_thread_id IN (
-                 SELECT provider_thread_id
-                 FROM orchestration_v2_projection_subagents
-                 WHERE thread_id = ${threadId}
-                   AND provider_thread_id IS NOT NULL
-               )`
-               })
+            WHERE ${providerThreadOwnershipFilter(sql, threadId, nodesOwningProviderThreads(threadId), unsettledSubagentRowids(threadId), filter?.omitSettledSubagentRecords === true)}
               ${filter?.providerThreadIds === undefined ? sql`` : sql`AND provider_thread_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerThreadIds)}))`}
             ORDER BY COALESCE(first_run_ordinal, 0), provider_thread_id ASC
           `

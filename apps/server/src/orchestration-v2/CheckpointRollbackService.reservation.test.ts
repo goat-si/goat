@@ -55,6 +55,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
       const projection = {
         thread: {
           id: threadId,
+          deletedAt: null,
           projectId: ProjectId.make("rollback-reservation-project"),
           worktreePath,
           branch: "feature/rollback-reservation",

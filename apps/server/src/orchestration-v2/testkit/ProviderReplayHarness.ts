@@ -371,12 +371,13 @@ export function layerWithRegistry<Error>(
         scenario.name.replace(/[^a-z0-9_-]+/gi, "-"),
       ).pipe(Effect.orDie);
       return {
-        resolve: (input) =>
+        resolve: Effect.fn("RuntimePolicy.RuntimePolicyV2.resolve")((input) =>
           Effect.succeed({
             runtimeMode: input.thread.runtimeMode,
             interactionMode: input.thread.interactionMode,
             cwd: input.thread.worktreePath ?? workspace,
           }),
+        ),
       };
     }),
   );
