@@ -34,10 +34,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 
-import {
-  type DispatchModeRefusal,
-  DispatchModeLimit,
-} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerConfig from "../config.ts";
@@ -50,7 +46,6 @@ import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { refuseForward } from "./channelForwardRefusal.ts";
 import { makeForwardFollowUp } from "./channelForwardFollowUp.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -68,7 +63,7 @@ import {
 } from "./channelDispatchAuthority.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
-import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
+import { forwardLocalWorkerAnswer } from "./channelForwardAnswer.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
@@ -1098,79 +1093,15 @@ const make = Effect.gen(function* () {
         yield* ledger.completeForward({ owner, sequence: pending.sequence });
         return;
       }
-      const ids = answerForwardIdsFor(event.eventId);
-      const authority = yield* requesterForDelivery(
-        stored.task,
-        event.payload.sender,
-        event.actor === "user" ? event.payload.inputId : undefined,
-      ).pipe(
-        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      return yield* forwardLocalWorkerAnswer(
+        { ledger, threads, slackSettings },
+        stored,
+        worker.threadId,
+        projectId,
+        event,
+        pending.sequence,
+        owner,
       );
-      if (authority._tag !== "allowed") {
-        const projection = yield* threads
-          .getThreadRecords(worker.threadId, ["messages", "runs"])
-          .pipe(Effect.option);
-        if (Option.isNone(projection)) return;
-        const accepted =
-          projection.value.messages.some((message) => message.id === ids.messageId) ||
-          projection.value.runs.some((run) => run.userMessageId === ids.messageId);
-        if (accepted) {
-          yield* ledger.completeForward({ owner, sequence: pending.sequence });
-          return;
-        }
-        yield* refuseAnswerForward(ledger, stored, authority, owner, pending.sequence, ids);
-        return;
-      }
-      // The worker's modes may have been raised since the task started. The orchestrator re-checks
-      // them against the requester's ceiling inside the thread's command lock.
-      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      const sent = yield* threads
-        .sendToThread({
-          projectId: ProjectId.make(projectId),
-          commandId: ids.commandId,
-          threadId: worker.threadId,
-          messageId: ids.messageId,
-          text: "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
-          attachments: [],
-          mode: "queue",
-          createdBy: "user",
-          creationSource: "server",
-        })
-        .pipe(
-          Effect.provideService(DispatchModeLimit, {
-            runtimeMode: authority.requester.runtimeModeCeiling,
-            interactionMode: "default",
-            refused,
-          }),
-          Effect.result,
-        );
-      if (sent._tag === "Failure") {
-        const refusal = yield* Ref.get(refused);
-        if (refusal !== undefined) {
-          // Keep the answer's intent: ask again, so the requester can lower the thread or answer there.
-          yield* refuseForward(
-            ledger,
-            stored,
-            "The coding thread now runs in " +
-              refusal.runtimeMode +
-              " mode, above what this task may use, so I didn't pass on your answer (\"" +
-              event.payload.answer +
-              "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
-            owner,
-            pending.sequence,
-            [ids.messageId],
-          );
-          return;
-        }
-        // Left pending; the next scan sends it again under the same command id.
-        yield* Effect.logWarning("channel answer forward failed", {
-          taskId: stored.task.taskId,
-          cause: sent.failure,
-        });
-        return;
-      }
-      yield* ledger.completeForward({ owner, sequence: pending.sequence });
     });
 
   return ChannelDispatcher.of({ dispatch, forward });
