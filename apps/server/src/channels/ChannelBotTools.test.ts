@@ -59,5 +59,12 @@ it.effect("a restricted bot refuses local launches and stops a live worker on na
     assert.strictEqual(refused?.status, "failed");
     assert.include(refused?.resultSummary ?? "", "Scout's tool limits can't be applied");
     assert.isUndefined(refused?.worker);
+    yield* members.update({ botId, tools: { mcpServers: "all", skills: "all" } }, owner);
+    yield* gateway.ingest(slackInput("do: check the fixed build", "tools-restored"), slackContext);
+    yield* runtime.drain;
+    const restored = (yield* ledger.listTasks({ ownerId: owner.ownerId, limit: 10 })).tasks.find(
+      (task) => task.taskId !== active.taskId && task.taskId !== refused?.taskId,
+    );
+    assert.strictEqual(restored?.status, "running");
   }).pipe(Effect.provide(harness.layer));
 });
