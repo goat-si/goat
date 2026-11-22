@@ -155,6 +155,7 @@ it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale
       FROM channel_tasks, history WHERE task_id = ${taskId}`;
         if (phase === "upgraded unbound") {
           yield* sql`DROP TABLE IF EXISTS channel_worker_generations`;
+          yield* sql`ALTER TABLE channel_conversations DROP COLUMN slack_bot_id`;
           yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id > 178`;
           yield* sql`UPDATE channel_tasks SET status = 'dispatching', worker_thread_id = NULL
           WHERE task_id = ${taskId}`;
