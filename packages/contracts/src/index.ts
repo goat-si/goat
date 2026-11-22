@@ -188,3 +188,4 @@ export * from "./decisions.ts";
 export * from "./actionOutcomeSafety.ts";
 
 export * from "./botProfile.ts";
+export * from "./botPackage.ts";

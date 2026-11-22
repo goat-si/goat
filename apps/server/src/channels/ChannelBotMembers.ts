@@ -12,6 +12,12 @@ import * as NodeCrypto from "node:crypto";
 import {
   BotId,
   type BotProfile,
+  type BotPackage,
+  type BotPackageExportInput,
+  type BotPackageExportResult,
+  type BotPackageImportInput,
+  type BotPackageReviewInput,
+  type BotPackageReviewResult,
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelCreateBotInput,
   type ChannelResolveBotProposalInput,
@@ -69,6 +75,14 @@ import {
   type TemplateCreation,
 } from "./channelBotTemplateAutomation.ts";
 
+import {
+  addImportedAutomations,
+  exportBotPackage,
+  reviewBotPackage,
+} from "./channelBotPackages.ts";
+
+type ReviewedImport = { readonly botPackage: BotPackage; readonly digest: string };
+
 export type MemberBot = BotProfile & { readonly templateAutomationPending?: true };
 type Owner = Pick<ChannelConnectionOwner, "ownerId"> &
   Partial<Pick<ChannelConnectionOwner, "principalId">>;
@@ -84,6 +98,18 @@ export class ChannelBotMembers extends Context.Service<
       owner: Owner,
       templateCreation?: TemplateCreation,
     ) => Effect.Effect<MemberBot, ChannelGatewayError>;
+    readonly exportPackage: (
+      input: BotPackageExportInput,
+      owner: Owner,
+    ) => Effect.Effect<BotPackageExportResult, ChannelGatewayError>;
+    readonly reviewPackage: (
+      input: BotPackageReviewInput,
+    ) => Effect.Effect<BotPackageReviewResult, ChannelGatewayError>;
+    readonly importPackage: (
+      input: BotPackageImportInput,
+      owner: Owner,
+      creation?: TemplateCreation,
+    ) => Effect.Effect<{ readonly bot: BotProfile }, ChannelGatewayError>;
     readonly setHidden: (
       input: ChannelSetBotHiddenInput,
       owner: Owner,
@@ -134,6 +160,7 @@ const CreateRecord = Schema.fromJsonString(
   Schema.Struct({
     botId: BotId,
     templateId: Schema.optionalKey(Schema.String),
+    packageDigest: Schema.optionalKey(Schema.String),
     principalId: Schema.optionalKey(Schema.String),
     automationAdded: Schema.optionalKey(Schema.Boolean),
   }),
@@ -314,6 +341,7 @@ const make = Effect.gen(function* () {
     owner: Owner,
     proposal?: BotProposalCreate,
     templateCreation?: TemplateCreation,
+    imported?: ReviewedImport,
   ) {
     yield* home.requireHome;
     const at = yield* now;
@@ -325,7 +353,14 @@ const make = Effect.gen(function* () {
     )
       return yield* fail("invalid_input");
     const authority =
-      template === undefined ? undefined : yield* templateAuthority(templateCreation);
+      template === undefined && imported === undefined
+        ? undefined
+        : yield* templateAuthority(templateCreation);
+    if (
+      imported !== undefined &&
+      (authority === undefined || authority.principalId !== owner.principalId)
+    )
+      return yield* fail("forbidden");
     const key =
       proposal === undefined
         ? createKey(owner.ownerId, input.clientRequestId)
@@ -338,7 +373,8 @@ const make = Effect.gen(function* () {
           const receipt = decodeCreate(known[0].value_json);
           if (input.retryForBotId !== undefined && receipt.botId !== input.retryForBotId)
             return yield* fail("not_found");
-          if (receipt.templateId !== input.templateId) return yield* fail("invalid_input");
+          if (receipt.templateId !== input.templateId || receipt.packageDigest !== imported?.digest)
+            return yield* fail("invalid_input");
           if (receipt.principalId !== authority?.principalId) return yield* fail("forbidden");
           const existing = yield* readMember(owner.ownerId, receipt.botId);
           if (existing === undefined) return yield* fail("persistence_failed");
@@ -358,6 +394,13 @@ const make = Effect.gen(function* () {
           purpose: template?.purpose ?? input.purpose,
           ...(template === undefined ? {} : { instructions: template.instructions }),
           ...(proposal === undefined ? {} : { instructions: proposal.instructions }),
+          ...(imported === undefined
+            ? {}
+            : {
+                instructions: imported.botPackage.instructions,
+                tools: { mcpServers: [], skills: [] },
+                importedToolNames: imported.botPackage.tools,
+              }),
           defaultModelSelection: input.defaultModelSelection,
           defaultProjectId: null,
           environmentId,
@@ -370,9 +413,9 @@ const make = Effect.gen(function* () {
           (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;
         const receipt = {
           botId,
-          ...(template === undefined || authority === undefined
-            ? {}
-            : { templateId: template.id, principalId: authority.principalId }),
+          ...(template === undefined ? {} : { templateId: template.id }),
+          ...(imported === undefined ? {} : { packageDigest: imported.digest }),
+          ...(authority === undefined ? {} : { principalId: authority.principalId }),
         };
         yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
           VALUES (${key}, ${encodeCreate(receipt)}, ${at})`;
@@ -380,10 +423,11 @@ const make = Effect.gen(function* () {
         return { record: created, receipt };
       }),
     );
+    if (record.state === "deleted" && imported !== undefined) return yield* fail("not_found");
     if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
     const bot = ChannelBotProfiles.memberProfile(record);
     if (
-      template === undefined ||
+      (template === undefined && imported === undefined) ||
       authority === undefined ||
       record.state === "deleted" ||
       ("automationAdded" in receipt && receipt.automationAdded === true)
@@ -393,6 +437,19 @@ const make = Effect.gen(function* () {
     if (ref === undefined) return yield* fail("persistence_failed");
     const model =
       bot.defaultModelSelection ?? resolveGoatBotModelSelection(yield* serverSettings.getSettings);
+    if (imported !== undefined) {
+      yield* addImportedAutomations(
+        sql,
+        authority,
+        imported.botPackage,
+        bot,
+        ref.bot.projectId,
+        model,
+        key,
+      );
+      return bot;
+    }
+    if (template === undefined) return bot;
     const added = yield* addTemplateAutomation(
       sql,
       authority,
@@ -419,6 +476,39 @@ const make = Effect.gen(function* () {
     serial,
     requireHome: home.requireHome,
     create: createMember,
+  });
+
+  const exportPackage: ChannelBotMembers["Service"]["exportPackage"] = Effect.fn(
+    "ChannelBotMembers.exportPackage",
+  )(function* ({ botId }, owner) {
+    const bot = (yield* profiles.list(owner)).find((entry) => entry.botId === botId);
+    if (bot === undefined) return yield* fail("not_found");
+    return yield* exportBotPackage(sql, bot);
+  });
+
+  const importPackage: ChannelBotMembers["Service"]["importPackage"] = Effect.fn(
+    "ChannelBotMembers.importPackage",
+  )(function* (input, owner, creation) {
+    const reviewed = yield* reviewBotPackage(input);
+    if (reviewed.digest !== input.digest) return yield* fail("invalid_input");
+    const { name, face, color, purpose } = reviewed.botPackage;
+    const bot = yield* serial(
+      createMember(
+        {
+          name,
+          avatar: face,
+          purpose,
+          ...(color === null ? {} : { color }),
+          defaultModelSelection: null,
+          clientRequestId: input.clientRequestId,
+        },
+        owner,
+        undefined,
+        creation,
+        reviewed,
+      ),
+    );
+    return { bot };
   });
 
   /** One committed change to a member, then its thread step if the change set one. */
@@ -632,6 +722,9 @@ const make = Effect.gen(function* () {
     attentionFeed,
     taskChanges: (owner) => ledger.taskChangeRevisions(owner.ownerId),
     create,
+    exportPackage,
+    reviewPackage: reviewBotPackage,
+    importPackage,
     ...proposals,
     setHidden,
     remove,
@@ -650,6 +743,7 @@ export const rpcHandlers = (
   owner: Owner,
   authorizeProposalDecision: Effect.Effect<void, EnvironmentAuthorizationError>,
   templateCreation?: TemplateCreation,
+  canImportPackage = true,
 ) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
@@ -675,6 +769,14 @@ export const rpcHandlers = (
           templateAutomationPending,
         })),
       ),
+    [CHANNEL_GATEWAY_WS_METHODS.exportBotPackage]: (input: BotPackageExportInput) =>
+      service.exportPackage(input, owner),
+    [CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage]: (input: BotPackageReviewInput) =>
+      canImportPackage ? service.reviewPackage(input) : Effect.fail(fail("forbidden")),
+    [CHANNEL_GATEWAY_WS_METHODS.importBotPackage]: (input: BotPackageImportInput) =>
+      canImportPackage
+        ? service.importPackage(input, owner, templateCreation)
+        : Effect.fail(fail("forbidden")),
     [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: (input: ChannelResolveBotProposalInput) =>
       service.resolveProposal(
         input,

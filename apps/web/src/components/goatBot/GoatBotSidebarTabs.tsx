@@ -1,3 +1,4 @@
+import { GoatBotPackageImportButton } from "./GoatBotPackageActions";
 import { GoatBotTemplatePicker } from "./GoatBotTemplatePicker";
 import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
 import { useAtomValue } from "@effect/atom-react";
@@ -224,6 +225,7 @@ function NewBotButton({
           From a template
         </Button>
       )}
+      <GoatBotPackageImportButton key={environmentId} environmentId={environmentId} />
       {supportsTemplates && templatesOpen && (
         <GoatBotTemplatePicker
           environmentId={environmentId}

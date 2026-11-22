@@ -475,6 +475,19 @@ export function createChannelEnvironmentAtoms<R, E>(
       }),
       onSuccess: refreshBots,
     }),
+    exportBotPackage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:export-bot-package",
+      tag: CHANNEL_GATEWAY_WS_METHODS.exportBotPackage,
+    }),
+    reviewBotPackage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:review-bot-package",
+      tag: CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage,
+    }),
+    importBotPackage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:import-bot-package",
+      tag: CHANNEL_GATEWAY_WS_METHODS.importBotPackage,
+      onSuccess: refreshBots,
+    }),
     resolveBotProposal: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:resolve-bot-proposal",
       tag: CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal,

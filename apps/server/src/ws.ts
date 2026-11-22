@@ -1652,6 +1652,7 @@ export const layerWsRpc = (
             service: scheduledTasks,
             capture: scheduledTaskAccess.capture(captureTaskMemoryCeiling),
           },
+          clientOrigin.surface !== "mobile",
         ),
         ...(yield* makeThreadFollowService(channelLedger)).rpcHandlers(
           channelOwner,

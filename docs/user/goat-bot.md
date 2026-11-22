@@ -73,6 +73,23 @@ the routine. For a webhook trigger, configure its signing secret and connect the
 before enabling it. If setup reports that it could not add the routine, choose **Retry**
 in the picker or in the bot’s conversation to finish setting up the same bot.
 
+### Share a bot’s setup
+
+Open a bot’s row menu (long press on mobile), choose **Share setup**, and review the
+`.goatbot.json` package before saving it. The file includes the bot’s profile, instructions,
+automation definitions, and named tools. Conversations, notes, task history, Slack bindings,
+webhook URLs, and signing secrets stay on the source computer. Export stops if text looks
+like a secret. Edit the flagged fields and try again. The check catches known token shapes
+and high-entropy strings. Review the file for any other private information before sharing it.
+
+On web or desktop, choose **Import bot package** in the Bots list on the destination computer.
+The review shows the fields GOAT will use and any it will ignore. Confirm to add the bot.
+If setup fails after creating it, use **Retry import** in the review to finish the same bot.
+Automations start paused. In the bot’s Home, provide each signed trigger’s secret and connect
+its source before enabling it. Use **Edit bot → Tools** to grant access by entering the
+matching local MCP server or skill identifiers. A name in the package grants no access by
+itself.
+
 ## The face
 
 Each bot's avatar shows what it is doing:
