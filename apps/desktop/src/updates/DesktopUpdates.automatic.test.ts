@@ -114,6 +114,36 @@ describe("DesktopUpdates automatic coordinator", () => {
     }),
   );
 
+  it.effect(
+    "backs off twice for an interrupted automatic download, then leaves manual retry available",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness({
+          installPolicy: "install-on-quit",
+          downloadUpdate: Effect.fail(
+            new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+              channel: "latest",
+              cause: new Error("net::ERR_HTTP2_PROTOCOL_ERROR"),
+            }),
+          ),
+        });
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-available", { version });
+            yield* observe(updates, (state) => state.errorContext === "download");
+            yield* TestClock.adjust("2 seconds");
+            assert.equal(harness.downloadCount(), 2);
+            yield* TestClock.adjust("8 seconds");
+            assert.equal(harness.downloadCount(), 3);
+            yield* TestClock.adjust("2 minutes");
+            assert.equal(harness.downloadCount(), 3);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
   it.effect("failed automatic download waits for another check generation", () =>
     Effect.gen(function* () {
       const failure = new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
