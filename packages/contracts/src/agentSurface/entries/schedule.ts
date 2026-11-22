@@ -76,7 +76,7 @@ export const scheduleEntries = {
     toolkit: "orchestrator",
     summary: "List scheduled task webhook delivery summaries",
     description:
-      "Read retained webhook delivery summaries for a scheduled task, including filtered and duplicate requests that did not start a run. Requires live orchestration:operate access.",
+      "Read retained webhook delivery summaries for a scheduled task, including filtered and duplicate requests that did not start a run. Thread callers can read deliveries for tasks in their own project.",
     parameters: { scheduledTaskId: "The scheduled task ID from goat_schedule_list." },
     effect: "read",
     hostRoutable: false,

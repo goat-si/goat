@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import {
-  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   CommandId,
   EnvironmentAuthorizationError,
   EnvironmentId,
@@ -193,7 +193,7 @@ const deliverySummaries = (["filtered", "duplicate"] as const).map((outcome) => 
 }));
 const deliveryScope = {
   ...updateScope,
-  grantedScopes: [AuthOrchestrationOperateScope],
+  grantedScopes: [AuthOrchestrationReadScope],
   reauthorize: () => Effect.void,
 };
 
@@ -338,48 +338,63 @@ it.effect("list_scheduled_tasks returns bounded run history and its incomplete m
   }).pipe(Effect.provide(served));
 });
 
-it.effect("lists filtered and duplicate webhook deliveries as summaries only", () => {
-  const { served } = updateFixture();
-  return Effect.gen(function* () {
-    const result = yield* callTool(
-      "goat_schedule_delivery_list",
-      {
-        scheduledTaskId: webhookTask.id,
-      },
-      deliveryScope,
-    );
-    expect(result.structuredContent, JSON.stringify(result)).toEqual({
-      deliveries: deliverySummaries,
-    });
-    expect(JSON.stringify(result)).not.toMatch(
-      /private-(token|signing-secret|request-body|request-header)/,
-    );
-  }).pipe(Effect.provide(served));
-});
-
-it.effect("refuses webhook delivery reads without live orchestration operate access", () => {
-  const { served } = updateFixture();
-  return Effect.gen(function* () {
-    for (const scope of [
-      { ...deliveryScope, grantedScopes: [] },
-      {
-        ...deliveryScope,
-        reauthorize: () =>
-          Effect.fail(
-            new EnvironmentAuthorizationError({
-              requiredScope: AuthOrchestrationOperateScope,
-              message: "Grant revoked.",
-            }),
-          ),
-      },
-    ]) {
+it.effect(
+  "lists retained delivery summaries for a provider credential with orchestration read access",
+  () => {
+    const { served } = updateFixture();
+    return Effect.gen(function* () {
       const result = yield* callTool(
         "goat_schedule_delivery_list",
         {
           scheduledTaskId: webhookTask.id,
         },
-        scope,
+        deliveryScope,
       );
+      expect(result.structuredContent, JSON.stringify(result)).toEqual({
+        deliveries: deliverySummaries,
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /private-(token|signing-secret|request-body|request-header)/,
+      );
+    }).pipe(Effect.provide(served));
+  },
+);
+
+it.effect("refuses delivery reads outside the caller's project", () => {
+  const { stored, served } = updateFixture();
+  stored.task = { ...webhookTask, projectId };
+  return Effect.gen(function* () {
+    const listed = yield* callTool("goat_schedule_list", {}, deliveryScope);
+    expect(listed.structuredContent).toEqual({ tasks: [] });
+    const result = yield* callTool(
+      "goat_schedule_delivery_list",
+      { scheduledTaskId: webhookTask.id },
+      deliveryScope,
+    );
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("task_not_found") }),
+    ]);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("refuses schedule reads after the provider credential is revoked", () => {
+  const { served } = updateFixture();
+  const revokedScope = {
+    ...deliveryScope,
+    reauthorize: () =>
+      Effect.fail(
+        new EnvironmentAuthorizationError({
+          requiredScope: AuthOrchestrationReadScope,
+          message: "Grant revoked.",
+        }),
+      ),
+  };
+  return Effect.gen(function* () {
+    for (const [name, args] of [
+      ["goat_schedule_list", {}],
+      ["goat_schedule_delivery_list", { scheduledTaskId: webhookTask.id }],
+    ] as const) {
+      const result = yield* callTool(name, args, revokedScope);
       expect(result.structuredContent).toBeUndefined();
       expect(result.content).toEqual([
         expect.objectContaining({ text: expect.stringContaining("capability_denied") }),
