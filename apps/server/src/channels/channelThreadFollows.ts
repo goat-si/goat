@@ -1,4 +1,3 @@
-import * as NodeCrypto from "node:crypto";
 import {
   AuthSessionId,
   BotId,
@@ -120,7 +119,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
         if (capacity?.duplicate === 1) return false;
         if ((capacity?.count ?? 0) >= 100)
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
-        const value = yield* encode({ ...follow, instanceId: NodeCrypto.randomUUID() });
+        const value = yield* encode({ ...follow, instanceId: crypto.randomUUID() });
         const now = DateTime.formatIso(yield* DateTime.now);
         const inserted = yield* sql<{ readonly key: string }>`
       INSERT INTO channel_runtime_state (key, value_json, updated_at)
@@ -164,7 +163,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
       `;
         if (row === undefined) return;
         const follow = yield* decode(row.value_json);
-        const instance = { key, id: follow.instanceId ?? NodeCrypto.randomUUID() };
+        const instance = { key, id: follow.instanceId ?? crypto.randomUUID() };
         if (!(yield* mayRead(follow))) {
           yield* writeNotice(
             follow,
