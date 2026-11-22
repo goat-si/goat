@@ -337,6 +337,16 @@ it("keeps New bot disabled until the server offers member bots and its list has 
   await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
 });
 
+it("omits the template picker on an older host that supports blank member bots", async () => {
+  setup();
+  bots.supportsMembers = true;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to render the roster without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "From a template" }).query()).toBeNull();
+});
+
 it("one click sends createBot named New bot 2 beside a deleted New bot, with no dialog, and a second click sends nothing", async () => {
   setup();
   bots.supportsMembers = true;
