@@ -15,7 +15,9 @@ import { useEnvironmentQuery } from "../../state/query";
 
 const RUNS_SHOWN = 7;
 
-type RunTask = Partial<Pick<ScheduledTask, "recentRuns" | "lastRunError">> & {
+type RunTask = Partial<
+  Pick<ScheduledTask, "recentRuns" | "recentRunsIncomplete" | "lastRunError">
+> & {
   readonly lastRun?: Pick<NonNullable<ScheduledTask["lastRun"]>, "firingId"> | undefined;
 };
 type TimeOptions = Parameters<typeof routineRunFinished>[2];
@@ -37,10 +39,13 @@ export function MobileRoutineRunStrip(props: {
   );
   // A run that leaves the seven closes its panel, and stays closed if it comes back.
   if (openId !== null && !dots.some((dot) => dot.firingId === openId)) setOpenId(null);
-  if (dots.length === 0) return null;
+  if (dots.length === 0 && !props.task.recentRunsIncomplete) return null;
   const open = dots.find((dot) => dot.firingId === openId) ?? null;
   return (
     <View className="gap-1">
+      {props.task.recentRunsIncomplete ? (
+        <Text className="text-xs text-foreground-muted">Couldn't read runs</Text>
+      ) : null}
       <View accessibilityLabel={`Recent runs of ${props.title}`} className="flex-row flex-wrap">
         {dots.map((dot) => (
           <Pressable
@@ -112,6 +117,7 @@ function MobileRoutineRunPanel(props: {
       <Text className="text-foreground">
         {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
         {finished === null ? "" : `, ${finished}`}
+        {dot.originLabel === undefined ? "" : ` · ${dot.originLabel}`}
       </Text>
       {/* A changed reply (an error, another answer) starts collapsed and is measured again. */}
       <MobileRunReply key={body} body={body} />

@@ -9,6 +9,7 @@ import {
   type RoutineRunShape,
 } from "@goat/client-runtime/scheduledTasks";
 import type { ChannelInputSnapshot, EnvironmentId, ThreadId } from "@goat/contracts";
+import { Link } from "@tanstack/react-router";
 import { useContext, useState } from "react";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { channelEnvironment } from "~/state/channels";
@@ -16,13 +17,17 @@ import { useEnvironmentQuery } from "~/state/query";
 import { timestampLocale } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotChatHidden } from "./goatBotLayout";
 import { GoatBotRunInChat } from "./goatBotRunRow";
 
 const RUNS_SHOWN = 7;
 const NO_DETAILS = "Details for this run aren't available.";
 
-type RunTask = Pick<BotRoutineSource, "recentRuns" | "lastRun" | "lastRunError">;
+type RunTask = Pick<
+  BotRoutineSource,
+  "recentRuns" | "recentRunsIncomplete" | "lastRun" | "lastRunError"
+>;
 type TimeOptions = Parameters<typeof routineRunFinished>[2];
 
 /** Run times in web's timestamp locale, with the hours the Timestamp format setting picks. */
@@ -58,48 +63,55 @@ export function GoatBotRoutineRuns(props: {
   // boolean keeps Base UI's own rule of returning focus only when it is still in the popup.
   const [toChatId, setToChatId] = useState<RoutineRunDot["firingId"] | null>(null);
   const dots = botRoutineRuns(props.task, RUNS_SHOWN, (iso) => routineRunTime(iso, timeOptions));
-  if (dots.length === 0) return null;
+  if (dots.length === 0 && !props.task.recentRunsIncomplete) return null;
   // A run pushed out of the seven closes its popover.
   const open = dots.find((dot) => dot.firingId === openId);
   return (
-    <Toolbar.Root aria-label={`Recent runs of ${props.title}`} className="-ms-2 flex flex-wrap">
-      {dots.map((dot) => (
-        <Popover
-          key={dot.firingId}
-          open={dot === open}
-          onOpenChange={(next) => {
-            if (next) setToChatId(null);
-            setOpenId((current) =>
-              next ? dot.firingId : current === dot.firingId ? null : current,
-            );
-          }}
-        >
-          <PopoverTrigger
-            render={
-              <Toolbar.Button
-                aria-label={dot.accessibleName}
-                className="flex size-7 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-accent"
-              />
-            }
-          >
-            <RunShape shape={dot.shape} />
-          </PopoverTrigger>
-          <PopoverPopup width="md" align="start" finalFocus={dot.firingId !== toChatId}>
-            <RunDetails
-              environmentId={props.environmentId}
-              dot={dot}
-              newest={dot === dots.at(-1)}
-              task={props.task}
-              botName={props.botName}
-              timeOptions={timeOptions}
-              botThreadId={props.botThreadId}
-              setToChatId={setToChatId}
-              setOpenId={setOpenId}
-            />
-          </PopoverPopup>
-        </Popover>
-      ))}
-    </Toolbar.Root>
+    <>
+      {props.task.recentRunsIncomplete ? (
+        <p className="text-xs text-muted-foreground">Couldn't read runs</p>
+      ) : null}
+      {dots.length === 0 ? null : (
+        <Toolbar.Root aria-label={`Recent runs of ${props.title}`} className="-ms-2 flex flex-wrap">
+          {dots.map((dot) => (
+            <Popover
+              key={dot.firingId}
+              open={dot === open}
+              onOpenChange={(next) => {
+                if (next) setToChatId(null);
+                setOpenId((current) =>
+                  next ? dot.firingId : current === dot.firingId ? null : current,
+                );
+              }}
+            >
+              <PopoverTrigger
+                render={
+                  <Toolbar.Button
+                    aria-label={dot.accessibleName}
+                    className="flex size-7 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-accent"
+                  />
+                }
+              >
+                <RunShape shape={dot.shape} />
+              </PopoverTrigger>
+              <PopoverPopup width="md" align="start" finalFocus={dot.firingId !== toChatId}>
+                <RunDetails
+                  environmentId={props.environmentId}
+                  dot={dot}
+                  newest={dot === dots.at(-1)}
+                  task={props.task}
+                  botName={props.botName}
+                  timeOptions={timeOptions}
+                  botThreadId={props.botThreadId}
+                  setToChatId={setToChatId}
+                  setOpenId={setOpenId}
+                />
+              </PopoverPopup>
+            </Popover>
+          ))}
+        </Toolbar.Root>
+      )}
+    </>
   );
 }
 
@@ -131,6 +143,7 @@ function RunDetails(props: {
   readonly setOpenId: (firingId: null) => void;
 }) {
   const { dot } = props;
+  const member = useGoatBotMember();
   // Read here, the one place a streamed chat update reaches, so it never redraws the strip.
   const runInChat = useContext(GoatBotRunInChat);
   const conversation = dot.conversation;
@@ -148,6 +161,7 @@ function RunDetails(props: {
       ? channelEnvironment.getInput({ environmentId: props.environmentId, input: { inputId } })
       : null,
   );
+  const taskId = read.error === null ? read.data?.taskIds?.[0] : undefined;
   const word = dot.word.charAt(0).toUpperCase() + dot.word.slice(1);
   const finished = routineRunFinished(dot.requestedAt, dot.completedAt, props.timeOptions);
   return (
@@ -155,6 +169,7 @@ function RunDetails(props: {
       <PopoverTitle>
         {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
         {finished === null ? "" : `, ${finished}`}
+        {dot.originLabel === undefined ? "" : ` · ${dot.originLabel}`}
       </PopoverTitle>
       {/* Only the body scrolls, so the heading and Show in chat stay in view; it takes focus so a
           keyboard can scroll a reply whose chat row is gone. */}
@@ -166,6 +181,24 @@ function RunDetails(props: {
       >
         {runBody({ ...props, state, quiet, inputId, read })}
       </div>
+      {taskId !== undefined ? (
+        <Link
+          className="self-end text-sm underline"
+          to="/bot"
+          search={{ ...goatBotSearch(member), task: taskId }}
+          onClick={() => props.setOpenId(null)}
+        >
+          Open task
+        </Link>
+      ) : dot.taskThreadId === undefined || dot.taskThreadId === props.botThreadId ? null : (
+        <Link
+          className="self-end text-sm underline"
+          to="/$environmentId/$threadId"
+          params={{ environmentId: props.environmentId, threadId: dot.taskThreadId }}
+        >
+          Open task
+        </Link>
+      )}
       {show === undefined ? null : (
         <div className="flex justify-end">
           <Button

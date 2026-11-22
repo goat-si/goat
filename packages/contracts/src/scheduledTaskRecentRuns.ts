@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { CommandId, IsoDateTime, ThreadId } from "./baseSchemas.ts";
+import { CommandId, ForwardCompatibleOptional, IsoDateTime, ThreadId } from "./baseSchemas.ts";
 import { ChannelInputId } from "./channelCommon.ts";
 
 /**
@@ -11,12 +11,14 @@ import { ChannelInputId } from "./channelCommon.ts";
 export const SCHEDULED_TASK_RECENT_RUNS = 7;
 /** GOAT Bot routines whose history one list carries, newest created first; the rest carry none. */
 export const SCHEDULED_TASK_RECENT_RUN_ROUTINES = 50;
-/** Encoded bytes of history one list carries; the routines past it carry none, in list order. */
+/** Combined encoded size of the run arrays in one list. Later routines omit their arrays. */
 export const SCHEDULED_TASK_RECENT_RUN_BYTES = 128 * 1024;
 
 /** One recent firing of a GOAT Bot routine, for its row's history. */
 export const ScheduledTaskRecentRun = Schema.Struct({
   firingId: CommandId,
+  origin: ForwardCompatibleOptional(Schema.Literals(["schedule", "manual", "event"])),
+  taskThreadId: Schema.optionalKey(ThreadId),
   /** A ScheduledTaskRun status, or any later one; clients show unknown ones as unknown. */
   status: Schema.String,
   requestedAt: IsoDateTime,

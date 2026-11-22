@@ -172,6 +172,13 @@ const handlers = {
       return yield* service.listScheduledTasks(scope, input);
     }),
   ),
+  goat_schedule_delivery_list: McpToolAccess.reads(({ scheduledTaskId }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.listScheduledTaskDeliveries(scope, scheduledTaskId);
+    }),
+  ),
   update_scheduled_task: McpToolAccess.destructive(
     McpToolAccess.writes(
       (input) =>

@@ -120,7 +120,8 @@ bot's tasks, and a task opens in its own view.
   allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
-  see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
+  see what started it and what it said. On web and desktop, you can also open the task if it
+  started one. On mobile, an incomplete history is marked above the runs. **Check in on me** sets up a routine on the days and hours you choose: the bot
   looks over its tasks and writes only when something needs you. A timer routine whose last run failed
   shows **Run now**. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
@@ -154,8 +155,8 @@ A trigger starts new work only in its selected project, with approvals required.
 revoking the device session that authorized it blocks queued work. Open and save the trigger
 again from a trusted session to authorize future work.
 
-The trigger's **Deliveries** in Scheduled tasks shows why unsigned, duplicate, and own-work
-events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
+On web and desktop, open **Deliveries** on the trigger under **Home → Routines** or in Scheduled tasks to see why
+unsigned, duplicate, and own-work events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
 them in the trigger. You can pause or resume a configured trigger on mobile.
 
 ## Going back to an older GOAT

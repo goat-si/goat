@@ -203,6 +203,7 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly listWebhookDeliveries: (
       input: ScheduledTaskListWebhookDeliveriesInput,
+      projectId?: ProjectId,
     ) => Effect.Effect<ScheduledTaskListWebhookDeliveriesResult, ScheduledTaskError>;
     readonly getWebhookDelivery: (
       input: ScheduledTaskGetWebhookDeliveryInput,
@@ -1275,10 +1276,18 @@ export const layer = Layer.effect(
 
     const listWebhookDeliveries: ScheduledTaskService["Service"]["listWebhookDeliveries"] = (
       input,
+      projectId,
     ) =>
       sql<WebhookDeliveryRow>`
         SELECT d.*, ${deliveryEvidence(sql)}
         FROM scheduled_task_webhook_deliveries d WHERE task_id = ${input.id}
+          ${
+            projectId === undefined
+              ? sql``
+              : sql`AND EXISTS (
+            SELECT 1 FROM scheduled_tasks t WHERE t.task_id = d.task_id AND t.project_id = ${projectId}
+          )`
+          }
         ORDER BY received_at DESC, rowid DESC
       `.pipe(
         NodeSqliteClient.readOnly,

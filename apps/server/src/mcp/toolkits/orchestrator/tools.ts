@@ -52,6 +52,8 @@ import {
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
   TrimmedNonEmptyString,
+  ScheduledTaskMcpListWebhookDeliveriesInput,
+  ScheduledTaskListWebhookDeliveriesResult,
   HandoffWithdrawInput,
   HandoffWithdrawResult,
 } from "@goat/contracts";
@@ -60,6 +62,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
+import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
@@ -188,6 +191,18 @@ const ListScheduledTasksTool = Tool.make(agentSurfaceRegistry["schedule.list"].n
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["schedule.list"]));
+
+const ListScheduledTaskDeliveriesTool = Tool.make(
+  agentSurfaceRegistry["schedule.delivery_list"].name,
+  {
+    parameters: ScheduledTaskMcpListWebhookDeliveriesInput,
+    description: agentSurfaceRegistry["schedule.delivery_list"].description,
+    success: ScheduledTaskListWebhookDeliveriesResult,
+    failure: OrchestratorMcpFailure,
+    failureMode: "return",
+    dependencies: [...dependencies, ScheduledTasks.ScheduledTaskService],
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["schedule.delivery_list"]));
 
 const UpdateScheduledTaskTool = Tool.make(agentSurfaceRegistry["schedule.update"].name, {
   description: agentSurfaceRegistry["schedule.update"].description,
@@ -399,6 +414,7 @@ export const OrchestratorToolkit = Toolkit.make(
   BackgroundWaitTool,
   ScheduleTaskTool,
   ListScheduledTasksTool,
+  ListScheduledTaskDeliveriesTool,
   UpdateScheduledTaskTool,
   DeleteScheduledTaskTool,
   RequestSecretTool,
