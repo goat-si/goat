@@ -1,3 +1,4 @@
+import { readAgentModes, makeAgentModeReporter } from "./agentModeChanges.ts";
 import { acpCanSwitchModelInSession } from "./capabilities.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
@@ -548,7 +549,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           return plans;
         };
-
         const initialSessionActivationFailure = yield* Ref.make<{
           readonly sessionId: string;
           readonly error: EffectAcpErrors.AcpError;
@@ -579,6 +579,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
         const configuredPolicyMode = yield* Ref.make<string | undefined>(undefined);
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
+        const configuredModes = yield* Ref.make<ReadonlyMap<string, string>>(new Map());
+        const readModes = Effect.gen(function* () {
+          return readAgentModes(yield* runtime.getConfigOptions, yield* runtime.getModeState);
+        });
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
         const advertisedCommandsBySession = yield* SubscriptionRef.make(AdvertisedCommands.empty);
@@ -6385,6 +6389,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           yield* validateModelSelection(modelSelection);
           yield* Ref.set(configuredPolicyMode, flavor.sessionModeForPolicy?.(runtimePolicy));
+          yield* Ref.set(configuredModes, yield* readModes);
           yield* (
             flavor.onSessionConfigurationUpdate?.(
               yield* runtime.getConfigOptions,
@@ -6393,7 +6398,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             ) ?? Effect.void
           );
         });
-
         yield* configureSession(
           started,
           input.modelSelection,
@@ -6547,7 +6551,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }),
           );
         });
-
+        const reportAgentModeChanges = makeAgentModeReporter({
+          driver,
+          activeSelection,
+          configuredModes,
+          readModes,
+          emit: emitProviderEvent,
+        });
         const finalizeTurn = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           status: "completed" | "interrupted" | "failed" | "cancelled",
@@ -6638,6 +6648,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               },
             });
           }
+          yield* reportAgentModeChanges(context.input.threadId);
           const turn = providerTurnPayload(context, settledStatus, now);
           yield* emitProviderEvent({
             type: "provider_turn.updated",
