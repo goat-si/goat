@@ -321,6 +321,7 @@ export const layer = McpToolAccess.toLayer(
               role: bot.role,
               name: bot.name,
               purpose: bot.purpose,
+              ...(bot.tools === undefined ? {} : { tools: bot.tools }),
               hidden: bot.hidden === true,
               sessionThreadId: bot.sessionThreadId,
             })),

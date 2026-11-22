@@ -312,6 +312,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `channel.listBotNotes`. */
   goatBotNotes: Schema.optionalKey(Schema.Boolean),
   goatBotPrivateNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotTools: Schema.optionalKey(Schema.Boolean),
   goatBotInstructions: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
   goatBotLibrary: Schema.optionalKey(Schema.Boolean),

@@ -36,6 +36,15 @@ describe("channel.updateBot input", () => {
       expect(decode(input)._tag, JSON.stringify(input)).toBe("Failure");
     }
   });
+  it("preserves empty tool allowlists and omission in edits from older clients", () => {
+    const decodeEdit = Schema.decodeUnknownSync(ChannelUpdateBotInput);
+    const tools = { mcpServers: [], skills: "all" };
+    expect(decodeEdit({ botId: "main", tools })).toEqual({ botId: "main", tools });
+    expect(decodeEdit({ botId: "main", name: "Scout" })).toEqual({
+      botId: "main",
+      name: "Scout",
+    });
+  });
   it("accepts a partial edit and a cleared avatar", () => {
     expect(decode({ botId: "main", avatar: null })._tag).toBe("Success");
     expect(decode({ botId: "main", purpose: "" })._tag).toBe("Success");

@@ -1,3 +1,5 @@
+import { ChannelWake } from "./ChannelWake.ts";
+import { stopForBotToolsChange } from "./channelBotToolRevocation.ts";
 /**
  * Member bots: create, hide, delete, restore, and a reconciler for steps a crash left halfway.
  * Every step holds one permit, so a reconcile never interleaves with a delete or a restore.
@@ -126,6 +128,7 @@ const fail = (reason: ChannelGatewayError["reason"]) => new ChannelGatewayError(
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const wake = yield* ChannelWake;
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -485,7 +488,20 @@ const make = Effect.gen(function* () {
   const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
     profileEdits.withPermits(1)(
       Effect.gen(function* () {
-        const { bot, changed } = yield* profiles.updateWithChanges(input, owner);
+        const { bot, changed, toolsNarrowed } = yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const result = yield* profiles.updateWithChanges(input, owner);
+              if (result.toolsNarrowed)
+                yield* stopForBotToolsChange(sql, ledger, owner.ownerId, result.bot, yield* now);
+              return result;
+            }),
+          )
+          .pipe(Effect.mapError(failed));
+        if (toolsNarrowed) {
+          yield* ledger.announceTaskChanges([owner.ownerId]);
+          yield* wake.wake;
+        }
         for (const field of changed)
           yield* events.emit({
             ownerId: owner.ownerId,
