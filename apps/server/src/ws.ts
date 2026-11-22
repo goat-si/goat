@@ -12,6 +12,7 @@ import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
+import { makeThreadFollowService } from "./channels/channelThreadFollowService.ts";
 import { channelBotWorkRpcHandlers } from "./channels/channelBotWorkRpc.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
@@ -1642,6 +1643,11 @@ export const layerWsRpc = (
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
         ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
+        ...(yield* makeThreadFollowService(channelLedger)).rpcHandlers(
+          channelOwner,
+          channelEnvironmentId,
+          currentSessionId,
+        ),
         ...(yield* channelBotWorkRpcHandlers(channelOwner)),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>

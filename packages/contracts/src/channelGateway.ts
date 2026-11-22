@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { BotColor, BotId, BotProfile, BotRole } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
+  AuthSessionId,
   EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
@@ -132,6 +133,12 @@ export type ChannelOutboundKind = typeof ChannelOutboundKind.Type;
 
 /** One delivery to a transport. Delivery is at least once; `deliveryId` stays the same on retry. */
 export const ChannelOutboundMessage = Schema.Struct({
+  followApproval: Schema.optionalKey(
+    Schema.Struct({
+      sessionId: AuthSessionId,
+      principalId: Schema.String,
+    }),
+  ),
   deliveryId: ChannelDeliveryId,
   destination: ChannelReplyAddress,
   kind: ChannelOutboundKind,
@@ -259,6 +266,7 @@ export type ChannelIdentityUnlinkInput = typeof ChannelIdentityUnlinkInput.Type;
 const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   identity_unlinked: "This account is not linked to GOAT yet.",
   forbidden: "This request is not allowed for this sender.",
+  cross_environment_follow: "Following requires the bot and thread to be on the same environment.",
   invalid_input: "The channel message is not valid.",
   idempotency_conflict: "A different message was already stored under this idempotency key.",
   adapter_unavailable: "This channel is not available on this server.",
@@ -408,8 +416,6 @@ export const ChannelBotSummary = Schema.Struct({
   hidden: Schema.Boolean,
   sessionThreadId: ThreadId,
 });
-export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBotSummary) });
-export type ChannelBotListResult = typeof ChannelBotListResult.Type;
 
 /**
  * Changes only the keys sent; null clears an avatar, a member's model or its color. The main bot
@@ -702,7 +708,41 @@ export const ChannelListBotThreadsInput = Schema.Struct({
   ),
 });
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
+export type ChannelFollowTarget = typeof ChannelFollowTarget.Type;
+export const ChannelFollowTarget = Schema.Struct({
+  botId: BotId,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type ChannelFollowThreadInput = typeof ChannelFollowThreadInput.Type;
+export const ChannelFollowThreadInput = Schema.Struct({
+  ...ChannelFollowTarget.fields,
+  taskId: ChannelTaskId,
+  doneMeans: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_000))),
+});
+export const ChannelFollowedThread = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  taskId: ChannelTaskId,
+  doneMeans: ChannelFollowThreadInput.fields.doneMeans,
+  status: Schema.optionalKey(Schema.String),
+  pullRequest: Schema.optionalKey(Schema.String),
+});
+export type ChannelListFollowedThreadsInput = typeof ChannelListFollowedThreadsInput.Type;
+export const ChannelListFollowedThreadsInput = Schema.Struct({ botId: BotId });
+export type ChannelListFollowedThreadsResult = typeof ChannelListFollowedThreadsResult.Type;
+export const ChannelListFollowedThreadsResult = Schema.Struct({
+  followedThreads: Schema.Array(ChannelFollowedThread),
+});
+
+export const ChannelBotListResult = Schema.Struct({
+  bots: Schema.Array(ChannelBotSummary),
+  followedThreads: Schema.optionalKey(Schema.Array(ChannelFollowedThread)),
+});
+export type ChannelBotListResult = typeof ChannelBotListResult.Type;
+
 export const ChannelListBotThreadsResult = Schema.Struct({
+  followedThreads: Schema.optionalKey(Schema.Array(ChannelFollowedThread)),
   rows: Schema.Array(BotThreadRow),
   snoozed: Schema.optionalKey(
     Schema.Array(BotTaskRow).check(Schema.isMaxLength(CHANNEL_BOT_THREADS_SNOOZED_LIMIT)),
@@ -873,6 +913,9 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   setBotHidden: "channel.setBotHidden",
   deleteBot: "channel.deleteBot",
   restoreBot: "channel.restoreBot",
+  followThread: "channel.followThread",
+  stopFollowingThread: "channel.stopFollowingThread",
+  listFollowedThreads: "channel.listFollowedThreads",
   listBotThreads: "channel.listBotThreads",
   listBotNotes: "channel.listBotNotes",
   listBotArtifacts: "channel.listBotArtifacts",

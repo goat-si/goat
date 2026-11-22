@@ -299,6 +299,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotThreads` and `channel.updateTaskView` for bot task threads. */
+  goatBotThreadFollows: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.listBotThreads` takes `history` and walks every task of a bot by cursor. Older
       servers drop the key and answer the current list. */

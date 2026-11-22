@@ -12,6 +12,7 @@ import {
   CHANNEL_BOT_THREADS_SNOOZED_LIMIT,
   ChannelTaskId,
   type ChannelListBotThreadsInput,
+  type ChannelListFollowedThreadsResult,
   type ChannelListBotThreadsResult,
   type ChannelTaskView,
   type ChannelSnoozeBotTaskInput,
@@ -41,6 +42,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
+import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
@@ -103,6 +105,10 @@ interface ChildRow extends ThreadPullRequestColumns, RemotePullRequestColumns {
 export class ChannelBotThreads extends Context.Service<
   ChannelBotThreads,
   {
+    readonly listFollowed: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<ChannelListFollowedThreadsResult["followedThreads"], ChannelGatewayError>;
     readonly update: (
       input: ChannelUpdateTaskViewInput,
       owner: ChannelConnectionOwner,
@@ -145,6 +151,7 @@ export class ChannelBotThreads extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const follows = yield* makeThreadFollowService(ledger);
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
@@ -526,6 +533,9 @@ const make = Effect.gen(function* () {
       ...(snoozedRevision === undefined ? {} : { snoozedRevision }),
       ...(nextSnoozeExpiry === undefined ? {} : { nextSnoozeExpiry, readAt: nowIso }),
       mainMessageCount: messages,
+      ...(after === undefined
+        ? { followedThreads: yield* follows.list(owner.ownerId, botId) }
+        : {}),
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
     };
   });
@@ -788,6 +798,9 @@ const make = Effect.gen(function* () {
   });
   return ChannelBotThreads.of({
     list,
+    listFollowed: Effect.fn("ChannelBotThreads.listFollowed")((ownerId, botId) =>
+      follows.list(ownerId, botId).pipe(Effect.mapError(failed)),
+    ),
     update: views.update,
     snooze: views.snooze,
     unsnooze: views.snooze,
