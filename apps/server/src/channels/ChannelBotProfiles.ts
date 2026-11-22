@@ -119,6 +119,50 @@ export const readProfileRecord = (sql: SqlClient.SqlClient, ownerId: string, bot
     ),
   );
 
+export const normalizeBotName = (name: string) =>
+  name
+    .trim()
+    .replace(/[ \t]+/g, " ")
+    .normalize("NFC")
+    .toLowerCase();
+
+const MAX_PROFILE_ROWS = 501;
+
+export const readStoredBotProfiles = Effect.fn("ChannelBotProfiles.readStored")(function* (
+  sql: SqlClient.SqlClient,
+  ownerId: string,
+) {
+  const prefix = keyPrefix(ownerId);
+  const rows = yield* sql<{ readonly key: string; readonly value_json: string }>`
+    SELECT key, value_json FROM channel_runtime_state
+    WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
+    LIMIT ${MAX_PROFILE_ROWS}`;
+  return yield* Effect.try(() =>
+    rows.map((row) => checkedProfile(prefix, row.key, row.value_json)),
+  );
+});
+
+export const assertBotNameAvailable = Effect.fn("ChannelBotProfiles.assertNameAvailable")(
+  function* (sql: SqlClient.SqlClient, ownerId: string, name: string, except?: BotId) {
+    const profiles = yield* readStoredBotProfiles(sql, ownerId);
+    const normalized = normalizeBotName(name);
+    const conflict = profiles.find(
+      (profile) =>
+        profile.botId !== except &&
+        (profile.role === "main" || profile.state !== "deleted") &&
+        normalizeBotName(profile.name) === normalized,
+    );
+    const implicitMain =
+      except !== MAIN_BOT_ID &&
+      !profiles.some((profile) => profile.role === "main") &&
+      normalized === normalizeBotName(DEFAULT_BOT_IDENTITY.name);
+    const conflictingBotName =
+      conflict?.name ?? (implicitMain ? DEFAULT_BOT_IDENTITY.name : undefined);
+    if (conflictingBotName !== undefined)
+      return yield* new ChannelGatewayError({ reason: "invalid_input", conflictingBotName });
+  },
+);
+
 const isGatewayError = Schema.is(ChannelGatewayError);
 
 /** A color edit: a value sets it, null removes it, and leaving it out keeps the stored one. */
@@ -242,6 +286,9 @@ const make = Effect.gen(function* () {
             (input.defaultModelSelection !== undefined || (input.color ?? null) !== null)
           ) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
+          }
+          if (input.name !== undefined && input.name !== record.name) {
+            yield* assertBotNameAvailable(sql, owner.ownerId, input.name, input.botId);
           }
           const changes = {
             ...(input.name === undefined ? {} : { name: input.name }),

@@ -167,6 +167,7 @@ describe("handleSlackEnvelope", () => {
       assert.deepEqual(call.context, {
         ...owner,
         caller: { type: "transport", kind: "slack", connectionId },
+        slackRouting: { allowName: true },
       });
     }).pipe(Effect.provide(gateway.layer));
   });
@@ -378,6 +379,7 @@ describe("makeSlackChannelTransport", () => {
       teamId: "T0TEAM",
       botUserId: "U0BOT",
       botApi: {
+        postEphemeral: () => Promise.reject(new Error("Unexpected private notice")),
         authTest: () => Promise.reject(new Error("not used")),
         updateMessage: () => Promise.reject(new Error("not used")),
         deleteMessage: () => Promise.reject(new Error("not used")),
@@ -642,6 +644,7 @@ describe("Slack progress edits and removals", () => {
       teamId: options.teamId ?? "T0TEAM",
       botUserId: "U0BOT",
       botApi: {
+        postEphemeral: () => Promise.reject(new Error("Unexpected private notice")),
         authTest: () => Promise.reject(new Error("not used")),
         postMessage: () => Promise.reject(new Error("not used")),
         updateMessage: (input) => {

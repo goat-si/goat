@@ -1,4 +1,5 @@
 import {
+  isChannelWorkerThreadId,
   CommandId,
   isGoatBotSessionThreadId,
   EnvironmentId,
@@ -18,7 +19,6 @@ import {
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
-import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import { suggestedAction } from "./launchWatchText.ts";
 
 /**

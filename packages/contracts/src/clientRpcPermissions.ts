@@ -188,6 +188,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
   // What the bots wait on is task state, the same read their waiting badges need.
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBotAttention]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: AuthOrchestrationReadScope,

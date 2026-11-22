@@ -152,6 +152,15 @@ export const ChannelOutboundMessage = Schema.Struct({
   chip: Schema.optional(ChannelTaskChip),
   /** The original requester to tag, such as a Slack user id. */
   mentionActorId: Schema.optional(TrimmedNonEmptyString),
+  /** A Slack notice visible only to this user. */
+  slackPrivateNotice: Schema.optionalKey(
+    Schema.Struct({
+      userId: TrimmedNonEmptyString,
+      text: TrimmedNonEmptyString,
+    }),
+  ),
+  /** Display name of the member bot posting a Slack reply. */
+  slackBotName: Schema.optionalKey(TrimmedNonEmptyString),
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   questionId: Schema.optional(ChannelQuestionId),
@@ -298,6 +307,7 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   "ChannelGatewayError",
   {
     reason: ChannelGatewayErrorReason,
+    conflictingBotName: Schema.optionalKey(BotProfile.fields.name),
     attachmentProblem: Schema.optionalKey(Schema.Literal("expired")),
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
@@ -312,7 +322,9 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   },
 ) {
   override get message(): string {
-    return CHANNEL_GATEWAY_FAILURE_MESSAGES[this.reason];
+    return this.conflictingBotName === undefined
+      ? CHANNEL_GATEWAY_FAILURE_MESSAGES[this.reason]
+      : `A bot named “${this.conflictingBotName}” is already active.`;
   }
 }
 
@@ -808,7 +820,11 @@ export const ChannelListChildWorkResult = Schema.Struct({
 });
 export type ChannelListChildWorkResult = typeof ChannelListChildWorkResult.Type;
 
-export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
+export const ChannelGetTaskInput = Schema.Struct({
+  taskId: ChannelTaskId,
+  botId: Schema.optionalKey(BotId),
+  attentionRequest: Schema.optionalKey(Schema.String),
+});
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
 export const CHANNEL_LIST_TASKS_MAX_LIMIT = 100;
@@ -907,6 +923,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
   listOpenAsks: "channel.listOpenAsks",
+  listBotAttention: "channel.listBotAttention",
   subscribeTaskChanges: "channel.subscribeTaskChanges",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",

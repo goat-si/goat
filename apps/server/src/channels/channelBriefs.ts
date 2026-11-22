@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
+import type { ChannelBotFiles } from "./channelBotNotes.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
 /** Freeze once per generation and return the snapshot subsequent launch writes must use. */
@@ -81,4 +82,17 @@ export const channelNotesRevision = Effect.fn("channel.notesRevision")(function*
     }),
   );
   return bytes === null ? null : NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+});
+
+export const localNotesBriefContext = Effect.fn("channel.localNotesBriefContext")(function* (
+  files: ChannelBotFiles,
+  notesAllowed: boolean,
+  briefVersion: number | undefined,
+) {
+  return {
+    ...(notesAllowed ? { notesPath: files.notes } : {}),
+    notesRevision:
+      notesAllowed && briefVersion === undefined ? yield* channelNotesRevision(files.notes) : null,
+    skillsPath: files.skills,
+  };
 });

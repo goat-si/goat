@@ -222,6 +222,7 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBotAttention]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: "channel",

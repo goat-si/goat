@@ -34,7 +34,10 @@ vi.mock("../../lib/appState", () => ({
 vi.mock("@goat/client-runtime/environment", () => ({
   scopeThreadRef: (environmentId: string, threadId: string) => ({ environmentId, threadId }),
 }));
-vi.mock("@goat/client-runtime/goatBot", () => ({ goatBotName: () => "GOAT Bot" }));
+vi.mock(import("@goat/client-runtime/goatBot"), async (original) => ({
+  decodeBotAttentionRequest: (await original()).decodeBotAttentionRequest,
+  goatBotName: () => "GOAT Bot",
+}));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => route.shell }));
 vi.mock("../../state/threads", () => ({ threadEnvironment: { visit: "visit" } }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => route.visit }));

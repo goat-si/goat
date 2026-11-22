@@ -167,6 +167,7 @@ import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
 import * as ChannelLedger from "./channels/ChannelLedger.ts";
 import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
+import { readTaskForAttention } from "./channels/channelBotAttention.ts";
 import { ownerFromSession } from "./channels/channelOwner.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -1656,14 +1657,7 @@ export const layerWsRpc = (
             caller: { type: "rpc", clientId: currentSessionId },
           }),
         [CHANNEL_GATEWAY_WS_METHODS.getTask]: (input) =>
-          channelLedger.getTask(input.taskId).pipe(
-            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-            Effect.flatMap((stored) =>
-              stored === undefined || stored.ownerId !== channelOwner.ownerId
-                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
-                : Effect.succeed(stored.task),
-            ),
-          ),
+          readTaskForAttention(channelLedger, input, channelOwner.ownerId),
         [CHANNEL_GATEWAY_WS_METHODS.listTasks]: (input) =>
           channelLedger
             .listTasks({

@@ -7,6 +7,16 @@ import * as Fiber from "effect/Fiber";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import { PlacementStarted } from "../channelDispatchFences.ts";
 
+export const dispatchBarrier = Effect.gen(function* () {
+  const reached = yield* Deferred.make<void>();
+  const released = yield* Deferred.make<void>();
+  return {
+    reached: Deferred.await(reached),
+    release: Deferred.succeed(released, undefined),
+    pause: Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(released))),
+  };
+});
+
 type HeldMethod =
   | "findIdentity"
   | "getRemoteWorker"

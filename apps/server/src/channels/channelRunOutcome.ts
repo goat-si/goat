@@ -5,9 +5,17 @@
  *
  * @module channelRunOutcome
  */
-import type { ChannelTask, RunId, ThreadResultOutcome } from "@goat/contracts";
+import type { ChannelTask, OrchestrationV2Run, RunId, ThreadResultOutcome } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import type { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 
 import { questionIdFor } from "./channelIds.ts";
+import {
+  CHANNEL_PERMISSION_CHANGED,
+  CHANNEL_PERMISSION_CHANGED_MESSAGE,
+} from "./channelProviderInputAuthority.ts";
+import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import type { ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 
 export interface ReportedRunOutcome {
@@ -21,6 +29,42 @@ const REPORTED_BLOCKED_FALLBACK =
   "The worker reported that it is blocked without giving a reason. How should it continue?";
 /** What callers settle with when a run left no text of its own. */
 const NO_FINAL_TEXT = "Finished.";
+
+export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
+  threads: ThreadManagementService["Service"],
+  run: OrchestrationV2Run,
+  session: boolean,
+  routineWork: boolean,
+) {
+  if (session && run.status === "failed") {
+    const errors = yield* threads
+      .getThreadRecords(run.threadId, ["turnItems"], {
+        turnItemTypes: ["error"],
+        turnItemRunIds: [run.id],
+      })
+      .pipe(Effect.option);
+    if (Option.isNone(errors)) return undefined;
+    if (
+      errors.value.turnItems.some(
+        (item) => item.type === "error" && item.failure.code === CHANNEL_PERMISSION_CHANGED,
+      )
+    ) {
+      return { reason: CHANNEL_PERMISSION_CHANGED, summary: CHANNEL_PERMISSION_CHANGED_MESSAGE };
+    }
+  }
+  const releaseReason =
+    routineWork && run.status === "failed"
+      ? routineWorkerReleaseReason(
+          yield* threads.getThreadShell(run.threadId).pipe(Effect.orElseSucceed(() => null)),
+          run.id,
+        )
+      : undefined;
+  return {
+    reason: run.status,
+    summary:
+      releaseReason ?? "The coding thread ended with " + run.status.replaceAll("_", " ") + ".",
+  };
+});
 
 /**
  * The event that settles `task` after run `runId` completed. `fallbackSummary` is what the task

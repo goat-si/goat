@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import { useState } from "react";
 import React, { act, type ReactNode } from "react";
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
 }));
@@ -195,7 +197,6 @@ vi.mock("../../native/StackHeader", () => ({
     )),
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
 }));

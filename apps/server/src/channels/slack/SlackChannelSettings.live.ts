@@ -12,15 +12,11 @@
  * @module SlackChannelSettings.live
  */
 import {
-  AuthEnvironmentScopes,
+  MAIN_BOT_ID,
+  SLACK_BOT_BINDING_LIMIT,
   resolveSlackAccess,
-  RuntimeMode,
   SlackChannelConnectionId,
-  SlackChannelDefaultTarget,
-  SlackChannelScope,
   SlackChannelSettingsError,
-  SlackUserAccess,
-  TrimmedNonEmptyString,
   type SlackChannelConfigureInput,
   type SlackChannelSettings as SlackChannelSettingsSnapshot,
   type SlackChannelSettingsErrorReason,
@@ -34,7 +30,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -42,50 +37,22 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as ChannelBotProfiles from "../ChannelBotProfiles.ts";
 import { isGoatBotHome } from "../ChannelBotHome.ts";
-import { unlinkedIdentity } from "../ChannelGateway.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
+import {
+  decodeSettingsFile,
+  encodeSettingsFile,
+  SETTINGS_FILE_NAME,
+  type StoredConnection,
+  workspaceIdentity,
+} from "./slackChannelSettingsFile.ts";
 import type { SlackRevocationEvent } from "./slackEventMapping.ts";
 import * as SlackSdk from "./SlackSdk.ts";
 
-const StoredOwner = Schema.Struct({
-  ownerId: TrimmedNonEmptyString,
-  principalId: TrimmedNonEmptyString,
-  displayName: TrimmedNonEmptyString,
-  grantedScopes: AuthEnvironmentScopes,
-  runtimeModeCeiling: RuntimeMode,
-});
-
-const StoredConnection = Schema.Struct({
-  connectionId: SlackChannelConnectionId,
-  enabled: Schema.Boolean,
-  teamId: Schema.optional(TrimmedNonEmptyString),
-  botUserId: Schema.optional(TrimmedNonEmptyString),
-  appTokenSavedAt: Schema.optional(Schema.Number),
-  botTokenSavedAt: Schema.optional(Schema.Number),
-  revoked: Schema.optional(Schema.Literals(["bot_revoked", "app_uninstalled"])),
-  allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
-  // Absent in files saved before these existed; resolveSlackAccess supplies the defaults.
-  channelScope: Schema.optional(SlackChannelScope),
-  userAccess: Schema.optional(SlackUserAccess),
-  unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
-  defaultTarget: Schema.optional(SlackChannelDefaultTarget),
-  owner: Schema.optional(StoredOwner),
-});
-type StoredConnection = typeof StoredConnection.Type;
-
-const SettingsFile = Schema.Struct({
-  version: Schema.Literal(1),
-  connections: Schema.Array(StoredConnection),
-});
-const SettingsFileJson = Schema.fromJsonString(SettingsFile);
-const decodeSettingsFile = Schema.decodeUnknownEffect(SettingsFileJson);
-const encodeSettingsFile = Schema.encodeEffect(SettingsFileJson);
-
 const REVOCATION_SKEW_MARGIN_SECONDS = 300;
-const SETTINGS_FILE_NAME = "slack-channel-settings.json";
 /** Server-generated connection ids. Only these are ever used in secret file names. */
 const CONNECTION_ID_PATTERN = /^slack-[a-f0-9]{12}$/;
 
@@ -129,6 +96,7 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const sdk = yield* SlackSdk.SlackSdk;
   const runtime = yield* SlackChannelRuntime.SlackChannelRuntime;
+  const profiles = yield* Effect.serviceOption(ChannelBotProfiles.ChannelBotProfiles);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
@@ -206,6 +174,7 @@ export const make = Effect.gen(function* () {
         enabled: connection.enabled,
         channelScope: access.channelScope,
         allowedChannelIds: connection.allowedChannelIds,
+        ...(connection.botBindings === undefined ? {} : { botBindings: connection.botBindings }),
         ...(access.userAccess === "workspace"
           ? { unlinkedRuntimeModeCeiling: access.unlinkedRuntimeModeCeiling }
           : {}),
@@ -269,6 +238,7 @@ export const make = Effect.gen(function* () {
         ...(connection.teamId === undefined ? {} : { teamId: connection.teamId }),
         ...(connection.botUserId === undefined ? {} : { botUserId: connection.botUserId }),
         allowedChannelIds: connection.allowedChannelIds,
+        ...(connection.botBindings === undefined ? {} : { botBindings: connection.botBindings }),
         ...resolveSlackAccess(connection),
         ...(connection.defaultTarget === undefined
           ? {}
@@ -424,6 +394,37 @@ export const make = Effect.gen(function* () {
           return yield* snapshot(yield* clearCredentials(base));
         }
 
+        if (input.botBindings !== undefined) {
+          const ids = new Set(input.botBindings.map((binding) => binding.channelId));
+          if (
+            ids.size !== input.botBindings.length ||
+            ids.size > SLACK_BOT_BINDING_LIMIT ||
+            input.botBindings.some((binding) => !/^[CG][A-Z0-9]{1,31}$/u.test(binding.channelId))
+          ) {
+            return yield* fail("invalid_input");
+          }
+          const changed = input.botBindings.filter(
+            (binding) =>
+              binding.botId !== MAIN_BOT_ID &&
+              !base.botBindings?.some(
+                (saved) => binding.channelId === saved.channelId && binding.botId === saved.botId,
+              ),
+          );
+          if (changed.length > 0) {
+            if (Option.isNone(profiles)) return yield* fail("adapter_unavailable");
+            const bots = yield* profiles.value
+              .list(resolvedOwner)
+              .pipe(Effect.catch(persistenceFailed("read-bot-binding-targets")));
+            if (
+              changed.some(
+                (binding) =>
+                  !bots.some((bot) => bot.botId === binding.botId && bot.hidden !== true),
+              )
+            )
+              return yield* fail("invalid_input");
+          }
+        }
+
         // Validate new tokens before anything is written.
         if (input.appToken !== undefined) {
           const appToken = input.appToken;
@@ -491,6 +492,7 @@ export const make = Effect.gen(function* () {
             ? {}
             : { teamId: identity.teamId, botUserId: identity.botUserId }),
           allowedChannelIds,
+          ...(input.botBindings === undefined ? {} : { botBindings: input.botBindings }),
           channelScope,
           userAccess: input.userAccess ?? storedAccess.userAccess,
           unlinkedRuntimeModeCeiling:
@@ -526,19 +528,14 @@ export const make = Effect.gen(function* () {
         ),
       ),
     unlinkedIdentity: (connectionId, externalActorId) =>
-      Effect.map(Ref.get(state), (current) => {
-        const connection = current.connections.find((c) => c.connectionId === connectionId);
-        if (connection?.owner === undefined) return Option.none();
-        const access = resolveSlackAccess(connection);
-        if (access.userAccess !== "workspace") return Option.none();
-        return Option.some(
-          unlinkedIdentity(connection.owner, {
-            connectionId,
+      Effect.map(Ref.get(state), (current) =>
+        Option.fromUndefinedOr(
+          workspaceIdentity(
+            current.connections.find((connection) => connection.connectionId === connectionId),
             externalActorId,
-            runtimeModeCeiling: access.unlinkedRuntimeModeCeiling,
-          }),
-        );
-      }),
+          ),
+        ),
+      ),
   });
 
   /**

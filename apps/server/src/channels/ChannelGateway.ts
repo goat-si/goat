@@ -52,6 +52,7 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import { answerVerdict } from "./channelPersonMessage.ts";
 
 const FINISHED_TASK_STATUSES = new Set(["completed", "failed", "cancelled"]);
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -307,6 +308,7 @@ const noticeDelivery = (
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const home = yield* ChannelBotHome.ChannelBotHome;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const registry = yield* ChannelTransport.ChannelTransportRegistry;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
@@ -385,7 +387,8 @@ const make = Effect.gen(function* () {
             caller.kind !== "slack" ||
             caller.connectionId !== input.connectionId ||
             address.kind !== "slack" ||
-            address.connectionId !== input.connectionId
+            address.connectionId !== input.connectionId ||
+            input.conversationKey !== [address.teamId, address.channelId, address.rootTs].join(":")
           ) {
             return yield* forbidden();
           }
@@ -555,6 +558,7 @@ const make = Effect.gen(function* () {
           requester,
           acceptedAt,
           botId,
+          ...(context.slackRouting === undefined ? {} : { slackRouting: context.slackRouting }),
           ...(requester === undefined
             ? {
                 rejectNotice: noticeDelivery(
@@ -681,27 +685,48 @@ const make = Effect.gen(function* () {
       return stored.snapshot;
     });
 
+  const slackReplyIdentity = Effect.fn("ChannelGateway.slackReplyIdentity")(function* (
+    message: ChannelOutboundMessage,
+  ) {
+    if (message.destination.kind !== "slack" || message.slackPrivateNotice !== undefined)
+      return message;
+    const task =
+      message.taskId === undefined
+        ? undefined
+        : yield* ledger.getTask(message.taskId).pipe(Effect.mapError(ledgerFailure));
+    const origin =
+      task ??
+      (message.inReplyToInputId === undefined
+        ? undefined
+        : yield* ledger.getInput(message.inReplyToInputId).pipe(Effect.mapError(ledgerFailure)));
+    if (origin === undefined || origin.botId === MAIN_BOT_ID) return message;
+    const identity = yield* profiles.identity(origin.ownerId, origin.botId);
+    return { ...message, slackBotName: identity.name };
+  });
+
   const send: ChannelGateway["Service"]["send"] = (message) =>
     registry.resolve(message.destination.kind).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new ChannelGatewayError({ reason: "adapter_unavailable" })),
-          onSome: (transport) => transport.send(message),
+          onSome: (transport) => Effect.flatMap(slackReplyIdentity(message), transport.send),
         }),
       ),
     );
 
   const skipped = { _tag: "skipped" } as const;
   const edit: ChannelGateway["Service"]["edit"] = (input) =>
-    registry
-      .resolve(input.message.destination.kind)
-      .pipe(
-        Effect.flatMap((transport) =>
-          Option.isSome(transport) && transport.value.edit !== undefined
-            ? transport.value.edit(input)
-            : Effect.succeed(skipped),
-        ),
-      );
+    registry.resolve(input.message.destination.kind).pipe(
+      Effect.flatMap((transport) => {
+        const editMessage = Option.getOrUndefined(transport)?.edit;
+        return editMessage === undefined
+          ? Effect.succeed(skipped)
+          : slackReplyIdentity(input.message).pipe(
+              Effect.flatMap((message) => editMessage({ ...input, message })),
+              Effect.orElseSucceed(() => skipped),
+            );
+      }),
+    );
   const remove: ChannelGateway["Service"]["remove"] = (input) =>
     registry
       .resolve(input.destination.kind)
