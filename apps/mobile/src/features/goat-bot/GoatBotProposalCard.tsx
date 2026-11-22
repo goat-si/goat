@@ -1,13 +1,15 @@
 import type { BotProposalCard, ChannelResolveBotProposalInput } from "@goat/contracts";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Alert, Pressable, Text, View } from "react-native";
 
 export function GoatBotProposalCard({
   card,
   resolve,
 }: {
   readonly card: BotProposalCard;
-  readonly resolve?: ((input: ChannelResolveBotProposalInput) => Promise<boolean>) | undefined;
+  readonly resolve?:
+    | ((input: ChannelResolveBotProposalInput) => Promise<string | null>)
+    | undefined;
 }) {
   const [saving, setSaving] = useState(false);
   const [settled, setSettled] = useState<"accepted" | "dismissed">();
@@ -17,13 +19,11 @@ export function GoatBotProposalCard({
   async function submit(accept: boolean) {
     if (!resolve) return;
     setSaving(true);
-    try {
-      if (await resolve({ proposalId: card.proposalId, accept })) {
-        setSettled(accept ? "accepted" : "dismissed");
-      }
-    } finally {
-      setSaving(false);
-    }
+    const failure = await resolve({ proposalId: card.proposalId, accept }).finally(() =>
+      setSaving(false),
+    );
+    if (failure === null) setSettled(accept ? "accepted" : "dismissed");
+    else Alert.alert("Couldn't resolve proposal", failure);
   }
   return (
     <View className="my-2 gap-3 rounded-xl border border-border bg-card p-4">

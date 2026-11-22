@@ -4,7 +4,6 @@ import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/s
 import type { ChannelResolveBotProposalInput, EnvironmentId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { useCallback } from "react";
-import { Alert } from "react-native";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 
@@ -18,14 +17,12 @@ export function useMobileBotProposalDecision(environmentId: EnvironmentId | null
   );
   const resolve = useCallback(
     async (input: ChannelResolveBotProposalInput) => {
-      if (environmentId === null || !allowed) return false;
+      if (environmentId === null || !allowed) return "Proposal review is unavailable.";
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.resolveBotProposal, {
         environmentId,
         input,
       });
-      if (result._tag === "Success") return true;
-      Alert.alert("Couldn't resolve proposal", botManageFailure(squashAtomCommandFailure(result)));
-      return false;
+      return result._tag === "Success" ? null : botManageFailure(squashAtomCommandFailure(result));
     },
     [allowed, environmentId],
   );

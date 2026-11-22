@@ -27,15 +27,11 @@ export function GoatBotProposalCard({
     permitted && environment?.serverConfig?.environment.capabilities.goatBotProposals === true;
   async function submit(accept: boolean) {
     setSaving(true);
-    try {
-      const result = await resolve({
-        environmentId,
-        input: { proposalId: card.proposalId, accept },
-      });
-      if (result._tag === "Success") setSettled(accept ? "accepted" : "dismissed");
-    } finally {
-      setSaving(false);
-    }
+    const result = await resolve({
+      environmentId,
+      input: { proposalId: card.proposalId, accept },
+    }).finally(() => setSaving(false));
+    if (result._tag === "Success") setSettled(accept ? "accepted" : "dismissed");
   }
   return (
     <section
