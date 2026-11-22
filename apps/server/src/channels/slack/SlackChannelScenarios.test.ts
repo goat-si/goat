@@ -215,6 +215,30 @@ describe("Slack runtime on the channel core", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("routes a decomposed 64-character bot name and preserves the body", () => {
+    const { sdk, layer } = slackScenario();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createBot("Ops");
+      const long = yield* createBot("Ops: " + "é".repeat(59));
+      yield* connect(sdk);
+      yield* linkAlice(sdk);
+      const body = "Check cafe\u0301";
+      const text = "<@U0BOT> Ops: " + "e\u0301".repeat(59) + ": " + body;
+      const routed = yield* receive(sdk, channelMention({ text }), "EvDecomposedName");
+      assert.strictEqual(routed?.botId, long.botId);
+      assert.strictEqual(routed?.message.text, body);
+      yield* (yield* ChannelBotMembers.ChannelBotMembers).remove({ botId: long.botId }, owner);
+      const rejected = yield* receive(
+        sdk,
+        channelMention({ text, ts: "1760000000.000102" }),
+        "EvDeletedDecomposedName",
+      );
+      assert.strictEqual(rejected?.snapshot.state, "rejected");
+      assert.strictEqual(sdk.ephemeral.at(-1)?.userId, "U0ALICE");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect.each(["Ops: East", "Ops:  East"])(
     "reserves the deleted name %j and allows a replacement with the same routing name",
     (name) => {
