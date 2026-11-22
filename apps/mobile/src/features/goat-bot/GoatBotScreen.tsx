@@ -3,7 +3,6 @@ import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotAccent,
   goatBotEventSubjectSpan,
@@ -16,7 +15,6 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import {
-  type BotProfile,
   ChannelQuestionId,
   ChannelTaskId,
   type EnvironmentId,
@@ -95,7 +93,6 @@ import {
   GoatBotUnreadPill,
   useGoatBotUnread,
 } from "./GoatBotUnreadMarker";
-import type { GoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
 import { type MobileBotHomeFocus, useGoatBotEventTargets } from "./useGoatBotEventTargets";
 import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
@@ -103,11 +100,12 @@ import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
-import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
+import { botApprovalRenderer } from "./botApprovalRenderer";
+import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
+import type { GoatBotScreenProps, ThreadSelection } from "./goatBotScreenProps";
 
-type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (item: GoatBotChatItem) => item.id;
 type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
 type ListMetrics = Parameters<typeof goatBotFooterInView>[0];
@@ -311,29 +309,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   );
 });
 
-export function GoatBotScreen(props: {
-  readonly visible: boolean;
-  /** False while the app is in the background, where GOAT Bot's steps are not read. */
-  readonly foreground?: boolean;
-  /** Focused and the app active: what the screen shows has been seen. */
-  readonly seen?: boolean;
-  readonly taskId?: ChannelTaskId;
-  readonly attentionRequest?: string | undefined;
-  /** The title the screen that opened this task carried, for a task the list no longer holds. */
-  readonly taskTitle?: string | undefined;
-  /** A member bot whose conversation this is; the main bot's when absent. */
-  readonly member?: BotProfile | null;
-  /** Where the person had read the main chat up to when this visit began. */
-  readonly readSnapshot?: GoatBotVisitSnapshot | null;
-  /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
-  readonly main?: BotProfile | null;
-  /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
-  readonly templateRetry?: React.ReactNode;
-  readonly onRestoreMember?: MobileRestoreMember | undefined;
-  readonly onSelectThread?: (thread: ThreadSelection) => void;
-  /** Floating tabs cover the bottom of the screen; the composer rests above them. */
-  readonly floatingTabs?: { readonly bottomSafeArea: number };
-}) {
+export function GoatBotScreen(props: GoatBotScreenProps) {
   const member = props.member ?? null;
   const conversation = member
     ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
@@ -655,6 +631,8 @@ export function GoatBotScreen(props: {
       ),
     [session.rows, session.streamingReplyIds],
   );
+  const ApprovalCards = props.visible && session.homeConnected ? props.approvalCards : undefined;
+  const renderApprovals = botApprovalRenderer(ApprovalCards, session, taskId, onSelectThread);
   return (
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
@@ -731,6 +709,7 @@ export function GoatBotScreen(props: {
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
             taskChips={session.taskChips}
+            renderTaskApprovals={taskId && ApprovalCards ? renderApprovals : undefined}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
             taskTitle={props.taskTitle}
@@ -901,6 +880,7 @@ export function GoatBotScreen(props: {
           className="gap-2 border-t border-border px-4 pt-2"
           style={composerPaddingStyle}
         >
+          {(taskId === undefined || session.taskChips.has(taskId)) && renderApprovals()}
           <GoatBotAttachmentStrip
             environmentId={session.historyEnvironmentId}
             attachments={attachments}

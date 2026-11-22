@@ -1,6 +1,8 @@
 import { MobileBotTemplateSheet } from "./MobileBotTemplateSheet";
 import { RegistryContext } from "@effect/atom-react";
 import {
+  lazy,
+  Suspense,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -30,6 +32,7 @@ import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } fr
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { uuidv4 } from "../../lib/uuid";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
+import { getKeptSummaryPersistence } from "./keptPerComputerStore";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
@@ -37,6 +40,8 @@ import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { isComputerReadable, useComputerReadable } from "./useKeptPerComputer";
+
+const OfflineBotRoster = lazy(() => import("./OfflineBotRoster"));
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -103,6 +108,7 @@ export function MobileBotRoster(props: {
   const environmentId = roster.environmentId;
   const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
   const supportsTemplates = roster.supportsTemplates && manage.canUseTemplates;
+  const offline = !roster.connected && getKeptSummaryPersistence(registry) !== undefined;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
   const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
@@ -247,6 +253,30 @@ export function MobileBotRoster(props: {
           );
         }
       : undefined;
+  if (offline) {
+    return (
+      <Suspense fallback={props.header}>
+        <OfflineBotRoster
+          header={props.header}
+          environmentId={environmentId}
+          visible={visible}
+          computer={roster.computerLabel}
+          openBot={(botId, summaryEnvironmentId) => {
+            if (botId === "main") return () => onOpenBot({ kind: "main", profile: null });
+            if (summaryEnvironmentId !== environmentId) return undefined;
+            const bot = roster.bots.find(
+              (row) => row.kind === "member" && row.profile.botId === botId,
+            );
+            return bot
+              ? () => {
+                  if (readableNow()) onOpenBot(bot);
+                }
+              : undefined;
+          }}
+        />
+      </Suspense>
+    );
+  }
   return (
     <View className="flex-1">
       {supportsTemplates && templateHost !== null && templateHost === environmentId && (

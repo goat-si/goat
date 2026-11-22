@@ -1,14 +1,19 @@
 import { botTaskSnoozeInput } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
+import type { SessionStreamUpdate } from "@goat/client-runtime/rpc";
 import type {
   BotId,
   ChannelChildWorkGroup,
+  ChannelTaskChangesEvent,
   ChannelTaskId,
   ChannelTaskView,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
+  ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useLayoutEffect, useRef } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -17,6 +22,10 @@ import { updateMobileTaskView } from "./mobileTaskViewUpdate";
 import { useMobileBotTaskLookup } from "./useMobileBotTaskLookup";
 
 const identityOf = (owner: string, taskId: ChannelTaskId) => JSON.stringify([owner, taskId]);
+const NO_PERMISSION = Atom.make(false);
+const NO_TASK_CHANGES = Atom.make(
+  AsyncResult.initial<SessionStreamUpdate<ChannelTaskChangesEvent>, never>(false),
+);
 
 /**
  * A task screen's lookup of a task the current list does not hold, and Pin, Done, Retry and read
@@ -33,27 +42,56 @@ export function useMobileTaskScreen(input: {
   readonly taskId: ChannelTaskId | null;
   /** Connected, with a server that can change task views. */
   readonly enabled: boolean;
-  /** The server looks tasks up by id. */
-  readonly lookupSupported: boolean;
+  readonly capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "goatBotTaskLookupSearch" | "goatBotTaskChanges">
+    | undefined;
   readonly supportsSnooze?: boolean;
   /** The bot's current-list read. */
   readonly list: {
     readonly data: unknown;
+    readonly error: string | null;
     readonly isPending: boolean;
     readonly refresh: () => void;
   };
   /** The last successful current list holds the task. */
   readonly holdsTask: boolean;
+  readonly needsApprovalObservation: boolean;
+  readonly workRevision: string | null | undefined;
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
 }) {
-  const { lookup, invalidate } = useMobileBotTaskLookup({
+  const { environmentId, capabilities } = input;
+  const lookupSupported = capabilities?.goatBotTaskLookupSearch === true;
+  const watchApprovals =
+    input.needsApprovalObservation &&
+    input.enabled &&
+    lookupSupported &&
+    capabilities.goatBotTaskChanges === true &&
+    environmentId !== null &&
+    input.taskId !== null;
+  const mayWatchApprovals = useAtomValue(
+    watchApprovals ? channelEnvironment.taskChangesPermission(environmentId) : NO_PERMISSION,
+  );
+  const watching = watchApprovals && mayWatchApprovals;
+  const changes = useAtomValue(
+    watching ? channelEnvironment.taskChanges({ environmentId, input: {} }) : NO_TASK_CHANGES,
+  );
+  const event = watching ? Option.getOrNull(AsyncResult.value(changes)) : null;
+  const approvalRevision =
+    event !== null && "value" in event
+      ? `stream:${event.subscription}:${event.value.revision}`
+      : input.needsApprovalObservation && input.workRevision != null
+        ? `transcript:${input.workRevision}`
+        : undefined;
+  const { lookup, approvalTask, invalidate } = useMobileBotTaskLookup({
     environmentId: input.environmentId,
     botId: input.botId,
     taskId: input.taskId,
-    supported: input.enabled && input.lookupSupported,
-    established: input.list.data !== null,
+    supported: input.enabled && lookupSupported,
+    established:
+      input.list.data !== null || (input.needsApprovalObservation && input.list.error !== null),
     refreshing: input.list.isPending,
-    holdsTask: input.holdsTask && !input.supportsSnooze,
+    holdsTask: input.holdsTask && !input.needsApprovalObservation && !input.supportsSnooze,
+    approvalRevision,
     revision: input.supportsSnooze ? input.list.data : undefined,
     childGroups: input.childGroups,
   });
@@ -90,7 +128,8 @@ export function useMobileTaskScreen(input: {
   };
   const canUpdate = permitted && input.enabled;
   return {
-    lookup,
+    lookup: input.holdsTask ? { state: "off" as const } : lookup,
+    approvalTask,
     /** This device may change task views here; the read mark's own gate as well. */
     permitted,
     canUpdate,

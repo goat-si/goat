@@ -41,6 +41,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
+import { message } from "./mobileBotHomeItems";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
@@ -51,6 +52,7 @@ import { useAfterSheetGone } from "./useAfterSheetGone";
 import { MobileBotTaskSearch } from "./MobileBotTaskSearch";
 import { MobileBotHomeChip } from "./MobileBotHomeChip";
 import { useMobileTaskScreen } from "./useMobileTaskScreen";
+import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
 import { MobileBotRoutines } from "./MobileBotRoutines";
@@ -133,6 +135,9 @@ export function MobileBotWork(props: {
   readonly workRevision?: string | null | undefined;
   /** The newest chip of each task in the conversation: what its worker asks of the person. */
   readonly taskChips?: MobileTaskChips | undefined;
+  readonly renderTaskApprovals?:
+    | ((observation: MobileTaskApprovalObservation) => ReactNode)
+    | undefined;
   /** What the home opens on, from an event line; seq changes on every request. */
   readonly focus?: (MobileBotHomeFocus & { readonly seq: number }) | null | undefined;
 }) {
@@ -156,7 +161,6 @@ export function MobileBotWork(props: {
     member: member !== null,
   });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
-  // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -220,16 +224,22 @@ export function MobileBotWork(props: {
   );
   const botId = member?.botId ?? BotId.make("main");
   const older = !task && listData !== null && (offline || threads.successResult !== null);
+  const renderTaskApprovals =
+    props.visible && props.taskId !== undefined && !chips.has(props.taskId)
+      ? props.renderTaskApprovals
+      : undefined;
   const actions = useMobileTaskScreen({
     environmentId,
     owner: workOwner,
     botId,
     taskId: props.taskId ?? null,
     enabled,
-    lookupSupported: capabilities?.goatBotTaskLookupSearch === true,
+    capabilities,
     supportsSnooze: capabilities?.goatBotTaskSnooze === true,
     list: threads,
     holdsTask: task !== undefined,
+    needsApprovalObservation: renderTaskApprovals !== undefined,
+    workRevision: props.workRevision,
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
@@ -431,11 +441,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
-    key,
-    render: () => node,
-  });
-  // Home is one list that mounts only what is near the screen; a bot with many tasks stays light.
   const homeItems: MobileBotHomeItem[] = [
     {
       key: "identity",
@@ -856,7 +861,7 @@ export function MobileBotWork(props: {
       ) : props.sheetOnly ? null : Platform.OS === "android" ? (
         <MobileBotHomeChip botName={botName} face={props.chipFace} onOpen={() => setOpen(true)} />
       ) : null}
-      {/* Open Home on an older task's screen opens this bot's Home right here, as one more sheet. */}
+      {actions.approvalTask && renderTaskApprovals?.(actions.approvalTask)}
       {olderHome ? (
         <MobileBotWork
           {...props}

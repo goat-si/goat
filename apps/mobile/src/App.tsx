@@ -19,7 +19,7 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
-import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { CloudAuthProvider, installCloudAccountService } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -28,6 +28,8 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
+import { installKeptSummaryPersistence } from "./features/goat-bot/keptPerComputerStore";
+import { mobileKeptSummaryPersistence } from "./features/goat-bot/keptSummaryPersistence";
 import { followKeptPerComputerCatalog } from "./features/goat-bot/useKeptPerComputer";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
@@ -118,6 +120,8 @@ const appServiceDisposers = [
   installPermissionUpdateNotice(),
   installThreadOutboxDelivery(),
   installComposerAttachmentUploads(),
+  installKeptSummaryPersistence(appAtomRegistry, mobileKeptSummaryPersistence),
+  installCloudAccountService(),
   followKeptPerComputerCatalog(appAtomRegistry),
 ];
 disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () => {

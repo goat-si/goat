@@ -102,23 +102,20 @@ export function MobileNeedsYouStrip(props: {
   };
   const count = `${open.total}${open.truncated ? "+" : ""}`;
   const title = open.total > 0 ? `Needs you · ${count}` : "Needs you";
-  const stale = open.offline ? (
-    <Text className="border-t border-border px-4 py-2 text-xs text-foreground-muted">
-      Offline · this may be out of date
-    </Text>
-  ) : open.staleRetry === null ? null : (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
-      onPress={open.staleRetry}
-      className="min-h-[44px] justify-center border-t border-border px-4 py-2"
-    >
-      <Text className="text-xs text-foreground-muted">
-        Couldn't refresh, this may be out of date.{" "}
-        <Text className="text-foreground">Try again</Text>
-      </Text>
-    </Pressable>
-  );
+  const stale =
+    open.staleRetry === null ? null : (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
+        onPress={open.staleRetry}
+        className="min-h-[44px] justify-center border-t border-border px-4 py-2"
+      >
+        <Text className="text-xs text-foreground-muted">
+          Couldn't refresh, this may be out of date.{" "}
+          <Text className="text-foreground">Try again</Text>
+        </Text>
+      </Pressable>
+    );
   const newest = open.asks[0];
   if (newest === undefined) {
     // The server stopped before it read all the waiting work, and found none in what it read.
@@ -139,7 +136,7 @@ export function MobileNeedsYouStrip(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
-        accessibilityLabel={`${count} waiting for you${open.offline ? ", offline, may be out of date" : open.staleRetry ? ", may be out of date" : ""}. ${line}`}
+        accessibilityLabel={`${count} waiting for you${open.staleRetry ? ", may be out of date" : ""}. ${line}`}
         onPress={() => setExpanded((value) => !value)}
         className="min-h-[44px] flex-row items-center gap-2 px-4 py-2"
       >
