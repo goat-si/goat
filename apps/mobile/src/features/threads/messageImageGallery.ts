@@ -2,6 +2,7 @@ import type { ChatAttachment, EnvironmentId, ThreadId } from "@goat/contracts";
 import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
 import { imageMimeType } from "@goat/shared/image";
 import type { FilePreviewItem } from "../../components/FilePreviewModal.types";
+import { remoteAttachmentImageSource } from "../../lib/filePreviewGallery";
 import { markdownImageSources } from "../../lib/markdownImageSources";
 import { resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 
@@ -17,17 +18,7 @@ export function messageImageGallery(
   const images: FilePreviewItem[] = [];
   for (const attachment of message.attachments ?? []) {
     if (attachment.type !== "image" && imageMimeType(attachment) === null) continue;
-    images.push({
-      kind: "image",
-      name: attachment.name,
-      environmentId: context.environmentId,
-      resource: {
-        _tag: "attachment",
-        attachmentId: attachment.id,
-        fileName: attachment.name,
-        mimeType: attachment.mimeType,
-      },
-    });
+    images.push(remoteAttachmentImageSource(context.environmentId, attachment.id, attachment));
   }
   for (const href of markdownImageSources(message.text)) {
     const preview = resolveMarkdownMediaPreview(href, { ...context, imageEmbed: true });
