@@ -1,3 +1,4 @@
+import { mobileBotFollowedItems, sectionLabel } from "./MobileBotFollowedThread";
 import {
   accessDenied,
   botHomeWork,
@@ -432,20 +433,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  const sectionLabel = (
-    key: string,
-    text: string,
-    first = false,
-    action?: ReactNode,
-  ): MobileBotHomeItem => ({
-    key,
-    render: () => (
-      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
-        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
-        {action}
-      </View>
-    ),
-  });
   const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
     key,
     render: () => node,
@@ -529,6 +516,14 @@ export function MobileBotWork(props: {
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
     const workStart = homeItems.length;
+    homeItems.push(
+      ...mobileBotFollowedItems(
+        environmentId,
+        botId,
+        capabilities?.goatBotThreadFollows === true ? threads.data?.followedThreads : undefined,
+        props.onOpenThread,
+      ),
+    );
     if (environmentId && enabled && capabilities?.goatBotTaskLookupSearch === true)
       homeItems.push(
         message(

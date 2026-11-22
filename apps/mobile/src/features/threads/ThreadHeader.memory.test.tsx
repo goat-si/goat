@@ -7,6 +7,9 @@ import {
   type NativeMemoryHarness,
 } from "../../testing/memoryNativeHarness";
 const history = vi.hoisted(() => ({ allowed: true, select: vi.fn() }));
+vi.mock("../goat-bot/useMobileThreadFollowMenu", () => ({
+  useMobileThreadFollowMenu: () => ({ actions: [], select: () => {}, dialog: null }),
+}));
 vi.mock("./useThreadHistoryMenu", () => ({
   useThreadHistoryMenu: () => ({
     actions: history.allowed ? [{ id: "input-history", title: "Computer use history" }] : [],
