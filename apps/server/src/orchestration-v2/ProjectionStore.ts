@@ -60,6 +60,8 @@ import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import {
   makeShellThreadRows,
+  filterWorktreeRows,
+  worktreePathsMatch,
   runMapsByThreadId,
   shellItemCountMap,
   shellForkSourceIds,
@@ -7061,7 +7063,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       options: (ShellSnapshotOptions & { readonly listedOnly?: boolean }) | undefined,
       awarenessOnly = false,
     ) {
-      const targetThreadRows = yield* selectShellThreadRows(undefined, options);
+      const targetThreadRows = filterWorktreeRows(
+        yield* selectShellThreadRows(undefined, options),
+        options?.worktreePath,
+      );
       const targetThreadIds = new Set(targetThreadRows.map((row) => ThreadId.make(row.thread_id)));
       const rowsByThreadId = new Map(
         targetThreadRows.map((row) => [ThreadId.make(row.thread_id), row] as const),
@@ -7688,7 +7693,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             }
             if (
               options?.worktreePath !== undefined &&
-              projection.thread.worktreePath !== options.worktreePath
+              !worktreePathsMatch(projection.thread.worktreePath, options.worktreePath)
             ) {
               return false;
             }

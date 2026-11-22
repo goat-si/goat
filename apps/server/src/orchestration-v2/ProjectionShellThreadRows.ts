@@ -1,3 +1,4 @@
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import {
   IDLE_COMPACTION_TEXT,
   ThreadId,
@@ -22,6 +23,7 @@ export type ShellThreadRow = {
   readonly thread_id: string;
   readonly payload_json: string;
   readonly forked_from_run_source_thread_id: string | null;
+  readonly worktree_path: string | null;
   readonly lineage_relationship: string | null;
   readonly lineage_parent_thread_id: string | null;
   readonly local_launcher_thread_id: string | null;
@@ -141,6 +143,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
                 ELSE NULL
               END AS forked_from_run_source_thread_id,
+              json_extract(t.payload_json, '$.worktreePath') AS worktree_path,
               json_extract(t.payload_json, '$.lineage.relationshipToParent') AS lineage_relationship,
               json_extract(t.payload_json, '$.lineage.parentThreadId') AS lineage_parent_thread_id,
               CASE WHEN json_extract(t.payload_json, '$.launchedBy.kind') = 'launch'
@@ -389,7 +392,8 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
               worktreePath === undefined
                 ? sql``
                 : sql` AND CASE WHEN json_valid(t.payload_json)
-                    THEN json_extract(t.payload_json, '$.worktreePath') END = ${worktreePath}`
+                    THEN lower(rtrim(replace(trim(json_extract(t.payload_json, '$.worktreePath')), '\\', '/'), '/'))
+                  END = lower(rtrim(replace(trim(${worktreePath}), '\\', '/'), '/'))`
             }${threadIds === undefined ? sql`` : sql` AND t.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
@@ -556,3 +560,14 @@ export const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>
         ] as const,
     ),
   );
+
+export const worktreePathsMatch = (path: string | null, target: string | undefined) =>
+  target === undefined ||
+  (path !== null &&
+    normalizeProjectPathForComparison(path) === normalizeProjectPathForComparison(target));
+
+export const filterWorktreeRows = (
+  rows: ReadonlyArray<ShellThreadRow>,
+  target: string | undefined,
+) =>
+  target === undefined ? rows : rows.filter((row) => worktreePathsMatch(row.worktree_path, target));
