@@ -2752,6 +2752,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 hasProjects={projectGroups.length > 0}
                 projectScope={
                   <SidebarProjectScope
+                    onAddProject={openAddProjectCommandPalette}
                     projectGroups={projectGroups}
                     scopedProjectGroups={scopedProjectGroups}
                     projectScopeKeys={projectScopeKeys}
@@ -2762,7 +2763,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     environmentMachineById={environmentMachineById}
                   />
                 }
-                onNewProject={openAddProjectCommandPalette}
                 onNewThread={handleNewThreadClick}
                 newThreadDisabled={projects.length === 0}
                 newThreadShortcutLabel={newThreadShortcutLabel}
