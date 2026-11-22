@@ -228,6 +228,14 @@ const make = Effect.gen(function* () {
     const threadId = input.threadId ?? scope.thread?.threadId;
     if (threadId === undefined) return yield* new PullRequestThreadRequiredError();
     return yield* watches.setWatching({ threadId, target: input, watching }).pipe(
+      Effect.map((result) =>
+        result.checksState === "passing"
+          ? {
+              ...result,
+              next: "Checks already pass on this head, so no wake will come for them. Act on that now; the watch still wakes you on later changes.",
+            }
+          : result,
+      ),
       Effect.catchTags({
         PullRequestWatchThreadNotFoundError: (error) =>
           threadNotFound(engine, scope, error.threadId, error.message),
