@@ -144,7 +144,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
       {
         snapshot: { text: string; terminalRunId?: string };
         endings?: ReadonlyArray<{ text: string; terminalRunId: string }>;
-        eventCursor?: number;
+        eventCursor?: number | undefined;
       },
       E,
       R
