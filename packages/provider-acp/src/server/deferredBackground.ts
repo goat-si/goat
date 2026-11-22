@@ -1,3 +1,6 @@
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import type { AcpToolCallState } from "./runtimeModel.ts";
 import * as Ref from "effect/Ref";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
@@ -11,9 +14,11 @@ export function hasAcpDeferredBackgroundWork(
   context: ActiveAcpTurn,
   flavor: AcpAdapterV2Flavor,
   requestCount: number,
+  ignoreTool?: (tool: AcpToolCallState) => boolean,
 ): boolean {
   if (flavor.toolOutlivesPrompt !== undefined) {
     for (const tool of context.tools.values()) {
+      if (ignoreTool?.(tool) === true) continue;
       if (toolStatus(tool.status) === "running" && flavor.toolOutlivesPrompt(tool)) return true;
     }
   }
@@ -173,4 +178,45 @@ export function makeDeferredFinalizeScheduler(input: {
     yield* input.onScheduled?.(debounce) ?? Effect.void;
   });
   return schedule;
+}
+
+export function makePostSettleHoldExpiry(input: {
+  readonly flavor: AcpAdapterV2Flavor;
+  readonly hasDeferredBackgroundWork: (
+    context: ActiveAcpTurn,
+    ignoreTool?: (tool: AcpToolCallState) => boolean,
+  ) => boolean;
+  readonly finalizeTurn: (
+    context: ActiveAcpTurn,
+    status: "completed" | "interrupted" | "failed" | "cancelled",
+  ) => Effect.Effect<void>;
+  readonly sessionScope: import("effect/Scope").Scope;
+}) {
+  return Effect.fn("AcpAdapterV2.schedulePostSettleHoldExpiry")(function* (context: ActiveAcpTurn) {
+    const hold = input.flavor.postSettleCommandHold;
+    if (hold === undefined || !context.promptSettled || context.finalized) return;
+    const timeout = Duration.toMillis(hold.timeout);
+    const isRunningCommand = (tool: AcpToolCallState) =>
+      toolStatus(tool.status) === "running" && hold.isCommand(tool);
+    let quietSince = yield* Clock.currentTimeMillis;
+    yield* Effect.gen(function* () {
+      while (!context.finalized) {
+        quietSince = Math.max(quietSince, context.lastProgressAt);
+        const now = yield* Clock.currentTimeMillis;
+        const remaining = quietSince + timeout - now;
+        if (remaining > 0) {
+          yield* Effect.sleep(Duration.millis(remaining));
+          continue;
+        }
+        if (
+          [...context.tools.values()].some(isRunningCommand) &&
+          !input.hasDeferredBackgroundWork(context, isRunningCommand)
+        ) {
+          yield* input.finalizeTurn(context, context.promptSettledStatus ?? "completed");
+          return;
+        }
+        quietSince = now;
+      }
+    }).pipe(Effect.forkIn(input.sessionScope), Effect.asVoid);
+  });
 }
