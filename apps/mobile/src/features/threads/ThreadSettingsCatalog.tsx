@@ -44,11 +44,7 @@ import {
   useThreadSettingsSession,
   type ThreadSettingsSessionValue,
 } from "./thread-settings-session";
-import {
-  favoritesFirst,
-  modelMatchesCatalogQuery,
-  providerSectionIsCollapsed,
-} from "./thread-settings-sheet-state";
+import { visibleCatalogModels, providerSectionIsCollapsed } from "./thread-settings-sheet-state";
 
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
@@ -213,28 +209,15 @@ function buildThreadSettingsCatalogItems(
       return [];
     }
     const driver = group.models[0]?.providerDriver ?? group.providerKey;
-    const catalogModels =
-      session.manageHidden ||
-      session.showLegacy ||
-      session.providerFilter === FAVORITES_PROVIDER_FILTER
-        ? group.models
-        : group.models.filter(
-            (model) =>
-              !model.isLegacy || session.isApplied(model) || session.favoriteKeys.has(model.key),
-          );
-    const visibleModels = favoritesFirst(
-      catalogModels.filter(
-        (model) =>
-          (session.providerFilter !== FAVORITES_PROVIDER_FILTER ||
-            session.favoriteKeys.has(model.key)) &&
-          modelMatchesCatalogQuery({
-            model,
-            providerLabel: group.providerLabel,
-            query: session.searchQuery,
-          }),
-      ),
-      session.favoriteKeys,
-    );
+    const visibleModels = visibleCatalogModels({
+      models: group.models,
+      providerLabel: group.providerLabel,
+      query: session.searchQuery,
+      favoriteKeys: session.favoriteKeys,
+      favoritesOnly: session.providerFilter === FAVORITES_PROVIDER_FILTER,
+      showLegacy: session.manageHidden || session.showLegacy,
+      isDisplayed: session.isApplied,
+    });
     const updateRequiredNotice =
       group.updateRequired && session.providerFilter !== FAVORITES_PROVIDER_FILTER
         ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)

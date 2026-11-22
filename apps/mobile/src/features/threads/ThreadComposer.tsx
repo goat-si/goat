@@ -1,5 +1,5 @@
 import { mobileComposerDraftIsLocal } from "./composerLocalCommand";
-import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
+import { COMPOSER_ATTACHMENT_ENTERING } from "./composerVisualConstants";
 export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
 import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
@@ -748,10 +748,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 onLayout={compactEditor.onEditorLayout}
                 style={[
                   {
-                    minWidth:
-                      compactEditor.isWide || stripAttachments.length > 0 || compactControl !== null
-                        ? 0
-                        : INLINE_EDITOR_MIN_WIDTH,
+                    minWidth: 0,
                   },
                   compactEditor.containerStyle,
                   compactEditor.isWide ? { flex: 0, width: 0 } : undefined,
