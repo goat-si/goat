@@ -148,6 +148,7 @@ describe("how many change streams stay open", () => {
           ChannelBotMembers.rpcHandlers(
             service as unknown as ChannelBotMembers.ChannelBotMembers["Service"],
             { ownerId: "owner-a" } as Parameters<typeof ChannelBotMembers.rpcHandlers>[1],
+            Effect.void,
           )[CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges];
         const connection = handlersFor();
         for (let index = 0; index < MAX_TASK_CHANGE_STREAMS_PER_CONNECTION; index++)
@@ -165,6 +166,7 @@ describe("how many change streams stay open", () => {
           taskChanges: () => Stream.make(0),
         } as unknown as ChannelBotMembers.ChannelBotMembers["Service"],
         { ownerId: "owner-a" } as Parameters<typeof ChannelBotMembers.rpcHandlers>[1],
+        Effect.void,
       )[CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges];
       const seen: number[] = [];
       const ended = yield* Effect.flip(
@@ -195,6 +197,7 @@ describe("the open asks and their change stream over RPC", () => {
       {
         ownerId: "owner-a",
       } as Parameters<typeof ChannelBotMembers.rpcHandlers>[1],
+      Effect.void,
     );
     return RpcTest.makeClient(group).pipe(
       Effect.provide(
