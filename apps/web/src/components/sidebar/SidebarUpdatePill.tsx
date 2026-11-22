@@ -706,13 +706,23 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         createPortal(
           <aside
             aria-label={gt("Update available")}
-            className="fixed bottom-4 left-16 z-40 w-64 max-w-[calc(100vw-5rem)] rounded-lg border bg-popover p-3 text-sm text-popover-foreground shadow-lg"
+            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg"
           >
-            <div className="flex items-center justify-between gap-2">
-              <strong>GOAT {noticeVersion}</strong>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <strong>GOAT</strong>
+                <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-lg border border-primary/15 bg-primary/5 px-2 py-0.5 text-xs tabular-nums">
+                  <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">
+                    {state.currentVersion}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">→</span>
+                  <strong className="min-w-0 [overflow-wrap:anywhere]">{noticeVersion}</strong>
+                </span>
+              </div>
               <button
                 type="button"
                 aria-label={gt("Close")}
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                 onClick={() => {
                   window.sessionStorage.setItem("desktop-update-notice", noticeKey);
                   setDismissedNotice(noticeKey);
