@@ -14,6 +14,7 @@ import {
   AMBIGUOUS_RESUME_MESSAGE,
 } from "./goat/ProviderTurnStartErrorChecks.ts";
 import * as Continuation from "./manualContinuationMessage.ts";
+import { pendingResumeContext } from "./goat/ResumePendingContext.ts";
 import { manualContinuationDelivery } from "@goat/shared/orchestrationV2ManualContinuation";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
@@ -266,7 +267,7 @@ export const layer: Layer.Layer<
               threadId: replaySource.threadId,
               runOrdinal: replaySource.ordinal,
             };
-      const nativeResume = resumeDelivery?.type === "native" && handoffs.length === 0;
+      let nativeResume = resumeDelivery?.type === "native" && handoffs.length === 0;
       const privateBrief =
         !observeOnly &&
         !nativeResume &&
@@ -274,7 +275,7 @@ export const layer: Layer.Layer<
         (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
           ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
           : undefined;
-      const turnMessage = Continuation.message(
+      let turnMessage = Continuation.message(
         providerMessage,
         privateBrief,
         resumeDelivery,
@@ -725,6 +726,16 @@ export const layer: Layer.Layer<
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       if (session.providerSession === undefined)
         return yield* missingProviderSession(runId, session.driver);
+      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
+        runs: projection.runs,
+        providerTurns: projection.providerTurns,
+        compactionMessageIds: () =>
+          new Set(
+            projection.messages.filter(isSlashCommandMessage).map((candidate) => candidate.id),
+          ),
+        run,
+        attempts: projection.attempts,
+      });
       if (
         nativeResume &&
         (session.resumeInterruptedTurn === undefined ||
@@ -735,15 +746,20 @@ export const layer: Layer.Layer<
               source.providerThreadId === providerThread.id,
           ))
       ) {
-        yield* settleStartFailure({
-          signal: "resume-unsupported",
-          title: "Native resume is unavailable",
-          error: new ProviderAdapter.ProviderResumeUnsupportedError({
-            driver: session.driver,
-            providerThreadId: providerThread.id,
-          }),
-        });
-        return;
+        if (!pendingResumeContext(projection.thread, noteContinuation, restartCancelledWork)) {
+          yield* settleStartFailure({
+            signal: "resume-unsupported",
+            title: "Native resume is unavailable",
+            error: new ProviderAdapter.ProviderResumeUnsupportedError({
+              driver: session.driver,
+              providerThreadId: providerThread.id,
+            }),
+          });
+          return;
+        }
+        // Pending context turns the Resume into a prompted turn, which needs no native resume.
+        nativeResume = false;
+        turnMessage = Continuation.message(providerMessage, privateBrief, resumeDelivery, false);
       }
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       const loadFromProvider = Effect.fn("ProviderTurnStartService.loadFromProvider")(function* (
@@ -778,16 +794,6 @@ export const layer: Layer.Layer<
           : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
       const goalDriver = hasNativeGoals(session);
       const slashCommand = isSlashCommandMessage(turnMessage);
-      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
-        runs: projection.runs,
-        providerTurns: projection.providerTurns,
-        compactionMessageIds: () =>
-          new Set(
-            projection.messages.filter(isSlashCommandMessage).map((candidate) => candidate.id),
-          ),
-        run,
-        attempts: projection.attempts,
-      });
       const restartNote = [
         yield* sideChatNote(projectionStore, projection.thread, userText),
         restartCancelledWork.length === 0

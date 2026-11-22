@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   MessageId,
   RunAttemptId,
+  ThreadId,
   TurnItemId,
 } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -114,6 +115,32 @@ effectIt.effect.each([
       expect(started?.message.text).toBe(scenario === "native" ? "" : "Original prompt");
     }
   }),
+);
+
+effectIt.effect.each([
+  { supported: false, differentThread: false },
+  { supported: true, differentThread: true },
+] as const)(
+  "a side chat Resume without native resume continues as a prompted turn: %j",
+  ({ supported, differentThread }) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "",
+        sideChatParentMissing: true,
+        manualResume: { accepted: true, supported },
+        previousTurn: { runStatus: "interrupted", turnStatus: "interrupted", differentThread },
+      });
+      const projection = harness.projection();
+      harness.setProjection({
+        ...projection,
+        thread: { ...projection.thread, sideChatOf: ThreadId.make("parent") },
+      });
+      yield* harness.start;
+      expect(harness.projection().turnItems).toEqual([]);
+      const started = harness.startRootRun.mock.calls.at(-1)?.[0];
+      expect(started?.resume).toBe(false);
+      expect(started?.message.text).toBe("Continue where you left off.");
+    }),
 );
 
 effectIt.effect("manual Resume replays an unaccepted steering replacement and its image", () =>
