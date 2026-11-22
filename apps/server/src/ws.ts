@@ -1647,12 +1647,11 @@ export const layerWsRpc = (
         ...ChannelBotMembers.rpcHandlers(
           channelBotMembers,
           channelOwner,
-          reauthorizeSession(
-            sessions,
-            currentSessionId,
-          )([AuthOrchestrationOperateScope]).pipe(
-            Effect.mapError(() => new ChannelGatewayError({ reason: "forbidden" })),
-          ),
+          reauthorizeSession(sessions, currentSessionId)([AuthOrchestrationOperateScope]),
+          {
+            service: scheduledTasks,
+            capture: scheduledTaskAccess.capture(captureTaskMemoryCeiling),
+          },
         ),
         ...(yield* makeThreadFollowService(channelLedger)).rpcHandlers(
           channelOwner,

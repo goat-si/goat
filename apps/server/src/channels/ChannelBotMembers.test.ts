@@ -1,3 +1,4 @@
+import { verifyBotTemplate } from "./testkit/botTemplate.ts";
 import { launchBrief } from "./testkit/providerBrief.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- uploads are files in the attachments folder.
 import * as NodeFS from "node:fs";
@@ -233,6 +234,7 @@ describe("creating member bots", () => {
             .length > 0,
           true,
         );
+        yield* verifyBotTemplate(members, sql);
       }).pipe(Effect.provide(harness.layer));
     },
   );

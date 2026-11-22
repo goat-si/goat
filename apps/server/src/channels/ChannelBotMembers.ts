@@ -1,3 +1,4 @@
+import { goatBotTemplate } from "@goat/shared/goatBotNames";
 import { ChannelWake } from "./ChannelWake.ts";
 import { stopForBotToolsChange } from "./channelBotToolRevocation.ts";
 /**
@@ -16,6 +17,7 @@ import {
   type ChannelResolveBotProposalInput,
   type ChannelDeleteBotInput,
   ChannelGatewayError,
+  type EnvironmentAuthorizationError,
   type ChannelListOpenAsksResult,
   type ChannelListOpenAsksInput,
   type ChannelListBotsInput,
@@ -61,8 +63,15 @@ import {
   streamUnavailable,
 } from "./channelTaskChanges.ts";
 
-export type MemberBot = BotProfile;
-type Owner = Pick<ChannelConnectionOwner, "ownerId">;
+import {
+  addTemplateAutomation,
+  templateAuthority,
+  type TemplateCreation,
+} from "./channelBotTemplateAutomation.ts";
+
+export type MemberBot = BotProfile & { readonly templateAutomationPending?: true };
+type Owner = Pick<ChannelConnectionOwner, "ownerId"> &
+  Partial<Pick<ChannelConnectionOwner, "principalId">>;
 type MemberRecord = ChannelBotProfiles.MemberRecord;
 
 export class ChannelBotMembers extends Context.Service<
@@ -73,6 +82,7 @@ export class ChannelBotMembers extends Context.Service<
     readonly create: (
       input: ChannelCreateBotInput,
       owner: Owner,
+      templateCreation?: TemplateCreation,
     ) => Effect.Effect<MemberBot, ChannelGatewayError>;
     readonly setHidden: (
       input: ChannelSetBotHiddenInput,
@@ -120,7 +130,14 @@ const MEMBER_RECORD_LIMIT = 500;
 const RECONCILE_BATCH = 100;
 const createKey = (ownerId: string, clientRequestId: string) =>
   "bot-create:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(clientRequestId);
-const CreateRecord = Schema.fromJsonString(Schema.Struct({ botId: BotId }));
+const CreateRecord = Schema.fromJsonString(
+  Schema.Struct({
+    botId: BotId,
+    templateId: Schema.optionalKey(Schema.String),
+    principalId: Schema.optionalKey(Schema.String),
+    automationAdded: Schema.optionalKey(Schema.Boolean),
+  }),
+);
 const decodeCreate = Schema.decodeUnknownSync(CreateRecord);
 const encodeCreate = Schema.encodeSync(CreateRecord);
 
@@ -296,26 +313,38 @@ const make = Effect.gen(function* () {
     input: ChannelCreateBotInput,
     owner: Owner,
     proposal?: BotProposalCreate,
+    templateCreation?: TemplateCreation,
   ) {
     yield* home.requireHome;
     const at = yield* now;
     const environmentId = yield* environment.getEnvironmentId;
-    const record = yield* sql.withTransaction(
+    const template = goatBotTemplate(input.templateId);
+    if (
+      (input.templateId !== undefined || input.retryForBotId !== undefined) &&
+      template === undefined
+    )
+      return yield* fail("invalid_input");
+    const authority =
+      template === undefined ? undefined : yield* templateAuthority(templateCreation);
+    const key =
+      proposal === undefined
+        ? createKey(owner.ownerId, input.clientRequestId)
+        : "bot-proposal-create:" + encodeURIComponent(owner.ownerId) + ":" + proposal.id;
+    const { record, receipt } = yield* sql.withTransaction(
       Effect.gen(function* () {
-        const key =
-          proposal === undefined
-            ? createKey(owner.ownerId, input.clientRequestId)
-            : "bot-proposal-create:" + encodeURIComponent(owner.ownerId) + ":" + proposal.id;
         const known = yield* sql<{ readonly value_json: string }>`
-              SELECT value_json FROM channel_runtime_state WHERE key = ${key}`;
+          SELECT value_json FROM channel_runtime_state WHERE key = ${key}`;
         if (known[0] !== undefined) {
-          const existing = yield* readMember(
-            owner.ownerId,
-            decodeCreate(known[0].value_json).botId,
-          );
+          const receipt = decodeCreate(known[0].value_json);
+          if (input.retryForBotId !== undefined && receipt.botId !== input.retryForBotId)
+            return yield* fail("not_found");
+          if (receipt.templateId !== input.templateId) return yield* fail("invalid_input");
+          if (receipt.principalId !== authority?.principalId) return yield* fail("forbidden");
+          const existing = yield* readMember(owner.ownerId, receipt.botId);
           if (existing === undefined) return yield* fail("persistence_failed");
-          return existing;
+          return { record: existing, receipt };
         }
+        if (input.retryForBotId !== undefined) return yield* fail("not_found");
         const counts = yield* memberCounts(owner.ownerId);
         if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
           return yield* fail("bot_limit");
@@ -325,30 +354,64 @@ const make = Effect.gen(function* () {
           botId,
           role: "member",
           name: input.name,
-          avatar: input.avatar,
-          purpose: input.purpose,
+          avatar: template?.face ?? input.avatar,
+          purpose: template?.purpose ?? input.purpose,
+          ...(template === undefined ? {} : { instructions: template.instructions }),
+          ...(proposal === undefined ? {} : { instructions: proposal.instructions }),
           defaultModelSelection: input.defaultModelSelection,
           defaultProjectId: null,
           environmentId,
           sessionThreadId: memberBotLaunchIdsFor(owner.ownerId, botId).threadId,
-          ...(proposal === undefined ? {} : { instructions: proposal.instructions }),
           createdAt: at,
           updatedAt: at,
           ...(input.color === undefined ? {} : { color: input.color }),
         };
         yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
-              (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;
+          (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;
+        const receipt = {
+          botId,
+          ...(template === undefined || authority === undefined
+            ? {}
+            : { templateId: template.id, principalId: authority.principalId }),
+        };
         yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
-              VALUES (${key}, ${encodeCreate({ botId })}, ${at})`;
+          VALUES (${key}, ${encodeCreate(receipt)}, ${at})`;
         if (proposal !== undefined) yield* proposal.commit;
-        return created;
+        return { record: created, receipt };
       }),
     );
     if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
-    return ChannelBotProfiles.memberProfile(record);
+    const bot = ChannelBotProfiles.memberProfile(record);
+    if (
+      template === undefined ||
+      authority === undefined ||
+      record.state === "deleted" ||
+      ("automationAdded" in receipt && receipt.automationAdded === true)
+    )
+      return bot;
+    const ref = yield* ledger.getBotById(owner.ownerId, bot.botId);
+    if (ref === undefined) return yield* fail("persistence_failed");
+    const model =
+      bot.defaultModelSelection ?? resolveGoatBotModelSelection(yield* serverSettings.getSettings);
+    const added = yield* addTemplateAutomation(
+      sql,
+      authority,
+      template,
+      bot,
+      ref.bot.projectId,
+      model,
+      key,
+    );
+    return added
+      ? bot
+      : {
+          ...bot,
+          templateAutomationPending: true as const,
+          templateSetup: { templateId: template.id, clientRequestId: input.clientRequestId },
+        };
   }, Effect.mapError(failed));
-  const create: ChannelBotMembers["Service"]["create"] = (input, owner) =>
-    serial(createMember(input, owner));
+  const create: ChannelBotMembers["Service"]["create"] = (input, owner, templateCreation) =>
+    serial(createMember(input, owner, undefined, templateCreation));
   const proposals = botProposalOperations({
     sql,
     ledger,
@@ -459,10 +522,40 @@ const make = Effect.gen(function* () {
         : Effect.succeed({ ...record, hidden: input.hidden, updatedAt: at }),
     );
 
-  const list: ChannelBotMembers["Service"]["list"] = (input, owner) =>
-    reconcile(owner.ownerId).pipe(
-      Effect.andThen(profiles.list(owner, { includeDeleted: input.includeDeleted })),
+  const list: ChannelBotMembers["Service"]["list"] = Effect.fn("ChannelBotMembers.list")(function* (
+    input,
+    owner,
+  ) {
+    yield* reconcile(owner.ownerId);
+    const bots = yield* profiles.list(owner, { includeDeleted: input.includeDeleted });
+    if (owner.principalId === undefined || !bots.some((bot) => bot.role === "member")) return bots;
+    const prefix = createKey(owner.ownerId, "");
+    const pending = yield* sql<{ key: string; value_json: string }>`
+        SELECT key, value_json FROM channel_runtime_state
+        WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
+          AND json_extract(value_json, '$.principalId') = ${owner.principalId}
+          AND json_extract(value_json, '$.templateId') IS NOT NULL
+          AND COALESCE(json_extract(value_json, '$.automationAdded'), 0) = 0
+        LIMIT ${MEMBER_RECORD_LIMIT}`;
+    const byBot = new Map(
+      pending.map((row) => {
+        const { botId, templateId } = decodeCreate(row.value_json);
+        return [botId, { templateId, request: row.key.slice(prefix.length) }] as const;
+      }),
     );
+    return bots.map((bot) => {
+      const setup = byBot.get(bot.botId);
+      return setup?.templateId === undefined || bot.state === "deleted"
+        ? bot
+        : {
+            ...bot,
+            templateSetup: {
+              templateId: setup.templateId,
+              clientRequestId: decodeURIComponent(setup.request),
+            },
+          };
+    });
+  }, Effect.mapError(failed));
 
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",
@@ -555,7 +648,8 @@ export const layer = Layer.effect(ChannelBotMembers, make);
 export const rpcHandlers = (
   service: ChannelBotMembers["Service"],
   owner: Owner,
-  authorizeProposalDecision: Effect.Effect<void, ChannelGatewayError>,
+  authorizeProposalDecision: Effect.Effect<void, EnvironmentAuthorizationError>,
+  templateCreation?: TemplateCreation,
 ) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
@@ -575,9 +669,18 @@ export const rpcHandlers = (
     [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
       service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
-      service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+      service.create(input, owner, templateCreation).pipe(
+        Effect.map(({ templateAutomationPending, ...bot }) => ({
+          bot,
+          templateAutomationPending,
+        })),
+      ),
     [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: (input: ChannelResolveBotProposalInput) =>
-      service.resolveProposal(input, owner, authorizeProposalDecision),
+      service.resolveProposal(
+        input,
+        owner,
+        authorizeProposalDecision.pipe(Effect.mapError(() => fail("forbidden"))),
+      ),
     [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
       service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>

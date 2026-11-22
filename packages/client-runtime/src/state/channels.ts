@@ -23,7 +23,12 @@ import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts
 import { sameBotColor } from "../goatBot/botColor.ts";
 import { selectHomeCurrentOpenableWork } from "../goatBot/homeCurrentOpenableWork.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
-import { subscribeOrUnavailable } from "../rpc/client.ts";
+import {
+  currentSession,
+  EnvironmentRpcUnavailableError,
+  requestInSession,
+  subscribeOrUnavailable,
+} from "../rpc/client.ts";
 import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
@@ -456,6 +461,18 @@ export function createChannelEnvironmentAtoms<R, E>(
     createBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:create-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.createBot,
+      execute: Effect.fn("ChannelEnvironment.createBot")(function* (input, _, environmentId) {
+        const session = yield* currentSession();
+        if (input.templateId !== undefined) {
+          const unavailable = new EnvironmentRpcUnavailableError({
+            environmentId,
+            message: "This computer does not support bot templates.",
+          });
+          const config = yield* session.initialConfig.pipe(Effect.mapError(() => unavailable));
+          if (config.environment.capabilities.goatBotTemplates !== true) return yield* unavailable;
+        }
+        return yield* requestInSession(session, CHANNEL_GATEWAY_WS_METHODS.createBot, input);
+      }),
       onSuccess: refreshBots,
     }),
     resolveBotProposal: createEnvironmentRpcCommand(runtime, {

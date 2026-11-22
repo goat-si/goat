@@ -112,6 +112,7 @@ export function MobileBotRosterView(props: {
     /** Why New bot and Restore cannot be used now (the computer is offline); said to the screen reader. */
     readonly unavailable?: string;
     readonly onNewBot: () => void;
+    readonly onTemplates?: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
     /** Where the panel opens a row's actions as a menu around the row (Android), it draws the row. */
@@ -362,6 +363,14 @@ export function MobileBotRosterView(props: {
                 : { accessibilityHint: props.members.unavailable })}
               onPress={props.members.onNewBot}
             />
+            {props.members.onTemplates && (
+              <Button
+                label="From a template"
+                fullWidth
+                disabled={!props.members.canCreate}
+                onPress={props.members.onTemplates}
+              />
+            )}
             {props.members.unavailable === undefined ? null : (
               // The hint says it to a screen reader; this says it on screen.
               <Text

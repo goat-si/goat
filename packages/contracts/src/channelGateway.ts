@@ -463,17 +463,8 @@ export const ChannelResolveBotProposalInput = Schema.Struct({
 });
 export type ChannelResolveBotProposalInput = typeof ChannelResolveBotProposalInput.Type;
 
-/** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
-export const ChannelCreateBotInput = Schema.Struct({
-  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
-  name: BotProfile.fields.name,
-  avatar: BotProfile.fields.avatar,
-  purpose: BotProfile.fields.purpose,
-  defaultModelSelection: BotProfile.fields.defaultModelSelection,
-  /** Read by servers with `goatBotProfileColor`; absent leaves the bot neutral. */
-  color: Schema.optionalKey(BotColor),
-});
-export type ChannelCreateBotInput = typeof ChannelCreateBotInput.Type;
+export { ChannelBotResult, ChannelCreateBotInput } from "./channelBotCreate.ts";
+
 export const ChannelSetBotHiddenInput = Schema.Struct({ botId: BotId, hidden: Schema.Boolean });
 export type ChannelSetBotHiddenInput = typeof ChannelSetBotHiddenInput.Type;
 /** Refused with bot_busy while the bot has open work; its thread is archived, not removed. */
@@ -481,8 +472,6 @@ export const ChannelDeleteBotInput = Schema.Struct({ botId: BotId });
 export type ChannelDeleteBotInput = typeof ChannelDeleteBotInput.Type;
 export const ChannelRestoreBotInput = Schema.Struct({ botId: BotId });
 export type ChannelRestoreBotInput = typeof ChannelRestoreBotInput.Type;
-export const ChannelBotResult = Schema.Struct({ bot: BotProfile });
-export type ChannelBotResult = typeof ChannelBotResult.Type;
 export type ChannelUpdateBotInput = typeof ChannelUpdateBotInput.Type;
 export type ChannelUpdateBotResult = typeof ChannelUpdateBotResult.Type;
 

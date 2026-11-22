@@ -56,5 +56,7 @@ export {
 } from "./taskSnooze.ts";
 export * from "./attention.ts";
 export * from "./slackBindings.ts";
+export * from "./templateDraft.ts";
+export * from "./templateSetup.ts";
 
 export { chooseThreadFollow, threadFollowSupported } from "./threadFollow.ts";

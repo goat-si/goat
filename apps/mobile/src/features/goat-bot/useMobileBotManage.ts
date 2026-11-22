@@ -2,12 +2,19 @@ import { useAtomValue } from "@effect/atom-react";
 import { botManageFailure } from "@goat/client-runtime/goatBot";
 import type { BotProfileValues } from "@goat/client-runtime/state/channels";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import {
+  AuthSettingsWriteScope,
+  type BotProfile,
+  type ChannelBotResult,
+  type ChannelCreateBotInput,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { Alert } from "react-native";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentScope } from "../../state/session";
 import { goatBotComputerConnectedNow, useGoatBotComputerConnected } from "./goatBotComputerLink";
 
 const NO_PERMISSION = Atom.make(false);
@@ -23,6 +30,7 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
       ? NO_PERMISSION
       : channelEnvironment.createBot.permissionAtom(environmentId),
   );
+  const mayConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const mayManage = useAtomValue(
     environmentId === null
       ? NO_PERMISSION
@@ -48,8 +56,20 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
     Alert.alert(title, botManageFailure(squashAtomCommandFailure(result as never)));
     return false;
   };
+  const createBot = async (input: ChannelCreateBotInput): Promise<ChannelBotResult | string> => {
+    if (environmentId === null || !goatBotComputerConnectedNow(environmentId)) return offline;
+    const result = await runAtomCommand(appAtomRegistry, channelEnvironment.createBot, {
+      environmentId,
+      input,
+    });
+    return result._tag === "Success"
+      ? result.value
+      : botManageFailure(squashAtomCommandFailure(result));
+  };
   return {
     canCreate: mayCreate && connected,
+    canUseTemplates: mayConfigure && mayCreate,
+    createTemplate: createBot,
     canManage: mayManage && connected,
     canEdit: mayEdit && connected,
     /** This person may hide, delete and restore bots, connected or not; offline they wait. */
@@ -64,22 +84,15 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
       model: BotProfile["defaultModelSelection"],
       clientRequestId: string,
     ): Promise<BotProfile | string> => {
-      if (environmentId === null || !goatBotComputerConnectedNow(environmentId)) return offline;
-      const result = await runAtomCommand(appAtomRegistry, channelEnvironment.createBot, {
-        environmentId,
-        input: {
-          clientRequestId,
-          name: changes.name ?? "",
-          avatar: changes.avatar ?? null,
-          purpose: changes.purpose ?? "",
-          defaultModelSelection: model,
-          // Neutral sends no key, which older servers would drop anyway.
-          ...(changes.color == null ? {} : { color: changes.color }),
-        },
+      const result = await createBot({
+        clientRequestId,
+        name: changes.name ?? "",
+        avatar: changes.avatar ?? null,
+        purpose: changes.purpose ?? "",
+        defaultModelSelection: model,
+        ...(changes.color == null ? {} : { color: changes.color }),
       });
-      return result._tag === "Success"
-        ? result.value.bot
-        : botManageFailure(squashAtomCommandFailure(result));
+      return typeof result === "string" ? result : result.bot;
     },
     /** Resolves to null when saved, else the message to show in the sheet. A model is sent only when given. */
     update: async (

@@ -1,8 +1,8 @@
+import { useMobileBotTemplateDraft } from "./useMobileBotTemplateDraft";
 import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotAccent,
   goatBotEventSubjectSpan,
@@ -15,7 +15,6 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import {
-  type BotProfile,
   ChannelQuestionId,
   ChannelTaskId,
   type EnvironmentId,
@@ -94,21 +93,19 @@ import {
   GoatBotUnreadPill,
   useGoatBotUnread,
 } from "./GoatBotUnreadMarker";
-import type { GoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
 import { type MobileBotHomeFocus, useGoatBotEventTargets } from "./useGoatBotEventTargets";
 import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import type { MobileBotApprovalSlot } from "./MobileBotApprovals";
 import { MobileBotWork } from "./MobileBotWork";
 import { botApprovalRenderer } from "./botApprovalRenderer";
-import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
+import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
+import type { GoatBotScreenProps, ThreadSelection } from "./goatBotScreenProps";
 
-type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (item: GoatBotChatItem) => item.id;
 type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
 type ListMetrics = Parameters<typeof goatBotFooterInView>[0];
@@ -312,29 +309,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   );
 });
 
-export function GoatBotScreen(props: {
-  readonly visible: boolean;
-  /** False while the app is in the background, where GOAT Bot's steps are not read. */
-  readonly foreground?: boolean;
-  /** Focused and the app active: what the screen shows has been seen. */
-  readonly seen?: boolean;
-  readonly taskId?: ChannelTaskId;
-  readonly attentionRequest?: string | undefined;
-  /** The title the screen that opened this task carried, for a task the list no longer holds. */
-  readonly taskTitle?: string | undefined;
-  /** A member bot whose conversation this is; the main bot's when absent. */
-  readonly member?: BotProfile | null;
-  /** Where the person had read the main chat up to when this visit began. */
-  readonly readSnapshot?: GoatBotVisitSnapshot | null;
-  /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
-  readonly main?: BotProfile | null;
-  /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
-  readonly onRestoreMember?: MobileRestoreMember | undefined;
-  readonly onSelectThread?: (thread: ThreadSelection) => void;
-  readonly approvalCards?: MobileBotApprovalSlot;
-  /** Floating tabs cover the bottom of the screen; the composer rests above them. */
-  readonly floatingTabs?: { readonly bottomSafeArea: number };
-}) {
+export function GoatBotScreen(props: GoatBotScreenProps) {
   const member = props.member ?? null;
   const conversation = member
     ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
@@ -406,10 +381,9 @@ export function GoatBotScreen(props: {
   const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
   // Android hides the native header and draws edge to edge, so the Home chip starts below the status bar.
   const homeChipTop = Platform.OS === "android" ? insets.top : topInset;
-  // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
-  // conversation by the header height and its last message starts below the composer's top.
-  const listTopInset = 0;
-  const [text, setText] = useState("");
+  // LegendList can't see UIKit's adjusted inset, so leave its top padding at zero.
+  const templateDraft = useMobileBotTemplateDraft(member, taskId);
+  const [text, setText] = useState(templateDraft);
   const [homeOpen, setHomeOpen] = useState(false);
   const openHome = useCallback(() => setHomeOpen(true), []);
   // An event line opens the home on its routine or listed task, or a task that left the list on its
@@ -439,7 +413,7 @@ export function GoatBotScreen(props: {
       environmentId: session.sendEnvironmentId,
       threadId: session.sendThreadId,
     },
-    () => setText(""),
+    () => setText(templateDraft()),
   );
   const files = useGoatBotDraftAttachments(props.visible, draftOwner);
   const { attachments, intake } = files;
@@ -828,7 +802,7 @@ export function GoatBotScreen(props: {
             keyboardShouldPersistTaps="handled"
             // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
             contentInsetAdjustmentBehavior="automatic"
-            contentInsetStartAdjustment={listTopInset}
+            contentInsetStartAdjustment={0}
             contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
             scrollEventThrottle={100}
             onScroll={(event) => {
@@ -913,6 +887,7 @@ export function GoatBotScreen(props: {
             onRemove={files.remove}
           />
           {editing.nameRow}
+          {props.templateRetry}
           {answering.target !== null ? (
             <GoatBotAnsweringChip
               target={answering.target}

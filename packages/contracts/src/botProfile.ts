@@ -46,6 +46,13 @@ export const BotProfile = Schema.Struct({
   sessionThreadId: ThreadId,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  /** Setup the creating person can retry after a template bot already exists. */
+  templateSetup: Schema.optionalKey(
+    Schema.Struct({
+      templateId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+      clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+    }),
+  ),
   /** Left out of the roster by a person; still answers. Absent means shown. */
   hidden: Schema.optionalKey(Schema.Boolean),
   /** A deleted member keeps its id and archived thread until it is restored. Absent means active. */
