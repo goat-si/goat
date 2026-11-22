@@ -440,6 +440,7 @@ describe("late ACP session load", () => {
       assert.deepInclude(late.providerThread.contextUsage, { usedTokens: 13101 });
       // With no run left to receive it, only a session-scoped update reaches the projection.
       assert.isTrue(late.sessionScoped);
+      assert.equal(late.providerThread.status, "idle");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });
