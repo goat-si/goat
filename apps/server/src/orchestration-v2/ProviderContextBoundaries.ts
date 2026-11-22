@@ -67,13 +67,14 @@ export function providerTurnForRun(
     return undefined;
   }
 
-  return (
-    latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) ??
-    projection.providerTurns.find((turn) => {
-      const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
-      return attempt?.providerTurnId === turn.id;
-    })
-  );
+  const latest = latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId);
+  if (latest !== undefined) return latest;
+  const namedTurnId = projection.attempts.find(
+    (candidate) => candidate.id === run.activeAttemptId,
+  )?.providerTurnId;
+  return namedTurnId == null
+    ? undefined
+    : projection.providerTurns.find((turn) => turn.id === namedTurnId);
 }
 
 export function contextSourcePointForRun(
