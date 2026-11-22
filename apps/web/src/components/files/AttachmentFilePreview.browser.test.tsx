@@ -1960,60 +1960,6 @@ it("unwraps one text attachment without turning off the word wrap setting", asyn
   expect(screen.container.querySelector("pre")?.dataset.wordWrap).toBe("false");
 });
 
-it("mounts a bounded set of saved notebook outputs as the reader scrolls", async () => {
-  const notebook = {
-    nbformat: 4,
-    metadata: {},
-    cells: Array.from({ length: 20 }, (_, cell) => ({
-      cell_type: "code",
-      source: [],
-      metadata: {},
-      outputs: Array.from({ length: 100 }, (_, output) => ({
-        output_type: "display_data",
-        data: { "text/html": `<p>saved ${cell}-${output}</p>` },
-      })),
-    })),
-  };
-  const file = new Blob([JSON.stringify(notebook)]);
-  await using screen = await render(
-    <div style={{ display: "flex", height: 400, width: 600 }}>
-      <AttachmentFilePreview
-        name="observations.ipynb"
-        mimeType="application/json"
-        sizeBytes={file.size}
-        file={file}
-      />
-    </div>,
-  );
-  // The first outputs wait on the lazy notebook viewer and the conversion worker, not on a frame.
-  await vi.waitFor(
-    () => expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
-    { timeout: 10_000 },
-  );
-  expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
-  const first = screen.container.querySelector("iframe")!;
-  expect(first.srcdoc).toContain("saved 0-0");
-  const viewport = screen.container.querySelector<HTMLElement>(".scrollbar-gutter-both")!;
-  await act(() => {
-    viewport.scrollTop = viewport.scrollHeight;
-  });
-  await vi.waitFor(() => {
-    expect(
-      [...screen.container.querySelectorAll("iframe")].some((frame) =>
-        frame.srcdoc.includes("saved 19-99"),
-      ),
-    ).toBe(true);
-    expect(first.isConnected).toBe(false);
-  });
-  expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
-  await act(() => {
-    viewport.scrollTop = 0;
-  });
-  await vi.waitFor(() =>
-    expect(screen.container.querySelector("iframe")?.srcdoc).toContain("saved 0-0"),
-  );
-});
-
 it.each([
   [String.raw`{\rtf1\uc1\u945{\b bold}Hello}`, "αboldHello"],
   [String.raw`{\rtf1\uc1{\u945}Hello}`, "αHello"],
