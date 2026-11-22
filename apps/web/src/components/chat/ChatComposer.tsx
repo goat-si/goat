@@ -135,6 +135,7 @@ import {
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
+  isImageOnlyClipboardHtml,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
 import {
@@ -2686,7 +2687,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       folders.length > 0 ||
       (activeThreadId &&
         files.length > 0 &&
-        shouldHandleComposerAttachmentPaste({ files, plainText }))
+        shouldHandleComposerAttachmentPaste({
+          files,
+          plainText,
+          bypassAutoAttachment,
+          htmlIsOnlyImage:
+            plainText.length > 0 &&
+            isImageOnlyClipboardHtml(event.clipboardData.getData("text/html")),
+        }))
     ) {
       event.preventDefault();
       event.stopPropagation();
@@ -2717,12 +2725,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
-
     if ((readPastedComposerContext(event.clipboardData)?.records.length ?? 0) > 0) return;
     if (!foldPastedText(plainText, bypassAutoAttachment)) {
       return;
     }
-
     event.preventDefault();
     event.stopPropagation();
   };
@@ -2741,7 +2747,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     return setContextInsertionHandler(composerDraftTarget, insertContextReferencesAtCaretStable);
   }, [composerDraftTarget, insertContextReferencesAtCaretStable, setContextInsertionHandler]);
-
   // Capture drops before the editor; mention handlers own native propagation and moves.
   const composerMentionDragHandlers = makeComposerMentionDragHandlers({
     insertMentionAtEnd: (text) =>
@@ -2766,7 +2771,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
     },
   });
-
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
       const record = droppedThreadContextRecord(ref, readThreadShell(ref));
@@ -2809,7 +2813,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftThreadContexts(composerDraftTarget, routed);
     }
   });
-
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLFormElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.stopPropagation();
@@ -2817,7 +2820,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
     setIsDragOverComposer(false);
   };
-
   // Escape can cancel without dragleave; clear highlights on bubbling dragend.
   useEffect(() => {
     if (!isDragOverComposer) return;
@@ -2866,14 +2868,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
   };
   const scheduleComposerCollapseCheckStable = useStableCallback(scheduleComposerCollapseCheck);
-
   // Question dismissal unmounts focused controls without firing blur.
   const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
   useEffect(() => {
     if (activePendingUserInputRequestId !== null) return;
     scheduleComposerCollapseCheckStable();
   }, [activePendingUserInputRequestId, scheduleComposerCollapseCheckStable]);
-
   useEffect(() => {
     return () => {
       if (composerBlurFrameRef.current !== null) {

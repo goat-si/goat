@@ -121,6 +121,23 @@ describe("composer attachment files", () => {
     ).toBe(true);
   });
 
+  it("preserves Word text but attaches Copy Image and Finder images", () => {
+    const image = new File(["png"], "image.png", { type: "image/png" });
+    expect(
+      shouldHandleComposerAttachmentPaste({ files: [image], plainText: "Hello from Word" }),
+    ).toBe(false);
+    expect(
+      shouldHandleComposerAttachmentPaste({
+        files: [image],
+        plainText: "https://example.com/image.png",
+        htmlIsOnlyImage: true,
+      }),
+    ).toBe(true);
+    expect(shouldHandleComposerAttachmentPaste({ files: [image], plainText: "image.png" })).toBe(
+      true,
+    );
+  });
+
   it("preserves text when the clipboard also includes generic image files", () => {
     const image = new File(["tiff"], "photo.tiff", { type: "image/tiff" });
     expect(
