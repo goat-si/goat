@@ -3,9 +3,9 @@
 <p>Mention the GOAT bot in a Slack channel or send it a direct message, and GOAT
 answers in that Slack thread, starts the work in its own coding thread, and
 posts the result back to the same thread. The conversation stays in Slack; the
-GOAT Bot shows the work and its final report. On web and desktop, choose <strong>Bots</strong>
-in the sidebar to find the main bot and its task threads. Slack and iMessage reach
-the main bot only; see <a href="/goat/docs/user/goat-bot/">GOAT Bot</a> for the bots you add in GOAT.</p>
+GOAT Bot shows the work and its final report. In GOAT, open <strong>Bots</strong> and choose
+the bot that answered to find its work. Slack can route to the main bot or
+a named bot. iMessage reaches the main bot.</p>
 <h2 id="set-up">Set up</h2>
 <ol>
 <li>Create a Slack app with <strong>Socket Mode</strong> turned on. GOAT opens the
@@ -30,29 +30,61 @@ at the level chosen for their code; everyone else in the workspace works at
 </ol>
 <h2 id="good-to-know">Good to know</h2>
 <ul>
-<li>In a channel, mention the bot in each message; it does not read other
-channel messages. Direct messages always work.</li>
-<li><strong>Who can use it</strong> decides who may start work. <strong>Everyone in the workspace</strong>
+<li>
+<p>In a channel, mention the bot in each message; it does not read other
+channel messages. Direct messages always work.</p>
+</li>
+<li>
+<p><strong>Who can use it</strong> decides who may start work. <strong>Everyone in the workspace</strong>
 (the default) answers anyone in the connected Slack workspace; people from
 another organization in a shared channel are ignored. <strong>Linked accounts
 only</strong> answers everyone else with how to link. Someone without a link sees
 only their own work and the conversation they write in, and cannot use GOAT
-memory or change GOAT Bot’s notes.</li>
-<li>Replies, questions, and results go to the thread where you asked, and
-questions tag the person who asked.</li>
-<li>While work runs, the thread keeps one message about it, which GOAT updates
+memory or change GOAT Bot’s notes.</p>
+</li>
+<li>
+<p>Replies, questions, and results go to the thread where you asked, and
+questions tag the person who asked.</p>
+</li>
+<li>
+<p>While work runs, the thread keeps one message about it, which GOAT updates
 with the latest step instead of posting each one. The answer always arrives
 as a new message. After it, GOAT removes that message if it only said the
 work was under way, or puts its first reply back as it was. If Slack refuses
-an update, the message stays as it is.</li>
-<li><strong>Default project</strong> decides where work from Slack runs when your message
+an update, the message stays as it is.</p>
+</li>
+<li>
+<p>Use <strong>Channel bindings</strong> under <strong>Settings → GOAT Bot → Slack</strong> to pick a
+member bot for a channel. Paste the channel ID from its details in Slack,
+choose the bot, then add the binding and save. In a DM or mention, start with
+the bot’s name followed by a colon, for example <code>Scout: Check the build</code>.
+The name takes priority over the channel binding on the first accepted
+message. A channel without a binding goes to the main bot.</p>
+</li>
+<li>
+<p>Follow-ups stay with the bot that took the thread, even after a rename or
+binding change. Threads from before channel bindings stay with the main bot.
+If that member bot is deleted, restore it in GOAT or start a new Slack thread.
+Only the requester sees the reply when a bot name is unavailable or ambiguous.</p>
+</li>
+<li>
+<p>Member replies include the bot’s name. An app with the optional
+<code>chat:write.customize</code> scope can show it as the sender name.
+The same channel and account access rules apply to every bot.</p>
+</li>
+<li>
+<p><strong>Default project</strong> decides where work from Slack runs when your message
 doesn’t name a project. Without it, GOAT picks the project from the
 conversation and asks only when it can’t tell, suggesting the one you worked
 in most recently. <strong>This machine (no project)</strong> runs work that isn’t about a
-repository.</li>
-<li>GOAT Bot answers questions about the machine it runs on, such as its name,
-OS, memory, and what is running, without starting work.</li>
-<li>For questions that need a look around but no code change (what fills the
+repository.</p>
+</li>
+<li>
+<p>GOAT Bot answers questions about the machine it runs on, such as its name,
+OS, memory, and what is running, without starting work.</p>
+</li>
+<li>
+<p>For questions that need a look around but no code change (what fills the
 disk, what several threads concluded, something on the web), GOAT Bot says
 it is on it and looks into it itself, then answers in the same conversation.
 Messages you send while it works are added to what it is doing. It uses the
@@ -64,36 +96,52 @@ may use, so it can read files, logs, and status anywhere on the machine
 without asking. It is told to change nothing itself and to start a coding
 task or ask you when something needs changing. That rule is part of its
 instructions; GOAT does not block changes, so link people at a lower access
-level if they should not be able to make the bot change things.</li>
-<li>GOAT Bot and work started from Slack never see or control this computer’s
+level if they should not be able to make the bot change things.</p>
+</li>
+<li>
+<p>GOAT Bot and work started from Slack never see or control this computer’s
 screen on their own, even when <a href="/goat/docs/user/computer-use/">computer use</a> is on. When
 a task needs it, GOAT asks for approval in that task’s thread, for a set time.
 Someone allowed to change GOAT’s settings approves it in the GOAT app on
 desktop, web, or mobile; replying in Slack does not approve it. Approval
 admits that thread until the time shown, not each action, and you can end it
-early from the request.</li>
-<li>Ask GOAT Bot about earlier work (“did the login PR merge?”, “what did the
+early from the request.</p>
+</li>
+<li>
+<p>Ask GOAT Bot about earlier work (“did the login PR merge?”, “what did the
 docs thread do?”, “when did I mention the lighthouse score?”) and it looks
 it up itself and answers, without starting a coding agent. It reads the work
 it started, the pull requests that work linked, the last messages of its
 coding threads, older messages in the conversation, and its notes and
 <a href="/goat/docs/user/memory/">memory</a>. It shows you only work from the conversation you are
-in, work you asked for, and, if your link may read GOAT’s threads, the rest.</li>
-<li>With every message GOAT Bot also sees a short journal of the latest work
-you may see: what was asked, how it ended, and its pull requests.</li>
-<li>Ask GOAT Bot “what’s pending?” to see everything still open: queued,
+in, work you asked for, and, if your link may read GOAT’s threads, the rest.</p>
+</li>
+<li>
+<p>With every message GOAT Bot also sees a short journal of the latest work
+you may see: what was asked, how it ended, and its pull requests.</p>
+</li>
+<li>
+<p>Ask GOAT Bot “what’s pending?” to see everything still open: queued,
 running, waiting on you, or finished but not yet reported to you. Say “stop
 everything” (or name one piece of work) to stop it, including anything it
 handed to subagents, on this machine or another one. A machine still on an
 older GOAT stops only the current turn; subagents it started there finish on
-their own.</li>
-<li>When more than one machine is connected, GOAT Bot spreads research across
+their own.</p>
+</li>
+<li>
+<p>When more than one machine is connected, GOAT Bot spreads research across
 the ones with room to spare and tells you which machine ran what. It never
-starts a Boat cloud machine unless you ask.</li>
-<li>GOAT Bot runs up to four pieces of your work at once. More wait in order and
-start as earlier ones finish; the reply says when something is queued.</li>
-<li>In <strong>Settings → GOAT Bot</strong>, turn off <strong>Answer with the bot session</strong> to use reception for new messages.</li>
-<li><strong>Settings → GOAT Bot → Automatically choose a worker computer</strong> lets work
+starts a Boat cloud machine unless you ask.</p>
+</li>
+<li>
+<p>GOAT Bot runs up to four pieces of your work at once. More wait in order and
+start as earlier ones finish; the reply says when something is queued.</p>
+</li>
+<li>
+<p>In <strong>Settings → GOAT Bot</strong>, turn off <strong>Answer with the bot session</strong> to use reception for new messages.</p>
+</li>
+<li>
+<p><strong>Settings → GOAT Bot → Automatically choose a worker computer</strong> lets work
 use an already-connected SSH computer with the same repository and requested
 model. It is off by default. Turning it on allows the worker’s instructions,
 notes and named skills to go to the selected computer. GOAT prefers ready
@@ -101,12 +149,16 @@ accounts with more quota left and less channel work, and shows why it chose
 one. Naming a computer keeps work there. Unknown or unavailable repositories
 are skipped; GOAT does not prepare computers or sign in for this choice.
 Retrying automatically placed work chooses again; a running worker never
-moves automatically.</li>
-<li>Work counts as waiting on you when the agent working on it, or a subagent it
+moves automatically.</p>
+</li>
+<li>
+<p>Work counts as waiting on you when the agent working on it, or a subagent it
 started in GOAT, needs your approval or an answer. That includes a subagent
 running in GOAT on another machine. Subagents that run on another service
-are not counted.</li>
-<li>When work needs an approval, GOAT Bot sends a card saying what the agent
+are not counted.</p>
+</li>
+<li>
+<p>When work needs an approval, GOAT Bot sends a card saying what the agent
 wants to do. Tap Deny or Approve in GOAT or on the Slack card, or reply with
 the words the card shows, code included, such as “deny A1”. iMessage, which
 has no buttons, takes the same words. A number or a bare “approve” answers
@@ -117,8 +169,10 @@ that can’t show what the request asks says so; check its thread in GOAT
 before answering. Only
 people with the same access as whoever asked for the work can answer. An
 approval on another GOAT machine is sent there; if that machine can’t take
-it, answer it in that thread.</li>
-<li>Ask GOAT Bot to remember a standing rule (“always reply in Korean”) and it
+it, answer it in that thread.</p>
+</li>
+<li>
+<p>Ask GOAT Bot to remember a standing rule (“always reply in Korean”) and it
 follows it from then on, in Slack and in GOAT. It keeps a note only when the
 message you send asks for it, and each note names the message it came from.
 Notes live in
@@ -129,34 +183,49 @@ and older ones that share words with your message, so name the topic when
 you rely on an old note. Put written procedures in <code>goat-bot/skills/</code> as Markdown
 files, and the bot points its coding agents to the one that fits. Work sent
 to another machine gets the notes, and any procedure the request names, in
-its first message.</li>
-<li>If a machine running your work goes to sleep or disconnects, GOAT Bot tells
+its first message.</p>
+</li>
+<li>
+<p>If a machine running your work goes to sleep or disconnects, GOAT Bot tells
 you. Say “continue on <another host>” to continue from the last copy of its
 work, taken each time the work finishes a turn. New files over 2 MiB and new
 files that look like secrets are not copied. The work on the original machine
-is not deleted.</li>
-<li>When a provider has more than one signed-in account on the machine running
+is not deleted.</p>
+</li>
+<li>
+<p>When a provider has more than one signed-in account on the machine running
 the work, GOAT uses the one with more quota left and the task card says why,
-such as “Codex (work) · 20% weekly used”.</li>
-<li>For memories used in coding conversations and shared between devices, see
-<a href="/goat/docs/user/memory/">Memory</a>.</li>
-<li>Work you start from Slack is capped at the access level chosen when you
+such as “Codex (work) · 20% weekly used”.</p>
+</li>
+<li>
+<p>For memories used in coding conversations and shared between devices, see
+<a href="/goat/docs/user/memory/">Memory</a>.</p>
+</li>
+<li>
+<p>Work you start from Slack is capped at the access level chosen when you
 created the link code, or at <strong>Access without a link</strong> if you have not
 linked. Its coding agents can use GOAT memory only as far as the link
 allows. A link you narrow later, or switching to <strong>Linked accounts only</strong>,
-applies to work that has not started yet.</li>
-<li>When you connect to several machines, Slack runs only on the machine GOAT
+applies to work that has not started yet.</p>
+</li>
+<li>
+<p>When you connect to several machines, Slack runs only on the machine GOAT
 Bot lives on. Change it in <strong>Settings → Integrations → GOAT Bot</strong>; set up
-Slack on that machine.</li>
-<li>If the machine GOAT Bot lives on is gone or stays disconnected, GOAT Bot
+Slack on that machine.</p>
+</li>
+<li>
+<p>If the machine GOAT Bot lives on is gone or stays disconnected, GOAT Bot
 stops answering on every machine and its screen says so. Use <strong>Move GOAT Bot
 to …</strong> there, or pick another machine in <strong>Settings → Integrations → GOAT
 Bot</strong>. An agent with full access can do the same on the machine it runs on
 with <code>goat_call {path:"channel.bot_home_claim"}</code>. Other machines follow the move once
-a GOAT app connected to them is open.</li>
-<li>When GOAT Bot can’t read a message, its reply says why, such as a model that
+a GOAT app connected to them is open.</p>
+</li>
+<li>
+<p>When GOAT Bot can’t read a message, its reply says why, such as a model that
 needs you to sign in again or a usage limit, so you know whether resending
-helps.</li>
+helps.</p>
+</li>
 </ul>
 <h2 id="imessage-mac">iMessage (Mac)</h2>
 <p>GOAT can read direct text messages from allowed iMessage handles on the Mac running its server
