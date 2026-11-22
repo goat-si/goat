@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { botManageFailure } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
   botPackageFileName,
   type BotPackageExportResult,
   type BotProfile,
@@ -11,6 +12,7 @@ import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
+import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { GoatBotPackageExportDialog, GoatBotPackageImportDialog } from "./GoatBotPackageDialog";
@@ -33,8 +35,9 @@ export function GoatBotPackageImportButton({
 }) {
   const canReview = usePackagePermission(environmentId, "reviewBotPackage");
   const canImport = usePackagePermission(environmentId, "importBotPackage");
+  const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const [open, setOpen] = useState(false);
-  return canReview && canImport ? (
+  return canReview && canImport && canOperate ? (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
         Import bot package

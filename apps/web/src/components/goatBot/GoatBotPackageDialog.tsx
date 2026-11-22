@@ -92,7 +92,7 @@ export function GoatBotPackageImportDialog({
   const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<string>();
 
-  const readFile = async (file: File | undefined) => {
+  const readFile = (file: File | undefined) => {
     setSelected(undefined);
     setError(undefined);
     if (file === undefined) return;
@@ -101,40 +101,36 @@ export function GoatBotPackageImportDialog({
       return;
     }
     setBusy(true);
-    try {
-      const text = await file.text();
-      const result = await review(text);
-      if (typeof result === "string") {
-        setError(result);
-        return;
-      }
-      setSelected({ text, review: result, clientRequestId: randomUUID() });
-    } catch {
-      setError("Could not read the package file.");
-    } finally {
-      setBusy(false);
-    }
+    void file
+      .text()
+      .then(async (text) => {
+        const result = await review(text);
+        if (typeof result === "string") {
+          setError(result);
+          return;
+        }
+        setSelected({ text, review: result, clientRequestId: randomUUID() });
+      })
+      .catch(() => setError("Could not read the package file."))
+      .finally(() => setBusy(false));
   };
 
-  const importReviewed = async () => {
+  const importReviewed = () => {
     if (selected === undefined || busy) return;
     setBusy(true);
     setAttempted(true);
     setError(undefined);
-    try {
-      const failure = await confirm({
-        text: selected.text,
-        digest: selected.review.digest,
-        clientRequestId: selected.clientRequestId,
-      });
-      if (failure === undefined) {
-        close();
-        return;
-      }
-      setError(failure);
-    } finally {
-      setBusy(false);
-    }
+    void confirm({
+      text: selected.text,
+      digest: selected.review.digest,
+      clientRequestId: selected.clientRequestId,
+    })
+      .then((failure) => {
+        if (failure === undefined) close();
+        else setError(failure);
+      })
+      .catch(() => setError("Could not import the bot. Try again."))
+      .finally(() => setBusy(false));
   };
 
   return (
@@ -154,7 +150,7 @@ export function GoatBotPackageImportDialog({
                 type="file"
                 accept={BOT_PACKAGE_EXTENSION}
                 disabled={busy || attempted}
-                onChange={(event) => void readFile(event.currentTarget.files?.[0])}
+                onChange={(event) => readFile(event.currentTarget.files?.[0])}
               />
             </label>
             {selected !== undefined && (
@@ -186,7 +182,7 @@ export function GoatBotPackageImportDialog({
           <Button variant="outline" disabled={busy} onClick={close}>
             Close
           </Button>
-          <Button disabled={busy || selected === undefined} onClick={() => void importReviewed()}>
+          <Button disabled={busy || selected === undefined} onClick={importReviewed}>
             {attempted ? "Retry import" : "Import bot"}
           </Button>
         </DialogFooter>

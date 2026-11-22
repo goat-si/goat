@@ -18,22 +18,23 @@ export function MobileBotPackageSheet({
 }) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string>();
-  const save = async (contents: string) => {
+  const save = (contents: string) => {
     if (sharing || !canShare()) return;
     setSharing(true);
     setError(undefined);
-    try {
-      const shared = await shareGeneratedAttachment({
-        bytes: new TextEncoder().encode(contents),
-        attachment: { name: botPackageFileName(bot.name), mimeType: "application/json" },
-        signal: new AbortController().signal,
-      });
-      if (!shared) setError("File sharing is unavailable on this device.");
-    } catch {
-      setError("Could not share the package. Try again.");
-    } finally {
-      setSharing(false);
-    }
+    void Promise.resolve()
+      .then(() =>
+        shareGeneratedAttachment({
+          bytes: new TextEncoder().encode(contents),
+          attachment: { name: botPackageFileName(bot.name), mimeType: "application/json" },
+          signal: new AbortController().signal,
+        }),
+      )
+      .then((shared) => {
+        if (!shared) setError("File sharing is unavailable on this device.");
+      })
+      .catch(() => setError("Could not share the package. Try again."))
+      .finally(() => setSharing(false));
   };
 
   return (
@@ -88,7 +89,7 @@ export function MobileBotPackageSheet({
           {typeof result === "object" && result?.status === "ready" && (
             <Pressable
               accessibilityRole="button"
-              onPress={() => void save(result.contents)}
+              onPress={() => save(result.contents)}
               disabled={sharing}
               className="min-h-[44px] justify-center px-3"
             >
