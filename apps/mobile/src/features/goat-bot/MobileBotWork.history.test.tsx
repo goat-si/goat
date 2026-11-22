@@ -16,6 +16,7 @@ const forward = (props: Props) => ({
 });
 const nativeAlert = vi.hoisted(() => vi.fn());
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
 }));
@@ -235,6 +236,7 @@ vi.mock("@expo/ui/community/datetime-picker", () => ({
     </button>
   ),
 }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([

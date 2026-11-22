@@ -171,6 +171,7 @@ const storeObservation = (correlationId: string, observation: ChannelWorkerObser
 class RemoteMachine {
   readonly calls: RecordedCall[] = [];
   readonly environmentId = EnvironmentId.make("environment:mac-studio");
+  botAttention: true | undefined;
   readonly threadId = ThreadId.make("thread:remote");
   readonly runId = RunId.make("run:remote");
   observation: ChannelWorkerObservation = { pullRequests: [], needsYou: [] };
@@ -189,12 +190,13 @@ class RemoteMachine {
     {
       listHosts: () => Effect.succeed([{ alias: "mac-studio", source: "ssh-config" as const }]),
       launchThread: <E, R>(
-        _input: SshRemoteDispatch.SshLaunchInput,
+        input: SshRemoteDispatch.SshLaunchInput,
         beforeLaunch: Effect.Effect<void, E, R>,
       ) => {
         const machine = this;
         return Effect.gen(function* () {
           yield* beforeLaunch;
+          machine.botAttention = input.report?.botAttention;
           return {
             host: "mac-studio",
             cwd: "/tmp/remote",
@@ -382,6 +384,7 @@ describe("approvals held on another machine", () => {
         host: "mac-studio",
         environmentId: machine.environmentId,
       });
+      assert.isTrue(machine.botAttention);
       yield* runtime.drain;
       assert.strictEqual((yield* questionCards).length, 1);
       // This machine can't read the request's details, so the card says so; its buttons stay.

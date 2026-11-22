@@ -237,12 +237,34 @@ describe("runMigrations", () => {
   );
 });
 
-it.effect("rechecks a current database without taking a write transaction", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
-    yield* sql`PRAGMA query_only = ON`;
-    assert.deepStrictEqual(yield* runMigrations(), []);
-    assert.deepStrictEqual(yield* history, migrationManifest);
-  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+it.effect.each(["with indexes", "without indexes"] as const)(
+  "rechecks a current database %s without taking a write transaction",
+  (indexState) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ skipStartupRepairs: true });
+      if (indexState === "without indexes") {
+        yield* sql`DROP INDEX IF EXISTS scheduled_tasks_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS scheduled_task_channel_inputs_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS channel_tasks_work_trigger_idx`;
+      }
+
+      yield* sql`PRAGMA query_only = ON`;
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+        WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+          'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')
+        ORDER BY name`;
+      assert.deepStrictEqual(
+        indexes.map(({ name }) => name),
+        indexState === "with indexes"
+          ? [
+              "channel_tasks_work_trigger_idx",
+              "scheduled_task_channel_inputs_work_trigger_idx",
+              "scheduled_tasks_work_trigger_idx",
+            ]
+          : [],
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

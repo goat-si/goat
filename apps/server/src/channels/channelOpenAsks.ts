@@ -70,6 +70,16 @@ const draftOf = (botId: BotId, task: ChannelTask, waiting: WaitingAsk): Draft =>
           : {}),
       };
     }
+    case "handoff":
+      return {
+        ask: {
+          ...base,
+          kind: "approval",
+          text: task.title + " needs approval on its worker",
+          askedAt,
+          requestId: waiting.ref.requestId,
+        },
+      };
     case "native_question": {
       const question = waiting.ref;
       return {

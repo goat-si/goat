@@ -3,9 +3,13 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
+import { migrationLedgerProblem } from "./migrationPreflight.ts";
+import channelBotAttention from "./Migrations/181_ChannelBotAttention.ts";
 
 import {
   assertMemoryMigrationsCompatible,
+  canonicalMigrationName,
+  fenceWorkTriggerRollback,
   GOAT_MIGRATION_NAMES,
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
@@ -54,6 +58,15 @@ const history = Effect.gen(function* () {
   `;
   return rows.map((row) => [row.migration_id, row.name] as const);
 });
+
+const preflight = (ledger: ReadonlyArray<readonly [number, string]>) =>
+  migrationLedgerProblem(
+    {
+      history: ledger.map(([migration_id, name]) => ({ migration_id, name })),
+      hasMemoryTables: true,
+    },
+    "test",
+  );
 
 const goatNames = migrationEntries.flatMap(([id, name]) =>
   GOAT_MIGRATION_NAMES.has(name) && id <= FIXTURE_LEDGER_GOAT_END ? [name] : [],
@@ -136,6 +149,93 @@ const prePenMemberMemoryNames = [
   "MemoryCompactMoveReceipts",
   "MemoryOriginCatchup",
 ];
+
+it.effect.each([176, 177, 180] as const)(
+  "upgrades a dev database at migration %s without replacing earlier history",
+  (id) =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: id });
+      if (id === 177) yield* fenceWorkTriggerRollback();
+      const sql = yield* SqlClient.SqlClient;
+      const before = yield* history;
+      assert.isUndefined(preflight(before));
+      assert.deepStrictEqual(
+        before.at(-1),
+        migrationManifest.find(([entry]) => entry === id),
+      );
+      assert.isTrue(yield* hasPendingMigrations());
+
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([entry]) => entry > id),
+      );
+      const after = yield* history;
+      assert.deepStrictEqual(
+        after.slice(0, before.length),
+        before.map(
+          ([migrationId, name]) =>
+            [
+              migrationId,
+              name === "ChannelLedgerRequiresWorkTriggerAuthority"
+                ? "ChannelLedgerRequiresWorkerReleaseAuthority"
+                : name,
+            ] as const,
+        ),
+      );
+      assert.deepStrictEqual(
+        after.map(([migrationId, name]) => [migrationId, canonicalMigrationName(name)] as const),
+        migrationManifest,
+      );
+      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
+      assert.deepStrictEqual(yield* sql`SELECT * FROM channel_bot_attention`, []);
+      assert.isFalse(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+describe("bot attention preview ledgers", () => {
+  it.effect("leaves an invalid attention preview ledger intact when startup refuses it", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 175 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({ "176_ChannelBotAttention": channelBotAttention }),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 55`;
+      const before = yield* history;
+      const failure = yield* Effect.flip(runMigrations());
+      assert.include(failure.message, "55_");
+      assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect.each([176, 177, 178])(
+    "preserves an alert written by the PR preview at migration %s",
+    (id) =>
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: id - 1 });
+        yield* Migrator.make({})({
+          loader: Migrator.fromRecord({ [`${id}_ChannelBotAttention`]: channelBotAttention }),
+        });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_bot_attention (
+        owner_id, bot_id, task_id, event_id, kind, generation, occurred_at
+      ) VALUES ('owner', 'main', 'task', 'alert', 'question', 1, '2026-11-21T00:00:00Z')`;
+        assert.isUndefined(preflight(yield* history));
+        assert.isTrue(yield* hasPendingMigrations());
+
+        yield* runMigrations();
+
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.deepStrictEqual(yield* sql`SELECT sequence, event_id FROM channel_bot_attention`, [
+          { sequence: 1, event_id: "alert" },
+        ]);
+        assert.deepStrictEqual(yield* sql`SELECT * FROM channel_worker_launch_heads`, []);
+        assert.isFalse(yield* hasPendingMigrations());
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
 
 describe("memory reliability ledger before migration 158 AuthSessionPenMember", () => {
   it.effect.each([1, prePenMemberMemoryNames.length])(
@@ -792,42 +892,5 @@ it.effect("relocates ScheduledTaskRuns without changing populated receipts or as
     assert.deepStrictEqual(yield* sql`SELECT last_firing_id FROM scheduled_tasks`, tasks);
     assert.includeDeepMembers(yield* history, [[129, "ScheduledTaskRuns"]]);
     assert.deepStrictEqual(yield* runMigrations(), []);
-  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-);
-
-it.effect("reuses the draft dispatch migration id without losing a recorded environment", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 177 });
-    const draft = migrationEntries.find(([, name]) => name === "RemoteDispatchEnvironment")!;
-    yield* Migrator.make({})({
-      loader: Migrator.fromRecord({ "178_RemoteDispatchEnvironment": draft[2] }),
-    });
-    yield* sql`INSERT INTO remote_dispatches
-      (correlation_id, kind, origin_thread_id, host, remote_thread_id, remote_environment_id, read_key, delivery, state, created_at, updated_at)
-      VALUES ('draft', 'thread', 'origin', 'box', 'worker', 'verified', 'read-key', 'wake', 'running',
-        '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
-    const interveningMigration = sql`ALTER TABLE remote_dispatches ADD COLUMN fixture_column TEXT`;
-    const incoming = [
-      ...migrationEntries.filter(([id]) => id < 178),
-      [178, "InterveningMigrationFixture", interveningMigration],
-      [184, draft[1], draft[2]],
-    ] as const;
-
-    assert.deepStrictEqual(yield* reconcileGoatMigrationIds(incoming), [
-      [178, "InterveningMigrationFixture"],
-    ]);
-    assert.deepStrictEqual(
-      (yield* history).filter(([id]) => id >= 178),
-      [
-        [178, "InterveningMigrationFixture"],
-        [184, "RemoteDispatchEnvironment"],
-      ],
-    );
-    assert.deepStrictEqual(
-      yield* sql`SELECT remote_environment_id, fixture_column FROM remote_dispatches WHERE correlation_id = 'draft'`,
-      [{ remote_environment_id: "verified", fixture_column: null }],
-    );
-    assert.deepStrictEqual(yield* reconcileGoatMigrationIds(incoming), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

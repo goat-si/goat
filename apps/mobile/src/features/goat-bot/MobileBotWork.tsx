@@ -1,6 +1,7 @@
 import {
   accessDenied,
   botHomeWork,
+  withoutSnoozedBotTasks,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -39,6 +40,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
+import { sectionLabel, message } from "./mobileBotHomeItems";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
@@ -187,13 +189,17 @@ export function MobileBotWork(props: {
     capabilities,
     current: props.taskId ? null : listData,
     loaded: threads.successResult !== null,
+    home: threads,
     enabled: enabled && open && !props.taskId,
     scope: JSON.stringify([workOwner, sheet.generation]),
     owner: workOwner,
+    fallbackTasks: props.chatTasks,
   });
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
-  const homeRows = props.taskId ? rows : history.rows;
+  const { snoozed } = history.snoozeList;
+  const homeRows = props.taskId ? rows : withoutSnoozedBotTasks(history.rows, snoozed);
+  const [showSnoozed, setShowSnoozed] = useState(false);
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
   const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android", workOwner);
@@ -230,6 +236,7 @@ export function MobileBotWork(props: {
     taskId: props.taskId ?? null,
     enabled,
     capabilities,
+    supportsSnooze: capabilities?.goatBotTaskSnooze === true,
     list: threads,
     holdsTask: task !== undefined,
     needsApprovalObservation: renderTaskApprovals !== undefined,
@@ -435,24 +442,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  const sectionLabel = (
-    key: string,
-    text: string,
-    first = false,
-    action?: ReactNode,
-  ): MobileBotHomeItem => ({
-    key,
-    render: () => (
-      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
-        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
-        {action}
-      </View>
-    ),
-  });
-  const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
-    key,
-    render: () => node,
-  });
   // Home is one list that mounts only what is near the screen; a bot with many tasks stays light.
   const homeItems: MobileBotHomeItem[] = [
     {
@@ -625,6 +614,9 @@ export function MobileBotWork(props: {
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
+            ...history.snoozeList,
+            showSnoozed,
+            onToggleSnoozed: () => setShowSnoozed((value) => !value),
             onToggleFinished: () => setShowAllFinished((value) => !value),
             expanded: new Set(expanded),
             onToggleExpanded: toggleExpanded,

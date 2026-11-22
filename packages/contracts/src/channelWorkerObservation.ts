@@ -23,6 +23,7 @@ export const ChannelTaskPullRequest = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   url: TrimmedNonEmptyString,
+  linkedAt: Schema.optionalKey(IsoDateTime),
   /** Absent until the host has been read once. */
   state: Schema.optional(PullRequestState),
   /** The server watches the pull request and wakes the worker on checks, comments or conflicts. */
@@ -62,6 +63,8 @@ export const ChannelTaskNeedsYou = Schema.Struct({
   kind: ChannelTaskNeedsYouKind,
   since: IsoDateTime,
   approval: Schema.optional(ChannelTaskApprovalRef),
+  /** A durable approval uses the handoff RPCs on the worker's machine. */
+  handoff: Schema.optional(ChannelTaskApprovalRef),
   /** Set for a native question, in the same shape as an approval ref. */
   question: Schema.optional(ChannelTaskApprovalRef),
 });
@@ -90,10 +93,11 @@ export const EMPTY_CHANNEL_WORKER_OBSERVATION: ChannelWorkerObservation = {
   needsYou: [],
 };
 
-/** Whether two observations would show the same thing; equal ones are not written again. */
+/** Waits ignore link dates so older origins that cannot echo them can still wait. */
 export const channelWorkerObservationEquals = (
   left: ChannelWorkerObservation | undefined,
   right: ChannelWorkerObservation | undefined,
+  compareLinkedAt = false,
 ): boolean => {
   const a = left ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
   const b = right ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
@@ -122,6 +126,10 @@ export const channelWorkerObservationEquals = (
         item.approval?.threadId === b.needsYou[index]?.approval?.threadId &&
         item.approval?.host === b.needsYou[index]?.approval?.host &&
         item.approval?.environmentId === b.needsYou[index]?.approval?.environmentId &&
+        item.handoff?.requestId === b.needsYou[index]?.handoff?.requestId &&
+        item.handoff?.threadId === b.needsYou[index]?.handoff?.threadId &&
+        item.handoff?.host === b.needsYou[index]?.handoff?.host &&
+        item.handoff?.environmentId === b.needsYou[index]?.handoff?.environmentId &&
         item.question?.requestId === b.needsYou[index]?.question?.requestId &&
         item.question?.threadId === b.needsYou[index]?.question?.threadId &&
         item.question?.host === b.needsYou[index]?.question?.host &&
@@ -135,6 +143,7 @@ export const channelWorkerObservationEquals = (
         item.repository === other.repository &&
         item.number === other.number &&
         item.url === other.url &&
+        (!compareLinkedAt || item.linkedAt === other.linkedAt) &&
         item.state === other.state &&
         item.watching === other.watching
       );

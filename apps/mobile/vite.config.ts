@@ -91,6 +91,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotShimmerText.test.tsx",
   "src/features/goat-bot/useMobileGoatBotFace.motion.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
+  "src/features/goat-bot/MobileBotWork.approvals.test.tsx",
   "src/features/goat-bot/MobileBotWork.lookup.test.tsx",
   "src/features/goat-bot/MobileBotWork.taskScreen.test.tsx",
   "src/features/goat-bot/useMobileBotRowSignals.test.tsx",

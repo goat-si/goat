@@ -168,6 +168,7 @@ export type ChannelOpenQuestion = typeof ChannelOpenQuestion.Type;
 export const ChannelAnsweredQuestion = Schema.Struct({
   questionId: ChannelQuestionId,
   inputId: Schema.optional(ChannelInputId),
+  answerText: Schema.optionalKey(Schema.String),
 });
 export type ChannelAnsweredQuestion = typeof ChannelAnsweredQuestion.Type;
 /** The newest answers a task keeps; an older one's pick shows as a plain message. */
@@ -239,6 +240,8 @@ export type ChannelWorkerRun = typeof ChannelWorkerRun.Type;
 export const ChannelTaskKind = Schema.Literals(["work", "turn"]);
 export type ChannelTaskKind = typeof ChannelTaskKind.Type;
 
+export const ChannelTaskDoneMeans = TrimmedNonEmptyString.check(Schema.isMaxLength(280));
+
 export const ChannelTask = Schema.Struct({
   taskId: ChannelTaskId,
   /** Missing on tasks stored before turns existed; those are work. */
@@ -251,6 +254,7 @@ export const ChannelTask = Schema.Struct({
   routineWork: Schema.optional(Schema.Literal(true)),
   requester: ChannelRequester,
   title: TrimmedNonEmptyString,
+  doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   instruction: Schema.String,
   status: ChannelTaskStatus,
   version: PositiveInt,
@@ -320,6 +324,7 @@ const ChannelTaskEventBaseFields = {
   causationId: Schema.optional(TrimmedNonEmptyString),
   occurredAt: IsoDateTime,
   actor: ChannelTaskEventActor,
+  statusAfter: Schema.optionalKey(Schema.NullOr(ChannelTaskStatus)),
 } as const;
 
 /**
@@ -355,6 +360,7 @@ export type ChannelAnswerProjectChoice = typeof ChannelAnswerProjectChoice.Type;
 export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.created", {
     title: TrimmedNonEmptyString,
+    doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
     instruction: Schema.String,
     originInputId: ChannelInputId,
     notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
@@ -368,6 +374,7 @@ export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.worker.bound", { worker: ChannelWorkerAssignment }),
   taskEvent("task.progress", {
     generation: PositiveInt,
+    doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
     summary: TrimmedNonEmptyString,
     milestone: Schema.optional(Schema.Boolean),
   }),

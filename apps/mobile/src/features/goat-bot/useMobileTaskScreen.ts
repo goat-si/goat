@@ -1,3 +1,5 @@
+import { botTaskSnoozeInput } from "@goat/client-runtime/goatBot";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import type { SessionStreamUpdate } from "@goat/client-runtime/rpc";
 import type {
@@ -5,6 +7,7 @@ import type {
   ChannelChildWorkGroup,
   ChannelTaskChangesEvent,
   ChannelTaskId,
+  ChannelTaskView,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ExecutionEnvironmentCapabilities,
@@ -13,6 +16,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useLayoutEffect, useRef } from "react";
 
+import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { updateMobileTaskView } from "./mobileTaskViewUpdate";
 import { useMobileBotTaskLookup } from "./useMobileBotTaskLookup";
@@ -41,6 +45,7 @@ export function useMobileTaskScreen(input: {
   readonly capabilities:
     | Pick<ExecutionEnvironmentCapabilities, "goatBotTaskLookupSearch" | "goatBotTaskChanges">
     | undefined;
+  readonly supportsSnooze?: boolean;
   /** The bot's current-list read. */
   readonly list: {
     readonly data: unknown;
@@ -85,12 +90,25 @@ export function useMobileTaskScreen(input: {
     established:
       input.list.data !== null || (input.needsApprovalObservation && input.list.error !== null),
     refreshing: input.list.isPending,
-    holdsTask: input.holdsTask && !input.needsApprovalObservation,
+    holdsTask: input.holdsTask && !input.needsApprovalObservation && !input.supportsSnooze,
     approvalRevision,
+    revision: input.supportsSnooze ? input.list.data : undefined,
     childGroups: input.childGroups,
   });
   const permitted = useAtomValue(
     channelEnvironment.updateTaskView.permissionAtom(input.environmentId),
+  );
+  const canSnooze = useAtomValue(
+    (input.supportsSnooze
+      ? channelEnvironment.snoozeBotTask
+      : channelEnvironment.updateTaskView
+    ).permissionAtom(input.environmentId),
+  );
+  const canUnsnooze = useAtomValue(
+    (input.supportsSnooze
+      ? channelEnvironment.unsnoozeBotTask
+      : channelEnvironment.updateTaskView
+    ).permissionAtom(input.environmentId),
   );
   const identity = input.taskId === null ? null : identityOf(input.owner, input.taskId);
   const shown = useRef<string | null>(null);
@@ -126,6 +144,40 @@ export function useMobileTaskScreen(input: {
       }
       return ok;
     },
+    snooze: input.supportsSnooze
+      ? {
+          enabled: (view: ChannelTaskView) =>
+            input.enabled && (view.snoozedUntil === undefined ? canSnooze : canUnsnooze),
+          change: async (view: ChannelTaskView, action: string) => {
+            const { environmentId, botId } = input;
+            if (environmentId === null || !input.enabled || identity === null) return;
+            const task = { taskId: view.taskId, botId };
+            if (action === "unsnooze" && canUnsnooze) {
+              const result = await runAtomCommand(
+                appAtomRegistry,
+                channelEnvironment.unsnoozeBotTask,
+                {
+                  environmentId,
+                  input: task,
+                },
+              );
+              if (result._tag === "Success") settle(identity);
+            } else if (canSnooze) {
+              const snoozeInput = botTaskSnoozeInput(action);
+              if (snoozeInput === undefined) return;
+              const result = await runAtomCommand(
+                appAtomRegistry,
+                channelEnvironment.snoozeBotTask,
+                {
+                  environmentId,
+                  input: { ...task, ...snoozeInput },
+                },
+              );
+              if (result._tag === "Success") settle(identity);
+            }
+          },
+        }
+      : undefined,
     /** A Retry the screen started was accepted. */
     retried: () => {
       if (identity !== null) settle(identity);

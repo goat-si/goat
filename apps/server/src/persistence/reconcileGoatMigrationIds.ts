@@ -7,12 +7,15 @@ export const FIRST_V2_MIGRATION_ID = 55;
 
 const CHANNEL_LEDGER_MIGRATION = "ChannelLedger";
 const WORK_TRIGGER_LEDGER_FENCE = "ChannelLedgerRequiresWorkTriggerAuthority";
+const WORKER_RELEASE_LEDGER_FENCE = "ChannelLedgerRequiresWorkerReleaseAuthority";
 export const WORK_TRIGGER_FENCE_MIGRATION_NAME = "WorkTriggerAuthorityFence";
-export const REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME = "RemoteDispatchEnvironment";
+export const WORKER_GENERATIONS_MIGRATION_NAME = "ChannelWorkerGenerations";
 
 // Older builds already reject a changed name at a required V2 migration id.
 export const canonicalMigrationName = (name: string) =>
-  name === WORK_TRIGGER_LEDGER_FENCE ? CHANNEL_LEDGER_MIGRATION : name;
+  name === WORK_TRIGGER_LEDGER_FENCE || name === WORKER_RELEASE_LEDGER_FENCE
+    ? CHANNEL_LEDGER_MIGRATION
+    : name;
 
 export const fenceWorkTriggerRollback = Effect.fn("fenceWorkTriggerRollback")(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -20,11 +23,53 @@ export const fenceWorkTriggerRollback = Effect.fn("fenceWorkTriggerRollback")(fu
     WHERE name = ${CHANNEL_LEDGER_MIGRATION}`;
 });
 
+export const fenceWorkerReleaseRollback = Effect.fn("fenceWorkerReleaseRollback")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`UPDATE effect_sql_migrations SET name = ${WORKER_RELEASE_LEDGER_FENCE}
+    WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE})`;
+});
+
+export const reconcileWorkerReleaseRollback = Effect.fn("reconcileWorkerReleaseRollback")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [ledger] = yield* sql<{ readonly name: string }>`SELECT name FROM effect_sql_migrations
+      WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE}) LIMIT 1`;
+    if (ledger === undefined) return;
+    if (ledger.name === CHANNEL_LEDGER_MIGRATION && !(yield* hasPersistedWorkTriggers())) return;
+    yield* fenceWorkerReleaseRollback();
+  },
+);
+
+export const hasPersistedWorkTriggers = Effect.fn("hasPersistedWorkTriggers")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  // Migration 177 and databases that recorded the preview of 179 can lack these indexes.
+  const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+    WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+      'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')`;
+  const useIndex = (name: string) =>
+    indexes.some((index) => index.name === name) ? sql`INDEXED BY ${sql(name)}` : sql``;
+  const rows = yield* sql`SELECT 1 WHERE EXISTS (
+    SELECT 1 FROM scheduled_tasks ${useIndex("scheduled_tasks_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END = 'work'
+    UNION ALL
+    SELECT 1 FROM scheduled_task_channel_inputs ${useIndex("scheduled_task_channel_inputs_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.routineMode') END = 'work'
+    UNION ALL
+    SELECT 1 FROM channel_tasks ${useIndex("channel_tasks_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(task_json) THEN json_extract(task_json, '$.routineWork') END = 1
+    LIMIT 1)`;
+  return rows.length > 0;
+});
+
 const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
-const DRAFT_REMOTE_DISPATCH_ENVIRONMENT_ID = 178;
+const BOT_ATTENTION_MIGRATION_NAME = "ChannelBotAttention";
+const BOT_ATTENTION_PREVIEW_PREDECESSORS = [
+  [176, "ChannelWorkerLaunchHeads"],
+  [177, WORK_TRIGGER_FENCE_MIGRATION_NAME],
+] as const;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -44,6 +89,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteDispatches",
   CHANNEL_LEDGER_MIGRATION,
   WORK_TRIGGER_LEDGER_FENCE,
+  WORKER_RELEASE_LEDGER_FENCE,
   "RemoteDispatchQuestions",
   "ThreadRunResults",
   "RemoteReportRelay",
@@ -119,7 +165,11 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
-  REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME,
+  "WebhookDeliveryFiringEvidence",
+  WORKER_GENERATIONS_MIGRATION_NAME,
+  "ChannelBotTaskSnooze",
+  BOT_ATTENTION_MIGRATION_NAME,
+  "RemoteDispatchEnvironment",
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -153,19 +203,54 @@ const findPenMemberInsertion = <E>(
     : undefined;
 };
 
-function legacyGoatTailMove<E>(
+function legacyFirstBindId<E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
   history: ReadonlyArray<LedgerRow>,
 ) {
-  for (const [fromId, name] of [
-    [LEGACY_FIRST_BIND_ID, FIRST_BIND_MIGRATION_NAME],
-    [DRAFT_REMOTE_DISPATCH_ENVIRONMENT_ID, REMOTE_DISPATCH_ENVIRONMENT_MIGRATION_NAME],
-  ] as const) {
-    const [last, next] = history.filter((row) => row.migration_id >= fromId);
-    if (last?.migration_id !== fromId || last.name !== name || next !== undefined) continue;
-    const current = entries.find(([id, currentName]) => id > fromId && currentName === name);
-    if (current !== undefined) return { fromId, toId: current[0], name };
-  }
+  const current = entries.find(
+    ([id, name]) => id > LEGACY_FIRST_BIND_ID && name === FIRST_BIND_MIGRATION_NAME,
+  );
+  const tail = history.filter((row) => row.migration_id >= LEGACY_FIRST_BIND_ID);
+  return current !== undefined &&
+    tail.length === 1 &&
+    tail.some(
+      (row) => row.migration_id === LEGACY_FIRST_BIND_ID && row.name === FIRST_BIND_MIGRATION_NAME,
+    )
+    ? current[0]
+    : undefined;
+}
+
+function legacyBotAttentionId<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const latest = history.reduce<LedgerRow | undefined>(
+    (highest, row) =>
+      highest === undefined || row.migration_id > highest.migration_id ? row : highest,
+    undefined,
+  );
+  const current = entries.find(([, name]) => name === BOT_ATTENTION_MIGRATION_NAME);
+  if (latest?.name !== BOT_ATTENTION_MIGRATION_NAME || current === undefined) return undefined;
+  const previewId = latest.migration_id;
+  if (previewId < 176 || previewId > 178 || previewId >= current[0]) return undefined;
+  return BOT_ATTENTION_PREVIEW_PREDECESSORS.every(
+    ([id, name]) =>
+      id >= previewId || history.some((row) => row.migration_id === id && row.name === name),
+  )
+    ? previewId
+    : undefined;
+}
+
+export function normalizeBotAttentionPreview<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const previewId = legacyBotAttentionId(entries, history);
+  return {
+    previewId,
+    history:
+      previewId === undefined ? history : history.filter((row) => row.migration_id !== previewId),
+  };
 }
 
 /** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
@@ -241,11 +326,15 @@ export const skippedV2Migrations = <E>(
   const supportsWorkTriggers = entries.some(
     ([, name]) => name === WORK_TRIGGER_FENCE_MIGRATION_NAME,
   );
+  const supportsWorkerRelease = entries.some(
+    ([, name]) => name === WORKER_GENERATIONS_MIGRATION_NAME,
+  );
   const recordedNames = new Map(
-    history.map((row) => [
-      row.migration_id,
-      supportsWorkTriggers ? canonicalMigrationName(row.name) : row.name,
-    ]),
+    history.map(({ migration_id, name }) => {
+      const supported =
+        name === WORKER_RELEASE_LEDGER_FENCE ? supportsWorkerRelease : supportsWorkTriggers;
+      return [migration_id, supported ? canonicalMigrationName(name) : name];
+    }),
   );
   const skipped = entries.flatMap(([id, name]) => {
     if (id < FIRST_V2_MIGRATION_ID || id > upTo || (throughId !== undefined && id > throughId))
@@ -298,15 +387,17 @@ export function memoryMigrationProblem<E>(
 ): Migrator.MigrationError | undefined {
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
-  const tailMove = legacyGoatTailMove(entries, history);
+  const firstBindId = legacyFirstBindId(entries, history);
+  const legacyAttention = legacyBotAttentionId(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
+      if (row.migration_id === legacyAttention) return [];
       const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
       const recordedId =
-        tailMove !== undefined && row.name === tailMove.name
-          ? tailMove.toId
+        row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
+          ? firstBindId
           : row.migration_id +
             (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
@@ -432,10 +523,10 @@ export const plannedGoatLedger = <E>(
     }
   }
   const penMember = findPenMemberInsertion(entries, history);
-  const tailMove = legacyGoatTailMove(entries, history);
+  const firstBindId = legacyFirstBindId(entries, history);
   const insertions =
-    tailMove !== undefined
-      ? entries.filter(([id]) => id >= tailMove.fromId && id < tailMove.toId)
+    firstBindId !== undefined
+      ? entries.filter(([id]) => id >= LEGACY_FIRST_BIND_ID && id < firstBindId)
       : penMember === undefined
         ? []
         : [penMember];
@@ -451,7 +542,7 @@ export const plannedGoatLedger = <E>(
   const skipped = skippedV2Migrations(
     entries,
     moved,
-    tailMove?.toId ?? Math.max(lowestGoatBefore - 1, highestUpstreamBelowGoat(entries, moved)),
+    firstBindId ?? Math.max(lowestGoatBefore - 1, highestUpstreamBelowGoat(entries, moved)),
     undefined,
     Math.max(0, ...history.map((row) => row.migration_id)),
   );
@@ -470,9 +561,29 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   yield* assertMemoryMigrationsCompatible(entries);
   const history = yield* readHistory;
   if (history === undefined) return [];
-  const plan = plannedGoatLedger(entries, history);
-  if (plan === undefined) return [];
+  const normalized = normalizeBotAttentionPreview(entries, history);
+  const plan = plannedGoatLedger(entries, normalized.history);
   if (plan instanceof Migrator.MigrationError) return yield* plan;
+  if (normalized.previewId !== undefined) {
+    const moved = plan?.moved ?? normalized.history;
+    const final = [
+      ...moved,
+      ...displacedUpstreamMigrations(entries, moved).map(([id, name]) => ({
+        migration_id: id,
+        name,
+      })),
+    ];
+    const skipped = skippedV2Migrations(
+      entries,
+      final,
+      Math.max(0, ...final.map((row) => row.migration_id)),
+    );
+    if (skipped !== undefined) return yield* skipped;
+    // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
+    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${normalized.previewId}
+      AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
+  }
+  if (plan === undefined) return [];
   const { moved, goatRows, insertions } = plan;
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {

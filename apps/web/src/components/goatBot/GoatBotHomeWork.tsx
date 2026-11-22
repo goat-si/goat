@@ -2,11 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   accessDenied,
   botHomeWork,
+  withoutSnoozedBotTasks,
   botTaskWait,
   COLLAPSED_FINISHED,
   goatBotRowTime,
   presentTaskStatus,
   type BotWorkTask,
+  type BotSnoozeFoldContinuation,
   type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
 import { BotId } from "@goat/contracts";
@@ -39,6 +41,7 @@ import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { rememberHomeOrigin } from "./goatBotHomeRequest";
 import { GoatBotPullRequestChips } from "./GoatBotPullRequestChips";
+import { botTaskSnoozeMenu, useGoatBotTaskSnooze } from "./GoatBotTaskSnooze";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -53,6 +56,7 @@ export type HomeHistory = {
   readonly loadMore: () => void;
 };
 
+const NO_SNOOZED: ReadonlyArray<TaskRow> = [];
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
 const NO_CHIPS: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = new Map();
 
@@ -60,6 +64,7 @@ const MARK = {
   running: "bg-info",
   waiting: "text-warning-foreground",
   finished: "text-muted-foreground",
+  snoozed: "text-muted-foreground",
 } as const;
 type Mark = keyof typeof MARK;
 
@@ -71,6 +76,10 @@ export function GoatBotHomeWork({
   environmentId,
   botName,
   rows,
+  snoozed = NO_SNOOZED,
+  snoozedContinuation,
+  snoozedLimitReached,
+  supportsSnooze = false,
   remoteWork = NO_REMOTE,
   chips = NO_CHIPS,
   loaded,
@@ -94,6 +103,10 @@ export function GoatBotHomeWork({
   readonly threadId?: ThreadId | undefined;
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
+  readonly snoozed?: ReadonlyArray<TaskRow> | undefined;
+  readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
+  readonly snoozedLimitReached?: boolean | undefined;
+  readonly supportsSnooze?: boolean | undefined;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
   /** Each task's newest chip in the conversation, which says what its worker asks the person. */
   readonly chips?: ReadonlyMap<ChannelTaskId, ChannelTaskChip> | undefined;
@@ -130,7 +143,9 @@ export function GoatBotHomeWork({
   );
   const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
-  const work = botHomeWork(rows, [], environmentId, remoteWork, chips);
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const recentRows = withoutSnoozedBotTasks(rows, snoozed);
+  const work = botHomeWork(recentRows, [], environmentId, remoteWork, chips);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
@@ -174,7 +189,12 @@ export function GoatBotHomeWork({
       environmentId={environmentId}
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
-      older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
+      supportsSnooze={supportsSnooze}
+      older={
+        task.row.view.snoozedUntil === undefined &&
+        history?.supported === true &&
+        !history.currentTaskIds.has(task.row.task.taskId)
+      }
       currentRemoteIds={
         currentLinks === null
           ? null
@@ -224,7 +244,7 @@ export function GoatBotHomeWork({
           <GoatBotCardSkeleton rows={3} />
         </>
       )}
-      {loaded && !failed && empty && (
+      {loaded && !failed && empty && snoozed.length === 0 && (
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
           <p className="text-muted-foreground">
@@ -237,6 +257,42 @@ export function GoatBotHomeWork({
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
+      {snoozed.length > 0 && (
+        <>
+          <GoatBotShowMoreRow
+            expanded={showSnoozed}
+            label="Snoozed"
+            onToggle={() => setShowSnoozed((value) => !value)}
+          />
+          {showSnoozed &&
+            snoozed.map((snoozed) =>
+              row(
+                { row: snoozed, threads: [], subagents: [], remote: [], truncated: false },
+                "snoozed",
+              ),
+            )}
+          {showSnoozed && snoozedContinuation && (
+            <div className="flex flex-col items-center py-1">
+              {snoozedContinuation.failed && <p role="status">Couldn't load snoozed work.</p>}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Show more snoozed tasks"
+                aria-busy={snoozedContinuation.loading}
+                disabled={snoozedContinuation.loading}
+                onClick={snoozedContinuation.loadMore}
+              >
+                Show more
+              </Button>
+            </div>
+          )}
+          {showSnoozed && snoozedLimitReached && (
+            <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+              Snoozed work limit reached.
+            </p>
+          )}
+        </>
+      )}
       {/* One region per notice, mounted with Home's history, so one never repeats the other. */}
       {history && (
         <div role="status" className="px-3 text-xs text-muted-foreground">
@@ -282,6 +338,12 @@ export function GoatBotHomeWork({
 function MarkIcon({ mark }: { readonly mark: Mark }) {
   if (mark === "waiting")
     return <MessageCircleQuestionIcon aria-hidden className={cn("size-4", MARK[mark])} />;
+  if (mark === "snoozed")
+    return (
+      <span aria-hidden className="text-xs">
+        –
+      </span>
+    );
   if (mark === "finished") return <CheckIcon aria-hidden className={cn("size-4", MARK[mark])} />;
   // Still, never pulsing: a repainting mark costs frames on a high-refresh display.
   return <span aria-hidden className={cn("size-2 rounded-full", MARK[mark])} />;
@@ -300,6 +362,7 @@ function WorkRow({
   peekable,
   focusRef,
   launchesTruncated,
+  supportsSnooze,
   older,
   currentLinks,
   currentRemoteIds,
@@ -317,6 +380,7 @@ function WorkRow({
   readonly peekable: boolean;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   readonly launchesTruncated: boolean;
+  readonly supportsSnooze: boolean;
   readonly older: boolean;
   readonly currentLinks: ReadonlyArray<HomeCurrentOpenableLink> | null;
   readonly currentRemoteIds: ReadonlyArray<string> | null;
@@ -339,12 +403,14 @@ function WorkRow({
   };
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
+  const snooze = useGoatBotTaskSnooze(environmentId, supportsSnooze);
   const [expanded, setExpanded] = useState(false);
   const status = wait ?? presentTaskStatus(row.task.status, row.view.doneAt).label;
   async function menu(position: { readonly x: number; readonly y: number }) {
     const api = readLocalApi();
     if (api == null) return;
     const release = holdNavigation();
+    const snoozeItems = snooze.enabled(row.view) ? [botTaskSnoozeMenu(row.view)] : [];
     const action = await api.contextMenu
       .show(
         // Older work offers Pin; once pinned it joins the current list, whose row has the rest.
@@ -356,6 +422,7 @@ function WorkRow({
             ]
           : [
               { id: "work", label: expanded ? "Hide work" : "Show work" },
+              ...snoozeItems,
               ...(canUpdate
                 ? [
                     { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
@@ -380,6 +447,10 @@ function WorkRow({
           to: "/bot",
           search: { task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) },
         });
+      return;
+    }
+    if (action !== "pin" && action !== "done" && action !== "read") {
+      if (await snooze.change(action, row.view, member?.botId ?? BotId.make("main"))) onRefresh();
       return;
     }
     const input: ChannelUpdateTaskViewInput =

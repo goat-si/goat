@@ -1,3 +1,4 @@
+import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -101,7 +102,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { MobileBotApprovalSlot } from "./MobileBotApprovals";
 import { MobileBotWork } from "./MobileBotWork";
-import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
+import { botApprovalRenderer } from "./botApprovalRenderer";
 import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
@@ -313,6 +314,7 @@ export function GoatBotScreen(props: {
   /** Focused and the app active: what the screen shows has been seen. */
   readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
+  readonly attentionRequest?: string | undefined;
   /** The title the screen that opened this task carried, for a task the list no longer holds. */
   readonly taskTitle?: string | undefined;
   /** A member bot whose conversation this is; the main bot's when absent. */
@@ -476,6 +478,7 @@ export function GoatBotScreen(props: {
     reading: props.visible && props.foreground !== false && !opener.covered,
   });
   const listRef = useRef<LegendListRef>(null);
+  const attentionIndex = useMobileAttentionScroll(listRef, unread.items, props.attentionRequest);
   const { clear: clearUnread } = unread;
   const { onAnswer: answer } = session;
   const onAnswer = useCallback(
@@ -648,18 +651,7 @@ export function GoatBotScreen(props: {
     [session.rows, session.streamingReplyIds],
   );
   const ApprovalCards = props.visible && session.homeConnected ? props.approvalCards : undefined;
-  const { historyEnvironmentId, threadId } = session;
-  const renderApprovals = (taskObservation?: MobileTaskApprovalObservation) =>
-    ApprovalCards && historyEnvironmentId && threadId ? (
-      <ApprovalCards
-        environmentId={historyEnvironmentId}
-        threadId={threadId}
-        taskId={taskId}
-        chips={session.taskChips}
-        taskObservation={taskObservation}
-        onOpenThread={onSelectThread}
-      />
-    ) : null;
+  const renderApprovals = botApprovalRenderer(ApprovalCards, session, taskId, onSelectThread);
   return (
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
@@ -802,6 +794,12 @@ export function GoatBotScreen(props: {
             {homeError}
           </Text>
         ) : null}
+        <MobileGoatBotAlertRequest
+          requestId={attentionIndex < 0 ? props.attentionRequest : undefined}
+          environmentId={session.historyEnvironmentId}
+          botId={member?.botId}
+          taskId={taskId}
+        />
         <View style={{ flex: 1 }}>
           <LegendList
             renderScrollComponent={NativeScrollView}

@@ -14,9 +14,7 @@
  * While an answer is on its way to the worker every report waits, so a stale question cannot
  * move the task before the answer's run is known. A finished remote run settles the task only
  * after a short second look finds no newer run or report.
- *
- * Remote completion is weaker than local: the remote does not tell us about provider background
- * work or a restart continuation that has not started a run yet.
+ * Remote completion cannot see destination background work or a run that is about to restart.
  *
  * Everything here writes under the channel owner token and stops when it is lost. The remote
  * session's ceiling is the requester's runtime-mode ceiling, so the remote enforces it.
@@ -1698,6 +1696,7 @@ const make = Effect.gen(function* () {
               originLabel: NodeOS.hostname().slice(0, 120) || "GOAT",
               originThreadId: bot?.bot.threadId ?? ThreadId.make("channel-task:" + taskId),
               readKeyHash,
+              botAttention: true,
             },
             reportNote: REPORTING_NOTE,
           },
@@ -2061,7 +2060,7 @@ const make = Effect.gen(function* () {
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
         (stored.task.status === "running" || stored.task.status === "waiting_input") &&
-        !channelWorkerObservationEquals(stored.task.observed, stamped)
+        !channelWorkerObservationEquals(stored.task.observed, stamped, true)
       ) {
         const card =
           stored.task.requester.originKind !== "mcp" &&

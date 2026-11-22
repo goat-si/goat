@@ -3,6 +3,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@goat/client-runtime/environment";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import {
@@ -20,7 +21,12 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@goat/contracts";
-import { isGoatBotSessionThreadId, isSideChatThread } from "@goat/contracts";
+import {
+  isChannelWorkerThreadId,
+  isGoatBotSessionThreadId,
+  isRemoteChannelWorkerThreadId,
+  isSideChatThread,
+} from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import { monitorHoldsWakeCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -35,7 +41,8 @@ import {
 
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { isWindowsPlatform } from "../lib/utils";
-import { environmentSummaries } from "../state/presentation";
+import { environmentPresentations, environmentSummaries } from "../state/presentation";
+import { channelEnvironment } from "../state/channels";
 import { serverEnvironment } from "../state/server";
 import { environmentShell } from "../state/shell";
 import { threadFamilies } from "../state/threads";
@@ -257,12 +264,61 @@ export function startThreadNotifications(
     return parents;
   };
 
+  const usesLocalBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    (isChannelWorkerThreadId(threadId) || isGoatBotSessionThreadId(threadId)) &&
+    registry.get(environmentPresentations.presentationAtom(environmentId))?.serverConfig
+      ?.environment.capabilities.goatBotAttention === true;
+
+  const usesBotAlerts = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    isGoatBotSessionThreadId(threadId) ||
+    isRemoteChannelWorkerThreadId(threadId) ||
+    usesLocalBotAlerts(environmentId, threadId);
+
+  const owningOrigins = (destination: EnvironmentId, source?: OrchestrationV2ThreadShell) =>
+    source?.creationSource !== undefined && source.creationSource !== "mcp"
+      ? []
+      : registry
+          .get(environmentSummaries.environmentIdsAtom)
+          .filter(
+            (origin) =>
+              origin !== destination &&
+              (source?.launchedBy?.environmentId == null ||
+                source.launchedBy.environmentId === origin) &&
+              registry.get(environmentPresentations.presentationAtom(origin))?.serverConfig
+                ?.environment.capabilities.goatBotAttention === true &&
+              registry.get(channelEnvironment.listBotAttention.permissionAtom(origin)),
+          );
+
+  const ownedByBot = async (
+    origins: readonly EnvironmentId[],
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  ) => {
+    const results = await Promise.all(
+      origins.map((origin) =>
+        runAtomCommand(
+          registry,
+          channelEnvironment.listBotAttention,
+          {
+            environmentId: origin,
+            input: { worker: { environmentId, threadId } },
+          },
+          { reportFailure: false },
+        ),
+      ),
+    );
+    return results.some((result) => result._tag === "Success" && result.value.ownsWorker === true);
+  };
+
   // Completions fire from a timer, so read settings, focus and route when presenting.
   const presentApproval = (environmentId: EnvironmentId, entry: DecisionHandoff) => {
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
     const threadId = entry.handoff.requestedBy.threadId;
-    // A GOAT Bot session asks through its bot, as its other requests do.
-    if (isGoatBotSessionThreadId(threadId)) return;
+    if (
+      entry.botAttentionOwned === true &&
+      registry.get(channelEnvironment.listBotAttention.permissionAtom(environmentId))
+    )
+      return;
     const active = (router.state.matches.at(-1)?.params ?? {}) as {
       environmentId?: string;
       threadId?: string;
@@ -344,6 +400,7 @@ export function startThreadNotifications(
     approvalTitle?: string,
   ) => {
     let { thread } = state;
+    if (usesBotAlerts(environmentId, thread.id)) return;
     const { status } = state;
     if (isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy })) {
       const key = scopedThreadKey(scopeThreadRef(environmentId, thread.id));
@@ -471,7 +528,7 @@ export function startThreadNotifications(
       if (
         rawThread.lineage.relationshipToParent === "subagent" ||
         isSideChatThread(rawThread) ||
-        isGoatBotSessionThreadId(rawThread.id)
+        usesBotAlerts(environmentId, rawThread.id)
       )
         continue;
       const prior = previous.get(rawThread.id);
@@ -545,11 +602,40 @@ export function startThreadNotifications(
         const shown =
           kind === "input" ? approvalHandoffShownBy(entry.threads, threadId, state.status) : null;
         if (shown) entry.approvals.remember(shown.id);
-        present(environmentId, state, kind, shown?.title);
+        const origins =
+          state.raw.creationSource === "mcp" ? owningOrigins(environmentId, state.raw) : [];
+        if (origins.length === 0) {
+          present(environmentId, state, kind, shown?.title);
+          return;
+        }
+        void ownedByBot(origins, environmentId, threadId).then((owned) => {
+          const current = entry.previous.get(threadId);
+          if (
+            !owned &&
+            watched.get(environmentId) === entry &&
+            current?.attention === state.attention &&
+            current?.completedAt === state.completedAt
+          )
+            present(environmentId, state, kind, shown?.title);
+        });
       }),
       approvals: createApprovalNotificationGate<string>((handoffId) => {
         const handoff = handoffs.get(handoffId);
-        if (handoff) presentApproval(environmentId, handoff);
+        if (handoff === undefined) return;
+        const threadId = handoff.handoff.requestedBy.threadId;
+        if (isRemoteChannelWorkerThreadId(threadId) || usesLocalBotAlerts(environmentId, threadId))
+          return;
+        const source = entry.threads.find((thread) => thread.id === threadId);
+        const origins = owningOrigins(environmentId, source);
+        if (origins.length === 0) {
+          presentApproval(environmentId, handoff);
+          return;
+        }
+        void ownedByBot(origins, environmentId, threadId).then((owned) => {
+          const current = handoffs.get(handoffId);
+          if (!owned && current !== undefined && watched.get(environmentId) === entry)
+            presentApproval(environmentId, current);
+        });
       }),
     };
     // Held for as long as notifications watch this environment, whatever is on screen.

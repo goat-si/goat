@@ -15,6 +15,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./channel-bot-attention": {
+      "types": "./src/channelBotAttention.ts",
+      "import": "./src/channelBotAttention.ts"
+    },
     "./settings": {
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
