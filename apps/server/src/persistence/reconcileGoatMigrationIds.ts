@@ -665,6 +665,17 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   if (plan === undefined) return [];
   const { moved, goatRows, insertions, receiptMove } = plan;
   if (receiptMove !== undefined) {
+    const objects = yield* sql`SELECT name FROM sqlite_schema
+      WHERE (name = 'turn_memory_receipts' AND type = 'table')
+        OR (name = 'turn_memory_by_run' AND type = 'index' AND tbl_name = 'turn_memory_receipts')
+        OR (name = 'turn_memory_delete_thread' AND type = 'trigger' AND tbl_name = 'orchestration_v2_events')`;
+    if (objects.length !== 3) {
+      return yield* new Migrator.MigrationError({
+        kind: "BadState",
+        message:
+          "The recorded turn memory receipt preview is missing its table, index, or trigger.",
+      });
+    }
     yield* sql`UPDATE effect_sql_migrations SET migration_id = ${receiptMove.to}
       WHERE migration_id = ${receiptMove.from} AND name = ${TURN_MEMORY_RECEIPTS_NAME}`;
   }

@@ -1,4 +1,4 @@
-import { inspectBootstrappedTurn } from "./memory/TurnMemoryInspectRpc.ts";
+import { makeMemoryReadHandlers } from "./memory/MemoryReadHandlers.ts";
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
 import { speechStreamingCapabilities } from "./speech/SpeechCapabilities.ts";
 import {
@@ -1232,14 +1232,7 @@ export const layerWsRpc = (
           memory.search(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryList]: (input) =>
           memory.list(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryRead]: (input) =>
-          memory.read(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryTurnInspect]: (input) =>
-          inspectBootstrappedTurn(memory, memorySync, input, memorySource).pipe(
-            Effect.mapError(memoryError),
-          ),
-        [WS_METHODS.memoryHistory]: (input) =>
-          memory.history(input, memoryRead).pipe(Effect.mapError(memoryError)),
+        ...makeMemoryReadHandlers(memory, memorySync, memoryRead, memorySource),
         [WS_METHODS.memoryHubDiagnostics]: (input) =>
           memorySync.hubDiagnostics(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memorySyncStatus]: (input) =>
@@ -1247,8 +1240,6 @@ export const layerWsRpc = (
         ...makeMemoryMutationHandlers(memory, currentSession, memoryRead, memoryWrite),
         [WS_METHODS.memoryRevertResolution]: (input) =>
           memory.revertResolution(input, memoryWrite).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryReadSource]: (input) =>
-          memory.readSource(input, memorySource).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubSettingsGet]: (input) =>
           memorySync.getHubSettings(input, memorySettings).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubSettingsUpdate]: (input) =>

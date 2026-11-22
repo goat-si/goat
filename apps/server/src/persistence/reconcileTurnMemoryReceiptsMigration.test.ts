@@ -229,3 +229,21 @@ it.effect("does not use the receipt preview exception for a partial late gap", (
     assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`, schema);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("refuses an exact receipt preview ledger when a receipt object is absent", () =>
+  Effect.gen(function* () {
+    yield* seedReceiptPreview(183);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`DROP TRIGGER turn_memory_delete_thread`;
+    const before = yield* readLedger;
+    const schema = yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`;
+    const receipts = yield* readReceipts;
+    assert.include(
+      (yield* Effect.flip(runMigrations())).message,
+      "missing its table, index, or trigger",
+    );
+    assert.deepStrictEqual(yield* readLedger, before);
+    assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_schema ORDER BY type, name`, schema);
+    assert.deepStrictEqual(yield* readReceipts, receipts);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
