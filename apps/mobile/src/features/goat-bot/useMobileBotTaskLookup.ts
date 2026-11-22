@@ -66,9 +66,10 @@ export function taskLookupDecision(facts: TaskLookupFacts): {
 }
 
 /** The last answer for one task: what it read, or why it could not. */
-type Saved =
+type Saved = { readonly revision: unknown } & (
   | { readonly key: string; readonly value: BotWorkResult }
-  | { readonly key: string; readonly error: "missing" | "denied" | "failed" };
+  | { readonly key: string; readonly error: "missing" | "denied" | "failed" }
+);
 
 /** not_found, a refusal by the server's access check, or any other failure. */
 function failureKind(error: unknown): "missing" | "denied" | "failed" {
@@ -97,6 +98,7 @@ export function useMobileBotTaskLookup(input: {
   readonly supported: boolean;
   readonly established: boolean;
   readonly refreshing: boolean;
+  readonly revision?: unknown;
   readonly holdsTask: boolean;
   /** Child work read for this task, for its subagents. */
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
@@ -124,7 +126,7 @@ export function useMobileBotTaskLookup(input: {
     refreshing: input.refreshing,
     holdsTask: input.holdsTask,
     held: saved?.key === key,
-    stale: staleKey === key,
+    stale: staleKey === key || (saved?.key === key && saved.revision !== input.revision),
     inFlight: inFlight?.key === key,
   });
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
@@ -134,6 +136,7 @@ export function useMobileBotTaskLookup(input: {
     running.current = sent;
     setInFlight(sent);
     setStaleKey((current) => (current === sentKey ? null : current));
+    const revision = input.revision;
     void runAtomCommand(
       appAtomRegistry,
       channelEnvironment.getBotTask,
@@ -147,8 +150,8 @@ export function useMobileBotTaskLookup(input: {
       // A failure replaces the answer, so an action's failed reread never leaves the old state.
       setSaved(
         result._tag === "Success"
-          ? { key: sentKey, value: result.value }
-          : { key: sentKey, error: failureKind(squashAtomCommandFailure(result)) },
+          ? { key: sentKey, revision, value: result.value }
+          : { key: sentKey, revision, error: failureKind(squashAtomCommandFailure(result)) },
       );
     });
   };

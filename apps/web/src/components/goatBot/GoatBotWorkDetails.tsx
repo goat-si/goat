@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   groupBotWork,
+  botWorkerPullRequests,
   resolveRemoteBotWork,
   type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
@@ -11,6 +12,7 @@ import type {
   BotWorkResult,
   ChannelTaskId,
   EnvironmentId,
+  ThreadId,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
@@ -18,6 +20,7 @@ import { useThreadShell } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
+import { GoatBotPullRequestChips } from "./GoatBotPullRequestChips";
 import { Button } from "../ui/button";
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
@@ -25,6 +28,36 @@ const LINK = "min-w-0 max-w-full truncate underline";
 
 /** A work thread's link text: its own title, so two threads never read the same. */
 const workThreadName = (title: string | undefined) => title?.trim() || "Open work thread";
+
+function GoatBotWorkerLink({
+  thread,
+  label,
+  fallbackPullRequests,
+  onHomeNavigate,
+}: {
+  readonly thread: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+  readonly label: string;
+  readonly fallbackPullRequests?: BotRemoteWork;
+  readonly onHomeNavigate?: ((event: React.MouseEvent) => void) | undefined;
+}) {
+  const shell = useThreadShell(scopeThreadRef(thread.environmentId, thread.threadId));
+  const pullRequests = shell?.pullRequests?.length
+    ? botWorkerPullRequests(shell.pullRequests)
+    : fallbackPullRequests;
+  return (
+    <span className="max-w-full min-w-0">
+      <Link
+        to="/$environmentId/$threadId"
+        params={thread}
+        onClick={onHomeNavigate}
+        className={LINK}
+      >
+        {label}
+      </Link>
+      {pullRequests && <GoatBotPullRequestChips row={pullRequests} />}
+    </span>
+  );
+}
 
 /** A thread the bot launched on another machine: a link while this client can open it there. */
 function GoatBotRemoteWork({
@@ -51,18 +84,19 @@ function GoatBotRemoteWork({
   if (target.kind === "unavailable")
     return (
       <span className="rounded-full border border-border px-2 py-1">
-        {target.host} · {target.label}
+        <span>
+          {target.host} · {target.label}
+        </span>
+        <GoatBotPullRequestChips row={item} />
       </span>
     );
   return (
-    <Link
-      to="/$environmentId/$threadId"
-      params={target.ref}
-      onClick={onHomeNavigate}
-      className={LINK}
-    >
-      {workThreadName(shell?.title)} on {target.host}
-    </Link>
+    <GoatBotWorkerLink
+      thread={target.ref}
+      label={`${workThreadName(shell?.title)} on ${target.host}`}
+      fallbackPullRequests={item}
+      onHomeNavigate={onHomeNavigate}
+    />
   );
 }
 
@@ -138,17 +172,16 @@ export function GoatBotWorkDetails({
         </span>
       ))}
       {threads.map((thread) => (
-        <Link
+        <GoatBotWorkerLink
           key={`${thread.environmentId}:${thread.threadId}`}
-          to="/$environmentId/$threadId"
-          params={thread}
-          onClick={onHomeNavigate}
-          className={LINK}
-        >
-          {worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId
-            ? "Open work thread"
-            : workThreadName(titles.get(JSON.stringify([thread.environmentId, thread.threadId])))}
-        </Link>
+          thread={thread}
+          label={
+            worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId
+              ? "Open work thread"
+              : workThreadName(titles.get(JSON.stringify([thread.environmentId, thread.threadId])))
+          }
+          onHomeNavigate={onHomeNavigate}
+        />
       ))}
       {task.remote.map((item) => (
         <GoatBotRemoteWork

@@ -104,6 +104,7 @@ const base: Props = {
   capabilities: { goatBotTaskThreadsPaged: true } as Props["capabilities"],
   current: list([task("now")]),
   loaded: true,
+  home: { isPending: false, refresh: () => {} },
   enabled: true,
   scope: "env:bot:1",
   owner: "env:bot",

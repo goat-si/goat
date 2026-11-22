@@ -18,6 +18,8 @@ export interface RoutineRunDot {
   readonly shape: RoutineRunShape;
   /** The outcome in the last-run line's words, such as "completed", "dispatch failed" or "no update". */
   readonly word: string;
+  readonly originLabel?: string;
+  readonly taskThreadId?: NonNullable<ScheduledTaskRecentRun["taskThreadId"]>;
   readonly accessibleName: string;
   readonly requestedAt: string;
   readonly completedAt: string | null;
@@ -33,6 +35,12 @@ const SHAPE_BY_TONE = {
   outline: "hollow-square",
 } as const satisfies Record<ReturnType<typeof runStatusPresentation>["tone"], RoutineRunShape>;
 
+const ORIGIN_LABEL = {
+  schedule: "Schedule",
+  manual: "Run now",
+  event: "Event",
+} satisfies Record<NonNullable<ScheduledTaskRecentRun["origin"]>, string>;
+
 /** A routine's newest runs as dots, oldest to newest, at most `visible`; none from older servers. */
 export function botRoutineRuns(
   task: Pick<ScheduledTask, "recentRuns">,
@@ -46,6 +54,7 @@ export function botRoutineRuns(
       const outcome = runStatusPresentation(run.status, run.dispatchFailed === true);
       const quiet = run.quiet === true && run.status === "completed";
       const word = quiet ? "no update" : outcome.label.toLowerCase();
+      const originLabel = run.origin === undefined ? undefined : ORIGIN_LABEL[run.origin];
       return {
         firingId: run.firingId,
         status: run.status,
@@ -53,7 +62,9 @@ export function botRoutineRuns(
         ...(run.dispatchFailed === true ? { dispatchFailed: true as const } : {}),
         shape: quiet ? "bar" : SHAPE_BY_TONE[outcome.tone],
         word,
-        accessibleName: `Run on ${formatTime(run.requestedAt)}, ${word}`,
+        ...(originLabel === undefined ? {} : { originLabel }),
+        ...(run.taskThreadId === undefined ? {} : { taskThreadId: run.taskThreadId }),
+        accessibleName: `Run on ${formatTime(run.requestedAt)}, ${word}${originLabel === undefined ? "" : `, ${originLabel}`}`,
         requestedAt: run.requestedAt,
         completedAt: run.completedAt,
         ...(run.conversation === undefined ? {} : { conversation: run.conversation }),

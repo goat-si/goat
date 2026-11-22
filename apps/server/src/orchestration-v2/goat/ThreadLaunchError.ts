@@ -1,5 +1,9 @@
 import { CommandId, ProjectId, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import {
+  CHANNEL_WORKER_RELEASE_DENIED,
+  ChannelWorkerReleaseDenied,
+} from "../../channels/channelWorkerReleaseAuthority.ts";
 
 import { classifyPreparationFailure } from "./PreparationFailure.ts";
 
@@ -30,8 +34,10 @@ export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
 }
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
+const isChannelWorkerReleaseDenied = Schema.is(ChannelWorkerReleaseDenied);
 
 export function failureDetail(error: unknown): string {
+  if (isChannelWorkerReleaseDenied(error)) return error.reason;
   if (isThreadLaunchError(error)) {
     const cause = error.cause;
     const detail = cause instanceof Error ? cause.message : String(cause);
@@ -41,4 +47,6 @@ export function failureDetail(error: unknown): string {
 }
 
 export const preparationFailureClass = (error: unknown) =>
-  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
+  isChannelWorkerReleaseDenied(error)
+    ? { code: CHANNEL_WORKER_RELEASE_DENIED, retryable: false as const }
+    : classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);

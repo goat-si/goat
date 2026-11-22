@@ -9,6 +9,7 @@ interface AndroidAgentNotifications {
   clear(): void;
   setThreadOnScreen?(path: string | null): void;
   openLiveUpdateSettings?(): boolean;
+  postLocalAlert?(identifier: string, title: string, data: Record<string, unknown>): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
 }
 
@@ -56,4 +57,12 @@ export async function openAndroidLiveUpdateSettings(): Promise<void> {
   if (!native?.openLiveUpdateSettings?.()) {
     await Linking.openSettings();
   }
+}
+
+export function postAndroidLocalAlert(
+  identifier: string,
+  title: string,
+  data: Record<string, unknown>,
+) {
+  return native?.postLocalAlert?.(identifier, title, data) === true;
 }

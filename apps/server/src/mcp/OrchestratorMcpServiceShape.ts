@@ -1,5 +1,7 @@
 import type {
   NodeId,
+  ScheduledTaskId,
+  ScheduledTaskListWebhookDeliveriesResult,
   OrchestratorMcpCapabilitiesResult,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCreateThreadsInput,
@@ -96,6 +98,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpListScheduledTasksInput,
   ) => Effect.Effect<OrchestratorMcpListScheduledTasksResult, OrchestratorMcpFailure>;
+  readonly listScheduledTaskDeliveries: (
+    scope: McpInvocationScope,
+    id: ScheduledTaskId,
+  ) => Effect.Effect<ScheduledTaskListWebhookDeliveriesResult, OrchestratorMcpFailure>;
   readonly updateScheduledTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpUpdateScheduledTaskInput,

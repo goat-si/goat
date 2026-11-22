@@ -1,4 +1,9 @@
-import type { BotRemoteWork, BotThreadRow, ChannelListBotThreadsResult } from "@goat/contracts";
+import {
+  ChannelTaskId,
+  type BotRemoteWork,
+  type BotThreadRow,
+  type ChannelListBotThreadsResult,
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -46,6 +51,23 @@ const page = (
 const capabilities = { goatBotTaskThreadsPaged: true } as never;
 
 describe("botWorkHistory", () => {
+  it("keeps a cached older task's snooze in sync even outside the fold", () => {
+    const taskId = ChannelTaskId.make("t1");
+    const current = list([]);
+    const walk = applyHistoryPress(EMPTY_WALK, {
+      supported: true,
+      pages: [page([task(taskId)])],
+    });
+    const until = "2026-11-11T00:00:00.000Z";
+    const snoozed = writeThrough(walk, current, {
+      taskIds: [taskId],
+      active: [{ taskId, until }],
+    });
+    expect(snoozed.entries[0]?.task.view.snoozedUntil).toBe(until);
+    const recovered = writeThrough(snoozed, current, { taskIds: [taskId], active: [] });
+    expect(recovered.entries[0]?.task.view.snoozedUntil).toBeUndefined();
+  });
+
   it("never lets a page overwrite a task the walk already holds", () => {
     const first = applyHistoryPress(EMPTY_WALK, {
       supported: true,

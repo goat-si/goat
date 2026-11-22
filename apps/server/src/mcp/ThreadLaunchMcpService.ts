@@ -8,6 +8,7 @@ import {
   OrchestratorMcpFailure,
   CommandId,
   MessageId,
+  REMOTE_CHANNEL_WORKER_THREAD_PREFIX,
   ThreadId,
   type ModelSelection,
   type RuntimeMode,
@@ -304,7 +305,6 @@ const make = Effect.gen(function* () {
             (admission === undefined
               ? yield* newCommandId()
               : CommandId.make(admission.record.childWorkId));
-          const threadId = cloudRun?.threadId ?? ThreadId.make(commandId);
           const messageId = MessageId.make(commandId);
           const attachments = input.attachments ?? [];
           if (attachments.some((attachment) => !Claims.attachmentIsPendingUpload(attachment)))
@@ -335,6 +335,13 @@ const make = Effect.gen(function* () {
               message:
                 "Provider notes require an outside launch with a message, report binding and memory access.",
             });
+          const threadId =
+            cloudRun?.threadId ??
+            ThreadId.make(
+              report?.botAttention === true
+                ? REMOTE_CHANNEL_WORKER_THREAD_PREFIX + commandId
+                : commandId,
+            );
           if (
             input.scratch === true &&
             (input.projectId !== undefined || input.workspaceStrategy !== undefined)

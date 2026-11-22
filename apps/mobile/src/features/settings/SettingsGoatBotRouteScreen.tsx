@@ -1,4 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { goatBotAlertChoices } from "@goat/client-runtime/goatBot";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { useContext, useState } from "react";
 import { Text } from "react-native";
@@ -70,6 +71,7 @@ export function SettingsGoatBotRouteScreen() {
                 {error}
               </Text>
             ) : null}
+            <MobileBotAlertSettings writableIds={writableIds} />
             <SettingsSection title="Computers">
               {targets
                 .filter((target) => target.supportsHome && target.supportsBot)
@@ -110,6 +112,54 @@ export function SettingsGoatBotRouteScreen() {
         )}
       </ScreenScrollView>
     </SettingsScreen>
+  );
+}
+
+function MobileBotAlertSettings({
+  writableIds,
+}: {
+  readonly writableIds: ReadonlySet<EnvironmentId>;
+}) {
+  const { presentationById } = useEnvironments();
+  return [...presentationById].flatMap(([environmentId, computer]) =>
+    computer.connection.phase === "connected" &&
+    computer.serverConfig?.environment.capabilities.goatBotAttention === true
+      ? [
+          <MobileBotAlertSettingsRows
+            key={environmentId}
+            environmentId={environmentId}
+            label={computer.entry.target.label}
+            canWrite={writableIds.has(environmentId)}
+          />,
+        ]
+      : [],
+  );
+}
+
+function MobileBotAlertSettingsRows({
+  environmentId,
+  label,
+  canWrite,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly canWrite: boolean;
+}) {
+  const model = useMobileGoatBotModel(environmentId, canWrite);
+  if (!model) return null;
+  return (
+    <SettingsSection title={`Bot alerts on ${label}`}>
+      {goatBotAlertChoices.map(({ value, label: choice }) => (
+        <SettingsChoiceRow
+          key={value}
+          label={choice}
+          selected={model.settings.goatBotAlerts === value}
+          disabled={!model.allowed}
+          onPress={() => void model.save({ goatBotAlerts: value })}
+        />
+      ))}
+      {model.error ? <Text accessibilityRole="alert">{model.error}</Text> : null}
+    </SettingsSection>
   );
 }
 

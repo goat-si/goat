@@ -37,6 +37,7 @@ import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/pu
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import { GoatBotLocalNotificationsSettings } from "./GoatBotLocalNotificationsSettings";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -61,8 +62,9 @@ export function SettingsNotificationsRouteScreen() {
       <SettingsScreen title="Notifications">
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerClassName="px-5 pt-4"
+          contentContainerClassName="gap-6 px-5 pt-4"
         >
+          <GoatBotLocalNotificationsSettings />
           <Text className="text-base text-foreground-muted">
             {GOAT_CONNECT_COMING_SOON.title} · {GOAT_CONNECT_COMING_SOON.status}.{" "}
             {GOAT_CONNECT_COMING_SOON.description}
@@ -377,6 +379,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
+        <GoatBotLocalNotificationsSettings />
         <SettingsSection title="Agent activity">
           <SettingsSwitchRow
             icon="bell.badge"
