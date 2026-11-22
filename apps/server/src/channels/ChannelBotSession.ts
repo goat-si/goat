@@ -1,5 +1,5 @@
 import { botToolsRefusal } from "./channelBotTools.ts";
-import { readRecords, rejected } from "./channelBotSessionRecords.ts";
+import { asLedgerError, readRecords, rejected, requireTarget } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
 /** Warm sessions are bound per conversation, bot and requester. */
 import {
@@ -96,18 +96,7 @@ import {
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
 const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
-const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 type DispatchConfirmation = Effect.Success<ReturnType<typeof makeDispatchConfirmation>>;
-
-const requireTarget = (task: ChannelTask) =>
-  task.target === undefined
-    ? Effect.fail(
-        new ChannelLedger.ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "A GOAT Bot turn needs its dispatch target.",
-        }),
-      )
-    : Effect.succeed(task.target);
 
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
@@ -143,6 +132,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const { stateDir } = yield* ServerConfig.ServerConfig;
+  // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
@@ -295,6 +285,7 @@ const make = Effect.gen(function* () {
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+    // Only a requester at full access may act through the supervisor's owner profile.
     if (settings.goatclaw.enabled && requester.runtimeModeCeiling === "full-access")
       yield* permissions
         .bind(
@@ -482,6 +473,8 @@ const make = Effect.gen(function* () {
     let row = yield* currentRow(key);
     const read = yield* Rotation.readSessionRecords(threads, row?.thread_id);
     const records = read === "unknown" ? Option.none() : read;
+    // A generation that never finished launching belongs to the task that started it: only that
+    // task resumes its launch, while it can still run; otherwise the row is retired unused.
     if (
       row?.state === "starting" &&
       (row.task_id !== initial.task.taskId || row.task_generation !== initial.task.generation)
@@ -779,6 +772,7 @@ const make = Effect.gen(function* () {
       );
       return;
     }
+    // A stopped run is not restarted: the follow-up is dropped and its fence lifted.
     if (yield* bindAfterSend(ledger, event.taskId, own, result.run, owner)) yield* done;
   });
 
@@ -987,14 +981,5 @@ const make = Effect.gen(function* () {
 
   return ChannelBotSession.of({ serve, forward, eligible });
 });
-
-const asLedgerError = (operation: string) => (cause: unknown) =>
-  isLedgerError(cause)
-    ? cause
-    : new ChannelLedger.ChannelLedgerError({
-        reason: "persistence",
-        detail: "GOAT Bot session " + operation + " failed.",
-        cause,
-      });
 
 export const layer = Layer.effect(ChannelBotSession, make).pipe(Layer.provide(Profiles.layer));

@@ -15,8 +15,8 @@ export function GoatBotToolsField({
     <fieldset className="grid gap-3">
       <legend className="font-medium">Tools</legend>
       <p className="text-sm text-muted-foreground">
-        Restricting tools stops active work. The bot can start again when its destination supports
-        the limits or you allow all tools.
+        Restricting tools stops active work. For now, a bot with tool limits can't start work. Allow
+        all MCP servers and all skills to run it again.
       </p>
       {(["mcpServers", "skills"] as const).map((key) => (
         <ToolAllowlist
@@ -53,14 +53,13 @@ function ToolAllowlist({
           aria-label={`Allowed ${label}`}
           placeholder="Enter one name per line"
           defaultValue={value.join("\n")}
-          onChange={(event) =>
-            onChange(
-              event.target.value
-                .split("\n")
-                .map((name) => name.trim())
-                .filter(Boolean),
-            )
-          }
+          onChange={(event) => {
+            const names = event.target.value
+              .split("\n")
+              .map((name) => name.trim())
+              .filter(Boolean);
+            onChange([...new Set(names)]);
+          }}
         />
       ) : null}
     </div>

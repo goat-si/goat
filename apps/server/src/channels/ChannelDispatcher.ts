@@ -1,6 +1,18 @@
 import { botToolsRefusal } from "./channelBotTools.ts";
 import { sameRequester } from "./channelRequesterIdentity.ts";
-/** Launch IDs derive from a task's generation, so retries land on the same thread. */
+/**
+ * ChannelDispatcher - the ledger's central decision maker.
+ *
+ * A deterministic service, not a hidden agent thread: it reads one task from the ledger, picks a
+ * project and launch settings within what the requester may use, records that choice, and starts
+ * one coding thread through the normal launch service. When the choice is ambiguous or not
+ * allowed it asks the requester instead of guessing. It also forwards answers to worker threads.
+ *
+ * Launch ids derive from the task and its generation, so a restart re-runs the same launch and
+ * lands on the same thread.
+ *
+ * @module ChannelDispatcher
+ */
 import {
   type ChannelDispatchTarget,
   type CommandId,
@@ -56,7 +68,13 @@ import {
   workerMemoryCeiling,
 } from "./channelDispatchAuthority.ts";
 import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
-import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
+import {
+  PlacementStarted,
+  askRequester,
+  refuseDispatch,
+  routineFailure,
+  unlessMovedOn,
+} from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -403,18 +421,18 @@ const make = Effect.gen(function* () {
       // A session turn checks its requester itself, after binding any run a pass already sent.
       if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
       const requester = yield* dispatchGrant(initial.task);
-      if (requester === undefined) return yield* refuseDispatch(initial, owner);
+      if (requester === undefined) return yield* refuseDispatch(ledger, initial, owner);
       const botFiles = filesFor(initial.botId);
       const mayRead = initial.task.routineWork !== true && canReadChannelBotNotes(requester);
       const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
       const identity = yield* profiles.identity(initial.ownerId, initial.botId).pipe(Effect.option);
-      if (Option.isNone(identity)) return yield* refuseDispatch(initial, owner);
+      if (Option.isNone(identity)) return yield* refuseDispatch(ledger, initial, owner);
       const instance = yield* providers.getInstance(initial.task.target.modelSelection.instanceId);
       const refusal = botToolsRefusal(
         identity.value,
         instance?.displayName ?? initial.task.target.modelSelection.instanceId,
       );
-      if (refusal !== undefined) return yield* refuseDispatch(initial, owner, refusal);
+      if (refusal !== undefined) return yield* refuseDispatch(ledger, initial, owner, refusal);
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const { standingInstructions } = resolveProjectSettings(
         settings,
@@ -450,7 +468,7 @@ const make = Effect.gen(function* () {
                 sessionMemoryCeiling(current, target) === (target.memoryGrantCeiling ?? "none"))),
         ),
       );
-      if (!(yield* canDispatch)) return yield* refuseDispatch(stored, owner);
+      if (!(yield* canDispatch)) return yield* refuseDispatch(ledger, stored, owner);
       const confirmation = yield* makeDispatchConfirmation(
         task.routineWork === true || carriesNotes,
         canDispatch,
@@ -483,7 +501,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.result);
       if (launched._tag === "Failure") {
         if (carriesNotes && (yield* confirmation.refused))
-          return yield* refuseDispatch(stored, owner);
+          return yield* refuseDispatch(ledger, stored, owner);
         yield* Effect.logWarning("channel worker launch failed", {
           taskId: task.taskId,
           cause: launched.failure,
@@ -496,7 +514,8 @@ const make = Effect.gen(function* () {
             payload: {
               generation: task.generation,
               reason: "launch_failed",
-              summary: (yield* routineFailure(task)) ?? "The coding thread could not start.",
+              summary:
+                (yield* routineFailure(ledger, task)) ?? "The coding thread could not start.",
             },
           },
           { owner, narrate: true },
@@ -736,38 +755,6 @@ const make = Effect.gen(function* () {
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
-  const refuseDispatch = Effect.fn("ChannelDispatcher.refuseDispatch")(function* (
-    stored: ChannelLedger.ChannelStoredTask,
-    owner: string,
-    summary?: string,
-  ) {
-    yield* unlessMovedOn(
-      commitTransition(
-        ledger,
-        stored,
-        {
-          type: "task.failed",
-          payload: {
-            generation: stored.task.generation,
-            reason: "permission_changed",
-            summary:
-              summary ??
-              (yield* routineFailure(stored.task)) ??
-              "The requester’s permission to start this work changed.",
-          },
-        },
-        { owner, narrate: true },
-      ),
-    );
-  });
-
-  const routineFailure = (task: ChannelTask) =>
-    task.routineWork === true
-      ? ledger
-          .routineWorkAuthority(task.originInputId)
-          .pipe(Effect.map((grant) => ("error" in grant ? grant.error : undefined)))
-      : Effect.succeed(undefined);
-
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
@@ -776,7 +763,7 @@ const make = Effect.gen(function* () {
       let dispatchRequester = stored.task.requester;
       if (stored.task.status === "received") {
         const requester = yield* dispatchGrant(stored.task);
-        if (requester === undefined) return yield* refuseDispatch(stored, owner);
+        if (requester === undefined) return yield* refuseDispatch(ledger, stored, owner);
         dispatchRequester = requester;
       }
       // A generation that may already run on another machine never starts anywhere else.

@@ -411,12 +411,13 @@ export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfi
 export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
 export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
 
-/** A bot as agents see it: who it is and its conversation, nothing else a person set. */
+/** A bot’s identity, conversation and tool limits as agents see them. */
 export const ChannelBotSummary = Schema.Struct({
   botId: BotId,
   role: BotRole,
   name: BotProfile.fields.name,
   purpose: BotProfile.fields.purpose,
+  tools: BotProfile.fields.tools,
   hidden: Schema.Boolean,
   sessionThreadId: ThreadId,
 });

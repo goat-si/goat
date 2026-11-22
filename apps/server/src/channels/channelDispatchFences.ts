@@ -1,3 +1,4 @@
+import type { ChannelTask } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -63,3 +64,39 @@ export const askRequester = Effect.fn("channel.askRequester")(function* (
     ),
   );
 });
+
+export const refuseDispatch = Effect.fn("ChannelDispatcher.refuseDispatch")(function* (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  stored: ChannelLedger.ChannelStoredTask,
+  owner: string,
+  summary?: string,
+) {
+  yield* unlessMovedOn(
+    commitTransition(
+      ledger,
+      stored,
+      {
+        type: "task.failed",
+        payload: {
+          generation: stored.task.generation,
+          reason: "permission_changed",
+          summary:
+            summary ??
+            (yield* routineFailure(ledger, stored.task)) ??
+            "The requester’s permission to start this work changed.",
+        },
+      },
+      { owner, narrate: true },
+    ),
+  );
+});
+
+export const routineFailure = (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  task: ChannelTask,
+) =>
+  task.routineWork === true
+    ? ledger
+        .routineWorkAuthority(task.originInputId)
+        .pipe(Effect.map((grant) => ("error" in grant ? grant.error : undefined)))
+    : Effect.void;
