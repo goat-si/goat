@@ -1,3 +1,7 @@
+import {
+  claudeProgramReader,
+  claudeProgramWasReplaced,
+} from "../../provider/Drivers/ClaudeExecutable.ts";
 import * as ClaudeTurnCursor from "./ClaudeTurnCursor.ts";
 import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
@@ -1742,6 +1746,8 @@ interface ClaudeLiveQueryContext {
   readonly nativeThreadId: string;
   readonly query: ClaudeAgentSdkQuerySession;
   readonly queryPolicyKey: string;
+  readonly program: string | undefined;
+  readonly startedWithApiModelId: string;
   mcpCredentialId: string | undefined;
   /** The Cua Driver attached to this process now (`cuaDriverKey`); empty when none. */
   cuaDriverKey: string;
@@ -8803,6 +8809,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           queryPolicy: Effect.Success<ReturnType<typeof queryPolicyForTurn>>,
         ) {
           const launch = yield* resolveLaunch;
+          const readProgram = yield* claudeProgramReader(launch.binaryPath, launch.environment);
           const mcpSession = yield* readMcpSession(turnInput.threadId);
 
           const mcpOverrides = claudeMcpQueryOverrides({
@@ -8859,7 +8866,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               launch.environment,
             );
             const selection = compileClaudeModelSelection(turnInput.modelSelection, routed);
+            const startsUpdatedProgram =
+              existing.startedWithApiModelId !== selection.apiModelId &&
+              claudeProgramWasReplaced(existing.program, yield* readProgram) &&
+              !(yield* liveProcessRunsBackgroundWork(existing));
             if (
+              !startsUpdatedProgram &&
               existing.selection.queryIdentity !== selection.queryIdentity &&
               canApplyClaudeSelectionLive(existing.selection, selection) &&
               (existing.selection.apiModelId === selection.apiModelId ||
@@ -8867,7 +8879,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ) {
               yield* applyClaudeSelectionLive(existing, selection);
             }
-            if (existing.selection.queryIdentity === selection.queryIdentity) {
+            if (
+              !startsUpdatedProgram &&
+              existing.selection.queryIdentity === selection.queryIdentity
+            ) {
               // Enabling or disabling computer use reaches a live process here,
               // without replacing it (background work would block that).
               if (
@@ -9033,14 +9048,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const resolvedTurnCwd = yield* fileSystem
             .realPath(turnInput.runtimePolicy.cwd ?? ".")
             .pipe(Effect.orElseSucceed(() => turnInput.runtimePolicy.cwd));
-          const openQueryRuntime = queryRunner.open({
-            threadId: turnInput.threadId,
-            providerSessionId: input.providerSessionId,
-            options: pinClaudeHomeSettings(queryOptions),
-            ...(turnInput.resume ? { interruptedResume: true } : {}),
-          });
+          const openQueryRuntime = readProgram.pipe(
+            Effect.flatMap((program) =>
+              queryRunner
+                .open({
+                  threadId: turnInput.threadId,
+                  providerSessionId: input.providerSessionId,
+                  options: pinClaudeHomeSettings(queryOptions),
+                  ...(turnInput.resume ? { interruptedResume: true } : {}),
+                })
+                .pipe(Effect.map((querySession) => ({ program, querySession }))),
+            ),
+          );
           // The SDK spawns the CLI per turn, so only the open waits for a provider update.
-          const querySession = yield* (
+          const { program, querySession } = yield* (
             adapterOptions.installationGate === undefined
               ? openQueryRuntime
               : adapterOptions.installationGate.execute(adapterOptions.instanceId, openQueryRuntime)
@@ -9086,6 +9107,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cuaDriverKey: cuaKey,
             computerUseInstructed: launchedWithComputerUseSkill(cuaKey, mcpSession),
             selection: compiledSelection,
+            program,
+            startedWithApiModelId: compiledSelection.apiModelId,
             closed,
             lastTurn: null,
             promptEchoMode: "unknown",
