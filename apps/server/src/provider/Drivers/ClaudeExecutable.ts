@@ -86,3 +86,24 @@ export const resolveClaudeSdkExecutablePath = (
   environment: NodeJS.ProcessEnv,
 ): Effect.Effect<string> =>
   resolveClaudeSdkExecutable(binaryPath, environment).pipe(Effect.map((resolved) => resolved.path));
+
+export const claudeProgramReader = Effect.fn("claudeProgramReader")(function* (
+  binaryPath: string,
+  environment: NodeJS.ProcessEnv,
+) {
+  const platform = yield* HostProcess.Platform;
+  const resolveExecutable = yield* SpawnExecutableResolution;
+  return Effect.promise(async () => {
+    try {
+      const resolved = resolveExecutable(binaryPath, platform, environment);
+      return resolved === undefined ? undefined : await NodeFS.promises.realpath(resolved);
+    } catch {
+      return undefined;
+    }
+  });
+});
+
+export const claudeProgramWasReplaced = (
+  startedFrom: string | undefined,
+  now: string | undefined,
+) => startedFrom !== undefined && now !== undefined && startedFrom !== now;
