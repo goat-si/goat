@@ -502,7 +502,11 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ChannelBotMembers, make);
 
 /** Built once per connection, so the change stream limit counts this connection's streams. */
-export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
+export const rpcHandlers = (
+  service: ChannelBotMembers["Service"],
+  owner: Owner,
+  authorizeProposalDecision: Effect.Effect<void, ChannelGatewayError>,
+) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
     [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: (input: ChannelListOpenAsksInput) =>
@@ -521,7 +525,7 @@ export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner)
     [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
       service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: (input: ChannelResolveBotProposalInput) =>
-      service.resolveProposal(input, owner),
+      service.resolveProposal(input, owner, authorizeProposalDecision),
     [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
       service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>

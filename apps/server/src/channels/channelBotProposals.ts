@@ -120,7 +120,12 @@ export function botProposalOperations(deps: {
   );
 
   const resolveProposal = Effect.fn("ChannelBotMembers.resolveProposal")(
-    function* (input: ChannelResolveBotProposalInput, owner: { ownerId: string }) {
+    function* (
+      input: ChannelResolveBotProposalInput,
+      owner: { ownerId: string },
+      authorize: Effect.Effect<void, ChannelGatewayError>,
+    ) {
+      yield* authorize;
       yield* deps.requireHome;
       const key = keyPrefix(owner.ownerId) + input.proposalId;
       const rows = yield* sql<{ value_json: string }>`SELECT value_json

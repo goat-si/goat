@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ChannelGatewayError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -6,7 +7,7 @@ import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import { botThreadId, makeHarness, owner, setupBot } from "./testkit/ChannelHarness.ts";
 
 describe("member bot proposals", () => {
-  it.effect.each(["dismiss", "expire", "other owner"] as const)(
+  it.effect.each(["dismiss", "expire", "other owner", "revoked grant"] as const)(
     "%s prevents a proposal from creating a member",
     (action) => {
       const harness = makeHarness();
@@ -26,14 +27,17 @@ describe("member bot proposals", () => {
           "test-agent",
         );
         if (action === "dismiss")
-          yield* members.resolveProposal({ proposalId, accept: false }, owner);
+          yield* members.resolveProposal({ proposalId, accept: false }, owner, Effect.void);
         if (action === "expire") yield* TestClock.adjust("7 days");
         const reviewer = action === "other owner" ? { ownerId: "another-owner" } : owner;
-        assert.strictEqual(
-          (yield* Effect.flip(members.resolveProposal({ proposalId, accept: true }, reviewer)))
-            .reason,
-          "not_found",
+        const authorize =
+          action === "revoked grant"
+            ? Effect.fail(new ChannelGatewayError({ reason: "forbidden" }))
+            : Effect.void;
+        const denied = yield* Effect.flip(
+          members.resolveProposal({ proposalId, accept: true }, reviewer, authorize),
         );
+        assert.strictEqual(denied.reason, action === "revoked grant" ? "forbidden" : "not_found");
         assert.lengthOf(yield* members.list({}, owner), 1);
       }).pipe(Effect.provide(harness.layer));
     },
@@ -69,8 +73,8 @@ describe("member bot proposals", () => {
         ),
       );
       assert.lengthOf(yield* members.list({}, owner), 1);
-      yield* members.resolveProposal({ proposalId, accept: true }, owner);
-      yield* members.resolveProposal({ proposalId, accept: true }, owner);
+      yield* members.resolveProposal({ proposalId, accept: true }, owner, Effect.void);
+      yield* members.resolveProposal({ proposalId, accept: true }, owner, Effect.void);
       const bots = yield* members.list({}, owner);
       assert.lengthOf(bots, 2);
       assert.strictEqual(bots[1]?.name, "Reviewer");

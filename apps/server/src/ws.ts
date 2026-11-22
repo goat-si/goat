@@ -156,6 +156,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { reauthorizeSession } from "./auth/McpClientAuthority.ts";
 import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -1641,7 +1642,16 @@ export const layerWsRpc = (
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
-        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
+        ...ChannelBotMembers.rpcHandlers(
+          channelBotMembers,
+          channelOwner,
+          reauthorizeSession(
+            sessions,
+            currentSessionId,
+          )([AuthOrchestrationOperateScope]).pipe(
+            Effect.mapError(() => new ChannelGatewayError({ reason: "forbidden" })),
+          ),
+        ),
         ...(yield* channelBotWorkRpcHandlers(channelOwner)),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
