@@ -13,9 +13,12 @@ import {
   FIRST_V2_MIGRATION_ID,
   goatMigrationIdsMove,
   reconcileGoatMigrationIds,
+  reconcileWorkerReleaseRollback,
+  WORKER_GENERATIONS_MIGRATION_NAME,
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
+import { reconcileChannelWorkerGenerations } from "./reconcileChannelWorkerGenerations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
 
@@ -187,6 +190,8 @@ import Migration0170 from "./Migrations/170_RepairStaleTitleRegeneration.ts";
 import Migration0175 from "./Migrations/175_AcpSessionOwnerIndex.ts";
 import Migration0176 from "./Migrations/176_ChannelWorkerLaunchHeads.ts";
 import Migration0177 from "./Migrations/177_WorkTriggerAuthorityFence.ts";
+import Migration0178 from "./Migrations/178_WebhookDeliveryFiringEvidence.ts";
+import Migration0179 from "./Migrations/179_ChannelWorkerGenerations.ts";
 import Migration0180 from "./Migrations/180_ChannelBotTaskSnooze.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
@@ -371,6 +376,8 @@ export const migrationEntries = [
   [175, "AcpSessionOwnerIndex", Migration0175],
   [176, "ChannelWorkerLaunchHeads", Migration0176],
   [177, WORK_TRIGGER_FENCE_MIGRATION_NAME, Migration0177],
+  [178, "WebhookDeliveryFiringEvidence", Migration0178],
+  [179, WORKER_GENERATIONS_MIGRATION_NAME, Migration0179],
   [180, "ChannelBotTaskSnooze", Migration0180],
 ] as const;
 
@@ -457,10 +464,12 @@ const failIfDatabaseNewerThanBuild = Effect.fn("failIfDatabaseNewerThanBuild")(f
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
+  readonly skipStartupRepairs?: boolean;
 }
 
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
+  skipStartupRepairs = false,
 }: RunMigrationsOptions = {}) {
   // The desktop waits past its readiness budgets until the finished line follows this one.
   const announced = yield* hasPendingMigrations();
@@ -507,6 +516,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
         );
       }
       executed.push(...(yield* run({ loader: makeMigrationLoader(id) })));
+    }
+    if (toMigrationInclusive === undefined && !skipStartupRepairs) {
+      yield* reconcileWorkerReleaseRollback();
+      yield* reconcileChannelWorkerGenerations();
     }
     return executed;
   }).pipe(Effect.catchTags({ MigrationError: failIfDatabaseNewerThanBuild }));

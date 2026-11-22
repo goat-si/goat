@@ -188,6 +188,8 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -387,6 +389,8 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

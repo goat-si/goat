@@ -93,6 +93,7 @@ import {
 } from "./goat/ThreadLaunchError.ts";
 export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
+import { makePreparedWorkerRelease } from "../channels/channelWorkerReleaseAuthority.ts";
 import {
   preparationRunStopped,
   watchPreparationInterruption,
@@ -153,6 +154,7 @@ const make = Effect.gen(function* () {
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const releasePreparedWorker = yield* makePreparedWorkerRelease(threads.dispatch);
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
   // Optional so harnesses that never launch into a real folder need not provide it.
@@ -264,6 +266,16 @@ const make = Effect.gen(function* () {
     runId: RunId | null,
     log: Ref.Ref<PreparationLog>,
   ) {
+    const releaseRun = (id: RunId) =>
+      releasePreparedWorker(
+        {
+          type: "prepared-run.release",
+          commandId: CommandId.make(`${input.commandId}:release`),
+          threadId,
+          runId: id,
+        },
+        mapError(input, "release-run", threadId),
+      );
     const note = (line: string) =>
       Ref.update(log, (current) => appendPreparationLine(current, line));
     const project = yield* projects.getById(input.projectId).pipe(
@@ -285,15 +297,7 @@ const make = Effect.gen(function* () {
         .getCapabilities()
         .pipe(Effect.mapError(mapError(input, "resolve-project", threadId)));
       if (isCloudExecution(capabilities)) {
-        if (runId !== null)
-          yield* threads
-            .dispatch({
-              type: "prepared-run.release",
-              commandId: CommandId.make(`${input.commandId}:release`),
-              threadId,
-              runId,
-            })
-            .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
+        if (runId !== null) yield* releaseRun(runId);
         return;
       }
     }
@@ -837,22 +841,14 @@ const make = Effect.gen(function* () {
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
       if (runId !== null) {
-        yield* threads
-          .dispatch({
-            type: "prepared-run.release",
-            commandId: CommandId.make(`${input.commandId}:release`),
-            threadId,
-            runId,
-          })
-          .pipe(
-            Effect.mapError(mapError(input, "release-run", threadId)),
-            Effect.tap(() =>
-              Effect.sync(() => {
-                runReleased = true;
-              }),
-            ),
-            Effect.uninterruptible,
-          );
+        yield* releaseRun(runId).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              runReleased = true;
+            }),
+          ),
+          Effect.uninterruptible,
+        );
       }
       yield* releaseOwnership;
       yield* setupTracker.stageStatus(threadId, "agent", "done");
