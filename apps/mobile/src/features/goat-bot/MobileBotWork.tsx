@@ -1,3 +1,4 @@
+import { mobileBotFollowedItems, sectionLabel } from "./MobileBotFollowedThread";
 import {
   accessDenied,
   botHomeWork,
@@ -56,7 +57,6 @@ import { MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 
-/** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
@@ -72,7 +72,6 @@ import {
   type MobileCheckInDraftUpdate,
 } from "./mobileCheckInDraft";
 
-// Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
 
 export function MobileBotWork(props: {
@@ -432,20 +431,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  const sectionLabel = (
-    key: string,
-    text: string,
-    first = false,
-    action?: ReactNode,
-  ): MobileBotHomeItem => ({
-    key,
-    render: () => (
-      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
-        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
-        {action}
-      </View>
-    ),
-  });
   const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
     key,
     render: () => node,
@@ -529,6 +514,14 @@ export function MobileBotWork(props: {
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
     const workStart = homeItems.length;
+    homeItems.push(
+      ...mobileBotFollowedItems(
+        environmentId,
+        botId,
+        capabilities?.goatBotThreadFollows === true ? threads.data?.followedThreads : undefined,
+        props.onOpenThread,
+      ),
+    );
     if (environmentId && enabled && capabilities?.goatBotTaskLookupSearch === true)
       homeItems.push(
         message(
@@ -787,6 +780,8 @@ export function MobileBotWork(props: {
             connected={selected?.connected === true}
             supported={capabilities?.goatBotNotes === true}
             member={member !== null}
+            botId={member?.botId}
+            scoped={capabilities?.goatBotPrivateNotes === true}
             botName={botName}
             onDraft={
               props.onDraft

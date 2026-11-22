@@ -135,6 +135,7 @@ describe("Slack choice buttons", () => {
       teamId: "T0TEAM",
       botUserId: "U0BOT",
       botApi: {
+        postEphemeral: () => Promise.reject(new Error("Unexpected private notice")),
         authTest: () => Promise.reject(new Error("not used")),
         updateMessage: () => Promise.reject(new Error("not used")),
         deleteMessage: () => Promise.reject(new Error("not used")),

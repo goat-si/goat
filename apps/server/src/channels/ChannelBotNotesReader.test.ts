@@ -2,13 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect API.
 import * as NodeChildProcess from "node:child_process";
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelGatewayError, EnvironmentId } from "@goat/contracts";
+import { BotId, ChannelGatewayError, EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+import { botProfileKey } from "./channelBotLedger.ts";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -96,6 +98,45 @@ const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader
 );
 
 describe("ChannelBotNotesReader", () => {
+  it.effect(
+    "keeps legacy shared notes separate from each member and refuses readers without memory access",
+    () =>
+      Effect.gen(function* () {
+        const files = yield* writeNotes("Team release day is Thursday.\n");
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const scout = BotId.make("scout");
+        const review = BotId.make("review");
+        const sql = yield* SqlClient.SqlClient;
+        for (const botId of [scout, review]) {
+          yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          VALUES (${botProfileKey(viewer.ownerId, botId)}, '{"role":"member"}', '2026-11-21T00:00:00Z')`;
+        }
+        const scoutFiles = channelBotFilesFor(
+          path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+          scout,
+        );
+        assert.notStrictEqual(scoutFiles.notes, files.notes);
+        yield* fs.makeDirectory(scoutFiles.dir, { recursive: true });
+        yield* fs.writeFileString(scoutFiles.notes, "Scout's staging service is Juniper.\n");
+        const reader = yield* ChannelBotNotesReader.ChannelBotNotesReader;
+        assert.deepStrictEqual(
+          (yield* reader.list(viewer, scout)).notes.map((note) => note.text),
+          ["Scout's staging service is Juniper."],
+        );
+        assert.deepStrictEqual((yield* reader.list(viewer, review)).notes, []);
+        assert.deepStrictEqual(
+          (yield* reader.list(viewer)).notes.map((note) => note.text),
+          ["Team release day is Thursday."],
+        );
+        const unrelated = yield* Effect.flip(reader.list({ ...viewer, ownerId: "other" }, scout));
+        assert.strictEqual(unrelated.reason, "not_found");
+        const denied = yield* Effect.flip(reader.list({ ...viewer, grantedScopes: [] }, scout));
+        assert.strictEqual(denied.reason, "forbidden");
+      }).pipe(Effect.provide(readerLayer())),
+  );
+
   it.effect("lists dated notes newest first without the header or their source", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

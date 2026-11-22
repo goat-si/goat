@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
+import type { ChannelBotFiles } from "./channelBotNotes.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
 /** Freeze once per generation and return the snapshot subsequent launch writes must use. */
@@ -81,4 +82,24 @@ export const channelNotesRevision = Effect.fn("channel.notesRevision")(function*
     }),
   );
   return bytes === null ? null : NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+});
+
+const readableNotesRevision = (notesPath: string) =>
+  channelNotesRevision(notesPath).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("GOAT Bot notes revision unavailable", { cause }).pipe(Effect.as(null)),
+    ),
+  );
+
+export const localNotesBriefContext = Effect.fn("channel.localNotesBriefContext")(function* (
+  files: ChannelBotFiles,
+  notesAllowed: boolean,
+  briefVersion: number | undefined,
+) {
+  return {
+    ...(notesAllowed ? { notesPath: files.notes } : {}),
+    notesRevision:
+      notesAllowed && briefVersion === undefined ? yield* readableNotesRevision(files.notes) : null,
+    skillsPath: files.skills,
+  };
 });

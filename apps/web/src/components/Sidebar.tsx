@@ -177,6 +177,10 @@ import {
   threadActionRequiresOperate,
 } from "./threadActionMenu.logic";
 import {
+  handleWebThreadFollowAction,
+  webThreadFollowAvailable,
+} from "./goatBot/goatBotThreadFollowMenu";
+import {
   canPromoteThread,
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
@@ -2461,6 +2465,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              canFollowWithBot: webThreadFollowAvailable(threadRef),
               canOperate: readEnvironmentScope(
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
@@ -2499,6 +2504,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
+        if (botAction) return await botAction;
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =

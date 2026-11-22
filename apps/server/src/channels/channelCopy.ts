@@ -57,6 +57,8 @@ export const CHANNEL_COPY = {
     "I couldn't pass that approval on. That machine can't take approvals from here. Update GOAT there, or answer it in the thread.",
   noteCorrectionUnmatched:
     "I saved that, but couldn't find the earlier note it changes. If an older note says otherwise, ask me to forget it.",
+  sharedNoteConfirmationRequired:
+    "To save a note for all bots, ask “Remember for all bots:” followed by the note, then confirm the reply. To edit or forget a shared note, choose All bots in Library → Memory.",
   noteNotSaved: "I couldn't save that note, so it won't apply yet. Please ask me again.",
   noteChanged: "Changed that note.",
   noteForgotten: "Forgot that note.",
@@ -65,7 +67,7 @@ export const CHANNEL_COPY = {
     "Another change to my notes is still in progress, so nothing changed. Try again when it finishes.",
   noteEditFailed: "I couldn't change my notes just now, so nothing changed. Please try again.",
   noteFileTooLarge: "My notes file is too large to edit here, so nothing changed.",
-  noteEditNotAllowed: "Only someone linked to GOAT Bot can change its notes.",
+  noteEditNotAllowed: "Changing GOAT Bot notes requires memory read and write access.",
   noteEditTaskDone:
     "That notes change didn't start: the request it belonged to had already finished. Ask me again.",
   noteCameBack:

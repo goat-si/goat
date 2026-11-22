@@ -20,6 +20,11 @@ export {
   type ProviderTurnStartServiceV2Shape,
 } from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
+import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
+import {
+  queuedChannelProfileRefusal,
+  providerInputFence,
+} from "../channels/channelSessionProfileFence.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
@@ -42,6 +47,7 @@ import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecov
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
+  isChannelWorkerThreadId,
   CommandId,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
@@ -50,6 +56,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
+  isGoatBotSessionThreadId,
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
@@ -60,6 +67,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
+import {
+  appendRemoteWorkerNotes,
+  readChannelProviderBrief,
+} from "../channels/channelProviderBrief.ts";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -138,6 +150,7 @@ export const layer: Layer.Layer<
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
@@ -145,9 +158,10 @@ export const layer: Layer.Layer<
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
     const explainOpenFailure = yield* openFailureExplainer;
     const makeRunControls = makeProviderRunControls(projectionStore, idAllocator);
-
+    const providerInputRefusal = yield* Effect.serviceOption(
+      ChannelProviderInputAuthority.ChannelProviderInputAuthority,
+    );
     const memoryHooks = yield* makeMemoryRefreshFactory;
-
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -251,6 +265,15 @@ export const layer: Layer.Layer<
               runOrdinal: replaySource.ordinal,
             };
       const nativeResume = resumeDelivery?.type === "native";
+      const privateBrief =
+        !observeOnly &&
+        !nativeResume &&
+        Option.isSome(sql) &&
+        (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
+          ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
+          : undefined;
+      const turnMessage =
+        privateBrief === undefined ? providerMessage : { ...providerMessage, text: privateBrief };
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -260,12 +283,41 @@ export const layer: Layer.Layer<
         attempt,
         expectedStartStatus,
       });
-      if (
-        providerMessage.attachments.length === 0 &&
-        providerMessage.text.trimStart().startsWith("/")
-      ) {
+      const memoryRefusal =
+        !observeOnly && Option.isSome(providerInputRefusal)
+          ? providerInputRefusal.value(run.threadId, providerMessage.id, run.memoryGrantCeiling)
+          : undefined;
+      const profileRefusal = queuedChannelProfileRefusal(
+        sql,
+        observeOnly,
+        attempt,
+        run,
+        message.id,
+      );
+      const profileFailure = profileRefusal === undefined ? undefined : yield* profileRefusal;
+      if (profileFailure !== undefined) {
+        const failure =
+          memoryRefusal === undefined
+            ? profileFailure
+            : ((yield* memoryRefusal.pipe(
+                Effect.provideService(
+                  ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                  projection.thread.runtimeMode,
+                ),
+              )) ?? profileFailure);
+        yield* settleRunBeforeStart({
+          signal: "channel-session-profile",
+          status: "failed",
+          now: yield* DateTime.now,
+          providerInstanceId: run.providerInstanceId,
+          itemProviderThreadId: providerThread.id,
+          item: { type: "error", title: "GOAT Bot queued turn", failure },
+        });
+        return;
+      }
+      if (turnMessage.attachments.length === 0 && turnMessage.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
-          providerMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
+          turnMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
         // Preparation may select a new provider; account commands still target the last native session.
         const nativeThreads = new Map(
           projection.providerThreads
@@ -296,7 +348,7 @@ export const layer: Layer.Layer<
               providerAuth.tryHandlePromptCommand({
                 instanceId: authInstanceId,
                 text: projectComposerContextForProvider({
-                  text: providerMessage.text,
+                  text: turnMessage.text,
                   records: providerMessage.context?.records ?? [],
                 }),
                 hasAttachments: false,
@@ -337,7 +389,7 @@ export const layer: Layer.Layer<
                 : {
                     type: "command_execution",
                     title: "Provider signed out",
-                    input: providerMessage.text.trim(),
+                    input: turnMessage.text.trim(),
                     output: "Provider signed out",
                     exitCode: 0,
                   },
@@ -623,7 +675,7 @@ export const layer: Layer.Layer<
           runId: run.id,
           startsTurn:
             input.reattach !== true &&
-            !(yield* startsNoModelTurn(codexSurvivors, run, providerMessage, noteContinuation)),
+            !(yield* startsNoModelTurn(codexSurvivors, run, turnMessage, noteContinuation)),
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,
@@ -706,13 +758,17 @@ export const layer: Layer.Layer<
       const userText = nativeResume
         ? ""
         : yield* providerTextWithSkills(Option.some(serverSettings), {
-            message: providerMessage,
+            message: turnMessage,
             driver: session.driver,
             globalSkillsDir,
             project: Effect.succeed(projection.thread.projectId),
           });
+      const providerText =
+        observeOnly || nativeResume
+          ? userText
+          : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
       const goalDriver = hasNativeGoals(session);
-      const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
+      const goalCommand = goalDriver && parseGoalCommand(turnMessage) !== null;
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
@@ -749,7 +805,7 @@ export const layer: Layer.Layer<
           attachments: providerMessage.attachments,
           goalDriver,
           carriesImages:
-            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(providerMessage),
+            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(turnMessage),
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
           replayedInput,
         });
@@ -889,7 +945,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: resumedRetryHandoff.budget,
-            deferInline: isCompactionCommandMessage(providerMessage) || goalCommand,
+            deferInline: isCompactionCommandMessage(turnMessage) || goalCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -1375,6 +1431,7 @@ export const layer: Layer.Layer<
             sameNativeThread &&
             !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
+        ...providerInputFence(memoryRefusal, profileRefusal, resolvedRuntimePolicy.runtimeMode),
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
@@ -1382,7 +1439,7 @@ export const layer: Layer.Layer<
         loadUnsettledWork: runControls.loadUnsettledWork,
         message: {
           messageId: message.id,
-          text: userText,
+          text: providerText,
           attachments: retryHandoff.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,
@@ -1466,4 +1523,8 @@ export const layer: Layer.Layer<
       ),
     });
   }),
+);
+
+export const layerWithChannelAuthority = layer.pipe(
+  Layer.provide(ChannelProviderInputAuthority.layer),
 );

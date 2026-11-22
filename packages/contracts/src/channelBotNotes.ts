@@ -37,7 +37,7 @@ export const ChannelBotNote = Schema.Struct({
 });
 export type ChannelBotNote = typeof ChannelBotNote.Type;
 
-export const ChannelListBotNotesInput = Schema.Struct({});
+export const ChannelListBotNotesInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
 export type ChannelListBotNotesInput = typeof ChannelListBotNotesInput.Type;
 
 export const ChannelListBotNotesResult = Schema.Struct({
@@ -52,8 +52,22 @@ export type ChannelListBotNotesResult = typeof ChannelListBotNotesResult.Type;
 
 // Reception answers these sentences itself when a message is exactly one of them
 // (channelBotNoteTabEdits), so each note is a JSON string: the sentence ends where it says it does.
-export const goatBotForgetNoteMessage = (note: string) =>
-  "Please forget this note: " + JSON.stringify(note);
+export type ChannelBotNoteScope = "private" | "shared";
 
-export const goatBotChangeNoteMessage = (note: string, newText: string) =>
-  "Please change this note: " + JSON.stringify(note) + " to: " + JSON.stringify(newText);
+const scopeWords = (scope: ChannelBotNoteScope | undefined) =>
+  scope === "shared" ? " for all bots" : scope === "private" ? " for this bot" : "";
+
+export const goatBotForgetNoteMessage = (note: string, scope?: ChannelBotNoteScope) =>
+  "Please forget this note" + scopeWords(scope) + ": " + JSON.stringify(note);
+
+export const goatBotChangeNoteMessage = (
+  note: string,
+  newText: string,
+  scope?: ChannelBotNoteScope,
+) =>
+  "Please change this note" +
+  scopeWords(scope) +
+  ": " +
+  JSON.stringify(note) +
+  " to: " +
+  JSON.stringify(newText);

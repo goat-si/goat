@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
+import { recordSessionForwardEvent } from "./channelSessionForwardEvent.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
@@ -55,7 +56,7 @@ type Records = {
 };
 
 /** The intent row a message was recorded under, if GOAT sent it into a session. */
-const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
+export const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
   sql<SessionIntent>`
     SELECT * FROM channel_bot_session_runs WHERE thread_id = ${threadId} AND message_id = ${messageId}
   `.pipe(Effect.map((rows) => rows[0]));
@@ -199,16 +200,26 @@ export const sessionStore = (sql: SqlClient.SqlClient) => {
     messageId: MessageId,
     task: ChannelTask,
     kind: SessionIntent["kind"],
+    forwardSequence?: number,
   ) =>
     nowIso.pipe(
-      Effect.flatMap(
-        (now) => sql`
+      Effect.flatMap((now) => {
+        const write = sql`
           INSERT INTO channel_bot_session_runs
             (thread_id, message_id, task_id, task_generation, kind, created_at)
           VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
           ON CONFLICT (thread_id, message_id) DO NOTHING
-        `,
-      ),
+        `;
+        return forwardSequence === undefined
+          ? write
+          : sql.withTransaction(
+              write.pipe(
+                Effect.andThen(
+                  recordSessionForwardEvent(sql, threadId, messageId, forwardSequence, now),
+                ),
+              ),
+            );
+      }),
     );
 
   const recordRun = (

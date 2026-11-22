@@ -22,6 +22,7 @@ const MainRecord = Schema.Struct({
   name: BotProfile.fields.name,
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
+  instructions: BotProfile.fields.instructions,
   defaultModelSelection: BotProfile.fields.defaultModelSelection,
   defaultProjectId: BotProfile.fields.defaultProjectId,
   createdAt: BotProfile.fields.createdAt,
@@ -51,6 +52,7 @@ const decodeBot = Schema.decodeUnknownSync(
 export interface BotIdentity {
   readonly name: string;
   readonly purpose: string;
+  readonly instructions?: string;
 }
 export const DEFAULT_BOT_IDENTITY: BotIdentity = { name: "GOAT Bot", purpose: "" };
 
@@ -118,6 +120,50 @@ export const readProfileRecord = (sql: SqlClient.SqlClient, ownerId: string, bot
       ),
     ),
   );
+
+export const normalizeBotName = (name: string) =>
+  name
+    .trim()
+    .replace(/[ \t]+/g, " ")
+    .normalize("NFC")
+    .toLowerCase();
+
+const MAX_PROFILE_ROWS = 501;
+
+export const readStoredBotProfiles = Effect.fn("ChannelBotProfiles.readStored")(function* (
+  sql: SqlClient.SqlClient,
+  ownerId: string,
+) {
+  const prefix = keyPrefix(ownerId);
+  const rows = yield* sql<{ readonly key: string; readonly value_json: string }>`
+    SELECT key, value_json FROM channel_runtime_state
+    WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
+    LIMIT ${MAX_PROFILE_ROWS}`;
+  return yield* Effect.try(() =>
+    rows.map((row) => checkedProfile(prefix, row.key, row.value_json)),
+  );
+});
+
+export const assertBotNameAvailable = Effect.fn("ChannelBotProfiles.assertNameAvailable")(
+  function* (sql: SqlClient.SqlClient, ownerId: string, name: string, except?: BotId) {
+    const profiles = yield* readStoredBotProfiles(sql, ownerId);
+    const normalized = normalizeBotName(name);
+    const conflict = profiles.find(
+      (profile) =>
+        profile.botId !== except &&
+        (profile.role === "main" || profile.state !== "deleted") &&
+        normalizeBotName(profile.name) === normalized,
+    );
+    const implicitMain =
+      except !== MAIN_BOT_ID &&
+      !profiles.some((profile) => profile.role === "main") &&
+      normalized === normalizeBotName(DEFAULT_BOT_IDENTITY.name);
+    const conflictingBotName =
+      conflict?.name ?? (implicitMain ? DEFAULT_BOT_IDENTITY.name : undefined);
+    if (conflictingBotName !== undefined)
+      return yield* new ChannelGatewayError({ reason: "invalid_input", conflictingBotName });
+  },
+);
 
 const isGatewayError = Schema.is(ChannelGatewayError);
 
@@ -243,10 +289,14 @@ const make = Effect.gen(function* () {
           ) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
+          if (input.name !== undefined && input.name !== record.name) {
+            yield* assertBotNameAvailable(sql, owner.ownerId, input.name, input.botId);
+          }
           const changes = {
             ...(input.name === undefined ? {} : { name: input.name }),
             ...(input.avatar === undefined ? {} : { avatar: input.avatar }),
             ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+            ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
             ...(input.defaultModelSelection === undefined
               ? {}
               : { defaultModelSelection: input.defaultModelSelection }),
@@ -284,7 +334,11 @@ const make = Effect.gen(function* () {
     return yield* readProfileRecord(sql, ownerId, botId).pipe(
       Effect.flatMap((profile) =>
         profile !== undefined
-          ? Effect.succeed({ name: profile.name, purpose: profile.purpose })
+          ? Effect.succeed({
+              name: profile.name,
+              purpose: profile.purpose,
+              ...(profile.instructions === undefined ? {} : { instructions: profile.instructions }),
+            })
           : botId === MAIN_BOT_ID
             ? Effect.succeed(DEFAULT_BOT_IDENTITY)
             : Effect.fail(new ChannelGatewayError({ reason: "not_found" })),

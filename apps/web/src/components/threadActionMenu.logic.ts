@@ -2,6 +2,8 @@ import type { ContextMenuItem } from "@goat/contracts";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
+  | "bot-follow"
+  | "bot-stop-following"
   | "continue-on-ssh"
   | "find"
   | "new-thread-on-branch"
@@ -76,6 +78,7 @@ export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   /** The active chat owns the SSH host dialog. */
   readonly canOpenSshHandoff?: boolean | undefined;
+  readonly canFollowWithBot?: boolean;
   readonly canFind?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
@@ -187,6 +190,12 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const allItems: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.canFollowWithBot && state.canOperate && !state.globalAgent
+      ? [
+          { id: "bot-follow" as const, label: "Ask a bot to follow…" },
+          { id: "bot-stop-following" as const, label: "Stop following" },
+        ]
+      : []),
     ...(state.canPromote
       ? [
           {

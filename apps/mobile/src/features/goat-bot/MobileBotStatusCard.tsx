@@ -1,5 +1,7 @@
 import {
   diagnoseGoatBot,
+  slackBoundChannelIds,
+  slackReachabilityLabel,
   goatBotName,
   goatBotModelStatus,
   type GoatBotDiagnosticTone,
@@ -9,6 +11,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
+  BotId,
   BotProfile,
   ChannelTaskId,
   EnvironmentId,
@@ -47,6 +50,7 @@ const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
 export function MobileBotStatusCard(props: {
   readonly environmentId: EnvironmentId | null;
   readonly member: {
+    readonly botId?: BotId;
     readonly threadId: ThreadId;
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
   } | null;
@@ -73,10 +77,11 @@ export function MobileBotStatusCard(props: {
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
   const slackSupported =
-    member === null &&
     environmentId !== null &&
     presentation?.connection.phase === "connected" &&
-    presentation.serverConfig?.environment.capabilities.slackChannel === true;
+    presentation.serverConfig?.environment.capabilities.slackChannel === true &&
+    (member === null ||
+      presentation.serverConfig.environment.capabilities.slackBotBindings === true);
   const slack = useEnvironmentQuery(
     slackSupported ? channelEnvironment.slackSettings({ environmentId, input: {} }) : null,
   );
@@ -125,12 +130,26 @@ export function MobileBotStatusCard(props: {
     canChangeModel: false,
     rows: rowsFromHome ? props.rows : "unavailable",
     turnsWaiting: rowsFromHome ? props.turnsWaiting : [],
-    slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
+    slack:
+      member !== null || !slackSupported
+        ? "unavailable"
+        : slack.error
+          ? "failed"
+          : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack: false,
     now,
   });
-  if (props.quietWhenReady && !home.error && diagnostics.lines.every((line) => line.tone === "ok"))
+  const slackReachability =
+    member?.botId === undefined
+      ? null
+      : slackReachabilityLabel(slackBoundChannelIds(member.botId, slack.data));
+  if (
+    props.quietWhenReady &&
+    slackReachability === null &&
+    !home.error &&
+    diagnostics.lines.every((line) => line.tone === "ok")
+  )
     return null;
   return (
     <View
@@ -165,6 +184,9 @@ export function MobileBotStatusCard(props: {
           )}
         </View>
       ))}
+      {slackReachability === null ? null : (
+        <Text className="text-foreground-muted">{slackReachability}</Text>
+      )}
       {home.error ? <Text className="text-danger-foreground">{home.error}</Text> : null}
     </View>
   );

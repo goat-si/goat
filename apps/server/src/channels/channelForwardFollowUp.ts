@@ -90,14 +90,50 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       yield* ledger.completeForward({ owner, sequence: pending.sequence });
       return;
     }
-    // The requester and, for someone else's follow-up, its sender, as they stand now.
-    const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
-      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-    );
+    const brief = yield* ledger.latestTaskBrief(event.taskId, stored.task.generation);
+    const carriesNotes = brief?.context.notesPath !== undefined;
+    const sender = event.payload.sender;
+    const inputId = event.actor === "user" ? event.payload.inputId : undefined;
+    const senderInputId = sender?.inputId ?? inputId;
+    const live = Effect.gen(function* () {
+      if (carriesNotes && senderInputId === undefined)
+        return { _tag: "requester_changed" } as const;
+      return yield* requesterForDelivery(stored.task, sender, inputId, carriesNotes).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      );
+    });
+    const authority = yield* live;
     const requester = authority._tag === "allowed" ? authority.requester : undefined;
+    type PermissionRefusal = Exclude<typeof authority, { _tag: "allowed" }>;
+    const refusePermission = (denial: PermissionRefusal) =>
+      denial._tag === "sender_changed"
+        ? refuseSenderFollowUp(ledger, stored, {
+            eventId: event.eventId,
+            name: denial.name,
+            owner,
+            sequence: pending.sequence,
+            own,
+          })
+        : refuseForward(
+            ledger,
+            stored,
+            "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT.",
+            owner,
+            pending.sequence,
+            own,
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "Could not record forward refusal.",
+                  cause,
+                }),
+            ),
+          );
     let acceptedRun = undefined;
-    if (requester === undefined) {
+    if (authority._tag !== "allowed") {
       // The follow-up was recorded by this server's clock; a time that is unreadable or ahead
       // ends the wait rather than extending it.
       const age = DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(event.occurredAt);
@@ -137,36 +173,7 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       acceptedRun = projection.value.run;
       if (message !== undefined && acceptedRun === undefined)
         return waiting ? undefined : yield* giveUp;
-      if (acceptedRun === undefined && authority._tag === "sender_changed") {
-        yield* refuseSenderFollowUp(ledger, stored, {
-          eventId: event.eventId,
-          name: authority.name,
-          owner,
-          sequence: pending.sequence,
-          own,
-        });
-        return;
-      }
-      if (acceptedRun === undefined) {
-        yield* refuseForward(
-          ledger,
-          stored,
-          "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT.",
-          owner,
-          pending.sequence,
-          own,
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ChannelLedger.ChannelLedgerError({
-                reason: "persistence",
-                detail: "Could not record forward refusal.",
-                cause,
-              }),
-          ),
-        );
-        return;
-      }
+      if (acceptedRun === undefined) return yield* refusePermission(authority);
     }
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     // Steer only the run read above, and only while it holds no more memory than the requester
@@ -176,10 +183,30 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       steersInto(newest, false, captureMemoryGrantCeiling(requester.grantedScopes, false))
         ? newest
         : undefined;
-    const send = (attempt: "first" | "queued") => {
-      if (requester === undefined) return Effect.die("Cannot send without current authority");
+    const permissionRefused = yield* Ref.make<PermissionRefusal | undefined>(undefined);
+    const send = Effect.fn("channel.sendWorkerFollowUp")(function* (attempt: "first" | "queued") {
+      if (requester === undefined)
+        return yield* Effect.die("Cannot send without current authority");
       const ids = idsFor(attempt);
-      return threads
+      const steered = attempt === "first" ? steerInto : undefined;
+      const confirm = live.pipe(
+        Effect.orElseSucceed(() => ({ _tag: "requester_changed" }) as const),
+        Effect.flatMap((current) =>
+          current._tag !== "allowed"
+            ? Ref.set(permissionRefused, current).pipe(Effect.as(false))
+            : Effect.succeed(
+                steered === undefined ||
+                  steersInto(
+                    steered,
+                    true,
+                    captureMemoryGrantCeiling(current.requester.grantedScopes, false),
+                  ),
+              ),
+        ),
+      );
+      if (carriesNotes && senderInputId !== undefined)
+        yield* ledger.bindWorkerFollowUpSender(worker.threadId, ids.messageId, senderInputId);
+      return yield* threads
         .sendToThread({
           projectId: ProjectId.make(target.projectId),
           commandId: ids.commandId,
@@ -188,9 +215,10 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           text: "Follow-up from " + event.payload.from + ": " + event.payload.text,
           attachments: [],
           // The second attempt only queues, which the thread accepts whatever its run is doing.
-          ...(attempt === "first" && steerInto !== undefined
-            ? { mode: "steer" as const, targetRunId: steerInto.id }
+          ...(steered !== undefined
+            ? { mode: "steer" as const, targetRunId: steered.id }
             : { mode: "queue" as const }),
+          ...(carriesNotes ? { confirm } : {}),
           createdBy: "user",
           creationSource: "server",
         })
@@ -202,7 +230,7 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           }),
           Effect.result,
         );
-    };
+    });
     let sent =
       acceptedRun === undefined
         ? yield* send("first")
@@ -212,11 +240,14 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     if (
       sent._tag === "Failure" &&
       rejected(sent.failure) &&
+      (yield* Ref.get(permissionRefused)) === undefined &&
       (yield* Ref.get(refused)) === undefined
     ) {
       sent = yield* send("queued");
     }
     if (sent._tag === "Failure") {
+      const denial = yield* Ref.get(permissionRefused);
+      if (denial !== undefined) return yield* refusePermission(denial);
       const refusal = yield* Ref.get(refused);
       if (refusal !== undefined || rejected(sent.failure)) {
         yield* refuseForward(

@@ -12,6 +12,7 @@ import {
   CHANNEL_BOT_THREADS_SNOOZED_LIMIT,
   ChannelTaskId,
   type ChannelListBotThreadsInput,
+  type ChannelListFollowedThreadsResult,
   type ChannelListBotThreadsResult,
   type ChannelTaskView,
   type ChannelSnoozeBotTaskInput,
@@ -41,6 +42,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
+import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
@@ -57,6 +59,7 @@ import {
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
 import {
+  botWorkConversationFilter,
   decodeHistoryCursor,
   encodeHistoryCursor,
   launchesStatement,
@@ -103,6 +106,10 @@ interface ChildRow extends ThreadPullRequestColumns, RemotePullRequestColumns {
 export class ChannelBotThreads extends Context.Service<
   ChannelBotThreads,
   {
+    readonly listFollowed: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<ChannelListFollowedThreadsResult["followedThreads"], ChannelGatewayError>;
     readonly update: (
       input: ChannelUpdateTaskViewInput,
       owner: ChannelConnectionOwner,
@@ -145,6 +152,7 @@ export class ChannelBotThreads extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const follows = yield* makeThreadFollowService(ledger);
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
@@ -526,6 +534,9 @@ const make = Effect.gen(function* () {
       ...(snoozedRevision === undefined ? {} : { snoozedRevision }),
       ...(nextSnoozeExpiry === undefined ? {} : { nextSnoozeExpiry, readAt: nowIso }),
       mainMessageCount: messages,
+      ...(after === undefined
+        ? { followedThreads: yield* follows.list(owner.ownerId, botId) }
+        : {}),
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
     };
   });
@@ -616,7 +627,9 @@ const make = Effect.gen(function* () {
       JOIN channel_runtime_state s ON s.key = json_extract(k.value, '$.key')
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND ${botWorkConversationFilter(sql, botId)}`.pipe(
+      Effect.mapError(failed),
+    );
     const activeSnoozes = yield* Effect.try(() =>
       rows.flatMap((row) => {
         const view = decodeView(row.value_json);
@@ -675,7 +688,9 @@ const make = Effect.gen(function* () {
     }>`SELECT t.task_id, t.conversation_id, t.task_json, t.status_version FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
-        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+        AND c.owner_id = ${owner.ownerId} AND ${botWorkConversationFilter(sql, input.botId)}`.pipe(
+      Effect.mapError(failed),
+    );
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
@@ -788,6 +803,9 @@ const make = Effect.gen(function* () {
   });
   return ChannelBotThreads.of({
     list,
+    listFollowed: Effect.fn("ChannelBotThreads.listFollowed")((ownerId, botId) =>
+      follows.list(ownerId, botId).pipe(Effect.mapError(failed)),
+    ),
     update: views.update,
     snooze: views.snooze,
     unsnooze: views.snooze,

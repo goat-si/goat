@@ -334,6 +334,7 @@ const ChannelTaskEventBaseFields = {
 export const ChannelTaskSender = Schema.Struct({
   requester: ChannelRequester,
   connectionId: Schema.optional(TrimmedNonEmptyString),
+  inputId: Schema.optional(ChannelInputId),
 });
 export type ChannelTaskSender = typeof ChannelTaskSender.Type;
 

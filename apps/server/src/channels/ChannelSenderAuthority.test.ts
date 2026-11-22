@@ -1,8 +1,27 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope, ChannelReceptionInput, ChannelTaskId } from "@goat/contracts";
-import { ChannelQuestionId } from "@goat/contracts";
+import { ChannelQuestionId, EventId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Layer from "effect/Layer";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProviderTurnStart from "../orchestration-v2/ProviderTurnStartService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { nextTurnSelectionHarness } from "../orchestration-v2/testkit/SteeringHarness.ts";
+import { preparationSettled } from "../orchestration-v2/testkit/preparationSettled.ts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -10,11 +29,14 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
+import { taskIdFor, toolSteerIdsFor, turnSteerIdsFor } from "./channelIds.ts";
+import { senderOf } from "./channelSenderAuthority.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
   defaultScript,
+  goatInput,
+  memoryRpcContext,
   makeHarness,
   owner,
   setupBot,
@@ -141,6 +163,83 @@ const harnesses = {
   },
 };
 
+it.effect("a Slack follow-up after revocation cannot reuse a warm session holding notes", () => {
+  const { harness, opening } = harnesses.session();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const files = channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
+    const fs = yield* FileSystem.FileSystem;
+    const note = "Follow the Juniper release checklist.";
+    yield* appendChannelBotNote(fs, files, note, "2026-11-21T00:00:00Z", "fixture");
+    yield* link("U2", "teammate", ["memory:read"]);
+    const stored = yield* start(opening, "start-with-notes");
+    assert.include(yield* launchBrief(harness.world.launches[0]), note);
+    yield* say("U2", "more:" + stored.task.taskId + " check again", "follow");
+    yield* narrow("U2", ["orchestration:read", "orchestration:operate"]);
+    yield* forwardAll;
+    assert.isFalse(harness.world.sends.some((send) => send.text.includes("check again")));
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "checks the same principal's follow-up session before sending into notes-bearing work",
+  () => {
+    const { harness, opening } = harnesses.session();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* appendChannelBotNote(
+        yield* FileSystem.FileSystem,
+        files,
+        "Use Juniper for staging.",
+        "2026-11-21T00:00:00Z",
+        "fixture",
+      );
+      const sessions = yield* SessionStore.SessionStore;
+      const issue = sessions.issue({
+        subject: memoryRpcContext.principalId,
+        scopes: memoryRpcContext.grantedScopes,
+      });
+      const opener = yield* issue;
+      const follower = yield* issue;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* runtime.drain;
+      const first = yield* gateway.ingest(goatInput(opening, "app-opener"), {
+        ...memoryRpcContext,
+        authSessionId: opener.sessionId,
+      });
+      yield* reception.receive(first.inputId, runtime.ownerToken);
+      const taskId = taskIdFor(first.inputId, 0);
+      yield* dispatcher.dispatch(taskId, runtime.ownerToken);
+      assert.isDefined((yield* ledger.latestTaskBrief(taskId))?.context.notesPath);
+      const text = "check the staging report again";
+      const next = yield* gateway.ingest(goatInput("more:" + taskId + " " + text, "app-follower"), {
+        ...memoryRpcContext,
+        authSessionId: follower.sessionId,
+      });
+      yield* reception.receive(next.inputId, runtime.ownerToken);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      yield* sessions.revoke(follower.sessionId);
+      yield* forwardAll;
+      assert.isFalse(harness.world.sends.some((send) => send.text.includes(text)));
+      assert.lengthOf(yield* notices(taskId), 1);
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+        ),
+      ),
+    );
+  },
+);
+
 describe.each(["session", "local"] as const)("a %s worker's delivery from someone else", (kind) => {
   it.effect("drops a follow-up whose sender lost access after it was accepted", () => {
     const { harness, opening } = harnesses[kind]();
@@ -227,12 +326,15 @@ describe.each(["session", "local"] as const)("a %s worker's delivery from someon
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("delivers the requester's own follow-up after they lost memory", () => {
+  it.effect("delivers the requester's follow-up after memory revocation in notes-free work", () => {
     const { harness, opening } = harnesses[kind]();
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* link("U2", "teammate", ["memory:read"]);
+      yield* link("U2", "teammate", []);
       const stored = yield* start(opening, "start");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.isUndefined((yield* ledger.latestTaskBrief(stored.task.taskId))?.context.notesPath);
+      yield* narrow("U2", ["orchestration:read", "orchestration:operate", "memory:read"]);
       yield* say("U2", "more:" + stored.task.taskId + " own note", "own");
       yield* narrow("U2", ["orchestration:read", "orchestration:operate"]);
       yield* forwardAll;
@@ -285,6 +387,271 @@ describe.each(["session", "local"] as const)("a %s worker's delivery from someon
 });
 
 describe("a local worker's follow-up", () => {
+  it.effect.each([
+    "before forward",
+    "requester before forward",
+    "before steer dispatch",
+    "before provider steer",
+    "before queued start",
+    "agent before queued start",
+    "queued before sender binding existed",
+    "answer before forward",
+    "answer before dispatch",
+    "answer before queued start",
+    "answer allowed",
+    "allowed",
+  ] as const)("checks live authority for notes-bearing worker deliveries (%s)", (phase) =>
+    Effect.gen(function* () {
+      const answer = phase.startsWith("answer ");
+      const canSteer =
+        (!answer && phase.endsWith("before forward")) ||
+        phase === "before steer dispatch" ||
+        phase === "before provider steer";
+      const provider = yield* nextTurnSelectionHarness(
+        "worker-followup-notes",
+        false,
+        Effect.void,
+        false,
+        undefined,
+        canSteer,
+      );
+      const harness = makeHarness({
+        realWorkerLaunch: true,
+        workspaceRoot: import.meta.dirname,
+        workerAdapter: provider.adapter,
+      });
+      harness.script.current = localScript;
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const note = "Use Juniper for staging.";
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        yield* appendChannelBotNote(
+          yield* FileSystem.FileSystem,
+          files,
+          note,
+          "2026-11-21T00:00:00Z",
+          "fixture",
+        );
+        const sessions = yield* SessionStore.SessionStore;
+        const issue = sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const opener = yield* issue;
+        const sender = yield* issue;
+        const revoke = sessions.revoke(sender.sessionId);
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* runtime.drain;
+        const first = yield* gateway.ingest(goatInput("do: check the deploy", "worker-opener"), {
+          ...memoryRpcContext,
+          authSessionId: opener.sessionId,
+        });
+        yield* reception.receive(first.inputId, runtime.ownerToken);
+        const taskId = taskIdFor(first.inputId, 0);
+        yield* dispatcher.dispatch(taskId, runtime.ownerToken);
+        const worker = (yield* task(taskId)).worker;
+        if (worker?.runId === undefined) return yield* Effect.die("The worker did not launch");
+        const { threadId, runId } = worker;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const read = threads.getThreadRecords(threadId, ["messages", "runs"]);
+        const prepared = yield* preparationSettled(threadId);
+        assert.strictEqual(prepared.runs.find((run) => run.id === runId)?.status, "starting");
+        const starts = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
+        yield* starts.start({ threadId, runId });
+        assert.include(provider.started[0]?.message.text ?? "", note);
+        if (phase === "before provider steer") {
+          yield* threads.streamStoredEventsFrom({ threadId }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.runHead,
+          );
+        }
+
+        const questionId = ChannelQuestionId.make("question:disk");
+        if (answer) {
+          const stored = (yield* ledger.getTask(taskId))!;
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.question.opened",
+              payload: {
+                question: { questionId, text: "Which disk?", askedAt: "2026-11-21T00:00:00Z" },
+              },
+            },
+            { owner: runtime.ownerToken },
+          );
+        }
+        const next = yield* gateway.ingest(
+          goatInput(
+            answer
+              ? "answer:" + taskId + " " + questionId + " check again"
+              : "more:" + taskId + " check again",
+            "worker-follower",
+          ),
+          {
+            ...memoryRpcContext,
+            authSessionId: sender.sessionId,
+          },
+        );
+        if (phase === "queued before sender binding existed") {
+          const target = (yield* task(taskId)).target;
+          if (target === undefined) return yield* Effect.die("No worker target");
+          yield* threads.sendToThread({
+            ...turnSteerIdsFor(next.inputId, "queued"),
+            projectId: target.projectId,
+            threadId,
+            text: "Follow-up queued by an older server",
+            attachments: [],
+            mode: "queue",
+            createdBy: "user",
+            creationSource: "server",
+          });
+        } else {
+          if (phase === "agent before queued start") {
+            const stored = yield* ledger.getTask(taskId);
+            const source = yield* ledger.getInput(next.inputId);
+            if (stored === undefined || source?.requester === undefined)
+              return yield* Effect.die("Missing worker task or sender input");
+            const forwardKey = "agent-worker-followup";
+            yield* commitTransition(
+              ledger,
+              stored,
+              {
+                type: "task.followup.received",
+                payload: {
+                  inputId: stored.task.originInputId,
+                  forwardKey,
+                  text: "check again",
+                  from: source.requester.displayName,
+                  generation: stored.task.generation,
+                  sender: senderOf(source.requester, source.message.connectionId, next.inputId),
+                },
+              },
+              {
+                actor: "agent",
+                owner: runtime.ownerToken,
+                forward: true,
+                pendingAnswerMessageId: toolSteerIdsFor(forwardKey).messageId,
+              },
+            );
+          } else {
+            yield* reception.receive(next.inputId, runtime.ownerToken);
+          }
+          const [pending] = yield* ledger.listPendingForwards(10);
+          assert.strictEqual(
+            pending?.event.type,
+            answer ? "task.question.answered" : "task.followup.received",
+          );
+          if (pending === undefined) return yield* Effect.die("No delivery was recorded");
+          if (phase === "before forward" || phase === "answer before forward") yield* revoke;
+          if (phase === "requester before forward") yield* sessions.revoke(opener.sessionId);
+          if (phase === "before steer dispatch" || phase === "answer before dispatch") {
+            const send = threads.sendToThread;
+            Object.assign(threads, {
+              sendToThread: (input: Parameters<typeof send>[0]) =>
+                revoke.pipe(Effect.andThen(send(input))),
+            });
+          }
+          yield* dispatcher.forward(pending, runtime.ownerToken);
+        }
+        const forwarded = yield* read;
+        if (phase === "before provider steer") {
+          const ids = turnSteerIdsFor(next.inputId);
+          assert.strictEqual(
+            forwarded.messages.find((message) => message.id === ids.messageId)?.runId,
+            runId,
+          );
+          assert.lengthOf(forwarded.runs, 1);
+          yield* revoke;
+          const effects = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          yield* effects.drain();
+          assert.deepStrictEqual(provider.steered, []);
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const requests = yield* outbox.listByCommandId(ids.commandId);
+          assert.strictEqual(
+            requests.find((request) => request.request.type === "provider-turn.steer")?.status,
+            "failed",
+          );
+          return;
+        }
+        if (phase === "answer before forward" || phase === "answer before dispatch") {
+          assert.isFalse(
+            forwarded.messages.some((message) => message.text.includes("check again")),
+          );
+          assert.lengthOf((yield* task(taskId)).openQuestions, 1);
+          return;
+        }
+        if (canSteer) {
+          assert.isFalse(
+            forwarded.messages.some((message) => message.text.includes("check again")),
+          );
+          if (phase === "requester before forward") {
+            assert.include(
+              (yield* task(taskId)).openQuestions[0]?.text ?? "",
+              "permission changed",
+            );
+          } else {
+            assert.lengthOf(yield* notices(taskId), 1);
+          }
+          return;
+        }
+        const queued = forwarded.runs.find((run) => run.id !== runId);
+        const active = forwarded.runs.find((run) => run.id === runId);
+        assert.strictEqual(queued?.status, "queued");
+        if (queued === undefined || active?.status !== "running")
+          return yield* Effect.die("Expected an active run and a queued follow-up");
+        if (phase.endsWith("before queued start")) yield* revoke;
+        const now = yield* DateTime.now;
+        yield* (yield* EventSink.EventSinkV2).write({
+          events: [
+            {
+              id: EventId.make("event:worker-first-turn-settled"),
+              type: "run.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              providerInstanceId: active.providerInstanceId,
+              payload: { ...active, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        yield* (yield* Orchestrator.OrchestratorV2).resumeQueuedRuns;
+        assert.strictEqual(
+          (yield* read).runs.find((run) => run.id === queued.id)?.status,
+          "starting",
+        );
+        yield* starts.start({ threadId, runId: queued.id });
+        if (phase === "allowed" || phase === "answer allowed") {
+          assert.lengthOf(provider.started, 2);
+          assert.include(provider.started[1]?.message.text ?? "", "check again");
+          assert.notInclude(provider.started[1]?.message.text ?? "", note);
+        } else {
+          assert.lengthOf(provider.started, 1);
+          assert.strictEqual(
+            (yield* read).runs.find((run) => run.id === queued.id)?.status,
+            "failed",
+          );
+        }
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
+    }),
+  );
+
   it.effect("steers only the running run it checked, never whichever run is current", () => {
     const { harness, opening } = harnesses.local();
     return Effect.gen(function* () {

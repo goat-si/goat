@@ -230,6 +230,7 @@ function GoatBotProfileSection({
         <MobileBotProfileSheet
           mode="edit"
           initial={editing}
+          instructionsEditable={capabilities?.goatBotInstructions === true}
           canSubmit={manage.canEdit}
           unavailableReason={manage.connected ? undefined : manage.offlineReason}
           onClose={() => setEditing(null)}

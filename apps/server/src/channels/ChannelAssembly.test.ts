@@ -315,9 +315,12 @@ describe("R7 path over the assembled layer (fake Slack SDK)", () => {
           gateway.ingest(goatInput("do: goat job", "client-r7"), rpcContext),
           emit(
             harness.sdk,
-            eventCallback(channelMention({ text: "<@U0BOT> do: slack job", ts: slackRoot }), {
-              event_id: "EvR7Slack",
-            }),
+            eventCallback(
+              channelMention({ text: "<@U0BOT> GOAT Bot: do: slack job", ts: slackRoot }),
+              {
+                event_id: "EvR7Slack",
+              },
+            ),
           ),
         ],
         { concurrency: "unbounded" },
@@ -444,9 +447,12 @@ describe("Slack connection lifetime", () => {
       const connectionId = yield* connectSlack();
       yield* linkAlice(harness.sdk, connectionId);
       const runtime = yield* claim;
-      const body = eventCallback(channelMention({ text: "<@U0BOT> do: once", ts: slackRoot }), {
-        event_id: "EvOnce",
-      });
+      const body = eventCallback(
+        channelMention({ text: "<@U0BOT> GOAT Bot: do: once", ts: slackRoot }),
+        {
+          event_id: "EvOnce",
+        },
+      );
       // The input is stored, then the acknowledgement never completes and the socket drops.
       const first = harness.sdk.sessions[0]!.emitEnvelope(body, {
         ack: () => new Promise<void>(() => {}),
@@ -486,9 +492,12 @@ describe("Slack connection lifetime, interrupted mid-envelope", () => {
       yield* linkAlice(harness.sdk, connectionId);
       const runtime = yield* claim;
       const settings = yield* SlackChannelSettings.SlackChannelSettings;
-      const body = eventCallback(channelMention({ text: "<@U0BOT> do: cut", ts: slackRoot }), {
-        event_id: "EvCutOff",
-      });
+      const body = eventCallback(
+        channelMention({ text: "<@U0BOT> GOAT Bot: do: cut", ts: slackRoot }),
+        {
+          event_id: "EvCutOff",
+        },
+      );
       // The disconnect races the envelope's handling: it may stop before or after the store.
       const first = harness.sdk.sessions[0]!.emitEnvelope(body);
       yield* settings.disconnect({ connectionId });
@@ -525,9 +534,12 @@ describe("Slack default work target", () => {
       const runtime = yield* claim;
       yield* emit(
         harness.sdk,
-        eventCallback(channelMention({ text: "<@U0BOT> do: target job", ts: slackRoot }), {
-          event_id: "EvTarget",
-        }),
+        eventCallback(
+          channelMention({ text: "<@U0BOT> GOAT Bot: do: target job", ts: slackRoot }),
+          {
+            event_id: "EvTarget",
+          },
+        ),
       );
       yield* runtime.drain;
       const ledger = yield* ChannelLedger.ChannelLedger;

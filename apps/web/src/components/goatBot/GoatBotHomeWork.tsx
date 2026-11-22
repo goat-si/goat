@@ -14,6 +14,7 @@ import {
 import { BotId } from "@goat/contracts";
 import type {
   BotRemoteWork,
+  ChannelListFollowedThreadsResult,
   BotThreadRow,
   ChannelTaskId,
   ChannelTaskChip,
@@ -42,6 +43,7 @@ import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { rememberHomeOrigin } from "./goatBotHomeRequest";
 import { GoatBotPullRequestChips } from "./GoatBotPullRequestChips";
 import { botTaskSnoozeMenu, useGoatBotTaskSnooze } from "./GoatBotTaskSnooze";
+import { GoatBotFollowedThreads } from "./GoatBotFollowedThreads";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -76,6 +78,7 @@ export function GoatBotHomeWork({
   environmentId,
   botName,
   rows,
+  followedThreads,
   snoozed = NO_SNOOZED,
   snoozedContinuation,
   snoozedLimitReached,
@@ -103,6 +106,7 @@ export function GoatBotHomeWork({
   readonly threadId?: ThreadId | undefined;
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
+  readonly followedThreads?: ChannelListFollowedThreadsResult["followedThreads"] | undefined;
   readonly snoozed?: ReadonlyArray<TaskRow> | undefined;
   readonly snoozedContinuation?: BotSnoozeFoldContinuation | undefined;
   readonly snoozedLimitReached?: boolean | undefined;
@@ -222,6 +226,13 @@ export function GoatBotHomeWork({
   return (
     <div ref={containerRef} tabIndex={-1} aria-label="Work" className="flex flex-col">
       {notice}
+      {followedThreads && followedThreads.length > 0 && (
+        <GoatBotFollowedThreads
+          environmentId={environmentId}
+          rows={followedThreads}
+          onRefresh={onRetry}
+        />
+      )}
       {offline ? (
         <p className="px-3 py-3">
           {botName}'s tasks are unavailable while the computer is offline.

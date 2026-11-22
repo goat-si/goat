@@ -11,6 +11,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 import { goatBotSessionSharingFor } from "./channelIds.ts";
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 
@@ -30,6 +31,8 @@ export const bindingKeyFor = (
     requester.runtimeModeCeiling,
     // A session's frozen journal shows what these scopes could see; another set starts a new one.
     requester.grantedScopes.toSorted().join(","),
+    // Retire Slack sessions whose prompts could contain notes from before the read check.
+    ...(!canReadChannelBotNotes(requester) ? ["without-notes"] : []),
     target.memoryGrantCeiling ?? "none",
     target.modelSelection.instanceId,
     target.modelSelection.model,

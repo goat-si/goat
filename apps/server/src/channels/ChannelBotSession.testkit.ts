@@ -6,7 +6,6 @@ import type {
   ChatAttachment,
 } from "@goat/contracts";
 import { ProviderInstanceId, ThreadId } from "@goat/contracts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -68,7 +67,10 @@ const script = (input: ChannelReceptionInput) => {
 };
 
 export const sessionHarness = (
-  options: { readonly workerAdapter?: ProviderAdapter.ProviderAdapterV2["Service"] } = {},
+  options: Pick<
+    NonNullable<Parameters<typeof makeHarness>[0]>,
+    "workerAdapter" | "realWorkerLaunch" | "botWorkspaceRoot"
+  > = {},
 ) => {
   const harness = makeHarness({
     ...options,

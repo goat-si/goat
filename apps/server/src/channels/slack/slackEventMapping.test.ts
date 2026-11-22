@@ -247,6 +247,20 @@ describe("classifySlackEvent", () => {
     expect(JSON.stringify(result)).not.toContain("ABC123");
   });
 
+  it("preserves a bot address containing digits after Link", () => {
+    const text = "Link 012345 Extra: check the build";
+    const result = classifySlackEvent(envelope(directMessage({ text })), config);
+    expect(result).toMatchObject({
+      _tag: "message",
+      event: { text },
+    });
+  });
+
+  it("recognizes a complete six-digit link command", () => {
+    const result = classifySlackEvent(envelope(directMessage({ text: "link 012345" })), config);
+    expect(result).toMatchObject({ _tag: "link", code: "012345", event: { text: "" } });
+  });
+
   it("drops a link code posted in a channel and asks for link help", () => {
     const result = classifySlackEvent(envelope(mention({ text: "<@U0BOT> link ABC123" })), config);
     expect(result).toMatchObject({ _tag: "link_notice", notice: "link_help" });

@@ -1,5 +1,6 @@
 import * as ServerConfig from "../config.ts";
 import {
+  isChannelWorkerThreadId,
   MessageId,
   type ModelSelection,
   type NodeId,
@@ -18,6 +19,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ChannelProviderInputAuthority from "../channels/channelProviderInputAuthority.ts";
+import { isChannelFollowUpMessageId } from "../channels/channelIds.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
@@ -96,6 +99,9 @@ export const layer: Layer.Layer<
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+    const channelInputAuthority = yield* Effect.serviceOption(
+      ChannelProviderInputAuthority.ChannelProviderInputAuthority,
+    );
     // Stop reaches the screen first: the driver transport dies before the provider is asked.
     const stopComputerUse = (threadId: ThreadId) =>
       Option.isSome(computerUse) ? computerUse.value.stop(threadId) : Effect.void;
@@ -465,6 +471,38 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
+          const text = yield* providerTextWithSkills(settings, {
+            message,
+            driver: loaded.session.value.driver,
+            globalSkillsDir: Option.isSome(config) ? config.value.globalSkillsDir : undefined,
+            project: projections
+              .getThread(input.threadId)
+              .pipe(Effect.map((thread) => thread.projectId)),
+          });
+          // Command admission precedes outbox delivery, so steering needs its own live check.
+          if (
+            isChannelWorkerThreadId(input.threadId) &&
+            isChannelFollowUpMessageId(message.id) &&
+            Option.isSome(channelInputAuthority)
+          ) {
+            const thread = yield* projections.getThread(input.threadId);
+            const refusal = yield* channelInputAuthority
+              .value(input.threadId, message.id, run.memoryGrantCeiling)
+              .pipe(
+                Effect.provideService(
+                  ChannelProviderInputAuthority.ProviderInputRuntimeMode,
+                  thread.runtimeMode,
+                ),
+              );
+            if (refusal !== undefined) {
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause: refusal,
+              });
+            }
+          }
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
@@ -476,14 +514,7 @@ export const layer: Layer.Layer<
                 : { modelSelection: input.modelSelection }),
               message: {
                 messageId: message.id,
-                text: yield* providerTextWithSkills(settings, {
-                  message,
-                  driver: loaded.session.value.driver,
-                  globalSkillsDir: Option.isSome(config) ? config.value.globalSkillsDir : undefined,
-                  project: projections
-                    .getThread(input.threadId)
-                    .pipe(Effect.map((thread) => thread.projectId)),
-                }),
+                text,
                 attachments: message.attachments,
                 createdBy: message.createdBy,
                 creationSource: message.creationSource,
@@ -528,11 +559,15 @@ export const layer: Layer.Layer<
   }),
 );
 
+export const layerWithChannelAuthority = layer.pipe(
+  Layer.provide(ChannelProviderInputAuthority.layer),
+);
+
 export const layerWithSkills = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const settings = yield* ServerSettings.ServerSettingsService;
-    return layer.pipe(
+    return layerWithChannelAuthority.pipe(
       Layer.provide(
         Layer.merge(
           Layer.succeed(ServerConfig.ServerConfig, config),

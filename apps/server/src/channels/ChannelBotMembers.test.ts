@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- uploads are files in the attachments folder.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -269,6 +270,27 @@ describe("two bots", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect.each([
+    { stored: "Scout", create: "sCoUt", rename: "SCOUT" },
+    { stored: "Ops:  East", create: "Ops: East", rename: "Ops:\tEast" },
+  ])("refuses creating or renaming a bot to the same routing name as $stored", (names) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createMember("scout", { name: names.stored });
+      assert.strictEqual(
+        yield* refusal(createMember("duplicate", { name: names.create })),
+        "invalid_input",
+      );
+      const builder = yield* createMember("builder", { name: "Builder" });
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      assert.strictEqual(
+        yield* refusal(members.update({ botId: builder.botId, name: names.rename }, owner)),
+        "invalid_input",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("a new member greets the person first in its own chat, once", () => {
     const harness = makeHarness();
@@ -884,9 +906,9 @@ describe("a member's model", () => {
       assert.lengthOf(replies("The build is green."), 1);
       assert.notInclude((yield* threadView(botThreadId)).texts, "The build is green.");
       // The member's session gets the same personal data and read-only rules as the main bot.
-      const launched = harness.world.launches.find(
-        (launch) => launch.threadId === task!.worker!.threadId,
-      )?.initialMessage?.text;
+      const launched = yield* launchBrief(
+        harness.world.launches.find((launch) => launch.threadId === task!.worker!.threadId),
+      );
       assert.include(launched, "only through a connector already connected for that account");
       assert.include(
         launched,

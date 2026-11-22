@@ -72,6 +72,11 @@ const BOT_ATTENTION_PREVIEW_PREDECESSORS = [
 ] as const;
 const TURN_MEMORY_RECEIPTS_PREVIEW_ID = 178;
 const TURN_MEMORY_RECEIPTS_NAME = "TurnMemoryReceipts";
+const TURN_MEMORY_RECEIPTS_LATE_PREVIEW_ID = 184;
+const TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS = [
+  [182, "SlackConversationBot"],
+  [183, "ChannelInputSessionAuthority"],
+] as const;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -171,6 +176,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   WORKER_GENERATIONS_MIGRATION_NAME,
   "ChannelBotTaskSnooze",
   BOT_ATTENTION_MIGRATION_NAME,
+  ...TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS.map(([, name]) => name),
   TURN_MEMORY_RECEIPTS_NAME,
 ]);
 
@@ -384,6 +390,46 @@ const turnMemoryReceiptsPreview = <E>(
   return receipt[0];
 };
 
+// The second published preview already created the 184 receipt objects, before dev gained 182–183.
+export const turnMemoryReceiptsLatePreviewInsertions = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+): ReadonlyArray<MigrationEntry<E>> | undefined => {
+  const firstInsertionId = TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS[0][0];
+  const tail = history.filter((row) => row.migration_id >= firstInsertionId);
+  if (
+    tail.length !== 1 ||
+    tail[0]?.migration_id !== TURN_MEMORY_RECEIPTS_LATE_PREVIEW_ID ||
+    tail[0].name !== TURN_MEMORY_RECEIPTS_NAME ||
+    !entries.some(
+      ([id, name]) =>
+        id === TURN_MEMORY_RECEIPTS_LATE_PREVIEW_ID && name === TURN_MEMORY_RECEIPTS_NAME,
+    ) ||
+    skippedV2Migrations(entries, history, firstInsertionId - 1) !== undefined ||
+    history.some(
+      (row) =>
+        row.migration_id >= FIRST_V2_MIGRATION_ID &&
+        row.migration_id < firstInsertionId &&
+        !entries.some(
+          ([id, name]) => id === row.migration_id && name === canonicalMigrationName(row.name),
+        ),
+    )
+  )
+    return undefined;
+
+  const insertions = entries.filter(
+    ([id]) => id >= firstInsertionId && id < TURN_MEMORY_RECEIPTS_LATE_PREVIEW_ID,
+  );
+  return insertions.length === TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS.length &&
+    insertions.every(
+      ([id, name], index) =>
+        TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS[index]?.[0] === id &&
+        TURN_MEMORY_RECEIPTS_LATE_PREVIEW_INSERTIONS[index]?.[1] === name,
+    )
+    ? insertions
+    : undefined;
+};
+
 /**
  * Read-only preflight: preview reconciliation must not mutate incompatible memory sandboxes.
  *
@@ -523,6 +569,17 @@ export const plannedGoatLedger = <E>(
     }
   | Migrator.MigrationError
   | undefined => {
+  const latePreviewInsertions = turnMemoryReceiptsLatePreviewInsertions(entries, history);
+  if (latePreviewInsertions !== undefined) {
+    return {
+      moved: [
+        ...history,
+        ...latePreviewInsertions.map(([migration_id, name]) => ({ migration_id, name })),
+      ],
+      goatRows: [],
+      insertions: latePreviewInsertions,
+    };
+  }
   if (!goatMigrationIdsMove(entries, history)) return undefined;
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const goatRows = history.flatMap((row) => {
@@ -625,7 +682,9 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   }
   if (plan === undefined) return [];
   const { moved, goatRows, insertions } = plan;
-  yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
+  if (goatRows.length > 0) {
+    yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
+  }
   for (const row of goatRows) {
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;
   }

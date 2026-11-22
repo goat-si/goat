@@ -44,11 +44,13 @@ export function GoatBotProfileDialog(props: {
   readonly extraChanged?: boolean;
   /** The target server stores a member's color; absent or false hides the swatches. */
   readonly colorEditable?: boolean;
+  readonly instructionsEditable?: boolean;
   readonly finalFocus?: ComponentProps<typeof DialogPopup>["finalFocus"];
 }) {
   const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [instructions, setInstructions] = useState(props.initial.instructions ?? "");
   const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export function GoatBotProfileDialog(props: {
       name,
       avatar,
       purpose,
+      ...(props.instructionsEditable === true ? { instructions } : {}),
       // Without the swatches the form never carries a color, so an old server gets no key.
       ...(props.colorEditable === true ? { color } : {}),
     });
@@ -149,6 +152,19 @@ export function GoatBotProfileDialog(props: {
                 onChange={(event) => setPurpose(event.target.value)}
               />
             </label>
+            {props.instructionsEditable === true ? (
+              <label className="grid gap-1.5 text-sm">
+                Instructions
+                <Textarea
+                  value={instructions}
+                  maxLength={16 * 1024}
+                  disabled={busy}
+                  rows={4}
+                  placeholder="What should this bot do every time?"
+                  onChange={(event) => setInstructions(event.target.value)}
+                />
+              </label>
+            ) : null}
             {props.children}
             {nameMissing ? (
               <p className="text-sm text-muted-foreground">The bot needs a name.</p>

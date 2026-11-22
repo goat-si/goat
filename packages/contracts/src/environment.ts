@@ -301,6 +301,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotThreads` and `channel.updateTaskView` for bot task threads. */
+  goatBotThreadFollows: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.listBotThreads` takes `history` and walks every task of a bot by cursor. Older
       servers drop the key and answer the current list. */
@@ -311,6 +312,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotNotes`. */
   goatBotNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotPrivateNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotInstructions: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
   goatBotLibrary: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.retryTask`: a person runs a failed or stopped task again. */
@@ -320,6 +323,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
       answer listed channels and linked accounts only and drop those fields. */
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
+  slackBotBindings: Schema.optionalKey(Schema.Boolean),
   /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
   linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
   revisionBoundPullRequestReviews: Schema.optionalKey(Schema.Boolean),

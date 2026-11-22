@@ -1,3 +1,7 @@
+import {
+  handleWebThreadFollowAction,
+  webThreadFollowAvailable,
+} from "../components/goatBot/goatBotThreadFollowMenu";
 import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "../lib/copyThreadReference";
@@ -159,6 +163,7 @@ export function useThreadActionMenu(input: {
       const items = buildThreadActionMenuItems({
         canOpenSshHandoff: true,
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+        canFollowWithBot: webThreadFollowAvailable(threadRef),
         canFind: onFind !== undefined,
         branch: thread.branch ?? null,
         projectFilter: null,
@@ -182,6 +187,8 @@ export function useThreadActionMenu(input: {
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
+      if (botAction) return await botAction;
       const action: ThreadActionMenuId = clicked.value;
       if (
         threadActionRequiresOperate(action) &&

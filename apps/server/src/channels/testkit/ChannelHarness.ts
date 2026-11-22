@@ -1,11 +1,3 @@
-/**
- * A channel core harness for tests: the GOAT bot thread is a real orchestrator thread whose
- * provider adapter refuses to run anything, worker threads are scripted (`WorkerWorld`), and the
- * reception model and Slack transport are fakes the test controls. Other lanes swap in their own
- * channel layer or Slack transport through `makeHarness` options.
- *
- * @module ChannelHarness
- */
 import {
   type ChannelIngestInput,
   type ChannelOutboundMessage,
@@ -316,6 +308,7 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    readonly botWorkspaceRoot?: string;
     /**
      * Real directory as the work project's root. A .git inside it makes the dispatcher give the
      * task its own worktree; the default is a path that does not exist.
@@ -357,6 +350,7 @@ export function makeHarness(
   };
 
   const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
+  const layerFiles = AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-");
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
     ProviderAdapterRegistry.layerFromAdapters([
@@ -370,7 +364,7 @@ export function makeHarness(
           ),
       },
     ]),
-    { databaseLayer: layerDatabase, runEffectWorker: false },
+    { databaseLayer: layerDatabase, serverConfigLayer: layerFiles, runEffectWorker: false },
   );
   const layerSettings =
     options.settingsLayer ??
@@ -694,7 +688,7 @@ export function makeHarness(
           {
             id: scratchProjectId,
             title: "Scratch",
-            workspaceRoot: "/nonexistent/scratch",
+            workspaceRoot: options.botWorkspaceRoot ?? "/nonexistent/scratch",
             defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
@@ -746,10 +740,7 @@ export function makeHarness(
       isScratchProject: () => Effect.succeed(false),
     }),
     layerSettings,
-  ).pipe(
-    // Server config, platform services, and the attachment files the gateway claims into.
-    Layer.provideMerge(AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-")),
-  );
+  ).pipe(Layer.provideMerge(layerFiles));
 
   const layerLaunchDependencies = Layer.mergeAll(
     layerOrchestrator,
@@ -769,15 +760,15 @@ export function makeHarness(
     }),
     ProviderRegistryMock.layer(),
     Layer.mock(ProjectService.ProjectService)({
-      getById: () =>
+      getById: (id) =>
         Effect.succeed(
-          Option.some({
-            ...shells[0]!,
+          Option.map(Option.fromUndefinedOr(shells.find((shell) => shell.id === id)), (shell) => ({
+            ...shell,
             repositoryIdentity: null,
             faviconPath: null,
             defaultThreadEnvMode: null,
             deletedAt: null,
-          }),
+          })),
         ),
     }),
   );
@@ -852,7 +843,6 @@ export function makeHarness(
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
     Layer.provideMerge(layerDatabase),
   );
-  /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {
     const index = shells.findIndex((shell) => shell.id === id);
     if (index !== -1) shells.splice(index, 1);
@@ -944,15 +934,26 @@ export const slackContext = {
   ...owner,
   caller: { type: "transport" as const, kind: "slack" as const, connectionId: "slack-1" },
 };
-
-/** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
-export const linkSlackUser = (user = "U1") =>
+export const memoryRpcContext = {
+  ...rpcContext,
+  grantedScopes: [...rpcContext.grantedScopes, "memory:read", "memory:write"] as const,
+};
+export const memorySlackContext = {
+  ...slackContext,
+  grantedScopes: memoryRpcContext.grantedScopes,
+};
+export const linkSlackUser = (user = "U1", withMemory: boolean | typeof owner = false) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
+    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...withMemory };
     const { code } = yield* identities.createLink(
-      { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
-      owner,
+      {
+        connectionId: "slack-1",
+        runtimeModeCeiling: "auto-accept-edits",
+        ...(withMemory ? { grantedScopes: context.grantedScopes } : {}),
+      },
+      context,
     );
     yield* gateway.linkIdentity(
       {
@@ -968,7 +969,7 @@ export const linkSlackUser = (user = "U1") =>
           rootTs: "1",
         },
       },
-      slackContext,
+      context,
     );
   });
 

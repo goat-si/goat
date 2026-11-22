@@ -7,6 +7,8 @@ import {
   AuthSettingsWriteScope,
   type EnvironmentId,
   type RuntimeMode,
+  type BotProfile,
+  type SlackBotBindings,
   type SlackChannelScope,
   type SlackChannelSettings as SlackConnection,
   type SlackUserAccess,
@@ -29,6 +31,7 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection, SettingsUnavailableGroup } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { SlackBotBindingEditor } from "./SlackBotBindingEditor";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
   type SlackSettingsDraft,
@@ -80,6 +83,9 @@ export function SlackChannelSettings() {
       {availability === "ready" && environmentId !== null ? (
         <SlackConnectionControls
           environmentId={environmentId}
+          bindingChoices={
+            selected?.serverConfig?.environment.capabilities.slackBotBindings === true
+          }
           accessChoices={
             selected?.serverConfig?.environment.capabilities.slackChannelAccess === true
           }
@@ -99,13 +105,23 @@ export function SlackChannelSettings() {
 function SlackConnectionControls({
   environmentId,
   accessChoices,
+  bindingChoices,
 }: {
   environmentId: EnvironmentId;
   accessChoices: boolean;
+  bindingChoices: boolean;
 }) {
   const settingsQuery = useEnvironmentQuery(
     channelEnvironment.slackSettings({ environmentId, input: {} }),
   );
+  const roster = useEnvironmentQuery(
+    bindingChoices ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
+  );
+  const bindingBots = bindingChoices
+    ? (roster.data?.bots ?? []).filter(
+        (bot) => bot.role === "member" && bot.state !== "deleted" && bot.hidden !== true,
+      )
+    : null;
   const statusResult = useAtomValue(channelEnvironment.slackStatus({ environmentId, input: {} }));
   const liveStatus = Option.getOrNull(AsyncResult.value(statusResult));
   const refreshSettings = settingsQuery.refresh;
@@ -130,6 +146,7 @@ function SlackConnectionControls({
         environmentId={environmentId}
         connection={undefined}
         accessChoices={accessChoices}
+        bindingBots={bindingBots}
         onSaved={refreshSettings}
       />
     );
@@ -140,6 +157,7 @@ function SlackConnectionControls({
         environmentId={environmentId}
         connection={connection}
         accessChoices={accessChoices}
+        bindingBots={bindingBots}
         onSaved={refreshSettings}
       />
       <SlackIdentityLinks environmentId={environmentId} connectionId={connection.connectionId} />
@@ -152,6 +170,7 @@ function SlackConnectionForm(props: {
   connection: SlackConnection | undefined;
   /** The server's slackChannelAccess capability. */
   accessChoices: boolean;
+  bindingBots: ReadonlyArray<BotProfile> | null;
   onSaved: () => void;
 }) {
   const { environmentId, connection } = props;
@@ -161,7 +180,8 @@ function SlackConnectionForm(props: {
   const projects = allProjects.filter((project) => project.environmentId === environmentId);
   // Untouched fields follow the latest saved settings; only the user's edits are kept locally.
   const [edits, setEdits] = useState<Partial<SlackSettingsDraft>>({});
-  const { accessChoices } = props;
+  const [bindingEdits, setBindingEdits] = useState<SlackBotBindings>();
+  const { accessChoices, bindingBots } = props;
   const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection, accessChoices), ...edits };
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -178,7 +198,15 @@ function SlackConnectionForm(props: {
       return;
     }
     setBusy(true);
-    const result = await configure({ environmentId, input: built.input });
+    const result = await configure({
+      environmentId,
+      input: {
+        ...built.input,
+        ...(bindingBots === null || bindingEdits === undefined
+          ? {}
+          : { botBindings: bindingEdits }),
+      },
+    });
     setBusy(false);
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
@@ -188,6 +216,7 @@ function SlackConnectionForm(props: {
     }
     // Saved values now come from the server; typed tokens are never shown again.
     setEdits({});
+    setBindingEdits(undefined);
     props.onSaved();
   };
 
@@ -204,6 +233,7 @@ function SlackConnectionForm(props: {
       return;
     }
     setEdits({});
+    setBindingEdits(undefined);
     props.onSaved();
   };
 
@@ -228,6 +258,7 @@ function SlackConnectionForm(props: {
       return;
     }
     setEdits({});
+    setBindingEdits(undefined);
     props.onSaved();
   };
 
@@ -336,6 +367,14 @@ function SlackConnectionForm(props: {
           }
         />
       ) : null}
+      {bindingBots === null ? null : (
+        <SlackBotBindingEditor
+          bindings={bindingEdits ?? connection?.botBindings ?? []}
+          bots={bindingBots}
+          disabled={busy}
+          onChange={setBindingEdits}
+        />
+      )}
       <SettingsRow
         title="Who can use it"
         description={
