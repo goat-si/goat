@@ -1,3 +1,4 @@
+import { verifyBotTemplate } from "./testkit/botTemplate.ts";
 import { launchBrief } from "./testkit/providerBrief.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- uploads are files in the attachments folder.
 import * as NodeFS from "node:fs";
@@ -60,6 +61,7 @@ import {
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
+
 const MAIN = BotId.make("main");
 const stranger = { ...owner, ownerId: "environment:stranger" };
 const NOW = "2026-11-07T00:00:00.000Z";
@@ -103,13 +105,10 @@ const ensureThread = (threadId: ThreadId) =>
       creationSource: "server",
     });
   });
+
 const createMember = (
   key: string,
-  fields: {
-    readonly templateId?: string;
-    readonly name?: string;
-    readonly model?: BotProfile["defaultModelSelection"];
-  } = {},
+  fields: { readonly name?: string; readonly model?: BotProfile["defaultModelSelection"] } = {},
   who = owner,
 ) =>
   Effect.gen(function* () {
@@ -117,7 +116,6 @@ const createMember = (
     const bot = yield* members.create(
       {
         clientRequestId: key,
-        ...(fields.templateId === undefined ? {} : { templateId: fields.templateId }),
         name: fields.name ?? "Helper",
         avatar: null,
         purpose: "Checks builds.",
@@ -128,6 +126,7 @@ const createMember = (
     yield* ensureThread(bot.sessionThreadId);
     return bot;
   });
+
 const send = (threadId: ThreadId, text: string, key: string, who = owner) =>
   ThreadMessageIntake.dispatchCommand(
     {
@@ -143,11 +142,13 @@ const send = (threadId: ThreadId, text: string, key: string, who = owner) =>
     },
     who,
   ).pipe(Effect.provide(AttachmentLifecycle.layerFiles));
+
 const isGatewayError = Schema.is(ChannelGatewayError);
 const refusal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flip(effect).pipe(
     Effect.map((error) => (isGatewayError(error) ? error.reason : String(error))),
   );
+
 const threadView = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
@@ -160,11 +161,13 @@ const threadView = (threadId: ThreadId) =>
       ),
     };
   });
+
 const titles = (botId: BotId) =>
   ChannelLedger.ChannelLedger.pipe(
     Effect.flatMap((ledger) => ledger.listTasks({ ownerId, botId, limit: 20 })),
     Effect.map((page) => page.tasks.map((task) => task.title).sort()),
   );
+
 const storedProfile = (botId: string) =>
   SqlClient.SqlClient.pipe(
     Effect.flatMap(
@@ -173,6 +176,7 @@ const storedProfile = (botId: string) =>
     ),
     Effect.map((rows) => rows[0]?.value_json ?? ""),
   );
+
 const setProfile = (botId: string, patch: Record<string, unknown>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -230,11 +234,7 @@ describe("creating member bots", () => {
             .length > 0,
           true,
         );
-        const template = yield* createMember("template", {
-          name: "PR reviewer",
-          templateId: "pr-reviewer",
-        });
-        assert.match(template.instructions ?? "", /pull request/i);
+        yield* verifyBotTemplate(members, sql);
       }).pipe(Effect.provide(harness.layer));
     },
   );

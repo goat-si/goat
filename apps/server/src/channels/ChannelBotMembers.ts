@@ -1,3 +1,4 @@
+import { goatBotTemplate } from "@goat/shared/goatBotNames";
 /**
  * Member bots: create, hide, delete, restore, and a reconciler for steps a crash left halfway.
  * Every step holds one permit, so a reconcile never interleaves with a delete or a restore.
@@ -52,7 +53,13 @@ import {
   streamUnavailable,
 } from "./channelTaskChanges.ts";
 
-export type MemberBot = BotProfile;
+import {
+  addTemplateAutomation,
+  templateAuthority,
+  type TemplateCreation,
+} from "./channelBotTemplateAutomation.ts";
+
+export type MemberBot = BotProfile & { readonly templateAutomationPending?: true };
 type Owner = Pick<ChannelConnectionOwner, "ownerId">;
 type MemberRecord = ChannelBotProfiles.MemberRecord;
 
@@ -62,6 +69,7 @@ export class ChannelBotMembers extends Context.Service<
     readonly create: (
       input: ChannelCreateBotInput,
       owner: Owner,
+      templateCreation?: TemplateCreation,
     ) => Effect.Effect<MemberBot, ChannelGatewayError>;
     readonly setHidden: (
       input: ChannelSetBotHiddenInput,
@@ -105,7 +113,14 @@ const MEMBER_RECORD_LIMIT = 500;
 const RECONCILE_BATCH = 100;
 const createKey = (ownerId: string, clientRequestId: string) =>
   "bot-create:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(clientRequestId);
-const CreateRecord = Schema.fromJsonString(Schema.Struct({ botId: BotId }));
+const CreateRecord = Schema.fromJsonString(
+  Schema.Struct({
+    botId: BotId,
+    templateId: Schema.optionalKey(Schema.String),
+    principalId: Schema.optionalKey(Schema.String),
+    automationAdded: Schema.optionalKey(Schema.Boolean),
+  }),
+);
 const decodeCreate = Schema.decodeUnknownSync(CreateRecord);
 const encodeCreate = Schema.encodeSync(CreateRecord);
 
@@ -276,24 +291,29 @@ const make = Effect.gen(function* () {
     Effect.catchCause((cause) => Effect.logWarning("GOAT Bot member reconcile failed", { cause })),
   );
 
-  const create: ChannelBotMembers["Service"]["create"] = (input, owner) =>
+  const create: ChannelBotMembers["Service"]["create"] = (input, owner, templateCreation) =>
     serial(
       Effect.gen(function* () {
         yield* home.requireHome;
         const at = yield* now;
         const environmentId = yield* environment.getEnvironmentId;
-        const record = yield* sql.withTransaction(
+        const template = goatBotTemplate(input.templateId);
+        if (input.templateId !== undefined && template === undefined)
+          return yield* fail("invalid_input");
+        const authority =
+          template === undefined ? undefined : yield* templateAuthority(templateCreation);
+        const key = createKey(owner.ownerId, input.clientRequestId);
+        const { record, receipt } = yield* sql.withTransaction(
           Effect.gen(function* () {
-            const key = createKey(owner.ownerId, input.clientRequestId);
             const known = yield* sql<{ readonly value_json: string }>`
               SELECT value_json FROM channel_runtime_state WHERE key = ${key}`;
             if (known[0] !== undefined) {
-              const existing = yield* readMember(
-                owner.ownerId,
-                decodeCreate(known[0].value_json).botId,
-              );
+              const receipt = decodeCreate(known[0].value_json);
+              if (receipt.templateId !== input.templateId) return yield* fail("invalid_input");
+              if (receipt.principalId !== authority?.principalId) return yield* fail("forbidden");
+              const existing = yield* readMember(owner.ownerId, receipt.botId);
               if (existing === undefined) return yield* fail("persistence_failed");
-              return existing;
+              return { record: existing, receipt };
             }
             const counts = yield* memberCounts(owner.ownerId);
             if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
@@ -304,8 +324,9 @@ const make = Effect.gen(function* () {
               botId,
               role: "member",
               name: input.name,
-              avatar: input.avatar,
-              purpose: input.purpose,
+              avatar: template?.face ?? input.avatar,
+              purpose: template?.purpose ?? input.purpose,
+              ...(template === undefined ? {} : { instructions: template.instructions }),
               defaultModelSelection: input.defaultModelSelection,
               defaultProjectId: null,
               environmentId,
@@ -316,13 +337,41 @@ const make = Effect.gen(function* () {
             };
             yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
               (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;
+            const receipt = {
+              botId,
+              ...(template === undefined || authority === undefined
+                ? {}
+                : { templateId: template.id, principalId: authority.principalId }),
+            };
             yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
-              VALUES (${key}, ${encodeCreate({ botId })}, ${at})`;
-            return created;
+              VALUES (${key}, ${encodeCreate(receipt)}, ${at})`;
+            return { record: created, receipt };
           }),
         );
         if (record.state !== "deleted") yield* launchMember(owner.ownerId, record);
-        return ChannelBotProfiles.memberProfile(record);
+        const bot = ChannelBotProfiles.memberProfile(record);
+        if (
+          template === undefined ||
+          authority === undefined ||
+          record.state === "deleted" ||
+          ("automationAdded" in receipt && receipt.automationAdded === true)
+        )
+          return bot;
+        const ref = yield* ledger.getBotById(owner.ownerId, bot.botId);
+        if (ref === undefined) return yield* fail("persistence_failed");
+        const model =
+          bot.defaultModelSelection ??
+          resolveGoatBotModelSelection(yield* serverSettings.getSettings);
+        const added = yield* addTemplateAutomation(
+          sql,
+          authority,
+          template,
+          bot,
+          ref.bot.projectId,
+          model,
+          key,
+        );
+        return added ? bot : { ...bot, templateAutomationPending: true as const };
       }).pipe(Effect.mapError(failed)),
     );
 
@@ -481,7 +530,11 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ChannelBotMembers, make);
 
 /** Built once per connection, so the change stream limit counts this connection's streams. */
-export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
+export const rpcHandlers = (
+  service: ChannelBotMembers["Service"],
+  owner: Owner,
+  templateCreation?: TemplateCreation,
+) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
     [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: (input: ChannelListOpenAsksInput) =>
@@ -498,7 +551,12 @@ export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner)
     [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
       service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
-      service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+      service.create(input, owner, templateCreation).pipe(
+        Effect.map(({ templateAutomationPending, ...bot }) => ({
+          bot,
+          templateAutomationPending,
+        })),
+      ),
     [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
       service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
     [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>

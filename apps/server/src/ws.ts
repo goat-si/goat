@@ -1641,7 +1641,10 @@ export const layerWsRpc = (
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
-        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
+        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner, {
+          service: scheduledTasks,
+          capture: scheduledTaskAccess.capture(captureTaskMemoryCeiling),
+        }),
         ...(yield* channelBotWorkRpcHandlers(channelOwner)),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
