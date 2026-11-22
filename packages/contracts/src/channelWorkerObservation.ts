@@ -60,6 +60,8 @@ export const ChannelTaskNeedsYou = Schema.Struct({
   kind: ChannelTaskNeedsYouKind,
   since: IsoDateTime,
   approval: Schema.optional(ChannelTaskApprovalRef),
+  /** A durable approval uses the handoff RPCs on the worker's machine. */
+  handoff: Schema.optional(ChannelTaskApprovalRef),
   /** Set for a native question, in the same shape as an approval ref. */
   question: Schema.optional(ChannelTaskApprovalRef),
 });
@@ -120,6 +122,9 @@ export const channelWorkerObservationEquals = (
         item.approval?.requestId === b.needsYou[index]?.approval?.requestId &&
         item.approval?.threadId === b.needsYou[index]?.approval?.threadId &&
         item.approval?.host === b.needsYou[index]?.approval?.host &&
+        item.handoff?.requestId === b.needsYou[index]?.handoff?.requestId &&
+        item.handoff?.threadId === b.needsYou[index]?.handoff?.threadId &&
+        item.handoff?.host === b.needsYou[index]?.handoff?.host &&
         item.question?.requestId === b.needsYou[index]?.question?.requestId &&
         item.question?.threadId === b.needsYou[index]?.question?.threadId &&
         item.question?.host === b.needsYou[index]?.question?.host,

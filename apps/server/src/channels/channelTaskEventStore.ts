@@ -5,14 +5,27 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import { workerLaunchIdsFor } from "./channelIds.ts";
 import type { ChannelTaskEventWrite } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import {
+  reconcileBoundBotHandoffAttention,
+  recordBotAttention,
+  taskEventCanCreateAttention,
+} from "./channelBotAttention.ts";
 import { newestAskAt } from "./channelWaitingTasks.ts";
 
-export const encodeTask = Schema.encodeSync(Schema.fromJsonString(ChannelTask));
+const taskJson = Schema.fromJsonString(ChannelTask);
+const decodeTask = Schema.decodeUnknownSync(taskJson);
+export const encodeTask = Schema.encodeSync(taskJson);
 export const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 
 export const makeTaskEventWriter = (sql: SqlClient.SqlClient) =>
   Effect.fn("ChannelLedger.writeTaskEvent")(function* (write: ChannelTaskEventWrite) {
     const { next, event } = write;
+    const attentionSource = taskEventCanCreateAttention(event)
+      ? (yield* sql<{ owner_id: string; bot_id: string; task_json: string }>`
+              SELECT owner_id, bot_id, task_json FROM channel_tasks
+              WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
+            `)[0]
+      : undefined;
     const pendingAnswer =
       write.pendingAnswerMessageId === undefined
         ? sql`pending_answer_message_id`
@@ -61,5 +74,15 @@ export const makeTaskEventWriter = (sql: SqlClient.SqlClient) =>
         )
         RETURNING sequence
       `;
+    if (attentionSource !== undefined) {
+      yield* recordBotAttention(sql, {
+        ownerId: attentionSource.owner_id,
+        botId: attentionSource.bot_id,
+        before: decodeTask(attentionSource.task_json),
+        next,
+        event,
+      });
+    }
+    if (event.type === "task.worker.bound") yield* reconcileBoundBotHandoffAttention(sql, next);
     return inserted[0]?.sequence ?? 0;
   });

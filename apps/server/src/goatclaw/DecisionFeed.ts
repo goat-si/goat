@@ -73,6 +73,7 @@ const make = Effect.gen(function* () {
   let subscribers = 0;
   // Bumped when the last subscriber leaves, so a computation started before then is not published.
   let generation = 0;
+  let handoffRevision = 0;
   let environmentId: EnvironmentId | undefined;
   const markDirty = Queue.offer(dirty, undefined).pipe(Effect.asVoid);
   const logFailure =
@@ -94,7 +95,11 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Stream.filter((stored) => invalidates(stored.event)),
-          Stream.runForEach(() => markDirty),
+          Stream.runForEach(({ event, sequence }) => {
+            if (event.type === "turn-item.updated" && event.payload.type === "human_handoff")
+              handoffRevision = sequence;
+            return markDirty;
+          }),
           Effect.forkScoped,
         );
       yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.join(events));
@@ -119,6 +124,7 @@ const make = Effect.gen(function* () {
     if (subscribers === 0 || target === undefined) return;
     const started = generation;
     // A failed read keeps its invalidation: retry while anyone still watches.
+    const revision = handoffRevision;
     const next = yield* inbox.feedSnapshot(target).pipe(
       Effect.tapCause(logFailure("snapshot")),
       Effect.retry({
@@ -131,7 +137,7 @@ const make = Effect.gen(function* () {
       }),
     );
     if (subscribers > 0 && generation === started)
-      yield* SubscriptionRef.set(snapshot, Option.some(next));
+      yield* SubscriptionRef.set(snapshot, Option.some({ ...next, handoffRevision: revision }));
   }).pipe(Effect.catchCause(logFailure("snapshot")), Effect.forever);
 
   yield* Effect.forkScoped(listen);

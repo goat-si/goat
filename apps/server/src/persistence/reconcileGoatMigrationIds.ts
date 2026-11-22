@@ -65,6 +65,11 @@ const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
+const BOT_ATTENTION_MIGRATION_NAME = "ChannelBotAttention";
+const BOT_ATTENTION_PREVIEW_PREDECESSORS = [
+  [176, "ChannelWorkerLaunchHeads"],
+  [177, WORK_TRIGGER_FENCE_MIGRATION_NAME],
+] as const;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -163,6 +168,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "WebhookDeliveryFiringEvidence",
   WORKER_GENERATIONS_MIGRATION_NAME,
   "ChannelBotTaskSnooze",
+  BOT_ATTENTION_MIGRATION_NAME,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -211,6 +217,39 @@ function legacyFirstBindId<E>(
     )
     ? current[0]
     : undefined;
+}
+
+function legacyBotAttentionId<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const latest = history.reduce<LedgerRow | undefined>(
+    (highest, row) =>
+      highest === undefined || row.migration_id > highest.migration_id ? row : highest,
+    undefined,
+  );
+  const current = entries.find(([, name]) => name === BOT_ATTENTION_MIGRATION_NAME);
+  if (latest?.name !== BOT_ATTENTION_MIGRATION_NAME || current === undefined) return undefined;
+  const previewId = latest.migration_id;
+  if (previewId < 176 || previewId > 178 || previewId >= current[0]) return undefined;
+  return BOT_ATTENTION_PREVIEW_PREDECESSORS.every(
+    ([id, name]) =>
+      id >= previewId || history.some((row) => row.migration_id === id && row.name === name),
+  )
+    ? previewId
+    : undefined;
+}
+
+export function normalizeBotAttentionPreview<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) {
+  const previewId = legacyBotAttentionId(entries, history);
+  return {
+    previewId,
+    history:
+      previewId === undefined ? history : history.filter((row) => row.migration_id !== previewId),
+  };
 }
 
 /** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
@@ -348,9 +387,11 @@ export function memoryMigrationProblem<E>(
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
+  const legacyAttention = legacyBotAttentionId(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
+      if (row.migration_id === legacyAttention) return [];
       const currentId = currentIds.get(canonicalMigrationName(row.name));
       const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
       const recordedId =
@@ -519,9 +560,29 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   yield* assertMemoryMigrationsCompatible(entries);
   const history = yield* readHistory;
   if (history === undefined) return [];
-  const plan = plannedGoatLedger(entries, history);
-  if (plan === undefined) return [];
+  const normalized = normalizeBotAttentionPreview(entries, history);
+  const plan = plannedGoatLedger(entries, normalized.history);
   if (plan instanceof Migrator.MigrationError) return yield* plan;
+  if (normalized.previewId !== undefined) {
+    const moved = plan?.moved ?? normalized.history;
+    const final = [
+      ...moved,
+      ...displacedUpstreamMigrations(entries, moved).map(([id, name]) => ({
+        migration_id: id,
+        name,
+      })),
+    ];
+    const skipped = skippedV2Migrations(
+      entries,
+      final,
+      Math.max(0, ...final.map((row) => row.migration_id)),
+    );
+    if (skipped !== undefined) return yield* skipped;
+    // The preview already wrote the table. Replay its idempotent migration after earlier ids run.
+    yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${normalized.previewId}
+      AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
+  }
+  if (plan === undefined) return [];
   const { moved, goatRows, insertions } = plan;
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {

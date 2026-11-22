@@ -133,6 +133,7 @@ export interface Preferences {
   readonly pullRequestActivityVisibility?: PullRequestActivityVisibility;
   readonly pullRequestMergeMethod?: PullRequestMergeMethod;
   readonly liveActivitiesEnabled?: boolean;
+  readonly goatBotLocalAlerts?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
@@ -230,6 +231,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     pullRequestActivityVisibility?: PullRequestActivityVisibility;
     pullRequestMergeMethod?: PullRequestMergeMethod;
     liveActivitiesEnabled?: boolean;
+    goatBotLocalAlerts?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
@@ -302,6 +304,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.pullRequestMergeMethod = parsed.pullRequestMergeMethod;
   }
 
+  if (typeof parsed.goatBotLocalAlerts === "boolean")
+    preferences.goatBotLocalAlerts = parsed.goatBotLocalAlerts;
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
   }

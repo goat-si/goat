@@ -1,17 +1,23 @@
 import {
   type DecisionItem,
+  type DecisionRequestTarget,
   isDecisionItemWaiting,
+  targetedHandoffItem,
+  targetedHandoffRead,
   unlistedApprovalsNotice,
 } from "@goat/client-runtime/state/decision-inbox";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, Navigate, useNavigate } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useId } from "react";
 
 import { isElectron } from "../../env";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { canOpenSideChat } from "../sideChat/sideChat.logic";
 import { queueSideChatQuestion } from "../sideChat/sideChatFromComposer";
@@ -27,7 +33,18 @@ import { DecisionDurableForm } from "./DecisionDurableForm";
 import { DecisionUserInputForm } from "./DecisionUserInputForm";
 import { useDecisionInbox } from "./useDecisionInbox";
 
-export function DecisionInbox() {
+const noHandoff = Atom.make(AsyncResult.initial());
+
+export function DecisionInbox({ target }: { readonly target?: DecisionRequestTarget | undefined }) {
+  const read = targetedHandoffRead(target);
+  const result = useAtomValue(
+    read === undefined ? noHandoff : serverEnvironment.targetedHandoff(read),
+  );
+  const handoff =
+    target !== undefined && result._tag === "Success"
+      ? targetedHandoffItem(target, result.value.item)
+      : undefined;
+  const loadingHandoff = read !== undefined && result._tag === "Initial";
   const {
     snapshot,
     ordered,
@@ -39,7 +56,27 @@ export function DecisionInbox() {
     skip,
     setAnswers,
     submit,
-  } = useDecisionInbox();
+  } = useDecisionInbox(target, handoff);
+  if (
+    read !== undefined &&
+    !loadingHandoff &&
+    handoff === undefined &&
+    target?.originTaskId !== undefined &&
+    target.originEnvironmentId !== undefined
+  ) {
+    return (
+      <Navigate
+        replace
+        to="/bot"
+        search={{
+          task: target.originTaskId,
+          attentionEnvironment: target.originEnvironmentId,
+          ...(target.originBotId === undefined ? {} : { bot: target.originBotId }),
+          ...(target.originDetail === undefined ? {} : { attentionDetail: target.originDetail }),
+        }}
+      />
+    );
+  }
   return (
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
@@ -56,7 +93,7 @@ export function DecisionInbox() {
                 Decision inbox and history
               </Button>
             </div>
-            {snapshot.isLoading ? <p role="status">Loading decisions…</p> : null}
+            {snapshot.isLoading || loadingHandoff ? <p role="status">Loading decisions…</p> : null}
             {snapshot.errors.length > 0 ? (
               <div role="alert">
                 <p>Some decisions could not be loaded.</p>
@@ -87,7 +124,7 @@ export function DecisionInbox() {
                 onSubmit={(response) => submit(current.id, response)}
                 onSkip={skip}
                 partial={snapshot.isLoading || snapshot.errors.length > 0}
-                feedAway={isDecisionItemWaiting(snapshot, current)}
+                feedAway={read === undefined && isDecisionItemWaiting(snapshot, current)}
                 blockedBySync={
                   snapshot.loadingRefs.some(
                     (ref) =>
@@ -101,9 +138,11 @@ export function DecisionInbox() {
                   )
                 }
               />
-            ) : !snapshot.isLoading && snapshot.errors.length === 0 ? (
+            ) : !loadingHandoff && !snapshot.isLoading && snapshot.errors.length === 0 ? (
               <p role="status">
-                All caught up. No pending thread requests on connected environments.
+                {target === undefined
+                  ? "All caught up. No pending thread requests on connected environments."
+                  : "This request is no longer pending or its computer is unavailable."}
               </p>
             ) : null}
           </WorkspacePageContainer>

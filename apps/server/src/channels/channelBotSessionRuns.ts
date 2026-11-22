@@ -85,30 +85,47 @@ export const launchWakeParentRun = Effect.fn("ChannelBotSession.launchWakeParent
   return rows.length === 1 ? (rows[0]?.run_id ?? undefined) : undefined;
 });
 
+const projectedRunLineage = (sql: SqlClient.SqlClient, threadId: string, runId: string) =>
+  sql<{ readonly messageId: string; readonly parentRunId: string | null }>`
+    SELECT json_extract(run.payload_json, '$.userMessageId') AS messageId,
+      COALESCE(json_extract(message.payload_json, '$.delegatedCompletion.parentRunId'),
+        json_extract(run.payload_json, '$.restartContinuationOfRunId'),
+        json_extract(message.payload_json, '$.notification.aboutRunId')) AS parentRunId
+    FROM orchestration_v2_projection_runs AS run
+    LEFT JOIN orchestration_v2_projection_messages AS message
+      ON message.thread_id = run.thread_id
+      AND message.message_id = json_extract(run.payload_json, '$.userMessageId')
+    WHERE run.thread_id = ${threadId} AND run.run_id = ${runId}
+  `.pipe(Effect.map((rows) => rows[0]));
+
 /**
  * The task a session run serves: the intent its own message was sent under, or for a delegated
  * completion, restart continuation or launched thread's end wake, the run it continues.
- * Undefined when GOAT never sent it.
+ * On a writer transaction without preloaded records, look up only the run's lineage.
  */
 export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun")(function* (
   sql: SqlClient.SqlClient,
   threadId: string,
-  records: Records,
+  records: Records | undefined,
   runId: string,
 ) {
-  let run = records.runs.find((candidate) => candidate.id === runId);
-  for (let hops = 0; run !== undefined && hops < 32; hops += 1) {
-    const current: OrchestrationV2Run = run;
-    const intent = yield* sessionIntentFor(sql, threadId, current.userMessageId);
+  let current: string | undefined = runId;
+  for (let hops = 0; current !== undefined && hops < 32; hops += 1) {
+    const runIdAtHop: string = current;
+    const run = records?.runs.find((candidate) => candidate.id === runIdAtHop);
+    const projected =
+      records === undefined ? yield* projectedRunLineage(sql, threadId, runIdAtHop) : undefined;
+    const messageId = run?.userMessageId ?? projected?.messageId;
+    if (messageId === undefined) return undefined;
+    const intent = yield* sessionIntentFor(sql, threadId, messageId);
     if (intent !== undefined) return intent;
-    const message = records.messages.find((candidate) => candidate.id === current.userMessageId);
-    const parent =
+    const message = records?.messages.find((candidate) => candidate.id === messageId);
+    current =
       message?.delegatedCompletion?.parentRunId ??
-      current.restartContinuationOfRunId ??
+      run?.restartContinuationOfRunId ??
       message?.notification?.aboutRunId ??
-      (yield* launchWakeParentRun(sql, threadId, current.userMessageId));
-    if (parent === undefined || parent === null) return undefined;
-    run = records.runs.find((candidate) => candidate.id === parent);
+      projected?.parentRunId ??
+      (yield* launchWakeParentRun(sql, threadId, messageId));
   }
   return undefined;
 });
