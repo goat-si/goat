@@ -495,6 +495,18 @@ export function createChannelEnvironmentAtoms<R, E>(
     }),
     listBotThreads,
     checkBotSnoozes,
+    followThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:followThread",
+      tag: CHANNEL_GATEWAY_WS_METHODS.followThread,
+    }),
+    stopFollowingThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:stopFollowingThread",
+      tag: CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread,
+    }),
+    listFollowedThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:listFollowedThreads",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listFollowedThreads,
+    }),
     getBotTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:get-bot-task",
       tag: CHANNEL_GATEWAY_WS_METHODS.getBotTask,
