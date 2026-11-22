@@ -80,6 +80,21 @@ function publish(update: DesktopUpdateState | null) {
 const releaseNotes = () => document.querySelector('[aria-label="Update release notes"]');
 
 describe("SidebarUpdatePill release notes", () => {
+  it("keeps a dismissed offer quiet and surfaces a subsequent download failure", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    const update = nightlyUpdate([]);
+    setup(update);
+    await using _screen = await render(<SidebarUpdatePill />);
+    const notice = () => document.querySelector('aside[aria-label="Update available"]');
+    expect(notice()?.textContent).toContain(update.availableVersion);
+    await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
+    await publish({ ...update, status: "downloading", downloadPercent: 80 });
+    expect(notice()).toBeNull();
+    await publish({ ...update, errorContext: "download", canRetry: true });
+    expect(notice()?.textContent).toContain("Retry");
+    sessionStorage.removeItem("desktop-update-notice");
+  });
+
   it("closes when the release notes stop applying", async () => {
     setup(nightlyUpdate(RELEASE_NOTES));
     await using _screen = await render(<SidebarUpdatePill />);
