@@ -53,6 +53,14 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("honors hidden character formatting and its reset", () => {
+    expect(
+      html(String.raw`{\rtf1 A{\v hidden{\v0 B}hidden}C\v hidden\v0 D\v hidden\plain E}`),
+    ).toEqual(["<p>ABCDE</p>"]);
+    expect(html(String.raw`{\rtf1\ansi{\v\line\line\line}First line\line Second line}`)).toEqual([
+      "<p>First line<br>Second line</p>",
+    ]);
+  });
   it("renders TextEdit soft line breaks while hiding deleted breaks", () => {
     const expected = html(String.raw`{\rtf1\ansi First line\line Second line}`);
     expect(html(String.raw`{\rtf1\ansi First line\uc0\u8232 Second line}`)).toEqual(expected);
