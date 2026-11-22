@@ -43,7 +43,6 @@ import {
   ChannelTask,
   ChannelTaskEvent,
   ChannelWorkerRun,
-  type ChannelTaskBrief,
   type ChannelTaskExportInput,
   type ChannelTaskExportResult,
   type ChannelTaskEventId,
@@ -59,6 +58,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { makeTaskHistoryReads } from "./channelBotTaskActivity.ts";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
@@ -156,9 +156,11 @@ export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelT
 
 type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
 
+type ChannelLedgerOperations = ChannelLedgerOps & ReturnType<typeof makeTaskHistoryReads>;
+
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  ChannelLedgerOps & {
+  ChannelLedgerOperations & {
     readonly recordLaunchHead: (
       input: Parameters<typeof recordChannelLaunchHead>[0],
     ) => Effect.Effect<void, ChannelLedgerError>;
@@ -289,10 +291,6 @@ export class ChannelLedger extends Context.Service<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
     >;
-    /** Most recently frozen brief, including earlier generations for version allocation. */
-    readonly latestTaskBrief: (
-      taskId: ChannelTaskId,
-    ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
     /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
@@ -1098,18 +1096,7 @@ const make = Effect.gen(function* () {
         };
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
 
-    latestTaskBrief: (taskId) =>
-      sql<{ readonly event_json: string }>`
-        SELECT event_json FROM channel_task_events
-        WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
-        ORDER BY sequence DESC LIMIT 1
-      `.pipe(
-        Effect.map((rows) => {
-          const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
-          return event?.type === "task.brief.frozen" ? event.payload.brief : undefined;
-        }),
-        Effect.mapError(toLedgerError("latestTaskBrief")),
-      ),
+    ...makeTaskHistoryReads(sql, toLedgerError),
 
     exportTasks: (input) =>
       Effect.gen(function* () {

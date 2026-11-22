@@ -15,7 +15,12 @@ export type BotRoutineSource = Pick<
   | "lastRunStatus"
   | "lastRunError"
 > &
-  Partial<Pick<ScheduledTask, "lastRun" | "recentRuns" | "routineMode" | "webhook">>;
+  Partial<
+    Pick<
+      ScheduledTask,
+      "lastRun" | "recentRuns" | "recentRunsIncomplete" | "routineMode" | "webhook"
+    >
+  >;
 
 export interface BotRoutineRow {
   readonly id: ScheduledTaskId;

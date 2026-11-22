@@ -2,11 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import {
+  AuthOrchestrationReadScope,
+  CommandId,
+  EnvironmentAuthorizationError,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   ScheduledTaskError,
   ScheduledTaskId,
+  ScheduledTaskWebhookDeliveryId,
   type ScheduledTaskUpsertInput,
   ThreadId,
   type ScheduledTask,
@@ -158,11 +162,11 @@ const mcpClient = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
-const callTool = (name: string, args: Record<string, unknown>) =>
+const callTool = (name: string, args: Record<string, unknown>, scope = updateScope) =>
   McpServer.McpServer.pipe(
     Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     Effect.provideService(McpSchema.McpServerClient, mcpClient),
-    Effect.provideService(McpInvocationContext.McpInvocationContext, updateScope),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
   );
 const webhookTask: ScheduledTask = {
   ...disabledTask,
@@ -173,6 +177,24 @@ const webhookTask: ScheduledTask = {
   runtimeMode: "approval-required",
   interactionMode: "default",
   webhook: { path: "/hooks/webhook-schedule/token", url: null, hasSecret: false },
+};
+
+const deliverySummaries = (["filtered", "duplicate"] as const).map((outcome) => ({
+  id: ScheduledTaskWebhookDeliveryId.make(outcome),
+  taskId: webhookTask.id,
+  receivedAt: webhookTask.createdAt,
+  method: "POST",
+  contentType: "application/json",
+  bodyBytes: 42,
+  outcome,
+  signatureVerified: true,
+  missingFields: [],
+  error: null,
+}));
+const deliveryScope = {
+  ...updateScope,
+  grantedScopes: [AuthOrchestrationReadScope],
+  reauthorize: () => Effect.void,
 };
 
 /**
@@ -206,6 +228,19 @@ const updateFixture = () => {
     Layer.mock(SecretRequests.SecretRequests)({}),
     Layer.mock(ScheduledTasks.ScheduledTaskService)({
       list: () => Effect.sync(() => ({ tasks: [stored.task] })),
+      listWebhookDeliveries: ({ id, acceptAnyOutcome }) =>
+        Effect.succeed({
+          deliveries:
+            id === webhookTask.id && acceptAnyOutcome
+              ? deliverySummaries.map((row) => ({
+                  ...row,
+                  url: "https://example.test/private-token",
+                  secret: "private-signing-secret",
+                  body: "private-request-body",
+                  headers: { authorization: "private-request-header" },
+                }))
+              : [],
+        }),
       upsert: (input) =>
         Effect.suspend(() => {
           upserts.push(input);
@@ -247,7 +282,6 @@ const updateFixture = () => {
       Layer.mergeAll(
         layerPermissionProfilesOff,
         NodeCrypto.layer,
-        Layer.succeed(McpInvocationContext.McpInvocationContext, updateScope),
         Layer.mock(HostThreads.HostThreadsMcpService)({}),
         Layer.mock(ThreadMetadata.ThreadMetadataMcpService)({}),
         Layer.mock(ThreadResults.ThreadResultService)({}),
@@ -275,6 +309,99 @@ const intervalTask: ScheduledTask = {
   enabled: true,
   runtimeMode: "approval-required",
 };
+
+it.effect("list_scheduled_tasks returns bounded run history and its incomplete marker", () => {
+  const { stored, served } = updateFixture();
+  const recentRuns = [
+    {
+      firingId: CommandId.make("routine-firing"),
+      origin: "event" as const,
+      taskThreadId: ThreadId.make("routine-work"),
+      status: "completed",
+      requestedAt: webhookTask.createdAt,
+      completedAt: webhookTask.lastRunAt,
+    },
+  ];
+  stored.task = {
+    ...webhookTask,
+    routineMode: "work",
+    recentRuns,
+    recentRunsIncomplete: true,
+    webhook: { path: "/hooks/token", url: "https://example.test/hooks/token", hasSecret: true },
+  };
+  return Effect.gen(function* () {
+    const result = yield* callTool("goat_schedule_list", {});
+    expect(result.structuredContent).toMatchObject({
+      tasks: [{ scheduledTaskId: stored.task.id, recentRuns, recentRunsIncomplete: true }],
+    });
+    expect(JSON.stringify(result)).not.toContain("https://example.test/hooks/token");
+  }).pipe(Effect.provide(served));
+});
+
+it.effect(
+  "lists retained delivery summaries for a provider credential with orchestration read access",
+  () => {
+    const { served } = updateFixture();
+    return Effect.gen(function* () {
+      const result = yield* callTool(
+        "goat_schedule_delivery_list",
+        {
+          scheduledTaskId: webhookTask.id,
+        },
+        deliveryScope,
+      );
+      expect(result.structuredContent, JSON.stringify(result)).toEqual({
+        deliveries: deliverySummaries,
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /private-(token|signing-secret|request-body|request-header)/,
+      );
+    }).pipe(Effect.provide(served));
+  },
+);
+
+it.effect("refuses delivery reads outside the caller's project", () => {
+  const { stored, served } = updateFixture();
+  stored.task = { ...webhookTask, projectId };
+  return Effect.gen(function* () {
+    const listed = yield* callTool("goat_schedule_list", {}, deliveryScope);
+    expect(listed.structuredContent).toEqual({ tasks: [] });
+    const result = yield* callTool(
+      "goat_schedule_delivery_list",
+      { scheduledTaskId: webhookTask.id },
+      deliveryScope,
+    );
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("task_not_found") }),
+    ]);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("refuses schedule reads after the provider credential is revoked", () => {
+  const { served } = updateFixture();
+  const revokedScope = {
+    ...deliveryScope,
+    reauthorize: () =>
+      Effect.fail(
+        new EnvironmentAuthorizationError({
+          requiredScope: AuthOrchestrationReadScope,
+          message: "Grant revoked.",
+        }),
+      ),
+  };
+  return Effect.gen(function* () {
+    for (const [name, args] of [
+      ["goat_schedule_list", {}],
+      ["goat_schedule_delivery_list", { scheduledTaskId: webhookTask.id }],
+    ] as const) {
+      const result = yield* callTool(name, args, revokedScope);
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("capability_denied") }),
+      ]);
+    }
+  }).pipe(Effect.provide(served));
+});
 
 it.effect("keeps one thread when fresh sessions are turned off before the first run", () => {
   const { upserts, stored, served } = updateFixture();

@@ -31,6 +31,8 @@ import {
   ScheduledTaskWebhookEndpoint,
 } from "./scheduledTask.ts";
 
+import { ScheduledTaskRecentRun } from "./scheduledTaskRecentRuns.ts";
+
 // ScheduledTask as clients shipped before recentRuns decode it, frozen at f74894c1a2e.
 const ShippedScheduledTask = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
@@ -328,6 +330,23 @@ describe("scheduled run outcomes", () => {
     expect(decoded?.recentRuns).toEqual(routine.recentRuns);
     const { recentRuns: _recent, ...shipped } = decoded ?? {};
     expect(decodeShippedList(wire).tasks).toEqual([shipped]);
+  });
+  it("preserves base run fields across versions with and without provenance", () => {
+    const baseRun = ScheduledTaskRecentRun.mapFields(
+      ({ origin: _origin, taskThreadId: _taskThreadId, ...fields }) => fields,
+    );
+    const oldRun = routine.recentRuns[0];
+    const newRun = { ...oldRun, origin: "event", taskThreadId: "work" };
+
+    expect(Schema.decodeUnknownSync(baseRun)(newRun)).toEqual(oldRun);
+    expect(Schema.decodeUnknownSync(ScheduledTaskRecentRun)(oldRun)).toEqual(oldRun);
+    expect(
+      decodeList(
+        JSON.stringify({
+          tasks: [{ ...routine, recentRuns: [newRun], recentRunsIncomplete: true }],
+        }),
+      ).tasks[0],
+    ).toMatchObject({ recentRuns: [newRun], recentRunsIncomplete: true });
   });
   it("a recentRuns that is not an array drops the history and keeps the routine", () => {
     const [decoded] = decodeList(

@@ -868,6 +868,10 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
         yield* sql`DROP TABLE scheduled_task_webhook_firings`;
         yield* sql`DROP TABLE channel_worker_generations`;
+        yield* sql`DROP TRIGGER channel_task_status_version`;
+        yield* sql`DROP INDEX channel_task_views_by_task`;
+        yield* sql`ALTER TABLE channel_tasks DROP COLUMN status_version`;
+        yield* sql`DELETE FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`;
         assert.isUndefined(yield* checkOldBuild(176));
         assert.deepStrictEqual(
           yield* runMigrations({ toMigrationInclusive: 177 }).pipe(
@@ -879,6 +883,7 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         assert.deepStrictEqual(yield* migrate, [
           [178, "WebhookDeliveryFiringEvidence"],
           [179, "ChannelWorkerGenerations"],
+          [180, "ChannelBotTaskSnooze"],
         ]);
         for (const through of [176, 177] as const) {
           assert.include(

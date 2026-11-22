@@ -156,6 +156,10 @@ it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale
         if (phase === "upgraded unbound") {
           yield* sql`DROP TABLE IF EXISTS channel_worker_generations`;
           yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id > 178`;
+          yield* sql`DROP TRIGGER channel_task_status_version`;
+          yield* sql`DROP INDEX channel_task_views_by_task`;
+          yield* sql`ALTER TABLE channel_tasks DROP COLUMN status_version`;
+          yield* sql`DELETE FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`;
           yield* sql`UPDATE channel_tasks SET status = 'dispatching', worker_thread_id = NULL
           WHERE task_id = ${taskId}`;
           yield* runMigrations();

@@ -132,11 +132,13 @@ export const pullRequestsFromLinks = (
   links:
     | ReadonlyArray<
         Pick<ThreadPullRequestLink, "repository" | "number" | "url" | "source"> & {
+          readonly linkedAt?: string | undefined;
           readonly snapshot: { readonly state: PullRequestState } | null;
           readonly watch?: unknown;
         }
       >
     | undefined,
+  includeLinkTime = false,
 ): ReadonlyArray<ChannelTaskPullRequest> =>
   (links ?? [])
     .filter((link) => link.source !== "stack-dismissed")
@@ -144,6 +146,7 @@ export const pullRequestsFromLinks = (
       repository: link.repository,
       number: link.number,
       url: link.url,
+      ...(includeLinkTime && link.linkedAt !== undefined ? { linkedAt: link.linkedAt } : {}),
       ...(link.snapshot === null ? {} : { state: link.snapshot.state }),
       watching: link.watch !== undefined,
     }))

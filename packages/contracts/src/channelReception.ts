@@ -11,6 +11,7 @@ import {
 import {
   ChannelDispatchTarget,
   ChannelTaskEventType,
+  ChannelTaskDoneMeans,
   ChannelTaskKind,
   ChannelTaskStatus,
 } from "./channelLedger.ts";
@@ -171,6 +172,7 @@ export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
 export const ChannelReceptionTaskSpec = Schema.Struct({
   title: TrimmedNonEmptyString,
   instruction: TrimmedNonEmptyString,
+  doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   projectId: Schema.optional(ProjectId),
   /** One of `allowedHosts`, when the person asked for another machine. */
   host: Schema.optional(TrimmedNonEmptyString),
@@ -186,6 +188,7 @@ export const ChannelReceptionAction = Schema.Union([
     type: Schema.Literal("create_task"),
     title: TrimmedNonEmptyString,
     instruction: TrimmedNonEmptyString,
+    doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
     projectId: Schema.optional(ProjectId),
     /** One of `allowedHosts`, when the person asked for another machine. */
     host: Schema.optional(TrimmedNonEmptyString),
