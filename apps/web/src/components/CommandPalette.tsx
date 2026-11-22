@@ -112,10 +112,7 @@ import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
 import { BotTaskSearchStatus, useGoatBotTaskSearch } from "./goatBot/useGoatBotTaskSearch";
 import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
-import {
-  GoatBotTemplatePicker,
-  useGoatBotTemplatePaletteAction,
-} from "./goatBot/GoatBotTemplatePicker";
+import { GoatBotTemplatePicker } from "./goatBot/GoatBotTemplatePicker";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -513,8 +510,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
   const goatBots = useGoatBotPaletteBots();
-  const goatBotNewBot = useGoatBotPaletteNewBot();
-  const templateAction = useGoatBotTemplatePaletteAction(props.openTemplates);
+  const goatBotNewBot = useGoatBotPaletteNewBot(props.openTemplates);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1654,7 +1650,6 @@ function OpenCommandPaletteDialog(props: {
 
   const goatBotItems = goatBotPaletteItems(goatBots, navigate);
   actionItems.push(...goatBotItems.actions, ...goatBotNewBot);
-  if (templateAction && goatBotNewBot.length > 0) actionItems.push(templateAction);
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
