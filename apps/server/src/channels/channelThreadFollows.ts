@@ -10,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { SecureRandom } from "effect/crypto";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { SessionStore } from "../auth/SessionStore.ts";
@@ -119,7 +120,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
         if (capacity?.duplicate === 1) return false;
         if ((capacity?.count ?? 0) >= 100)
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
-        const value = yield* encode({ ...follow, instanceId: crypto.randomUUID() });
+        const value = yield* encode({ ...follow, instanceId: SecureRandom.uuidV4Unsafe() });
         const now = DateTime.formatIso(yield* DateTime.now);
         const inserted = yield* sql<{ readonly key: string }>`
       INSERT INTO channel_runtime_state (key, value_json, updated_at)
@@ -163,7 +164,7 @@ export const makeThreadFollows = Effect.fn("ChannelThreadFollows.make")(function
       `;
         if (row === undefined) return;
         const follow = yield* decode(row.value_json);
-        const instance = { key, id: follow.instanceId ?? crypto.randomUUID() };
+        const instance = { key, id: follow.instanceId ?? SecureRandom.uuidV4Unsafe() };
         if (!(yield* mayRead(follow))) {
           yield* writeNotice(
             follow,
