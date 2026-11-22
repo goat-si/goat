@@ -190,6 +190,7 @@ describe("V2 preview upgrade", () => {
         [177, "WorkTriggerAuthorityFence"],
         [178, "WebhookDeliveryFiringEvidence"],
         [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
         [182, "SlackConversationBot"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -391,6 +392,7 @@ describe("V2 preview upgrade", () => {
         [177, "WorkTriggerAuthorityFence"],
         [178, "WebhookDeliveryFiringEvidence"],
         [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
         [182, "SlackConversationBot"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

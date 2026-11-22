@@ -1,9 +1,33 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelTaskId, type BotThreadRow } from "@goat/contracts";
+import {
+  BotId,
+  CHANNEL_BOT_ROW_PULL_REQUESTS,
+  ChannelTaskId,
+  ThreadId,
+  type BotThreadRow,
+  type ChannelBotTaskActivityEntry,
+} from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
-import { environmentId, owner } from "./testkit/ChannelHarness.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as TaskViews from "./channelTaskViews.ts";
+import { correlationOf, RemoteMachine, remoteScript } from "./testing/RemoteMachine.ts";
+import {
+  botThreadId,
+  environmentId,
+  goatInput,
+  makeHarness,
+  owner,
+  rpcContext,
+  setupBot,
+} from "./testkit/ChannelHarness.ts";
+import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import { warnings } from "./testkit/botThreadUnread.fixture.ts";
 import {
   at,
@@ -429,3 +453,167 @@ describe("ChannelBotThreads pull requests", () => {
     ),
   );
 });
+
+it.effect("persists a date-only SSH observation and keeps the PR in Activity after retry", () => {
+  const machine = new RemoteMachine();
+  const harness = makeHarness({ sshRemote: machine.layer });
+  harness.script.current = remoteScript;
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const writes = yield* taskWriteMilestones();
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    yield* gateway.ingest(goatInput("do@mac-studio: observe the worker", "dated-pr"), rpcContext);
+    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    const { taskId } = yield* writes.waitFor((task) => task.status === "running");
+    yield* Deferred.await(machine.waitIdle);
+    const correlationId = correlationOf(machine);
+    const pullRequest = { repository, number: 42, url: url(repository, 42), watching: false };
+    machine.observeRun(correlationId, { needsYou: [], pullRequests: [pullRequest] });
+    yield* writes.waitFor((task) => task.observed?.pullRequests[0]?.number === 42);
+    assert.isEmpty(
+      (yield* lookup(taskId)).activity?.entries.filter((entry) => entry.type === "pr_linked") ?? [],
+    );
+
+    const linkedAt = at(2);
+    const echoed = yield* Deferred.make<void>();
+    machine.onWait = (request) =>
+      JSON.stringify(request.knownRun).includes(linkedAt)
+        ? Deferred.succeed(echoed, undefined).pipe(Effect.asVoid)
+        : Effect.void;
+    machine.observeRun(correlationId, {
+      needsYou: [],
+      pullRequests: [{ ...pullRequest, linkedAt }],
+    });
+    yield* Deferred.await(echoed);
+
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const read = () => ledger.getTask(taskId);
+    const observed = yield* read();
+    assert.strictEqual(observed?.task.observed?.pullRequests[0]?.linkedAt, linkedAt);
+    const entry: ChannelBotTaskActivityEntry = {
+      type: "pr_linked",
+      repo: repository,
+      number: 42,
+      at: linkedAt,
+      id: "pr:" + repository + "#42",
+      actor: "goat",
+    };
+    assert.deepInclude((yield* lookup(taskId)).activity?.entries ?? [], entry);
+    yield* commitTransition(ledger, observed!, {
+      type: "task.failed",
+      payload: { generation: 1, reason: "Worker stopped." },
+    });
+    yield* commitTransition(ledger, (yield* read())!, {
+      type: "task.retry.requested",
+      payload: { generation: 2 },
+    });
+    assert.isUndefined((yield* read())?.task.observed);
+    assert.deepInclude((yield* lookup(taskId)).activity?.entries ?? [], entry);
+  }).pipe(
+    Effect.provide(
+      BotThreads.layer.pipe(Layer.provideMerge(TaskViews.layer), Layer.provideMerge(harness.layer)),
+    ),
+  );
+});
+
+it.effect(
+  "records an acknowledged SSH worker starting and finishing without an environment id",
+  () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const taskId = "ssh-activity";
+        yield* insertTask(taskId, { status: "running", createdAt: at(10) });
+        const subject = { host: "unpaired", threadId: ThreadId.make("ssh-worker") };
+        const launch = {
+          surface: "ssh_thread_launch",
+          destination: { ...subject, correlationId: "dispatch" },
+        };
+        const started = {
+          id: "launch:child",
+          type: "worker_started",
+          actor: "bot",
+          at: at(1),
+          ...subject,
+        } satisfies ChannelBotTaskActivityEntry;
+        yield* childRecord(taskId, "child", { ...launch, state: "bound" });
+        const inProgress = yield* lookup(taskId);
+        assert.deepStrictEqual(
+          inProgress.activity?.entries.filter((entry) => "threadId" in entry),
+          [started],
+        );
+
+        yield* childRecord(taskId, "child", { ...launch, state: "completed" });
+        const finished = {
+          id: "launch-end:child",
+          type: "worker_finished",
+          actor: "goat",
+          at: at(1),
+          ...subject,
+        } satisfies ChannelBotTaskActivityEntry;
+        const completed = yield* lookup(taskId);
+        assert.deepStrictEqual(
+          completed.activity?.entries.filter((entry) => "threadId" in entry),
+          [started, finished],
+        );
+      }),
+    ),
+);
+
+it.effect("returns bounded, distinct PR summaries for the assigned and launched SSH workers", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* setup;
+      const taskId = "two-ssh-workers";
+      const sql = yield* SqlClient.SqlClient;
+      yield* insertTask(taskId, { status: "running", createdAt: at(10) });
+      yield* setWorker(taskId, "assigned-thread", "builder");
+      yield* setObserved(taskId, [{ number: 42, state: "open" }]);
+      yield* childRecord(taskId, "child", {
+        surface: "ssh_thread_launch",
+        state: "bound",
+        destination: { threadId: "child-thread", host: "unpaired", correlationId: "dispatch" },
+      });
+      const observation = JSON.stringify({
+        needsYou: [],
+        pullRequests: Array.from({ length: CHANNEL_BOT_ROW_PULL_REQUESTS + 1 }, (_, index) => ({
+          repository,
+          number: 70 + index,
+          url: url(repository, 70 + index),
+          state: "merged",
+          watching: false,
+        })),
+      });
+      yield* sql`INSERT INTO remote_dispatches (
+        correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery,
+        reports_supported, state, created_at, updated_at, observation
+      ) VALUES ('dispatch', 'thread', ${botThreadId}, 'unpaired', 'child-thread', 'read-key',
+        'notify_only', 1, 'running', ${at(6)}, ${at(6)}, ${observation})`;
+
+      const work = yield* lookup(taskId);
+      assert.deepStrictEqual(
+        work.remoteWork.map((row) => [
+          row.host,
+          row.pullRequests?.map((pr) => pr.number),
+          row.pullRequestsOmitted,
+        ]),
+        [
+          ["builder", [42], undefined],
+          ["unpaired", [75, 74, 73, 72, 71], 1],
+        ],
+      );
+      assert.isUndefined(work.remoteWork.find((row) => row.host === "unpaired")?.environmentId);
+      for (const page of [yield* current, yield* history()])
+        assert.deepStrictEqual(
+          page.remoteWork?.find((row) => row.host === "unpaired")?.pullRequests,
+          work.remoteWork[1]?.pullRequests,
+        );
+
+      yield* sql`UPDATE remote_dispatches SET origin_thread_id = 'different-caller'
+        WHERE correlation_id = 'dispatch'`;
+      assert.isUndefined(
+        (yield* lookup(taskId)).remoteWork.find((row) => row.host === "unpaired")?.pullRequests,
+      );
+    }),
+  ),
+);

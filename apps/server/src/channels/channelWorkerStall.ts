@@ -1,4 +1,5 @@
 import type { ChannelTask } from "@goat/contracts";
+
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 

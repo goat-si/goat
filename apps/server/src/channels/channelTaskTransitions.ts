@@ -1,8 +1,8 @@
 import {
   CHANNEL_ANSWERED_QUESTIONS_KEPT,
+  type ChannelTaskStatus,
   type ChannelTask,
   type ChannelTaskEvent,
-  type ChannelTaskStatus,
 } from "@goat/contracts";
 
 /**
@@ -160,7 +160,16 @@ export function applyChannelTaskEvent(
         },
       };
     case "task.progress":
-      return { ok: true, task: { ...base, resultSummary: event.payload.summary } };
+      return {
+        ok: true,
+        task: {
+          ...base,
+          resultSummary: event.payload.summary,
+          ...(task.doneMeans === undefined && event.payload.doneMeans !== undefined
+            ? { doneMeans: event.payload.doneMeans }
+            : {}),
+        },
+      };
     case "task.question.opened":
       return {
         ok: true,

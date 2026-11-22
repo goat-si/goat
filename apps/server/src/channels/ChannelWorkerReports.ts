@@ -43,11 +43,11 @@ import {
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { channelTaskIdFromAgent, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
-import { stallDelivery, STALLED_AFTER_MS } from "./channelWorkerStall.ts";
 import { channelRunFailure, failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
+import { STALLED_AFTER_MS, stallDelivery } from "./channelWorkerStall.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
 import { commitWorkerObserved, reconcileLateApprovals } from "./channelLateApprovals.ts";
@@ -91,8 +91,6 @@ const workerRunStatus = (
 };
 
 /** How far back, and how many per pass, finished tasks have their runs read into history. */
-export { STALLED_AFTER_MS } from "./channelWorkerStall.ts";
-
 const RUN_HISTORY_DAYS = 7;
 const RUN_HISTORY_PER_PASS = 20;
 
@@ -836,9 +834,12 @@ const make = Effect.gen(function* () {
       }
       // In a GOAT Bot session only the task's newest result run may report for it; an earlier
       // run's delayed report, another task's, or a background command's notice is refused.
-      if (isGoatBotSessionThreadId(worker.threadId)) {
+      const sessionWorker = isGoatBotSessionThreadId(worker.threadId);
+      if (sessionWorker) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
+        if (input.doneMeans !== undefined && runId === undefined)
+          return yield* new ChannelGatewayError({ reason: "forbidden" });
         if (runId !== undefined) {
           const records = yield* threads
             .getThreadRecords(worker.threadId, ["runs", "messages"])
@@ -850,6 +851,11 @@ const make = Effect.gen(function* () {
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }
+      if (
+        input.doneMeans !== undefined &&
+        (!sessionWorker || stored.task.kind !== "turn" || input.status !== "running")
+      )
+        return yield* new ChannelGatewayError({ reason: "invalid_input" });
       if (yield* ledger.hasTaskEvent(input.eventId)) return;
       const eventId = input.eventId as ChannelTaskEventId;
       const task = stored.task;
@@ -866,6 +872,9 @@ const make = Effect.gen(function* () {
               payload: {
                 generation: task.generation,
                 summary: input.summary,
+                ...(task.doneMeans === undefined && input.doneMeans !== undefined
+                  ? { doneMeans: input.doneMeans }
+                  : {}),
                 ...(milestone === undefined ? {} : { milestone }),
               },
             },
@@ -946,5 +955,7 @@ const make = Effect.gen(function* () {
 
   return ChannelWorkerReports.of({ reconcile, isWorkerThread, report });
 });
+
+export { STALLED_AFTER_MS };
 
 export const layer = Layer.effect(ChannelWorkerReports, make);

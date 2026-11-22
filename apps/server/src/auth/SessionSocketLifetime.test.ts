@@ -4,17 +4,31 @@ import * as NodeWS from "@effect/platform-node/NodeWS";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  BotId,
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelTaskId,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  WsChannelRpcGroup,
+  type AuthEnvironmentScope,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
 import * as Auth from "./EnvironmentAuth.ts";
 import * as Access from "./HubConnectAccess.ts";
 import * as Secrets from "./ServerSecretStore.ts";
 import * as Sessions from "./SessionStore.ts";
 import * as Lifetime from "./SessionSocketLifetime.ts";
+import * as HubRpcSocket from "./HubRpcSocket.ts";
 import * as SettingsSessionPermit from "./settingsSessionPermit.ts";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 import { layerHubAccess, makeCheckProbe, makeServerAndCli } from "./DurableRevocations.testkit.ts";
@@ -27,8 +41,104 @@ const layer = Auth.layer.pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
-  Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-connect-socket-" })),
+  Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-socket-" })),
   Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
+
+it.effect(
+  "denies snooze writes without operate scope and closes the RPC connection on revocation",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.SessionStore;
+      const { snoozeBotTask, unsnoozeBotTask } = CHANNEL_GATEWAY_WS_METHODS;
+      const tags = [...WsChannelRpcGroup.requests.values()].map((rpc) => rpc._tag);
+      const group = WsChannelRpcGroup.omit(
+        ...tags.filter((tag) => tag !== snoozeBotTask && tag !== unsnoozeBotTask),
+      );
+      const target = { taskId: ChannelTaskId.make("release-check"), botId: BotId.make("main") };
+      const until = "2026-11-12T10:00:00.000Z";
+      const view = { taskId: target.taskId, pinnedAt: null, doneAt: null, readThrough: null };
+      let active = false;
+      const closed = yield* Deferred.make<void>();
+      const routes = HubRpcSocket.layer((session) =>
+        Effect.gen(function* () {
+          const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
+          yield* RpcServer.make(group).pipe(
+            Effect.provideService(RpcServer.Protocol, protocol),
+            Effect.provide(
+              Layer.mergeAll(
+                group.toLayer({
+                  [snoozeBotTask]: () =>
+                    Effect.sync(() => {
+                      active = true;
+                      return { ...view, snoozedUntil: until };
+                    }),
+                  [unsnoozeBotTask]: () =>
+                    Effect.sync(() => {
+                      active = false;
+                      return view;
+                    }),
+                }),
+                HubRpcSocket.rpcAuthorization(session, sessions),
+              ),
+            ),
+            Effect.forkScoped,
+          );
+          return yield* httpEffect.pipe(
+            Effect.ensuring(
+              session.scopes.includes(AuthOrchestrationOperateScope)
+                ? Deferred.succeed(closed, undefined)
+                : Effect.void,
+            ),
+          );
+        }).pipe(Effect.provide(RpcSerialization.layerJson)),
+      );
+      const origin = yield* serve(routes);
+      const connect = Effect.fn("SnoozeAuthorizationTest.connect")(function* (
+        scopes: ReadonlyArray<AuthEnvironmentScope>,
+      ) {
+        const issued = yield* sessions.issue({ scopes });
+        const { token } = yield* sessions.issueWebSocketToken(issued.sessionId, {
+          audience: "rpc",
+        });
+        const url = new URL("/ws", origin.replace(/^http/u, "ws"));
+        url.searchParams.set(
+          ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+          ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+        );
+        url.searchParams.set("wsTicket", token);
+        const socket = yield* Socket.makeWebSocket(url.toString()).pipe(
+          Effect.provide(NodeWS.layerWebSocketConstructor),
+        );
+        const protocol = yield* RpcClient.makeProtocolSocket({ retryTransientErrors: false }).pipe(
+          Effect.provideService(Socket.Socket, socket),
+          Effect.provide(RpcSerialization.layerJson),
+        );
+        const client = yield* RpcClient.make(group).pipe(
+          Effect.provideService(RpcClient.Protocol, protocol),
+        );
+        return { client, sessionId: issued.sessionId };
+      });
+      const reader = yield* connect([AuthOrchestrationReadScope]);
+      const denied = yield* reader.client[snoozeBotTask]({ ...target, until }).pipe(Effect.flip);
+      expect(denied).toMatchObject({ requiredScope: AuthOrchestrationOperateScope });
+      expect(active).toBe(false);
+
+      const operator = yield* connect([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]);
+      expect(yield* operator.client[snoozeBotTask]({ ...target, until })).toEqual({
+        ...view,
+        snoozedUntil: until,
+      });
+      expect(yield* reader.client[unsnoozeBotTask](target).pipe(Effect.flip)).toMatchObject({
+        requiredScope: AuthOrchestrationOperateScope,
+      });
+      expect(yield* sessions.revoke(operator.sessionId)).toBe(true);
+      yield* Deferred.await(closed);
+      expect(yield* operator.client[unsnoozeBotTask](target).pipe(Effect.result)).toMatchObject({
+        _tag: "Failure",
+      });
+      expect(active).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
 it.effect("closing the Pen membership view closes a socket without revoking its session", () =>

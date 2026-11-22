@@ -162,6 +162,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
   "WebhookDeliveryFiringEvidence",
   WORKER_GENERATIONS_MIGRATION_NAME,
+  "ChannelBotTaskSnooze",
 ]);
 
 type MigrationEntry<E> = readonly [

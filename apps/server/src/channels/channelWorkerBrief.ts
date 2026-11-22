@@ -38,7 +38,7 @@ const REMOTE_MATCHED_NOTES_CHARS = 2_000;
 
 type BriefTask = Pick<
   ChannelTask,
-  "taskId" | "generation" | "instruction" | "notesChangeRequested"
+  "taskId" | "generation" | "instruction" | "notesChangeRequested" | "doneMeans"
 > &
   Partial<Pick<ChannelTask, "originInputId">>;
 
@@ -71,8 +71,17 @@ const TURN_FINISH =
   "End with your full answer as your final message: outcome first, then the detail the content needs, conversational and without padding. When the person already read your first line, pick up after it instead of repeating it, and ask a question only once. Say what you verified and what you did not in plain sentences; never start a line with NOT RUN:, Reported tests: or GOAT check:, because GOAT drops those lines before the person reads your answer.";
 
 /** The opening every worker gets: the instruction, then which task it belongs to. */
-const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instruction">) => [
+const workerHeader = (
+  task: Pick<BriefTask, "taskId" | "generation" | "instruction" | "doneMeans">,
+) => [
   task.instruction,
+  ...(task.doneMeans === undefined
+    ? []
+    : [
+        "",
+        "Done means: " + task.doneMeans,
+        "In your result, say whether you met this criterion and what you verified.",
+      ]),
   "",
   "---",
   "This work came in through GOAT as task " +
@@ -212,6 +221,7 @@ export const turnInstruction = (
       files.artifacts +
       " (create them when you first write there).",
     "When your answer is a file you saved for the person, name it in your answer by its path inside the artifacts folder in inline code, such as `reports/summary.md`, so GOAT can show it.",
+    `When you start coding work, use doneMeans on your first running ${goatCallText("channel.task_report")}: one sentence of at most 280 characters saying what the person can verify when the work ends. Put that same criterion in each worker's brief and ask the worker to report whether it met it. Keep the criterion within the person's request.`,
     GOAT_BOT_ROUTING_RULE,
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,

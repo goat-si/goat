@@ -13,6 +13,7 @@ import {
   CHANNEL_RECEPTION_MAX_OPTIONS,
   CHANNEL_HOST_WORKSPACE_LABEL,
   ChannelReceptionReadKind,
+  ChannelTaskDoneMeans,
   ChannelReceptionResult,
   type ChannelReceptionInput,
   type ChannelReceptionTaskSpec,
@@ -40,6 +41,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   ]),
   title: Schema.String,
   instruction: Schema.String,
+  doneMeans: Schema.String,
   projectId: Schema.String,
   host: Schema.String,
   taskId: Schema.String,
@@ -57,6 +59,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
     Schema.Struct({
       title: Schema.String,
       instruction: Schema.String,
+      doneMeans: Schema.String,
       projectId: Schema.String,
       host: Schema.String,
     }),
@@ -70,6 +73,7 @@ export const EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT = {
   action: "report_only",
   title: "",
   instruction: "",
+  doneMeans: "",
   projectId: "",
   host: "",
   taskId: "",
@@ -101,6 +105,12 @@ function clarifyOptions(options: ReadonlyArray<string>): string[] {
 function notesChangeFrom(text: string) {
   const notesChangeRequested = text.trim();
   return notesChangeRequested === "" ? {} : { notesChangeRequested };
+}
+
+const decodeDoneMeans = Schema.decodeUnknownOption(ChannelTaskDoneMeans);
+function completionCriterion(text: string) {
+  const criterion = decodeDoneMeans(text);
+  return Option.isSome(criterion) ? { doneMeans: criterion.value } : {};
 }
 
 /** The typed result, or None when the model's choice is missing what its action needs. */
@@ -135,6 +145,7 @@ function normalizeAdditionalTasks(
         {
           title: title as ChannelReceptionTaskSpec["title"],
           instruction: instruction as ChannelReceptionTaskSpec["instruction"],
+          ...completionCriterion(entry.doneMeans),
           ...(projectId === ""
             ? {}
             : { projectId: projectId as NonNullable<ChannelReceptionTaskSpec["projectId"]> }),
@@ -158,6 +169,7 @@ function toActionResult(
           type: "create_task",
           title: output.title,
           instruction: output.instruction,
+          ...completionCriterion(output.doneMeans),
           ...(output.projectId.trim() === "" ? {} : { projectId: output.projectId }),
           ...(output.host.trim() === "" ? {} : { host: output.host.trim() }),
           ...notesChangeFrom(output.notesChangeRequested),
@@ -453,9 +465,9 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "Style: warm and plain, outcome first. Replies that start or pass on work (run_turn, create_task, follow_up) are one line naming the concrete first step. Direct answers and results are conversational and as long as their content needs: no padding, no restating the question, no narrated steps, and no cutting real content short. No internal ids unless the person needs them. replyText, title, question, and instruction use the person's language, even when a note or fact is in another language.",
     "",
     "Choose exactly one action:",
-    "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below. When the person asks for several independent coding tasks in one message, put the first in title/instruction/projectId/host and up to " +
+    "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back), and doneMeans (one sentence of at most 280 characters describing what the person can verify when finished). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below. When the person asks for several independent coding tasks in one message, put the first in title/instruction/doneMeans/projectId/host and up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
-      " more in additionalTasks (each with title, instruction, projectId, and host); otherwise leave additionalTasks empty.",
+      " more in additionalTasks (each with title, instruction, doneMeans, projectId, and host); otherwise leave additionalTasks empty.",
     "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). When the message also asks for independent coding tasks alongside your turn (including while joining a running turn), put up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
       " coding tasks in additionalTasks.",
@@ -484,7 +496,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         ]
       : []),
     "",
-    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, replacesNote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something or corrects a standing note, an empty replacesNote unless remember corrects a standing note, and an empty notesChangeRequested unless the new message asks to change, forget or tidy notes.",
+    "Return a JSON object with every key: replyText, action, title, instruction, doneMeans, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, replacesNote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something or corrects a standing note, an empty replacesNote unless remember corrects a standing note, and an empty notesChangeRequested unless the new message asks to change, forget or tidy notes.",
     "",
     "This machine (where you and new work run unless a host is set):",
     hostFacts === "" ? "(not available)" : hostFacts,

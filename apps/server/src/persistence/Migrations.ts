@@ -192,6 +192,7 @@ import Migration0176 from "./Migrations/176_ChannelWorkerLaunchHeads.ts";
 import Migration0177 from "./Migrations/177_WorkTriggerAuthorityFence.ts";
 import Migration0178 from "./Migrations/178_WebhookDeliveryFiringEvidence.ts";
 import Migration0179 from "./Migrations/179_ChannelWorkerGenerations.ts";
+import Migration0180 from "./Migrations/180_ChannelBotTaskSnooze.ts";
 import Migration0182 from "./Migrations/182_SlackConversationBot.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
@@ -378,6 +379,7 @@ export const migrationEntries = [
   [177, WORK_TRIGGER_FENCE_MIGRATION_NAME, Migration0177],
   [178, "WebhookDeliveryFiringEvidence", Migration0178],
   [179, WORKER_GENERATIONS_MIGRATION_NAME, Migration0179],
+  [180, "ChannelBotTaskSnooze", Migration0180],
   [182, "SlackConversationBot", Migration0182],
 ] as const;
 

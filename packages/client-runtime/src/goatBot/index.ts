@@ -39,4 +39,19 @@ export * from "./newBots.ts";
 export * from "./botNameRowDismissal.ts";
 
 export { homeWorkGoverns, type HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
+
+export {
+  botTaskActivityFallbackName,
+  botTaskActivityFallbackNames,
+  botTaskActivityText,
+  botTaskActivityWorkerRef,
+} from "./taskActivity.ts";
+export {
+  BOT_TASK_SNOOZE_CHOICES,
+  botTaskSnoozeInput,
+  botSnoozeFold,
+  type BotSnoozeFoldPages,
+  type BotSnoozeFoldContinuation,
+  withoutSnoozedBotTasks,
+} from "./taskSnooze.ts";
 export * from "./slackBindings.ts";
