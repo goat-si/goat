@@ -5992,7 +5992,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId: moved.id,
           providerInstanceId: moved.providerInstanceId,
           occurredAt: now,
-          payload: moved,
+          payload: heldRunsToRelease.some((held) => held.id === moved.id)
+            ? { ...moved, queueHeld: false }
+            : moved,
         });
       }
       yield* completeSourcePlan(now);
