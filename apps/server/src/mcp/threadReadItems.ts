@@ -4,6 +4,7 @@ import type {
   OrchestratorMcpThreadTimelineItem,
   ThreadId,
 } from "@goat/contracts";
+import { idleCompactionOf } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 // Claude Code saves MCP results over ~25k tokens to a file instead of showing them. Bytes, not
@@ -132,7 +133,8 @@ function timelineItem(input: {
       : { parentModelSelection: task.parentModelSelection }),
     runId: input.row.item.runId,
     messageId,
-    createdBy: message?.createdBy ?? null,
+    createdBy:
+      message === undefined ? null : idleCompactionOf(message) ? "system" : message.createdBy,
     creationSource: message?.creationSource ?? null,
     ...(message?.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),
     type: input.row.item.type,
