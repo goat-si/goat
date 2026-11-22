@@ -191,6 +191,7 @@ describe("V2 preview upgrade", () => {
         [178, "WebhookDeliveryFiringEvidence"],
         [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
         [184, "TurnMemoryReceipts"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -393,6 +394,7 @@ describe("V2 preview upgrade", () => {
         [178, "WebhookDeliveryFiringEvidence"],
         [179, "ChannelWorkerGenerations"],
         [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
         [184, "TurnMemoryReceipts"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

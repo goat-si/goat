@@ -1,7 +1,22 @@
 import { RegistryContext } from "@effect/atom-react";
+import { botAttentionDecisionSearch } from "@goat/client-runtime/goatBot";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
+import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
-import { EnvironmentId, RuntimeRequestId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
+import {
+  BotId,
+  ChannelTaskId,
+  EnvironmentId,
+  ProviderInstanceId,
+  RuntimeRequestId,
+  ThreadId,
+  TurnItemId,
+  type ChannelTask,
+  type Handoff,
+  type OrchestrationV2GetTurnItemInput,
+  type OrchestrationV2GetTurnItemResult,
+  type ScopedThreadRef,
+} from "@goat/contracts";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -11,10 +26,12 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { render } from "../../../test/render";
 
 type Snapshot = {
   items: readonly DecisionItem[];
@@ -26,6 +43,7 @@ type Snapshot = {
 };
 type Receipt = AtomCommandResult<void, Error>;
 type Run = (...args: unknown[]) => Promise<Receipt>;
+const targetedHandoff = vi.hoisted(() => vi.fn());
 const state = vi.hoisted<{
   registry: AtomRegistry.AtomRegistry | null;
   snapshot: Atom.Writable<Snapshot> | null;
@@ -99,7 +117,9 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../state/environments", () => ({
   useEnvironment: (id: EnvironmentId) => ({ label: `Environment ${id}` }),
 }));
-vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "decisionAnswer" } }));
+vi.mock("../../state/server", () => ({
+  serverEnvironment: { answerDecision: "decisionAnswer", targetedHandoff },
+}));
 vi.mock("../../hooks/useSettings", async () => {
   const { DEFAULT_CLIENT_SETTINGS } = await import("@goat/contracts/settings");
   return {
@@ -110,7 +130,7 @@ vi.mock("../../hooks/useSettings", async () => {
 // The handoff card answers through its own RPCs and has its own tests.
 vi.mock("../chat/HandoffCard", () => ({
   HandoffCard: (props: { readonly handoff: { readonly title: string } }) => (
-    <section aria-label={props.handoff.title} />
+    <section aria-label={props.handoff.title}>{props.handoff.title}</section>
   ),
 }));
 
@@ -179,15 +199,23 @@ function makeRouter() {
   const decisions = createRoute({
     getParentRoute: () => rootRoute,
     path: "/decisions",
-    component: DecisionInbox,
+    validateSearch: (search): Partial<NonNullable<ReturnType<typeof readDecisionRequestTarget>>> =>
+      readDecisionRequestTarget(search) ?? {},
+    component: () => <DecisionInbox target={readDecisionRequestTarget(decisions.useSearch())} />,
   });
   const thread = createRoute({
     getParentRoute: () => rootRoute,
     path: "/$environmentId/$threadId",
     component: () => <p>Opened thread</p>,
   });
+  const bot = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/bot",
+    validateSearch: (search) => search,
+    component: () => <p>Opened Bot task</p>,
+  });
   return createRouter({
-    routeTree: rootRoute.addChildren([decisions, thread]),
+    routeTree: rootRoute.addChildren([decisions, thread, bot]),
     history: createMemoryHistory({ initialEntries: ["/decisions"] }),
     defaultPendingMinMs: 0,
   });
@@ -446,6 +474,141 @@ it("opens the exact environment/thread route from a disabled card", async () => 
   expect(container.textContent).toContain("Opened thread");
   expect(state.approval).not.toHaveBeenCalled();
 });
+
+it("a remote approval target never chooses a request with the same id on another thread or host", async () => {
+  const requested = approval("same", secondary, "second");
+  const otherHost = approval("same", primary, "second");
+  const otherThread = approval("same", secondary, "first");
+  write([otherHost, otherThread, requested]);
+  const targetedRouter = makeRouter();
+  await targetedRouter.navigate({
+    to: "/decisions",
+    search: { ...requested.ref, requestId: requested.request.requestId },
+  });
+  // Use the router that recognizes the Decisions search parameters.
+  await using screen = await render(
+    <RegistryContext.Provider value={state.registry!}>
+      <TooltipProvider>
+        <RouterProvider router={targetedRouter} />
+      </TooltipProvider>
+    </RegistryContext.Provider>,
+    { router: false },
+  );
+  await act(async () => screen.getByRole("button", { name: "Approve", exact: true }).click());
+  expect(state.approval).toHaveBeenCalledExactlyOnceWith({
+    environmentId: secondary,
+    input: { threadId: "second", requestId: "same", decision: "accept" },
+  });
+  await act(async () => write([otherHost, otherThread]));
+  await expect.element(screen.getByText(/This request is no longer pending/)).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Approve", exact: true }))
+    .not.toBeInTheDocument();
+});
+
+it.each(["open", "missing", "declined"] as const)(
+  "reads the oldest handoff by id and follows the alert's task if it cleared (%s)",
+  async (stateOfHandoff) => {
+    const createdAt = DateTime.makeUnsafe("2026-10-01T00:00:00.000Z");
+    const ref =
+      stateOfHandoff === "declined"
+        ? { ...a.ref, threadId: ThreadId.make("goat-bot-session:shared") }
+        : a.ref;
+    const handoff: Handoff = {
+      handoffId: TurnItemId.make("oldest"),
+      kind: "approval",
+      title: "Approve the oldest handoff",
+      reason: "The worker needs permission to continue.",
+      requestedBy: {
+        threadId: ref.threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        path: "agent",
+      },
+      target: { environmentId: a.ref.environmentId, path: "ssh.runtime_update" },
+      dedupeKey: "oldest",
+      state: "pending",
+      expiresAt: null,
+      createdAt,
+      actor: { type: "server" },
+    };
+    write(
+      Array.from({ length: 200 }, (_, i): DecisionItem => {
+        const id = "newer-" + i;
+        return {
+          id: JSON.stringify(["handoff", a.ref.environmentId, id]),
+          ref: a.ref,
+          createdAt: DateTime.formatIso(DateTime.add(createdAt, { seconds: i + 1 })),
+          routing: { routedTo: "person" },
+          kind: "handoff",
+          handoff: { ...handoff, handoffId: TurnItemId.make(id), title: "Newer handoff" },
+        };
+      }),
+      { feedEnvironments: [a.ref.environmentId] },
+    );
+    targetedHandoff.mockImplementation(
+      ({
+        environmentId,
+        input,
+      }: {
+        environmentId: EnvironmentId;
+        input: OrchestrationV2GetTurnItemInput;
+      }) => {
+        const found =
+          stateOfHandoff !== "missing" &&
+          environmentId === ref.environmentId &&
+          input.threadId === ref.threadId &&
+          input.itemId === handoff.handoffId;
+        const item: OrchestrationV2GetTurnItemResult["item"] = found
+          ? {
+              type: "human_handoff",
+              threadId: input.threadId,
+              id: input.itemId,
+              handoff: stateOfHandoff === "declined" ? { ...handoff, state: "declined" } : handoff,
+              runId: null,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              status: stateOfHandoff === "declined" ? "completed" : "waiting",
+              title: null,
+              startedAt: createdAt,
+              updatedAt: createdAt,
+              completedAt: null,
+            }
+          : null;
+        return Atom.make(AsyncResult.success({ item }));
+      },
+    );
+    const targetedRouter = makeRouter();
+    const taskId = ChannelTaskId.make("task:a");
+    const search = botAttentionDecisionSearch(
+      { ...ref, requestId: RuntimeRequestId.make(handoff.handoffId), requestKind: "handoff" },
+      { environmentId: primary, botId: BotId.make("main"), taskId },
+      { originAddress: { kind: "goat" } } as ChannelTask,
+    );
+    await targetedRouter.navigate({ to: "/decisions", search });
+    // Use the router that handles the Decisions target and originating task.
+    await using screen = await render(
+      <RegistryContext.Provider value={state.registry!}>
+        <TooltipProvider>
+          <RouterProvider router={targetedRouter} />
+        </TooltipProvider>
+      </RegistryContext.Provider>,
+      { router: false },
+    );
+    if (stateOfHandoff === "open") {
+      await expect.element(screen.getByRole("region", { name: handoff.title })).toBeVisible();
+    } else {
+      await expect.element(screen.getByText("Opened Bot task")).toBeVisible();
+      expect(targetedRouter.state.location.search).toMatchObject({
+        task: taskId,
+        attentionEnvironment: primary,
+      });
+    }
+  },
+);
 
 function durable(recommended: string | null): Extract<DecisionItem, { kind: "decision" }> {
   return {

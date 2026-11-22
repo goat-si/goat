@@ -25,7 +25,10 @@ export const openApprovalHandoffs = Effect.fn("DecisionInbox.openApprovalHandoff
     readonly title: string | null;
     readonly parent_thread_id: string | null;
     readonly parent_title: string | null;
-  }>`SELECT i.payload_json, t.title, parent.thread_id AS parent_thread_id, parent.title AS parent_title
+    readonly bot_attention_owned: number;
+  }>`SELECT i.payload_json, t.title, parent.thread_id AS parent_thread_id, parent.title AS parent_title,
+    EXISTS (SELECT 1 FROM channel_bot_attention a WHERE a.event_id = 'handoff:' || i.turn_item_id)
+      AS bot_attention_owned
     FROM orchestration_v2_projection_turn_items i
     JOIN orchestration_v2_projection_threads t
       ON t.thread_id = i.thread_id AND t.deleted_at IS NULL AND t.archived_at IS NULL
@@ -50,6 +53,7 @@ export const openApprovalHandoffs = Effect.fn("DecisionInbox.openApprovalHandoff
             parentThreadTitle: row.parent_title ?? "",
           }),
       handoff: item.handoff,
+      ...(row.bot_attention_owned === 1 ? { botAttentionOwned: true } : {}),
     });
   }
   const total =

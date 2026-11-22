@@ -767,7 +767,11 @@ export const ChannelListChildWorkResult = Schema.Struct({
 });
 export type ChannelListChildWorkResult = typeof ChannelListChildWorkResult.Type;
 
-export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
+export const ChannelGetTaskInput = Schema.Struct({
+  taskId: ChannelTaskId,
+  botId: Schema.optionalKey(BotId),
+  attentionRequest: Schema.optionalKey(Schema.String),
+});
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
 export const CHANNEL_LIST_TASKS_MAX_LIMIT = 100;
@@ -866,6 +870,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
   listOpenAsks: "channel.listOpenAsks",
+  listBotAttention: "channel.listBotAttention",
   subscribeTaskChanges: "channel.subscribeTaskChanges",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",

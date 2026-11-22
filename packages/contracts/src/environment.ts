@@ -287,6 +287,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotOpenAsksLimit: Schema.optionalKey(Schema.Boolean),
   /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
   goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
+  goatBotAttention: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */

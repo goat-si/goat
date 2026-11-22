@@ -1,13 +1,22 @@
 import { assert, describe, it } from "@effect/vitest";
-import { NodeId, type OrchestrationV2RuntimeRequest, RuntimeRequestId } from "@goat/contracts";
+import {
+  ChannelQuestionId,
+  EnvironmentId,
+  NodeId,
+  type OrchestrationV2RuntimeRequest,
+  RuntimeRequestId,
+  ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import { layerBotAttentionExpiry } from "./channelBotAttention.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -129,6 +138,225 @@ describe("open asks across bots", () => {
       assert.deepStrictEqual((yield* members.openAsks(stranger)).asks, []);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("commits an open question exactly once and scopes the feed to the owner", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const start = yield* members.attentionFeed(owner, {});
+      const task = yield* startWaiting(harness, "do: which repo?", "Ev-alert-question");
+      const { asks } = yield* members.openAsks(owner);
+      const page = yield* members.attentionFeed(owner, { cursor: start.cursor });
+      assert.lengthOf(page.events, 1);
+      assert.include(page.events[0], {
+        kind: "question",
+        taskId: task.taskId,
+
+        generation: 1,
+      });
+      assert.strictEqual(page.events[0]?.botId, "main");
+      assert.strictEqual(page.events[0]?.requestId, asks[0]?.questionId);
+      assert.notProperty(page.events[0], "text");
+      assert.notProperty(page.events[0], "title");
+      assert.deepStrictEqual(
+        (yield* members.attentionFeed(owner, { cursor: page.cursor })).events,
+        [],
+      );
+      assert.deepStrictEqual((yield* members.attentionFeed(stranger, { cursor: 0 })).events, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "publishes an existing SSH worker binding only to its owner and exact destination",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* linkSlackUser();
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const task = yield* startWaiting(
+          harness,
+          "do: deploy staging",
+          "Ev-legacy-ssh-binding",
+          request("legacy-ssh-binding"),
+        );
+        const sql = yield* SqlClient.SqlClient;
+        const destination = EnvironmentId.make("old-ssh-destination");
+        const worker = { environmentId: destination, threadId: task.worker!.threadId };
+        assert.isFalse((yield* members.attentionFeed(owner, { worker })).ownsWorker);
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json,
+        '$.worker.environmentId', ${destination}, '$.worker.host', 'box')
+        WHERE task_id = ${task.taskId}`;
+        assert.isTrue((yield* members.attentionFeed(owner, { worker })).ownsWorker);
+        assert.isFalse((yield* members.attentionFeed(stranger, { worker })).ownsWorker);
+        assert.isFalse(
+          (yield* members.attentionFeed(owner, {
+            worker: { ...worker, environmentId: EnvironmentId.make("another-destination") },
+          })).ownsWorker,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("does not repeat a pending approval when the worker is observed again", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const pending = request("notify-approval");
+      const task = yield* startWaiting(harness, "do: deploy staging", "Ev-alert-approval", pending);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const stored = (yield* ledger.getTask(task.taskId))!;
+      yield* commitTransition(ledger, stored, {
+        type: "task.worker.observed",
+        payload: { generation: stored.task.generation, observed: stored.task.observed! },
+      });
+      const page = yield* members.attentionFeed(owner, { cursor: 0 });
+      assert.deepStrictEqual(
+        page.events.map(({ kind, requestId }) => [kind, requestId]),
+        [["approval", pending.id]],
+      );
+      assert.deepStrictEqual(page.events[0]?.request, {
+        kind: "runtime",
+        threadId: task.worker!.threadId,
+        requestId: pending.id,
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("records one exact SSH approval when the worker reports only a durable handoff", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const task = yield* startWaiting(harness, "do: deploy staging", "Ev-ssh-handoff");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("mcp:legacy-worker");
+      const handoff = { threadId, host: "box", requestId: RuntimeRequestId.make("handoff:42") };
+      yield* sql`UPDATE channel_tasks SET worker_thread_id = ${threadId}, task_json = json_set(
+        task_json, '$.worker.threadId', ${threadId}, '$.worker.host', ${handoff.host},
+        '$.worker.environmentId', 'remote') WHERE task_id = ${task.taskId}`;
+      for (const since of [task.createdAt, task.updatedAt]) {
+        const stored = (yield* ledger.getTask(task.taskId))!;
+        yield* commitTransition(ledger, stored, {
+          type: "task.worker.observed",
+          payload: {
+            generation: task.generation,
+            observed: { pullRequests: [], needsYou: [{ kind: "approval", since, handoff }] },
+          },
+        });
+      }
+      const feed = yield* members.attentionFeed(owner, { cursor: 0 });
+      assert.deepStrictEqual(
+        feed.events.map(({ kind, request }) => ({ kind, request })),
+        [{ kind: "approval", request: { kind: "handoff", ...handoff } }],
+      );
+      assert.deepStrictEqual((yield* members.attentionFeed(stranger, { cursor: 0 })).events, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("records a fresh question after retry and keeps failed and finished apart", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const task = yield* startWaiting(harness, "do: which repo?", "Ev-alert-retry");
+      const question = {
+        questionId: ChannelQuestionId.make("question-before-retry"),
+        text: "Which repository?",
+        askedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      assert.isDefined(
+        yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+          type: "task.question.opened",
+          payload: { question },
+        }),
+      );
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.failed",
+        payload: { generation: 1, reason: "fixture failure" },
+      });
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.retry.requested",
+        payload: { generation: 2 },
+      });
+      yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+        type: "task.question.opened",
+        payload: { question },
+      });
+      const finishing = yield* startWaiting(harness, "do: summarize logs", "Ev-alert-result");
+      assert.isDefined(
+        yield* commitTransition(ledger, (yield* ledger.getTask(finishing.taskId))!, {
+          type: "task.completed",
+          payload: { generation: 1, summary: "Private result summary" },
+        }),
+      );
+      const { events } = yield* members.attentionFeed(owner, { cursor: 0 });
+      const own = events.filter((event) => event.taskId === task.taskId);
+      assert.deepStrictEqual(
+        own.map(({ kind, generation }) => [kind, generation]),
+        [
+          ["question", 1],
+          ["failed", 1],
+          ["question", 2],
+        ],
+      );
+      assert.notStrictEqual(own[0]?.eventId, own[2]?.eventId);
+      assert.strictEqual(
+        events.findLast((event) => event.taskId === finishing.taskId)?.kind,
+        "finished",
+      );
+      assert.notInclude(JSON.stringify(events), "Private result summary");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "only returns the retained 500 events in bounded pages and drops expired events",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* linkSlackUser();
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const sql = yield* SqlClient.SqlClient;
+        const task = yield* startWaiting(harness, "do: summarize logs", "Ev-alert-bound");
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`
+        WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < 502)
+        INSERT INTO channel_bot_attention
+          (owner_id, bot_id, task_id, event_id, kind, generation, occurred_at)
+        SELECT ${owner.ownerId}, 'main', ${task.taskId}, 'older-alert-' || n, 'finished', 1, ${now} FROM ids
+      `;
+        yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, {
+          type: "task.question.opened",
+          payload: {
+            question: {
+              questionId: ChannelQuestionId.make("question-bound"),
+              text: "Which logs?",
+              askedAt: now,
+            },
+          },
+        });
+        let cursor = 0;
+        let events = 0;
+        for (let index = 0; index < 10; index++) {
+          const page = yield* members.attentionFeed(owner, { cursor });
+          assert.lengthOf(page.events, 50);
+          assert.isAbove(page.cursor, cursor);
+          assert.strictEqual(page.hasMore, index < 9);
+          cursor = page.cursor;
+          events += page.events.length;
+        }
+        assert.strictEqual(events, 500);
+        assert.lengthOf(yield* sql`SELECT sequence FROM channel_bot_attention`, 500);
+        yield* TestClock.adjust("8 days");
+        assert.deepStrictEqual(yield* sql`SELECT sequence FROM channel_bot_attention`, []);
+        assert.deepStrictEqual((yield* members.attentionFeed(owner, { cursor: 0 })).events, []);
+      }).pipe(Effect.provide(layerBotAttentionExpiry.pipe(Layer.provideMerge(harness.layer))));
+    },
+  );
 
   it.effect("words each approval as its card does, newest first", () => {
     const harness = makeHarness();

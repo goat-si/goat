@@ -57,6 +57,7 @@ it.effect("upgrades a receipt preview and preserves its data on reopen", () =>
       [178, "WebhookDeliveryFiringEvidence"],
       [179, "ChannelWorkerGenerations"],
       [180, "ChannelBotTaskSnooze"],
+      [181, "ChannelBotAttention"],
     ]);
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -72,11 +73,13 @@ it.effect("upgrades a receipt preview and preserves its data on reopen", () =>
       const schema = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_schema WHERE name IN (
           'scheduled_task_webhook_firings', 'channel_worker_generations',
-          'channel_task_status_version', 'turn_memory_by_run', 'turn_memory_delete_thread'
+          'channel_task_status_version', 'channel_bot_attention',
+          'turn_memory_by_run', 'turn_memory_delete_thread'
         ) ORDER BY name`;
       assert.deepStrictEqual(
         schema.map(({ name }) => name),
         [
+          "channel_bot_attention",
           "channel_task_status_version",
           "channel_worker_generations",
           "scheduled_task_webhook_firings",
@@ -92,7 +95,7 @@ it.effect("upgrades a receipt preview and preserves its data on reopen", () =>
 
 it.effect("appends turn receipts to an up-to-date dev ledger", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 180 });
+    yield* runMigrations({ toMigrationInclusive: 181 });
     assert.deepStrictEqual(yield* runMigrations(), [[184, "TurnMemoryReceipts"]]);
     assert.deepStrictEqual(yield* readLedger, migrationManifest);
     assert.deepStrictEqual(yield* readReceipts, []);
