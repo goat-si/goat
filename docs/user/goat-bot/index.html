@@ -26,7 +26,8 @@ under its own name and purpose from its next conversation session.</p>
 <li>Edit any bot, including the main one, from its row menu (long press on mobile), <strong>Edit bot</strong> in
 its home (its name at the top of its chat on web and desktop), or <strong>Settings → GOAT Bot →
 Profile</strong>. A new name also changes how the main bot
-introduces itself in Slack and iMessage.</li>
+introduces itself in Slack and iMessage. Use <strong>Instructions</strong> for rules the bot should follow
+on every request. Changes reach the next turn after the current work ends.</li>
 <li>An added bot’s model can change in its edit dialog or from the model button in its message
 box; its next turn uses it. <strong>Use GOAT Bot’s model</strong> makes it follow the main
 bot’s model again.</li>
@@ -37,7 +38,7 @@ conversation and moves it under <strong>Deleted bots</strong>, where <strong>Res
 history. A bot with open tasks can’t be deleted until they finish or you stop them.</li>
 <li><a href="/goat/docs/user/slack/">Slack</a> can reach bots you add through channel bindings or by name.
 iMessage reaches the main bot.</li>
-<li>Notes and skills are shared by all bots on the machine GOAT Bot lives on.</li>
+<li>Skills are shared by all bots on the machine GOAT Bot lives on.</li>
 <li>A bot can read files on the machine it lives on. It looks at private data such as browser
 history, mail, messages or saved credentials only when you ask about it.</li>
 <li>Agents can list your bots with <code>goat_channel_bot_list</code>; they can’t create bots or send work to
@@ -148,8 +149,15 @@ are: send or clear them first.</li>
 retry runs it again as its next attempt (<strong>Attempt 2</strong>, then 3). While the stopped work is still
 ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
 retried from here: check it on that computer, then ask the bot again.</li>
-<li><strong>Memory</strong> shows the notes GOAT Bot keeps, newest first, with where each was asked for. <strong>Ask
-to change</strong> or <strong>Ask to forget</strong> puts a request quoting the note in the message box for you to
+<li><strong>Library → Memory</strong> shows <strong>This bot</strong> for a member’s own notes and <strong>All bots</strong> for shared
+notes, including notes kept before this feature. When you ask a member to remember something,
+it goes in <strong>This bot</strong>. To share new information, send <code>Remember for all bots: &lt;note&gt;</code> and
+choose <strong>For all bots</strong> in the reply. The main bot uses this confirmation for new shared notes.
+To edit or forget an existing shared note, choose it under <strong>All bots</strong>.
+Reading or using these notes requires GOAT memory access.
+Changing them requires memory write access. A full-access worker on the machine can still read
+the files directly.</li>
+<li><strong>Ask to change</strong> or <strong>Ask to forget</strong> puts a request quoting the note in the message box for you to
 send. Sent as is, it changes or forgets that note at once without starting other work, and the
 bot answers “Changed that note.” or “Forgot that note.” If another note change is still
 running, the note can’t be found, or the file is too large to edit, the bot’s answer says so
