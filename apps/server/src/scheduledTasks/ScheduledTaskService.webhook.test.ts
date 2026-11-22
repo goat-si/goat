@@ -11,7 +11,7 @@ import * as EffectScheduler from "effect/Scheduler";
 import { withWebhookService as withService } from "./ScheduledRunFixture.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Effect's Crypto has no createHmac
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
+import { ProjectId, ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -299,14 +299,13 @@ it.effect("keeps credential headers and query values out of the delivery log", (
           },
         }),
       );
-      const [summary] = (yield* service.listWebhookDeliveries({
-        id: task.id,
-        acceptAnyOutcome: true,
-      })).deliveries;
-      const { delivery } = yield* service.getWebhookDelivery({
-        id: task.id,
-        deliveryId: summary!.id,
-      });
+      const input = { id: task.id, acceptAnyOutcome: true };
+      const [summary] = (yield* service.listWebhookDeliveries(input, task.projectId)).deliveries;
+      assert.deepEqual(
+        (yield* service.listWebhookDeliveries(input, ProjectId.make("another-project"))).deliveries,
+        [],
+      );
+      const { delivery } = yield* service.getWebhookDelivery({ ...input, deliveryId: summary!.id });
       assert.equal(delivery.query, "page=2&api_key=[redacted]");
       assert.equal(delivery.headers.authorization, "[redacted]");
       assert.equal(delivery.headers["x-webhook-key"], "[redacted]");
@@ -1153,9 +1152,9 @@ it.effect("main retention keeps fifty runs and preserves filtered and dedupe buc
       yield* Queue.take(launches);
       for (const outcome of ["filtered", "duplicate"]) {
         yield* sql`WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 20)
-        INSERT INTO scheduled_task_webhook_deliveries
-        SELECT ${outcome} || n.value, d.task_id, d.received_at, d.method, d.query, d.headers_json, d.body,
-          d.body_bytes, d.body_truncated, ${outcome}, d.signature_verified, d.missing_fields_json, d.rendered_prompt, d.error
+        INSERT INTO scheduled_task_webhook_deliveries (delivery_id, task_id, received_at, method, query,
+          headers_json, body, body_bytes, body_truncated, outcome, signature_verified, missing_fields_json)
+        SELECT ${outcome} || n.value, d.task_id, d.received_at, d.method, '', '{}', '', 0, 0, ${outcome}, 0, '[]'
         FROM n CROSS JOIN (SELECT * FROM scheduled_task_webhook_deliveries WHERE outcome = 'accepted' LIMIT 1) d`;
       }
       for (let i = 0; i < 59; i++) {

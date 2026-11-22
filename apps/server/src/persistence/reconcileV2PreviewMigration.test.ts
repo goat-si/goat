@@ -188,7 +188,10 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
-        [178, "TurnMemoryReceipts"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [184, "TurnMemoryReceipts"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -387,7 +390,10 @@ describe("V2 preview upgrade", () => {
         [175, "AcpSessionOwnerIndex"],
         [176, "ChannelWorkerLaunchHeads"],
         [177, "WorkTriggerAuthorityFence"],
-        [178, "TurnMemoryReceipts"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [184, "TurnMemoryReceipts"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

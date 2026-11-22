@@ -7,11 +7,15 @@ export const FIRST_V2_MIGRATION_ID = 55;
 
 const CHANNEL_LEDGER_MIGRATION = "ChannelLedger";
 const WORK_TRIGGER_LEDGER_FENCE = "ChannelLedgerRequiresWorkTriggerAuthority";
+const WORKER_RELEASE_LEDGER_FENCE = "ChannelLedgerRequiresWorkerReleaseAuthority";
 export const WORK_TRIGGER_FENCE_MIGRATION_NAME = "WorkTriggerAuthorityFence";
+export const WORKER_GENERATIONS_MIGRATION_NAME = "ChannelWorkerGenerations";
 
 // Older builds already reject a changed name at a required V2 migration id.
 export const canonicalMigrationName = (name: string) =>
-  name === WORK_TRIGGER_LEDGER_FENCE ? CHANNEL_LEDGER_MIGRATION : name;
+  name === WORK_TRIGGER_LEDGER_FENCE || name === WORKER_RELEASE_LEDGER_FENCE
+    ? CHANNEL_LEDGER_MIGRATION
+    : name;
 
 export const fenceWorkTriggerRollback = Effect.fn("fenceWorkTriggerRollback")(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -19,10 +23,50 @@ export const fenceWorkTriggerRollback = Effect.fn("fenceWorkTriggerRollback")(fu
     WHERE name = ${CHANNEL_LEDGER_MIGRATION}`;
 });
 
+export const fenceWorkerReleaseRollback = Effect.fn("fenceWorkerReleaseRollback")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`UPDATE effect_sql_migrations SET name = ${WORKER_RELEASE_LEDGER_FENCE}
+    WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE})`;
+});
+
+export const reconcileWorkerReleaseRollback = Effect.fn("reconcileWorkerReleaseRollback")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [ledger] = yield* sql<{ readonly name: string }>`SELECT name FROM effect_sql_migrations
+      WHERE name IN (${CHANNEL_LEDGER_MIGRATION}, ${WORK_TRIGGER_LEDGER_FENCE}) LIMIT 1`;
+    if (ledger === undefined) return;
+    if (ledger.name === CHANNEL_LEDGER_MIGRATION && !(yield* hasPersistedWorkTriggers())) return;
+    yield* fenceWorkerReleaseRollback();
+  },
+);
+
+export const hasPersistedWorkTriggers = Effect.fn("hasPersistedWorkTriggers")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  // Migration 177 and databases that recorded the preview of 179 can lack these indexes.
+  const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+    WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+      'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')`;
+  const useIndex = (name: string) =>
+    indexes.some((index) => index.name === name) ? sql`INDEXED BY ${sql(name)}` : sql``;
+  const rows = yield* sql`SELECT 1 WHERE EXISTS (
+    SELECT 1 FROM scheduled_tasks ${useIndex("scheduled_tasks_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(owner_json) THEN json_extract(owner_json, '$.routineMode') END = 'work'
+    UNION ALL
+    SELECT 1 FROM scheduled_task_channel_inputs ${useIndex("scheduled_task_channel_inputs_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.routineMode') END = 'work'
+    UNION ALL
+    SELECT 1 FROM channel_tasks ${useIndex("channel_tasks_work_trigger_idx")}
+      WHERE CASE WHEN json_valid(task_json) THEN json_extract(task_json, '$.routineWork') END = 1
+    LIMIT 1)`;
+  return rows.length > 0;
+});
+
 const PEN_MEMBER_MIGRATION_ID = 158;
 const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
 const LEGACY_FIRST_BIND_ID = 159;
 const FIRST_BIND_MIGRATION_NAME = "ScheduledTaskFirstBindIntent";
+const TURN_MEMORY_RECEIPTS_PREVIEW_ID = 178;
+const TURN_MEMORY_RECEIPTS_NAME = "TurnMemoryReceipts";
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -42,6 +86,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteDispatches",
   CHANNEL_LEDGER_MIGRATION,
   WORK_TRIGGER_LEDGER_FENCE,
+  WORKER_RELEASE_LEDGER_FENCE,
   "RemoteDispatchQuestions",
   "ThreadRunResults",
   "RemoteReportRelay",
@@ -117,7 +162,10 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "AcpSessionOwnerIndex",
   "ChannelWorkerLaunchHeads",
   WORK_TRIGGER_FENCE_MIGRATION_NAME,
-  "TurnMemoryReceipts",
+  "WebhookDeliveryFiringEvidence",
+  WORKER_GENERATIONS_MIGRATION_NAME,
+  "ChannelBotTaskSnooze",
+  TURN_MEMORY_RECEIPTS_NAME,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -241,11 +289,15 @@ export const skippedV2Migrations = <E>(
   const supportsWorkTriggers = entries.some(
     ([, name]) => name === WORK_TRIGGER_FENCE_MIGRATION_NAME,
   );
+  const supportsWorkerRelease = entries.some(
+    ([, name]) => name === WORKER_GENERATIONS_MIGRATION_NAME,
+  );
   const recordedNames = new Map(
-    history.map((row) => [
-      row.migration_id,
-      supportsWorkTriggers ? canonicalMigrationName(row.name) : row.name,
-    ]),
+    history.map(({ migration_id, name }) => {
+      const supported =
+        name === WORKER_RELEASE_LEDGER_FENCE ? supportsWorkerRelease : supportsWorkTriggers;
+      return [migration_id, supported ? canonicalMigrationName(name) : name];
+    }),
   );
   const skipped = entries.flatMap(([id, name]) => {
     if (id < FIRST_V2_MIGRATION_ID || id > upTo || (throughId !== undefined && id > throughId))
@@ -259,6 +311,38 @@ export const skippedV2Migrations = <E>(
         kind: "BadState",
         message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${highestRecorded}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
       });
+};
+
+/**
+ * The published receipt preview was built on the complete dev ledger through 177.
+ * Recognize that exact layout, not arbitrary GOAT gaps or mixed preview histories.
+ */
+const turnMemoryReceiptsPreview = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<LedgerRow>,
+) => {
+  const previewId = TURN_MEMORY_RECEIPTS_PREVIEW_ID;
+  const receipt = entries.find(
+    ([id, name]) => id > previewId && name === TURN_MEMORY_RECEIPTS_NAME,
+  );
+  const tail = history.filter((row) => row.migration_id >= previewId);
+  if (
+    receipt === undefined ||
+    !tail.some((row) => row.migration_id === previewId && row.name === TURN_MEMORY_RECEIPTS_NAME) ||
+    tail.length !== 1 ||
+    history.some(
+      (row) =>
+        row.migration_id >= FIRST_V2_MIGRATION_ID &&
+        row.migration_id < previewId &&
+        !entries.some(
+          ([id, name]) => id === row.migration_id && name === canonicalMigrationName(row.name),
+        ),
+    ) ||
+    skippedV2Migrations(entries, history, previewId - 1) !== undefined
+  ) {
+    return undefined;
+  }
+  return receipt[0];
 };
 
 /**
@@ -299,6 +383,7 @@ export function memoryMigrationProblem<E>(
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const insertion = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
+  const receiptPreviewId = turnMemoryReceiptsPreview(entries, history);
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
@@ -307,8 +392,10 @@ export function memoryMigrationProblem<E>(
       const recordedId =
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
           ? firstBindId
-          : row.migration_id +
-            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
+          : row.name === TURN_MEMORY_RECEIPTS_NAME && receiptPreviewId !== undefined
+            ? receiptPreviewId
+            : row.migration_id +
+              (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
     }),
   );
@@ -433,12 +520,15 @@ export const plannedGoatLedger = <E>(
   }
   const penMember = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
+  const receiptPreviewId = turnMemoryReceiptsPreview(entries, history);
   const insertions =
     firstBindId !== undefined
       ? entries.filter(([id]) => id >= LEGACY_FIRST_BIND_ID && id < firstBindId)
-      : penMember === undefined
-        ? []
-        : [penMember];
+      : receiptPreviewId !== undefined
+        ? entries.filter(([id]) => id >= TURN_MEMORY_RECEIPTS_PREVIEW_ID && id < receiptPreviewId)
+        : penMember === undefined
+          ? []
+          : [penMember];
   const moved = [
     ...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)),
     ...goatRows,

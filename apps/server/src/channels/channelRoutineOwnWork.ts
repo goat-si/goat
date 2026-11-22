@@ -17,7 +17,7 @@ import {
   webhookExpressionResolver,
   type WebhookRequest,
 } from "../scheduledTasks/webhookTemplate.ts";
-import { CHANNEL_WORKER_BRANCH_PREFIX, remoteBranchFor } from "./channelIds.ts";
+import { CHANNEL_WORKER_BRANCH_PREFIX, remoteBranchFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 
 const githubRepository = (value: unknown) =>
@@ -65,31 +65,44 @@ const backfillChannelWorkerHeads = Effect.fn("channel.backfillWorkerHeads")(func
     const rows = yield* sql<{
       readonly task_id: string;
       readonly generation: number;
-      readonly branch: string;
-      readonly workspace: string;
+      readonly worker_thread_id: string | null;
     }>`
-      WITH workers AS (
-        SELECT t.task_id, t.generation, json_extract(s.payload_json, '$.branch') AS branch,
-          COALESCE(json_extract(s.payload_json, '$.worktreePath'), p.workspace_root) AS workspace
-        FROM channel_tasks t
-        JOIN orchestration_v2_projection_threads s ON s.thread_id = t.worker_thread_id
-        LEFT JOIN projection_projects p ON p.project_id = s.project_id
-        WHERE t.status NOT IN ('completed', 'failed', 'cancelled') AND s.deleted_at IS NULL
-          AND t.task_id > ${after}
-          AND NOT EXISTS (
-            SELECT 1 FROM channel_worker_launch_heads h WHERE h.task_id = t.task_id AND h.generation = t.generation
-          )
-      )
-      SELECT task_id, generation, branch, workspace FROM workers
-      WHERE branch <> '' AND workspace <> '' ORDER BY task_id LIMIT 64`;
+      SELECT t.task_id, t.generation, t.worker_thread_id FROM channel_tasks t
+      WHERE t.task_id > ${after} AND t.status NOT IN ('completed', 'failed', 'cancelled')
+        AND (t.worker_thread_id IS NOT NULL OR t.status = 'dispatching')
+        AND NOT EXISTS (
+          SELECT 1 FROM channel_worker_launch_heads h WHERE h.task_id = t.task_id AND h.generation = t.generation
+        )
+      ORDER BY t.task_id LIMIT 64`;
     if (rows.length === 0) return;
-    for (const row of rows) {
-      after = row.task_id;
-      const identity = yield* identities.resolve(row.workspace);
-      yield* recordChannelLaunchHead({
-        taskId: ChannelTaskId.make(row.task_id),
+    const workers = rows.map((row) => {
+      const taskId = ChannelTaskId.make(row.task_id);
+      return {
+        threadId: row.worker_thread_id ?? workerLaunchIdsFor(taskId, row.generation).threadId,
+        taskId,
         generation: row.generation,
-        branch: row.branch,
+      };
+    });
+    const projections = yield* sql<{
+      readonly thread_id: string;
+      readonly branch: string | null;
+      readonly workspace: string | null;
+    }>`SELECT s.thread_id, json_extract(s.payload_json, '$.branch') AS branch,
+        COALESCE(json_extract(s.payload_json, '$.worktreePath'), p.workspace_root) AS workspace
+      FROM orchestration_v2_projection_threads s
+      LEFT JOIN projection_projects p ON p.project_id = s.project_id
+      WHERE s.thread_id IN ${sql.in(workers.map(({ threadId }) => threadId))} AND s.deleted_at IS NULL`;
+    const byId = new Map(projections.map((row) => [row.thread_id, row]));
+    for (const { threadId, taskId, generation } of workers) {
+      after = taskId;
+      const projection = byId.get(threadId);
+      if (!projection?.branch || !projection.workspace) continue;
+      const { branch, workspace } = projection;
+      const identity = yield* identities.resolve(workspace);
+      yield* recordChannelLaunchHead({
+        taskId,
+        generation,
+        branch,
         repository: githubRepositoryOf(identity),
       });
     }

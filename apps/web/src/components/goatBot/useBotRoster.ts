@@ -67,6 +67,8 @@ export function useBotThreads(
   }, [supported, watchedThreadId, revision, refreshThreads]);
   return {
     rows: threads.data?.rows ?? [],
+    workRevision: threads.data,
+    supportsSnooze: connected && capabilities?.goatBotTaskSnooze === true,
     mainMessageCount: threads.data?.mainMessageCount ?? 0,
     /** Threads the bot launched on other machines; none from servers before this list. */
     remoteWork: threads.data?.remoteWork ?? NO_REMOTE_WORK,

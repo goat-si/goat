@@ -636,7 +636,7 @@ const make = Effect.gen(function* () {
             const requests = yield* orchestrator
               .getThreadRecords(binding.threadId, ["runtimeRequests", "subagents"])
               .pipe(Effect.mapError(unavailable));
-            const pullRequests = pullRequestsFromLinks(shell.pullRequests);
+            const pullRequests = pullRequestsFromLinks(shell.pullRequests, true);
             // A subagent on this machine waiting on a person blocks the work as much as the
             // worker. The approval names that thread, which is a thread on this machine.
             const children = yield* scanSubagents(requests.subagents, (threadId) =>
