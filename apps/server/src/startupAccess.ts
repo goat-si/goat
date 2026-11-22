@@ -49,6 +49,9 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
 const VIRTUAL_INTERFACE =
   /^(docker|br-|veth|virbr|vmnet|vboxnet|vEthernet|podman|cni|flannel|cali|lxcbr|lxdbr|bridge[1-9]\d\d)/;
 
+// Windows adapter names are mutable; Linux bridges can inherit these MACs.
+export const WINDOWS_HOST_ADAPTER_MAC = /^(0a:00:27|00:50:56:c0:00):/i;
+
 const LINUX_CONTAINER_INTERFACE = /^(ve-|vb-|vz-)/;
 
 export const isVirtualInterface = (name: string, platform: NodeJS.Platform): boolean =>
@@ -138,7 +141,9 @@ const resolveHeadlessConnectionHost = (
     (entry) =>
       !entry.internal &&
       isIpv4Family(entry.family) &&
-      (!privateNetworkOnly || isPrivateNetworkAddress(entry.address)),
+      (!privateNetworkOnly ||
+        (isPrivateNetworkAddress(entry.address) &&
+          !(platform === "win32" && WINDOWS_HOST_ADAPTER_MAC.test(entry.mac)))),
   );
   // A tailnet or other CGNAT address reaches fewer devices than the LAN one.
   const externalIpv4 = privateNetworkOnly

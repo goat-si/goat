@@ -21,7 +21,12 @@ import { formatHostForUrl, isTailnetHost, isWildcardHost } from "@goat/shared/ho
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
-import { isLoopbackHost, isPrivateNetworkAddress, isVirtualInterface } from "../startupAccess.ts";
+import {
+  isLoopbackHost,
+  isPrivateNetworkAddress,
+  isVirtualInterface,
+  WINDOWS_HOST_ADAPTER_MAC,
+} from "../startupAccess.ts";
 
 type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
 
@@ -47,9 +52,6 @@ const isTailscaleInterface = (
 ): boolean =>
   /^tailscale/i.test(name) ||
   entries.some((entry) => entry.family === "IPv6" && isTailnetHost(entry.address));
-
-// Windows adapter names are mutable; Linux bridges can inherit these MACs.
-const WINDOWS_HOST_ADAPTER_MAC = /^(0a:00:27|00:50:56:c0:00):/i;
 
 export function resolveBoundEndpoints(input: {
   readonly platform: NodeJS.Platform;
