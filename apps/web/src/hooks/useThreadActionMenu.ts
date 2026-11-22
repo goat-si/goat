@@ -1,5 +1,5 @@
 import {
-  openWebThreadFollowMenu,
+  handleWebThreadFollowAction,
   webThreadFollowAvailable,
 } from "../components/goatBot/goatBotThreadFollowMenu";
 import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
@@ -163,6 +163,7 @@ export function useThreadActionMenu(input: {
       const items = buildThreadActionMenuItems({
         canOpenSshHandoff: true,
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+        canFollowWithBot: webThreadFollowAvailable(threadRef),
         canFind: onFind !== undefined,
         branch: thread.branch ?? null,
         projectFilter: null,
@@ -184,25 +185,10 @@ export function useThreadActionMenu(input: {
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
         fork: globalAgent ? null : readThreadForkMenuState(threadRef),
       });
-      const followItems =
-        !globalAgent && webThreadFollowAvailable(threadRef)
-          ? [
-              { id: "bot-follow" as const, label: "Ask a bot to follow…" },
-              { id: "bot-stop-following" as const, label: "Stop following" },
-            ]
-          : [];
-      const clicked = await settlePromise(() =>
-        api.contextMenu.show([...items, ...followItems], position),
-      );
+      const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
-      if (clicked.value === "bot-follow" || clicked.value === "bot-stop-following") {
-        await openWebThreadFollowMenu(
-          threadRef,
-          clicked.value === "bot-follow" ? "follow" : "stop",
-          position,
-        );
-        return;
-      }
+      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
+      if (botAction) return await botAction;
       const action: ThreadActionMenuId = clicked.value;
       if (
         threadActionRequiresOperate(action) &&

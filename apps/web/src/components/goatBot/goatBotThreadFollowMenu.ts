@@ -47,6 +47,15 @@ export async function openWebThreadFollowMenu(
   );
 }
 
+export function handleWebThreadFollowAction(
+  thread: ScopedThreadRef,
+  action: string,
+  position: { x: number; y: number },
+) {
+  if (action === "bot-follow") return openWebThreadFollowMenu(thread, "follow", position);
+  if (action === "bot-stop-following") return openWebThreadFollowMenu(thread, "stop", position);
+}
+
 export function webThreadFollowPaletteItems(
   activeThread: { environmentId: EnvironmentId; id: ThreadId } | null | undefined,
 ): CommandPaletteActionItem[] {
@@ -61,6 +70,14 @@ export function webThreadFollowPaletteItems(
       searchTerms: ["ask a bot to follow", "watch thread"],
       icon: createElement(ActivityIcon, { className: ITEM_ICON_CLASS }),
       run: () => openWebThreadFollowMenu(target, "follow"),
+    },
+    {
+      kind: "action",
+      value: "action:bot-stop-following-thread",
+      title: "Stop following",
+      searchTerms: ["stop following", "unfollow thread"],
+      icon: createElement(ActivityIcon, { className: ITEM_ICON_CLASS }),
+      run: () => openWebThreadFollowMenu(target, "stop"),
     },
   ];
 }

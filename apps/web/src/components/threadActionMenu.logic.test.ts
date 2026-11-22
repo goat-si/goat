@@ -179,3 +179,16 @@ describe("buildThreadActionMenuItems", () => {
     });
   });
 });
+
+it.each([
+  { canFollowWithBot: true, canOperate: true, expected: ["bot-follow", "bot-stop-following"] },
+  { canFollowWithBot: false, canOperate: true, expected: [] },
+  { canFollowWithBot: true, canOperate: false, expected: [] },
+])(
+  "gates the shared sidebar menu's bot actions ($canFollowWithBot, $canOperate)",
+  ({ canFollowWithBot, canOperate, expected }) => {
+    expect(
+      allIds({ ...baseState, canFollowWithBot, canOperate }).filter((id) => id.startsWith("bot-")),
+    ).toEqual(expected);
+  },
+);

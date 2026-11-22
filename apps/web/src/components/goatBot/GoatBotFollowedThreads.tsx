@@ -11,6 +11,7 @@ import { useQuietThreadShell } from "~/state/entities";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
+import { toastManager } from "../ui/toast";
 import { Button } from "../ui/button";
 import { useGoatBotMember } from "./goatBotMemberContext";
 
@@ -48,6 +49,11 @@ export function GoatBotFollowedThreads({
                   input: { botId, environmentId: row.environmentId, threadId: row.threadId },
                 });
                 if (result._tag === "Success") onRefresh();
+                else
+                  toastManager.add({
+                    type: "error",
+                    title: "Could not stop following this thread.",
+                  });
               }}
             >
               Stop following

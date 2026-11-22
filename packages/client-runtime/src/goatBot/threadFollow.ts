@@ -1,7 +1,14 @@
-import { isGoatBotSessionThreadId, type ScopedThreadRef } from "@goat/contracts";
+import {
+  ChannelGatewayError,
+  isGoatBotSessionThreadId,
+  type ScopedThreadRef,
+} from "@goat/contracts";
 import type { AtomRegistry } from "effect/reactivity";
 import type { createChannelEnvironmentAtoms } from "../state/channels.ts";
-import { runAtomCommand } from "../state/runtime.ts";
+import * as Schema from "effect/Schema";
+import { runAtomCommand, squashAtomCommandFailure } from "../state/runtime.ts";
+
+const isGatewayError = Schema.is(ChannelGatewayError);
 
 type Commands = ReturnType<typeof createChannelEnvironmentAtoms>;
 
@@ -81,5 +88,12 @@ export async function chooseThreadFollow(
     environmentId,
     input: { ...target, taskId: task.taskId },
   });
-  if (result._tag !== "Success") notice("Could not follow this thread.");
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    notice(
+      isGatewayError(error) && error.reason === "cross_environment_follow"
+        ? error.message
+        : "Could not follow this thread.",
+    );
+  }
 }

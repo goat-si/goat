@@ -9,7 +9,7 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import { AppText } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { channelEnvironment } from "../../state/channels";
@@ -42,12 +42,13 @@ function MobileBotFollowedThread({
       {canStop && (
         <Button
           label="Stop following"
-          onPress={() =>
-            void stop({
+          onPress={async () => {
+            const result = await stop({
               environmentId,
               input: { botId, environmentId: row.environmentId, threadId: row.threadId },
-            })
-          }
+            });
+            if (result._tag === "Failure") Alert.alert("Could not stop following this thread.");
+          }}
         />
       )}
     </View>
