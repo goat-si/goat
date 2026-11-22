@@ -1,3 +1,4 @@
+import { settlementMissingWorktreeTests } from "./ThreadSettlementService.missing-worktree-test-cases.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -1456,41 +1457,7 @@ describe("ThreadSettlementServiceV2 terminals", () => {
     ),
   );
 
-  it.effect("runs an explicit settle script in its worktree while automation is held", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const shared = appThread("shared-checkout-thread", "settled");
-        const missing = appThread("removed-worktree-thread", "settled", "/worktrees/removed");
-        const worktree = appThread("worktree-thread", "settled", "/worktrees/thread");
-        const hold = yield* AutomationHold.makeInMemory({
-          reason: "channel-copy",
-          heldAt: "2026-10-25T00:00:00.000Z",
-        });
-        const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([]),
-          currentThreads: [shared, missing, worktree],
-          existingWorktreePaths: ["/worktrees/thread"],
-        });
-
-        yield* Effect.gen(function* () {
-          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
-          yield* service.start();
-          yield* Deferred.succeed(fixture.activation, undefined);
-          yield* TestClock.adjust(0);
-          yield* fixture.publishEvent(settledEvent(shared));
-          yield* fixture.publishEvent(settledEvent(missing));
-          yield* fixture.publishEvent(settledEvent(worktree));
-          const run = yield* Queue.take(fixture.scriptRuns);
-          assert.strictEqual(run.threadId, worktree.id);
-          assert.strictEqual(run.worktreePath, "/worktrees/thread");
-          assert.strictEqual(run.trigger, "settle");
-        }).pipe(
-          Effect.provide(fixture.layer),
-          Effect.provideService(AutomationHold.AutomationHold, hold),
-        );
-      }),
-    ),
-  );
+  settlementMissingWorktreeTests({ makeHarness, makeSnapshot });
 
   it.effect("skips the settle script for a thread re-engaged while its shells close", () =>
     Effect.scoped(
