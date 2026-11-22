@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import type { ChatAttachment } from "@goat/contracts";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
@@ -24,7 +25,7 @@ export function threadTitleTextFromPrompt(value: string): string {
     return reference.label;
   });
   return (
-    normalizeTitleSeed(prose) ||
+    normalizeTitleSeed(composerFileLinksToPlainText(prose)) ||
     (imageIds.size > 0 ? (imageIds.size === 1 ? "Attached image" : "Attached images") : "")
   );
 }
