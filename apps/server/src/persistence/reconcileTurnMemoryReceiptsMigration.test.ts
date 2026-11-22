@@ -58,12 +58,12 @@ it.effect.each([178, 184] as const)(
       assert.isTrue(yield* hasPendingMigrations().pipe(Effect.provide(database)));
       assert.deepStrictEqual(yield* runMigrations().pipe(Effect.provide(database)), [
         ...(id === 178
-          ? [
+          ? ([
               [178, "WebhookDeliveryFiringEvidence"],
               [179, "ChannelWorkerGenerations"],
               [180, "ChannelBotTaskSnooze"],
               [181, "ChannelBotAttention"],
-            ]
+            ] as const)
           : []),
         [182, "SlackConversationBot"],
         [183, "ChannelInputSessionAuthority"],
