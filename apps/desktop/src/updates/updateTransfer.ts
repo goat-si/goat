@@ -144,3 +144,13 @@ export const persistUpdateDownload = Effect.fn("desktop.updates.persistDownload"
     .pipe(Effect.ignore({ log: true }));
   return false;
 });
+
+const UpdateInfo = Schema.Struct({
+  version: Schema.String,
+  // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
+  releaseNotes: Schema.optional(Schema.Unknown),
+  releaseName: Schema.optional(Schema.NullOr(Schema.String)),
+  releaseDate: Schema.optional(Schema.String),
+});
+
+export const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
