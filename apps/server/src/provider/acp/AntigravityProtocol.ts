@@ -498,6 +498,107 @@ export function isAntigravityOpenCommand(toolCall: AcpToolCallState): boolean {
   return toolCall.kind === "execute" && toolCall.status === "inProgress";
 }
 
+// Antigravity's run_command returns after `WaitMsBeforeAsync` with a task id, then ends the turn
+// on purpose: its own guidance tells the model to stop and wait for the task's completion message.
+// Without tracking that hand-off, ACP settles the run, terminalizes the still-open command as
+// "completed", and unloads the session before the task reports back.
+const ANTIGRAVITY_BACKGROUND_TASK_START =
+  /Tool is running as a background task with task id:\s*([\w-]+\/task-\d+)/i;
+const ANTIGRAVITY_BACKGROUND_TASK_END =
+  /Task id\s+"([\w-]+\/task-\d+)"\s+(finished|failed)\s+with\s+(?:result|error):/i;
+
+/** Tool content and native output carry the background-task ACK; both are bounded upstream. */
+function antigravityToolText(toolCall: AcpToolCallState): string | undefined {
+  const parts: string[] = [];
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || parts.length >= 32) return;
+    if (typeof value === "string") {
+      if (value.length > 0) parts.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 32)) visit(item, depth + 1);
+      return;
+    }
+    if (!Predicate.isObject(value)) return;
+    for (const [key, item] of Object.entries(value).slice(0, 32)) {
+      if (
+        key === "text" ||
+        key === "content" ||
+        key === "output" ||
+        key === "combinedOutput" ||
+        key === "combined_output" ||
+        key === "rawOutput"
+      ) {
+        visit(item, depth + 1);
+      }
+    }
+  };
+  visit(toolCall.data.content, 0);
+  visit(toolCall.data.rawOutput, 0);
+  if (typeof toolCall.detail === "string") parts.push(toolCall.detail);
+  if (typeof toolCall.title === "string") parts.push(toolCall.title);
+  if (parts.length === 0) return undefined;
+  return parts.join("\n").slice(0, TOOL_TEXT_LIMIT);
+}
+
+/** The ACK's task id is the identity GOAT must keep pending while the native command runs. */
+export function extractAntigravityBackgroundTaskId(toolCall: AcpToolCallState): string | undefined {
+  if (toolCall.kind !== undefined && toolCall.kind !== "execute") return undefined;
+  return antigravityToolText(toolCall)?.match(ANTIGRAVITY_BACKGROUND_TASK_START)?.[1];
+}
+
+export function isAntigravityBackgroundCommandTool(toolCall: AcpToolCallState): boolean {
+  return extractAntigravityBackgroundTaskId(toolCall) !== undefined;
+}
+
+/**
+ * The final report for a native task reuses the tool call's id, so settle the matching registered
+ * task instead of letting the generic tool terminalization report an unverified command.
+ */
+export function extractAntigravityBackgroundTaskCompletion(
+  toolCall: AcpToolCallState,
+): ReadonlyArray<{
+  readonly taskId: string;
+  readonly status: "completed" | "failed";
+  readonly appendOutput: string;
+}> {
+  const match = antigravityToolText(toolCall)?.match(ANTIGRAVITY_BACKGROUND_TASK_END);
+  if (match == null) return [];
+  return [
+    {
+      taskId: match[1],
+      status: match[2] === "failed" ? "failed" : "completed",
+      // The completion text is already this tool call's output; do not duplicate it.
+      appendOutput: "",
+    },
+  ];
+}
+
+/** A task report can also arrive as a plain agent message after the prompt has returned. */
+export function isAntigravityBackgroundTaskWakeNotification(notification: {
+  readonly update: { readonly sessionUpdate?: string };
+}): boolean {
+  const update = notification.update;
+  if (
+    update.sessionUpdate !== "agent_message" &&
+    update.sessionUpdate !== "agent_message_chunk" &&
+    update.sessionUpdate !== "user_message" &&
+    update.sessionUpdate !== "user_message_chunk"
+  ) {
+    return false;
+  }
+  const text = (notification as { readonly update: { readonly content?: unknown } }).update.content;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (depth > 4) return false;
+    if (typeof value === "string") return ANTIGRAVITY_BACKGROUND_TASK_END.test(value);
+    if (Array.isArray(value)) return value.some((item) => visit(item, depth + 1));
+    if (!Predicate.isObject(value)) return false;
+    return Object.values(value).some((item) => visit(item, depth + 1));
+  };
+  return visit(text, 0);
+}
+
 const ANTIGRAVITY_SUBAGENT_TITLES = new Set([
   "Running start_subagent",
   "Run start_subagent?",

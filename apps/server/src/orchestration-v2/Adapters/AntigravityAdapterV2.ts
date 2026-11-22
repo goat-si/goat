@@ -35,7 +35,11 @@ import {
   antigravityApprovalOptions,
   antigravitySubagentOutput,
   classifyAntigravitySubagentToolCall,
+  extractAntigravityBackgroundTaskCompletion,
+  extractAntigravityBackgroundTaskId,
   extractAntigravityUserInputQuestion,
+  isAntigravityBackgroundCommandTool,
+  isAntigravityBackgroundTaskWakeNotification,
   makeAntigravityReadRepair,
   makeAntigravityUserInputResponse,
   normalizeAntigravityToolCall,
@@ -236,6 +240,14 @@ export function makeAntigravityAcpAdapterFlavor(
     // Loading history replays tool calls; resume avoids replay.
     preferResumeSession: true,
     subagentsIdleOnTurnCompletion: true,
+    // A run_command can hand off to a native background task and end its turn on purpose.
+    // Keep the run and its provider session alive until that task reports, then wake the thread.
+    extractBackgroundTaskId: extractAntigravityBackgroundTaskId,
+    isBackgroundCommandTool: isAntigravityBackgroundCommandTool,
+    extractBackgroundTaskCompletion: extractAntigravityBackgroundTaskCompletion,
+    isProviderWakeNotification: isAntigravityBackgroundTaskWakeNotification,
+    deferFinalizeForBackgroundWork: true,
+    enablePostSettleContinuation: true,
     ...(options.onSessionEvent === undefined ? {} : { onSessionEvent: options.onSessionEvent }),
     applyModelSelection: Effect.fn("AntigravityAdapterV2.applyModelSelection")(function* ({
       runtime,

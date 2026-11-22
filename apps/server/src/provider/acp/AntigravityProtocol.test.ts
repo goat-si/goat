@@ -4,7 +4,11 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
 import {
+  extractAntigravityBackgroundTaskCompletion,
+  extractAntigravityBackgroundTaskId,
   extractAntigravityUserInputQuestion,
+  isAntigravityBackgroundCommandTool,
+  isAntigravityBackgroundTaskWakeNotification,
   isAntigravityOpenCommand,
   antigravityApprovalOptions,
   antigravitySubagentOutput,
@@ -678,5 +682,117 @@ describe("Antigravity served reads", () => {
       toolCallId: "call_current",
       status: "completed",
     });
+  });
+});
+
+describe("Antigravity native background tasks", () => {
+  const SESSION = "664880dc-701a-4ab3-bd22-c00e2e605178";
+  const ack = (text: string) => ({
+    toolCallId: "call_3735298662155955354",
+    kind: "execute",
+    status: "inProgress",
+    data: {
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: `Created At: ...\n${text}\nTask logs are available at: file:///.../task-60.log`,
+          },
+        },
+      ],
+    },
+  });
+
+  it("tracks the native task id reported by a backgrounded run_command", () => {
+    const toolCall = ack(`Tool is running as a background task with task id: ${SESSION}/task-60`);
+    expect(extractAntigravityBackgroundTaskId(toolCall)).toBe(`${SESSION}/task-60`);
+    expect(isAntigravityBackgroundCommandTool(toolCall)).toBe(true);
+  });
+
+  it("reads the task id from rawOutput as well as content and ignores ordinary output", () => {
+    expect(
+      extractAntigravityBackgroundTaskId({
+        toolCallId: "call_2",
+        kind: "execute",
+        data: {
+          rawOutput: {
+            combinedOutput: `Tool is running as a background task with task id: ${SESSION}/task-61`,
+          },
+        },
+      }),
+    ).toBe(`${SESSION}/task-61`);
+    expect(
+      extractAntigravityBackgroundTaskId({
+        toolCallId: "call_3",
+        kind: "execute",
+        data: {
+          content: [
+            { type: "content", content: { type: "text", text: "Command exited with code 0." } },
+          ],
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractAntigravityBackgroundTaskId({
+        toolCallId: "call_4",
+        kind: "read",
+        data: { rawOutput: `Tool is running as a background task with task id: ${SESSION}/task-9` },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("settles the registered task on its completion report without duplicating output", () => {
+    expect(
+      extractAntigravityBackgroundTaskCompletion({
+        toolCallId: "call_3735298662155955354",
+        kind: "execute",
+        status: "completed",
+        data: {
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: `Task id "${SESSION}/task-60" finished with result:\nCommand exited with code 0.`,
+              },
+            },
+          ],
+        },
+      }),
+    ).toEqual([{ taskId: `${SESSION}/task-60`, status: "completed", appendOutput: "" }]);
+    expect(
+      extractAntigravityBackgroundTaskCompletion({
+        toolCallId: "call_5",
+        kind: "execute",
+        status: "failed",
+        detail: `Task id "${SESSION}/task-61" failed with error: build failed`,
+        data: {},
+      }),
+    ).toEqual([{ taskId: `${SESSION}/task-61`, status: "failed", appendOutput: "" }]);
+    expect(extractAntigravityBackgroundTaskCompletion(ack("still running"))).toEqual([]);
+  });
+
+  it("recognizes a late task-completion message as wake evidence", () => {
+    const completed = {
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `Task id "${SESSION}/task-60" finished with result:\nAll checks passed.`,
+        },
+      },
+    };
+    expect(isAntigravityBackgroundTaskWakeNotification(completed)).toBe(true);
+    expect(
+      isAntigravityBackgroundTaskWakeNotification({
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello." } },
+      }),
+    ).toBe(false);
+    expect(
+      isAntigravityBackgroundTaskWakeNotification({
+        update: { sessionUpdate: "tool_call_update", content: completed.update.content },
+      }),
+    ).toBe(false);
   });
 });
