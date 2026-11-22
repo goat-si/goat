@@ -28,7 +28,7 @@ import { HoldsNavigation } from "~/lib/navigationHolds";
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 interface MemoryProps {
   readonly environmentId: EnvironmentId;
-  readonly onDraft?: ((text: string) => void) | undefined;
+  readonly onDraft?: ((text: string) => boolean) | undefined;
   readonly refreshKey?: string | null | undefined;
 }
 
@@ -135,7 +135,7 @@ function NoteList({
   notes: ReadonlyArray<ChannelBotNote>;
   truncated: boolean;
   scope: ChannelBotNoteScope | undefined;
-  onDraft: ((text: string) => void) | undefined;
+  onDraft: ((text: string) => boolean) | undefined;
 }) {
   const botName = useGoatBotName();
   const view = goatBotNotesView({ notes, truncated });
@@ -229,7 +229,7 @@ function NoteRow({
   /** Why a request naming this note by its words could reach another note, if it could. */
   heldBack: GoatBotNoteHeldBack | undefined;
   source: string | null;
-  onDraft: ((text: string) => void) | undefined;
+  onDraft: ((text: string) => boolean) | undefined;
 }) {
   const [wording, setWording] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState(false);
@@ -297,9 +297,7 @@ function NoteRow({
                 size="xs"
                 disabled={draft === null || onDraft === undefined}
                 onClick={() => {
-                  if (draft === null) return;
-                  onDraft?.(draft);
-                  setWording(null);
+                  if (draft !== null && onDraft?.(draft)) setWording(null);
                 }}
               >
                 Fill message

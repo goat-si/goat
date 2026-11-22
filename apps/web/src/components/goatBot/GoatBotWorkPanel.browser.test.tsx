@@ -626,7 +626,7 @@ it("New routine stays offered while the routine list cannot be read", async () =
   setup([]);
   mocks.routinesLoaded = false;
   mocks.routinesError = "Connection lost";
-  const onDraft = vi.fn<(text: string) => void>();
+  const onDraft = vi.fn<(text: string) => boolean>().mockReturnValue(true);
   await using screen = await render(
     <GoatBotWorkPanel
       onOpenFile={() => {}}

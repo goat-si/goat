@@ -73,7 +73,7 @@ export function GoatBotWorkPanel({
   /** Set only on the pinned panel: its Close button, which the chat points back at the name chip. */
   onClose?: (() => void) | undefined;
   /** Puts a message in this chat's composer; absent while the chat cannot send. */
-  onDraft?: ((text: string) => void) | undefined;
+  onDraft?: ((text: string) => boolean) | undefined;
   notesRefreshKey?: string | undefined;
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
