@@ -131,11 +131,18 @@ export function webhookDraftErrors(draft: DraftState) {
   return errors;
 }
 
-export function webhookDeliveryLabel(delivery: {
-  readonly outcome: string;
-  readonly pendingWindow?: boolean | undefined;
-}) {
-  if (delivery.outcome === "accepted") return delivery.pendingWindow ? "Opened window" : "Ran";
+export function webhookDeliveryLabel(
+  delivery: {
+    readonly outcome: string;
+    readonly pendingWindow?: boolean | undefined;
+    readonly firingAccepted?: boolean | undefined;
+  },
+  routineMode?: ScheduledTask["routineMode"],
+) {
+  if (delivery.outcome === "accepted") {
+    if (delivery.pendingWindow) return "Opened window";
+    return routineMode === "work" && delivery.firingAccepted !== true ? "Accepted" : "Ran";
+  }
   const labels: Record<string, string> = {
     dispatch_failed: "Run failed",
     duplicate: "Duplicate",

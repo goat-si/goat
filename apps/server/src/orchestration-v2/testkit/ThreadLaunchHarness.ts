@@ -255,6 +255,7 @@ export function makeHarness(options: HarnessOptions = {}) {
     Layer.provide(
       Layer.mergeAll(
         layerOrchestrator,
+        layerDatabase,
         layerRegistry,
         layerExternalServices,
         prepared === undefined && options.launchEvents === undefined

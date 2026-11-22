@@ -15,6 +15,7 @@ import {
   CHANNEL_PERMISSION_CHANGED,
   CHANNEL_PERMISSION_CHANGED_MESSAGE,
 } from "./channelProviderInputAuthority.ts";
+import { routineWorkerReleaseReason } from "./channelWorkerReleaseAuthority.ts";
 import type { ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 
 export interface ReportedRunOutcome {
@@ -33,6 +34,7 @@ export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
   threads: ThreadManagementService["Service"],
   run: OrchestrationV2Run,
   session: boolean,
+  routineWork: boolean,
 ) {
   if (session && run.status === "failed") {
     const errors = yield* threads
@@ -50,9 +52,17 @@ export const channelRunFailure = Effect.fn("channel.runFailure")(function* (
       return { reason: CHANNEL_PERMISSION_CHANGED, summary: CHANNEL_PERMISSION_CHANGED_MESSAGE };
     }
   }
+  const releaseReason =
+    routineWork && run.status === "failed"
+      ? routineWorkerReleaseReason(
+          yield* threads.getThreadShell(run.threadId).pipe(Effect.orElseSucceed(() => null)),
+          run.id,
+        )
+      : undefined;
   return {
     reason: run.status,
-    summary: "The coding thread ended with " + run.status.replaceAll("_", " ") + ".",
+    summary:
+      releaseReason ?? "The coding thread ended with " + run.status.replaceAll("_", " ") + ".",
   };
 });
 
