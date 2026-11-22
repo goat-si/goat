@@ -63,6 +63,7 @@ export function GoatBotEditBotDialog({
     >
       {toolsEditable ? (
         <GoatBotToolsField
+          importedNames={bot.importedToolNames}
           value={tools ?? { mcpServers: "all", skills: "all" }}
           onChange={setTools}
         />

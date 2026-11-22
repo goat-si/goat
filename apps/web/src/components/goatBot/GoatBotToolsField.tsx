@@ -6,9 +6,11 @@ type Tools = NonNullable<BotProfile["tools"]>;
 
 export function GoatBotToolsField({
   value,
+  importedNames,
   onChange,
 }: {
   readonly value: Tools;
+  readonly importedNames?: BotProfile["importedToolNames"];
   readonly onChange: (value: Tools) => void;
 }) {
   return (
@@ -23,6 +25,7 @@ export function GoatBotToolsField({
           key={key}
           label={key === "mcpServers" ? "MCP servers" : "skills"}
           value={value[key]}
+          importedNames={importedNames?.[key]}
           onChange={(next) => onChange({ ...value, [key]: next })}
         />
       ))}
@@ -33,9 +36,11 @@ export function GoatBotToolsField({
 function ToolAllowlist({
   label,
   value,
+  importedNames,
   onChange,
 }: {
   readonly label: string;
+  readonly importedNames?: readonly string[] | undefined;
   readonly value: Tools["skills"];
   readonly onChange: (value: Tools["skills"]) => void;
 }) {
@@ -48,6 +53,18 @@ function ToolAllowlist({
           onCheckedChange={(checked) => onChange(checked ? "all" : [])}
         />
       </label>
+      {importedNames !== undefined && importedNames.length > 0 && (
+        <div className="grid gap-1 text-sm text-muted-foreground">
+          <p>Imported {label}. Enter the matching local identifiers below to grant access.</p>
+          <ul className="max-h-20 list-disc overflow-auto ps-5">
+            {[...new Set(importedNames)].map((name) => (
+              <li key={name} className="break-all">
+                {name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {value !== "all" ? (
         <Textarea
           aria-label={`Allowed ${label}`}

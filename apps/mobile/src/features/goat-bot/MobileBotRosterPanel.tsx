@@ -1,5 +1,5 @@
 import { MobileBotTemplateSheet } from "./MobileBotTemplateSheet";
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   useContext,
   useEffect,
@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  botManageFailure,
   dismissCreatedBot,
   dismissNewBot,
   forgetNewBotIntentsOf,
@@ -23,12 +24,22 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import { type BotProfile, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import {
+  type BotPackageExportResult,
+  type BotProfile,
+  type ChannelTaskId,
+  type EnvironmentId,
+} from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } from "react-native";
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { uuidv4 } from "../../lib/uuid";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { channelEnvironment } from "../../state/channels";
+import { MobileBotPackageSheet } from "./MobileBotPackageSheet";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { MobileNewBotStatus } from "./MobileNewBotStatus";
@@ -37,6 +48,8 @@ import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { isComputerReadable, useComputerReadable } from "./useKeptPerComputer";
+
+const NO_PERMISSION = Atom.make(false);
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -101,6 +114,39 @@ export function MobileBotRoster(props: {
     );
   };
   const environmentId = roster.environmentId;
+  const mayShare = useAtomValue(
+    roster.supportsPackages && environmentId !== null
+      ? channelEnvironment.exportBotPackage.permissionAtom(environmentId)
+      : NO_PERMISSION,
+  );
+  const [sharing, setSharing] = useState<{
+    readonly bot: BotProfile;
+    readonly result: BotPackageExportResult | string | null;
+  } | null>(null);
+  if (
+    sharing !== null &&
+    (sharing.bot.environmentId !== environmentId || !rosterReadable || !mayShare)
+  )
+    setSharing(null);
+  const openShare = async (bot: BotProfile) => {
+    if (!mayShare || !readableNow() || bot.environmentId !== environmentId) return;
+    setSharing({ bot, result: null });
+    const result = await runAtomCommand(appAtomRegistry, channelEnvironment.exportBotPackage, {
+      environmentId,
+      input: { botId: bot.botId },
+    });
+    setSharing((current) =>
+      current?.bot === bot
+        ? {
+            bot,
+            result:
+              result._tag === "Success"
+                ? result.value
+                : botManageFailure(squashAtomCommandFailure(result)),
+          }
+        : current,
+    );
+  };
   const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
   const supportsTemplates = roster.supportsTemplates && manage.canUseTemplates;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
@@ -112,7 +158,7 @@ export function MobileBotRoster(props: {
   // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, its
   // environment and whether it may be read. A create's answer and a menu choice read it then.
   const visible = props.visible !== false;
-  const presenting = editing !== null || menuOpen;
+  const presenting = editing !== null || sharing !== null || menuOpen;
   const mount = useRef({
     mounted: true,
     visible,
@@ -123,7 +169,7 @@ export function MobileBotRoster(props: {
   // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed state.
   useLayoutEffect(() => {
     mount.current = { mounted: true, visible, presenting, environmentId, readable: rosterReadable };
-  }, [visible, presenting, environmentId, rosterReadable]);
+  }, [mount, visible, presenting, environmentId, rosterReadable]);
   // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers; a layout effect, so a dev reload's cleanup runs before the record is marked mounted again.
   useLayoutEffect(() => {
     const owner = mount;
@@ -131,7 +177,7 @@ export function MobileBotRoster(props: {
       owner.current = { ...owner.current, mounted: false };
       forgetNewBotIntentsOf(owner);
     };
-  }, []);
+  }, [mount]);
   // The new chat opens only if, when the create answers: the app is in front; this roster is still
   // mounted, on screen and presenting nothing of its own; the focused route at every level reads as
   // at the tap; and the roster still shows the environment the create was sent to. Read then.
@@ -179,10 +225,14 @@ export function MobileBotRoster(props: {
       title: "Edit",
       act: () => setEditing({ profile: bot, environmentId }),
     };
-    if (entry.kind === "main") return manage.canEdit ? [edit] : null;
-    if (!manage.canManage) return null;
-    return [
+    const share = { id: "share", title: "Share setup", act: () => void openShare(bot) };
+    const options = [
       ...(manage.canEdit ? [edit] : []),
+      ...(mayShare && roster.connected ? [share] : []),
+    ];
+    if (entry.kind === "main" || !manage.canManage) return options.length > 0 ? options : null;
+    return [
+      ...options,
       {
         id: "hide",
         title: bot.hidden === true ? "Show" : "Hide",
@@ -256,6 +306,19 @@ export function MobileBotRoster(props: {
           canCreate={() => manage.canCreate && readableNow()}
           close={() => setTemplateHost(null)}
           openBot={(bot) => onOpenBot({ kind: "member", profile: bot })}
+        />
+      )}
+      {sharing !== null && (
+        <MobileBotPackageSheet
+          bot={sharing.bot}
+          result={sharing.result}
+          close={() => setSharing(null)}
+          canShare={() =>
+            readableNow() &&
+            registry.get(
+              channelEnvironment.exportBotPackage.permissionAtom(sharing.bot.environmentId),
+            )
+          }
         />
       )}
       <MobileBotRosterView
