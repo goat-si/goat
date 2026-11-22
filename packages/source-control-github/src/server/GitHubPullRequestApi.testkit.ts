@@ -412,6 +412,12 @@ export const checkRun = (fields: Record<string, unknown>) => ({
   ...fields,
 });
 
+export const workflowRun = (name: string) => ({
+  event: "push",
+  runNumber: 1,
+  workflow: { id: `W_${name}`, name },
+});
+
 export const checkContextsPage = (
   nodes: ReadonlyArray<Record<string, unknown>>,
   endCursor: string | null,
