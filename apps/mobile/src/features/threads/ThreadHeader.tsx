@@ -1,3 +1,4 @@
+import { useMobileThreadFollowMenu } from "../goat-bot/useMobileThreadFollowMenu";
 import { useMemo } from "react";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useThreadHistoryMenu } from "./useThreadHistoryMenu";
@@ -30,14 +31,23 @@ export function ThreadHeader(
     EnvironmentId.make(props.gitControls.environmentId),
     ThreadId.make(props.gitControls.threadId),
   );
-  const historyActions = props.draft ? [] : history.actions;
+  const follow = useMobileThreadFollowMenu({
+    environmentId: EnvironmentId.make(props.gitControls.environmentId),
+    threadId: ThreadId.make(props.gitControls.threadId),
+  });
+  const historyActions = props.draft
+    ? []
+    : [
+        ...history.actions.map((action) => ({
+          ...action,
+          onPress: () => history.select(action.id),
+        })),
+        ...follow.actions.map((action) => ({ ...action, onPress: () => follow.select(action.id) })),
+      ];
   const historyMenu = {
     title: "Thread actions",
     icon: "ellipsis" as const,
-    items: historyActions.map((action) => ({
-      ...action,
-      onPress: () => history.select(action.id),
-    })),
+    items: historyActions,
   };
   const options = {
     ...native.options,
@@ -126,7 +136,12 @@ export function ThreadHeader(
         subtitle={props.subtitle}
         sidebar={native.sidebar}
         options={options}
-        optionsVersion={[native.optionsVersion, historyActions.length, history.select]}
+        optionsVersion={[
+          native.optionsVersion,
+          historyActions.length,
+          history.select,
+          follow.select,
+        ]}
         menus={historyActions.length ? [historyMenu] : []}
         trailing={
           props.fileInspectorSupported && props.hasThreadCwd ? (
@@ -149,6 +164,7 @@ export function ThreadHeader(
       />
       {native.fallback}
       {history.dialog}
+      {follow.dialog}
     </>
   );
 }

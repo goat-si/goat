@@ -1,3 +1,7 @@
+import {
+  openWebThreadFollowMenu,
+  webThreadFollowAvailable,
+} from "../components/goatBot/goatBotThreadFollowMenu";
 import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "../lib/copyThreadReference";
@@ -180,8 +184,25 @@ export function useThreadActionMenu(input: {
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
         fork: globalAgent ? null : readThreadForkMenuState(threadRef),
       });
-      const clicked = await settlePromise(() => api.contextMenu.show(items, position));
+      const followItems =
+        !globalAgent && webThreadFollowAvailable(threadRef)
+          ? [
+              { id: "bot-follow" as const, label: "Ask a bot to follow…" },
+              { id: "bot-stop-following" as const, label: "Stop following" },
+            ]
+          : [];
+      const clicked = await settlePromise(() =>
+        api.contextMenu.show([...items, ...followItems], position),
+      );
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      if (clicked.value === "bot-follow" || clicked.value === "bot-stop-following") {
+        await openWebThreadFollowMenu(
+          threadRef,
+          clicked.value === "bot-follow" ? "follow" : "stop",
+          position,
+        );
+        return;
+      }
       const action: ThreadActionMenuId = clicked.value;
       if (
         threadActionRequiresOperate(action) &&

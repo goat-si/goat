@@ -54,3 +54,5 @@ export {
   type BotSnoozeFoldContinuation,
   withoutSnoozedBotTasks,
 } from "./taskSnooze.ts";
+
+export { chooseThreadFollow, threadFollowSupported } from "./threadFollow.ts";

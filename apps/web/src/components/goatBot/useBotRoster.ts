@@ -67,6 +67,10 @@ export function useBotThreads(
   }, [supported, watchedThreadId, revision, refreshThreads]);
   return {
     rows: threads.data?.rows ?? [],
+    followedThreads:
+      connected && capabilities?.goatBotThreadFollows === true
+        ? threads.data?.followedThreads
+        : undefined,
     workRevision: threads.data,
     supportsSnooze: connected && capabilities?.goatBotTaskSnooze === true,
     mainMessageCount: threads.data?.mainMessageCount ?? 0,

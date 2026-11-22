@@ -170,3 +170,14 @@ let added bots finish or stop their tasks, and don't edit added bots while the o
 runs. Work that one of them had already accepted runs as the main bot there, and its replies
 stay in the main chat. After you update again, check the added bots' conversations; their tasks
 return to them, but replies already shown in the main chat stay there.
+
+### Follow an existing thread
+
+Open a thread’s actions menu and choose **Ask a bot to follow…**. Pick a bot on
+the thread’s computer, then choose the bot task that should receive updates.
+The thread stays in Threads and continues to run. The bot reports updates in
+its conversation, including when it loses access to the thread.
+
+Open the bot’s Home to find followed threads, their status, and any associated
+pull request. Choose **Stop following** from Home or the thread’s actions menu
+to remove the follow. The thread and its work stay in place.

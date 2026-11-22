@@ -1,3 +1,4 @@
+import { webThreadFollowPaletteItems } from "./goatBot/goatBotThreadFollowMenu";
 import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
 import { useGT } from "gt-react";
 import { useCommandPaletteSettingsItems } from "./useCommandPaletteSettingsItems";
@@ -1642,7 +1643,11 @@ function OpenCommandPaletteDialog(props: {
   });
 
   const goatBotItems = goatBotPaletteItems(goatBots, navigate);
-  actionItems.push(...goatBotItems.actions, ...goatBotNewBot);
+  actionItems.push(
+    ...goatBotItems.actions,
+    ...goatBotNewBot,
+    ...webThreadFollowPaletteItems(activeThread),
+  );
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
