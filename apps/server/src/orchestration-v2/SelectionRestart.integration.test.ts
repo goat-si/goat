@@ -357,6 +357,20 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
               Stream.runDrain,
               Effect.forkScoped({ startImmediately: true }),
             );
+          const continuationRunning = yield* eventSink
+            .stream({ threadId, afterSequence: yield* eventSink.latestSequence({ threadId }) })
+            .pipe(
+              Stream.map((stored) => stored.event),
+              Stream.filter(
+                (event) =>
+                  event.type === "run.updated" &&
+                  event.payload.status === "starting" &&
+                  event.payload.userMessageId === continuationMessageId,
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped({ startImmediately: true }),
+            );
           // What goat_worktree_handoff dispatches while the calling turn is still running.
           const bound = yield* orchestrator.dispatch({
             type: "thread.metadata.update",
@@ -378,6 +392,8 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
           );
           yield* worker.drain();
           yield* Fiber.join(settled);
+          yield* worker.drain();
+          yield* Fiber.join(continuationRunning);
           yield* worker.drain();
           return {
             projection: yield* orchestrator.getThreadProjection(threadId),
