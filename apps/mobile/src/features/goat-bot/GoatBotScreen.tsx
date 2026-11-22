@@ -1,3 +1,4 @@
+import { GoatBotProposalCard } from "./GoatBotProposalCard";
 import { MobileGoatBotAlertRequest, useMobileAttentionScroll } from "./mobileGoatBotAlertRoute";
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
@@ -127,6 +128,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
   /** The bot's computer is offline: a card's Open task stays listed but closed. */
   readonly taskOffline?: boolean;
+  readonly resolveProposal?: Parameters<typeof GoatBotProposalCard>[0]["resolve"];
   /** Where an event line's routine or task opens; undefined leaves the line plain. */
   readonly onOpenEvent?: ((subject: GoatBotEventSubject) => (() => void) | undefined) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
@@ -146,6 +148,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    if (row.botProposal) {
+      return <GoatBotProposalCard card={row.botProposal} resolve={props.resolveProposal} />;
+    }
     const subject = row.subject;
     const span = goatBotEventSubjectSpan(row);
     const open =
@@ -532,6 +537,7 @@ export function GoatBotScreen(props: {
             onSelectThread={onSelectThread}
             onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
             taskOffline={taskOffline}
+            resolveProposal={session.resolveProposal}
             onOpenEvent={onOpenEvent}
             environmentId={session.historyEnvironmentId}
             botName={title}
@@ -558,6 +564,7 @@ export function GoatBotScreen(props: {
       taskOffline,
       onOpenEvent,
       session.supportsTaskThreads,
+      session.resolveProposal,
       session.historyEnvironmentId,
       title,
       botEmoji,

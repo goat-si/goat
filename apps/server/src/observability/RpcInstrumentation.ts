@@ -227,6 +227,7 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.createBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: "channel",

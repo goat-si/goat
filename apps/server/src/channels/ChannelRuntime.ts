@@ -84,6 +84,7 @@ export class ChannelRuntime extends Context.Service<
      */
     readonly claimForWork: Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
     readonly ownerToken: string;
+    readonly proposeBot: ChannelBotMembers.ChannelBotMembers["Service"]["propose"];
   }
 >()("goat/channels/ChannelRuntime") {}
 
@@ -417,6 +418,7 @@ const make = Effect.gen(function* () {
     recover,
     claimForWork,
     ownerToken: owner,
+    proposeBot: members.propose,
   });
 });
 
