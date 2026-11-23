@@ -3,6 +3,7 @@ import { readStatusPaths } from "./gitStatusPaths.ts";
 import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
+import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
 import {
   branchNameFromHeadRef,
   isUnbornHeadStderr,
@@ -341,7 +342,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     { state: StatusFetchState; fiber: Fiber.Fiber<void, GitCommandError> }
   >();
   const statusFetchProcesses = yield* Semaphore.make(4);
-
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
       const commandInput = {
@@ -508,7 +508,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     },
   );
-
   const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) =>
     executeRaw(input).pipe(
       withMetrics({
@@ -5070,17 +5069,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* createTrackingBranch(input.cwd, newTrackingBranch, input.refName, executeGit);
 
       // A stale ref must not turn into a path checkout that discards local edits.
-      yield* executeGitWithStableDiagnostics(
+      const checkoutResult = yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.switchRef.checkout",
         input.cwd,
         [...checkoutArgs, "--"],
         {
           timeoutMs: null,
-          fallbackErrorDetail: "git checkout failed",
+          allowNonZeroExit: true,
           writesSharedConfig: checkoutArgs[1] === "--track" || (!localInputExists && !remoteExists),
         },
       );
 
+      yield* checkCheckoutResult(input.cwd, [...checkoutArgs, "--"], checkoutResult);
       const refName = yield* runGitStdout("GitVcsDriver.switchRef.currentBranch", input.cwd, [
         "branch",
         "--show-current",
