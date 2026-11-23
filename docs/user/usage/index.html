@@ -252,8 +252,10 @@ environment that will connect to the hub and enter its URL and management key.</
 accounts for other providers are not read. Codex accounts show banked reset credits; select an
 account and choose <strong>Use reset</strong> to redeem one. No hub plugin is required.</p>
 <p>This connection supplies usage information; configure
-the provider separately to send agent requests through the hub. Remove the hub from the same
-settings section when you no longer need it.</p>
+the provider separately to send agent requests through the hub. A thread uses the hub’s limits and
+reset times only when its provider’s endpoint has the same address as the hub, for example
+<code>http://127.0.0.1:8317</code> for both. Remove the hub from the same settings section when you no longer
+need it.</p>
 <h2 id="subscription-usage-widget">Subscription usage widget</h2>
 <p>Add <strong>Subscription usage</strong> from your iOS or Android widget gallery to see remaining Codex and
 Claude quotas. Tap it to open <strong>Usage → Limits</strong>; on Android this works while GOAT is running in

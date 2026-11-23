@@ -37,9 +37,12 @@ not prevent the agent from asking questions about the task. Subagent approval re
 the parent conversation with the subagent’s name, so you can respond without switching threads.</p>
 <h2 id="provider-differences">Provider differences</h2>
 <p>Providers enforce permissions differently. Some read-only actions can proceed in <strong>Supervised</strong>.
-<strong>Auto</strong> uses automatic review on Codex, Claude, Cursor, Grok, and fx; providers without an equivalent,
-including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
-to you for approval. On fx, prompts it still sends also come to you.</p>
+<strong>Auto</strong> uses automatic review on Codex, Claude, Cursor, Grok, Antigravity, and fx; providers without
+an equivalent, including OpenCode, fall back to asking. On Grok and Antigravity, actions their review
+does not approve come to you for approval. On fx, prompts it still sends also come to you.</p>
+<p>Antigravity offers <strong>Auto</strong> only when your Antigravity sign-in provides its Auto mode; some accounts,
+including some personal Google accounts, do not. Without it, an Antigravity thread already set to
+<strong>Auto</strong> runs in <strong>Supervised</strong>.</p>
 <p>Some providers, including Codex and Antigravity, change mode inside a running turn. Others
 cannot, so on them GOAT refuses a mode change while a turn runs. On the web and desktop, a message
 sent with another mode stays in the composer with the reason; send it again once the turn ends, or
@@ -47,13 +50,16 @@ press <strong>Stop</strong> first. On the phone, the message waits in its outbox
 under the new mode once the turn ends.</p>
 <p>Muse Code offers only <strong>Supervised</strong> and <strong>Full access</strong>. A Muse thread already set to another mode
 runs in <strong>Supervised</strong>.</p>
-<p>GOAT offers no <strong>Auto-accept edits</strong> or <strong>Full access</strong> for fx. An fx thread already set to either runs in
+<p>GOAT offers <strong>Full access</strong> when the installed fx advertises it, but no <strong>Auto-accept edits</strong>. An unsupported mode runs in
 <strong>Supervised</strong>.</p>
 <p>Grok offers no <strong>Auto-accept edits</strong>. A Grok thread already set to it runs in <strong>Supervised</strong>. Grok
 file-change approvals offer <strong>Allow all edits this session</strong>. Its command approvals have no
 session-wide choice, because Grok would remember that command for the whole project.</p>
 <p>ACP Registry agents run their own tools in their own mode; GOAT answers their approval requests
 by the permission mode. See <a href="/goat/docs/user/providers-acp/#permissions-and-terminals">ACP Registry permissions</a>.</p>
+<p>In <strong>Full access</strong>, commands that Codex’s dangerous-command check would ask about run without
+asking. Codex still asks before network access its managed network settings don’t allow, unless
+you already allowed commands for the session.</p>
 <p>Claude can still ask in <strong>Full access</strong> when its settings disable bypass permissions or require
 approval for an action.
 While a Claude approval is pending, type a text reply to decline that request and give feedback

@@ -22,7 +22,7 @@
 <p>GOAT does not show fx’s backend selector. To use Codex, Grok, or Vercel AI Gateway, run <code>fx provider</code> on the environment’s machine.</p>
 <p>Type <code>$</code> in the composer to list the skills fx finds in its skill folders, in the order fx’s own skill menu shows them. When two different skills share a name, the menu lists the one fx loads for that name: the first copy in fx’s folder order, starting with the workspace. The menu shows one skill per name regardless of case; to run a skill whose name differs only in case, such as <code>Review</code> next to <code>review</code>, type its exact name.</p>
 <h2 id="permission-modes">Permission modes</h2>
-<p>fx offers two composer modes.</p>
+<p>fx offers these composer modes, depending on the installed version.</p>
 <table>
 <thead>
 <tr>
@@ -39,9 +39,13 @@
 <td><strong>Auto</strong></td>
 <td>fx handles routine actions itself. Anything it still asks about reaches you.</td>
 </tr>
+<tr>
+<td><strong>Full access</strong></td>
+<td>Available when fx advertises it; actions run without approval prompts.</td>
+</tr>
 </tbody>
 </table>
-<p>GOAT does not offer <strong>Full access</strong> or <strong>Auto-accept edits</strong> for fx. A thread already set to one of those runs in <strong>Supervised</strong>. Changing the permission mode restarts the connection and reloads the same fx session.</p>
+<p>GOAT does not offer <strong>Auto-accept edits</strong> for fx. An unsupported mode runs in <strong>Supervised</strong>. Changing the permission mode restarts the connection and reloads the same fx session.</p>
 <p>On fx versions after <a href="https://github.com/vercel-labs/fx/pull/1189">vercel-labs/fx#1189</a>, fx saves the mode GOAT sets as its default permission mode. GOAT sets it each time it opens an fx thread, so fx in the terminal then starts in that thread’s mode.</p>
 <p>A message steered into a running turn stops that turn, and fx answers the new message in the same session.</p>
 <h2 id="sub-agents">Sub-agents</h2>
