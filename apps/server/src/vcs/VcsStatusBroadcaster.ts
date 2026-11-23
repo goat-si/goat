@@ -1,7 +1,6 @@
 import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
 import { remoteRefreshFailureDelay } from "./remoteRefreshFailureDelay.ts";
 import { statusWithRefsDigest } from "./statusWithRefsDigest.ts";
-import { remoteRefreshFailureDelay } from "./remoteRefreshFailureDelay.ts";
 import { makeUpstreamReads } from "./upstreamReads.ts";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
 import { VcsRefSnapshot, refreshMovedRefs } from "./VcsRefSnapshot.ts";
@@ -119,14 +118,7 @@ export const make = Effect.gen(function* () {
     (cwd) => detailedSubscribers.has(cwd),
     (cwd) => localRefreshResults.delete(cwd),
   );
-  const cache = new Map<string, CachedVcsStatus>();
   const upstreamReads = makeUpstreamReads();
-  // One permit per cwd for remote reads that write the cache. Without it a
-  // periodic poll that started before an agent creates a PR can finish after the
-  // turn-end refresh and overwrite the fresh PR with its stale `pr: null`.
-  const remoteWriteLocks = yield* KeyedLock.make<string>();
-  const withRemoteWriteLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
-    remoteWriteLocks.withLock(cwd, effect);
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")((cwd: string) =>
     Effect.sync(() => cache.get(cwd) ?? null),

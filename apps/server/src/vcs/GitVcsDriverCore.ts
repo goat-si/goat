@@ -1057,7 +1057,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : Cache.get(primaryRemoteExistsCache, paths.gitCommonDir),
       ),
     );
-  const resolvePublishBranchName = makeResolvePublishBranchName(listRemoteNames);
   const findPrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
     if (!(yield* hasAnyRemote(cwd))) return null;
     if (yield* originRemoteExists(cwd)) {

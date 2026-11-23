@@ -117,6 +117,8 @@ describe("pullCurrentBranch", () => {
         assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), remoteHead);
       }),
     ).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(layerTest)))),
+  );
+
   it.effect("does not scan the working tree to pull", () =>
     Effect.gen(function* () {
       const { cwd, initialBranch, remoteHead } = yield* cloneBehindRemote;

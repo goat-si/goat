@@ -14,7 +14,13 @@ import type { EventSinkV2Shape } from "./EventSink.ts";
 
 type HandoffProjection = Pick<
   OrchestrationV2ThreadProjection,
-  "thread" | "contextHandoffs" | "contextTransfers" | "runs" | "messages" | "turnItems"
+  | "thread"
+  | "contextHandoffs"
+  | "contextTransfers"
+  | "runs"
+  | "messages"
+  | "turnItems"
+  | "providerThreads"
 >;
 
 export function selectSideChatHandoffs(projection: HandoffProjection, run: OrchestrationV2Run) {
