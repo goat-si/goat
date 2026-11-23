@@ -198,7 +198,7 @@ describe("session receipt recovery", () => {
         }),
       );
       const acceptedAt = (yield* ledger.getInput(input.inputId))!.snapshot.acceptedAt;
-      const before = new Date(Date.parse(acceptedAt) + 55_000).toISOString();
+      const before = DateTime.formatIso(DateTime.makeUnsafe(Date.parse(acceptedAt) + 55_000));
       const takeover = {
         owner: runtime.ownerToken,
         inputId: input.inputId,

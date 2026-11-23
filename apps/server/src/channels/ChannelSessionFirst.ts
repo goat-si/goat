@@ -487,7 +487,9 @@ const make = Effect.gen(function* () {
           "channel-session-ack:" + inputId + ":" + NodeCrypto.randomUUID(),
         ),
         // From 55 seconds the fixed line owns the receipt.
-        before: new Date(Date.parse(stored.snapshot.acceptedAt) + FIXED_LINE_MS).toISOString(),
+        before: DateTime.formatIso(
+          DateTime.makeUnsafe(Date.parse(stored.snapshot.acceptedAt) + FIXED_LINE_MS),
+        ),
       }))
     )
       return;
