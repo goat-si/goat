@@ -35,7 +35,7 @@ import {
   isMissingWorktreeStderr,
 } from "./gitStatusParsing.ts";
 import { makeBranchTotalsDiffBackoff } from "./branchTotalsDiffBackoff.ts";
-import { makeResolvePublishBranchName } from "./gitPublishBranchName.ts";
+import { resolvePublishBranchName } from "./gitPublishBranchName.ts";
 import {
   makeRemoteRefContainsHead,
   pushesOnlyToFetchUrl,
@@ -2140,12 +2140,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         pushRemote,
       };
     }
-    const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
-      Effect.orElseSucceed(() => null),
-    );
-    const branchName = yield* resolvePublishBranchName(cwd, branch);
+    const remote = yield* resolvePushRemoteName(cwd, branch).pipe(Effect.orElseSucceed(() => null));
+    const branchName = yield* resolvePublishBranchName(cwd, branch, remote ?? upstream.remoteName);
     return {
-      remoteName: publishRemoteName ?? upstream.remoteName,
+      remoteName: remote ?? upstream.remoteName,
       branchName,
       publishes: true,
       upstream,
@@ -2186,7 +2184,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
-      const publishBranch = yield* resolvePublishBranchName(cwd, branch);
+      const publishBranch = yield* resolvePublishBranchName(cwd, branch, requestedRemoteName);
       yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
