@@ -232,6 +232,7 @@ export const makeRearmDeferredFinalize = (
     yield* schedule(context);
   });
 
+// Provider text arrives in streaming chunks; avoid a span for each chunk.
 export const settleMessageBackgroundTools = Effect.fnUntraced(function* (
   context: ActiveAcpTurn,
   flavor: AcpAdapterV2Flavor,
