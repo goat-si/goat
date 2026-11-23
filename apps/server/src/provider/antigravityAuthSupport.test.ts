@@ -683,10 +683,15 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       yield* fs.makeDirectory(userGemini, { recursive: true });
       yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "global agents rule");
       yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
+      yield* fs.makeDirectory(path.join(userGemini, "config"));
+      yield* fs.writeFileString(path.join(userGemini, "config", "skills.json"), '{"entries":[]}');
 
       yield* prepare;
       expect(yield* fs.readFileString(profileAgents)).toBe("global agents rule");
       expect(yield* fs.readFileString(profileGemini)).toBe("global gemini rule");
+      expect(yield* fs.readFileString(path.join(profileDirectory, "config", "skills.json"))).toBe(
+        '{"entries":[]}',
+      );
 
       yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "edited agents rule");
       yield* fs.remove(path.join(userGemini, "GEMINI.md"));
@@ -704,6 +709,9 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       yield* prepareAntigravityRuntimeHome({ directory: runtimeDirectory, profile, userHome });
       expect(yield* fs.readFileString(path.join(runtimeDirectory, "GEMINI.md"))).toBe(
         "profile's own rule",
+      );
+      expect(yield* fs.readFileString(path.join(runtimeDirectory, "config", "skills.json"))).toBe(
+        '{"entries":[]}',
       );
     }),
   );
