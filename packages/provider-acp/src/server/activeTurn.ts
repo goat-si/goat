@@ -1,3 +1,4 @@
+import { acpSubagentStatusBlocksTurnSettlement } from "./acpSubagentStatus.ts";
 import type {
   OrchestrationV2ProviderTurn,
   OrchestrationV2ProviderFailure,
@@ -60,6 +61,7 @@ export interface ActiveAcpTurn {
   readonly completed: Deferred.Deferred<void, never>;
   readonly itemOrdinals: Map<string, number>;
   readonly outgoingPrompt?: ReadonlyArray<EffectAcpSchema.ContentBlock> | undefined;
+  appContextCommit?: (() => boolean) | undefined;
   consumedPromptMessageId?: string;
   readonly user: ActiveTextStream;
   readonly assistant: ActiveTextStream;
@@ -192,3 +194,9 @@ export type PendingRuntimeRequest = {
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
     }
 );
+
+export function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
+  return (
+    acpSubagentStatusBlocksTurnSettlement(subagent.task.status) || !subagent.terminalStatusProjected
+  );
+}
