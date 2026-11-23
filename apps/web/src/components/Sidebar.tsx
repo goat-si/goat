@@ -1310,7 +1310,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       rangeSelectTo(threadKey, orderedThreadKeysRef.current);
       return;
     }
-    if (isTrailingDoubleClick(event.detail)) {
+    if (isTrailingDoubleClick(event.detail) && routeThreadKey === threadKey) {
       return;
     }
     navigateToThread(threadRef);
