@@ -1,3 +1,4 @@
+import { makeAcpMcpContextReader } from "./mcpCallLauncher.ts";
 import { readAgentModes, makeAgentModeReporter } from "./agentModeChanges.ts";
 import { acpCanSwitchModelInSession } from "./capabilities.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
@@ -212,12 +213,7 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import {
-  acpMcpContext,
-  acpMcpActivation,
-  acpMcpCredentialsMatch,
-  type AcpMcpContext,
-} from "./mcpContext.ts";
+import { acpMcpActivation, acpMcpCredentialsMatch, type AcpMcpContext } from "./mcpContext.ts";
 
 import { acpPerTurnPromptUsage } from "./promptUsage.ts";
 export { acpPerTurnPromptUsage } from "./promptUsage.ts";
@@ -284,12 +280,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { flavor, selfInvocation: self } = options;
-  const readMcpContext = (threadId: ThreadId | null) =>
-    threadId === null
-      ? Effect.succeed(acpMcpContext(undefined, self))
-      : mcpSessions
-          .read(threadId)
-          .pipe(Effect.map((session) => acpMcpContext(session, self, flavor.preferHttpMcp)));
   // Claims belong to native conversations, not runtime attachments. Unknown resumed
   // IDs stay silent until this adapter advertises tools; replacement IDs start empty.
   const memoryToolClaims = new Set<string>();
@@ -319,6 +309,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const readMcpContext = yield* makeAcpMcpContextReader({
+          stateDir: host.paths.stateDir,
+          isWindows: yield* HostProcess.isWindows,
+          fileSystem,
+          sessions: mcpSessions,
+          self,
+          preferHttp: flavor.preferHttpMcp,
+        });
         let itemIdentityVersion: 2 | undefined =
           input.initialProviderItemIdentityVersion ??
           (input.initialNativeThreadId === undefined ? 2 : undefined);
