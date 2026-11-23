@@ -35,7 +35,6 @@ import { extractCodexPackage } from "./CodexInstallationExtract.ts";
 import { makeLocalProbeCache } from "./CodexInstallationLocalProbe.ts";
 import { UPSTREAM_MAX_ARCHIVE_BYTES, lookupCodexUpstreamRelease } from "./CodexUpstreamRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import {
   ActiveRelease,
   CodexInstallationError,
@@ -239,15 +238,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     return yield* fromDirectory(directory, version, record.target);
   });
   const compatibility = Effect.fn("CodexInstallation.compatibility")(function* (version: string) {
-    const manifest = yield* manifestService.current;
-    return (
-      resolveProviderCompatibility(manifest.compatibility, DRIVER, version) ??
-      resolveProviderCompatibility(
-        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-        DRIVER,
-        version,
-      )
-    );
+    return ModelManifest.providerCompatibility(yield* manifestService.current, DRIVER, version);
   });
   const isSupported = (version: string) =>
     compatibility(version).pipe(Effect.map((advisory) => advisory?.status === "supported"));

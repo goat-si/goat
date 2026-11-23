@@ -897,6 +897,11 @@ export class ProviderAdapterV2 extends Context.Service<
   {
     readonly instanceId: ProviderInstanceId;
     readonly driver: ProviderDriverKind;
+    /**
+     * Set when openSession rates the version the runtime reports at its handshake. The host then
+     * skips its own check, which only knows the version from the last status probe.
+     */
+    readonly checksVersionAtHandshake?: boolean;
     /** Identifies the settings a session's process starts with; sessions opened under another key retire. */
     readonly sessionConfigKey?: string;
     readonly getCapabilities: () => Effect.Effect<

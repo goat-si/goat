@@ -8,7 +8,6 @@ import * as Schema from "effect/Schema";
 
 import { DRIVER, installationError, RECORD_MAX_BYTES } from "./AntigravityInstallationRecords.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
 /**
  * A release the model manifest marks broken or unsupported is never installed or launched; a
@@ -16,15 +15,8 @@ import { resolveProviderCompatibility } from "./providerCompatibility.ts";
  */
 export function makeWithdrawalCheck(manifestService: ModelManifest.ModelManifest["Service"]) {
   const statusOf = Effect.fn("AntigravityInstallation.statusOf")(function* (version: string) {
-    const manifest = yield* manifestService.current;
-    return (
-      resolveProviderCompatibility(manifest.compatibility, DRIVER, version) ??
-      resolveProviderCompatibility(
-        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-        DRIVER,
-        version,
-      )
-    )?.status;
+    return ModelManifest.providerCompatibility(yield* manifestService.current, DRIVER, version)
+      ?.status;
   });
   const isWithdrawn = Effect.fn("AntigravityInstallation.isWithdrawn")(function* (version: string) {
     const status = yield* statusOf(version);

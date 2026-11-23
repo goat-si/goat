@@ -1,4 +1,5 @@
 import { makeCodexThreadTitle } from "./CodexThreadTitle.ts";
+import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import {
   codexMcpAppResourceUri,
   type CodexDynamicToolItem,
@@ -101,7 +102,6 @@ import {
   OrchestrationV2ProviderGoal,
   parseGoalCommand,
   ProviderDriverKind,
-  ProviderSetupError,
 } from "@goat/contracts";
 import {
   appendGeneratedImageMarkdown,
@@ -771,6 +771,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
+    checksVersionAtHandshake: adapterOptions.compatibility !== undefined,
     sessionConfigKey:
       adapterOptions.sessionConfigKey ??
       codexSessionConfigKey(adapterOptions.settings, adapterOptions.environment),
@@ -1040,15 +1041,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               version && adapterOptions.compatibility
                 ? yield* adapterOptions.compatibility(version)
                 : undefined;
-            if (advisory?.status === "broken") {
-              const target =
-                advisory.recommendedVersion ?? advisory.recommendedRange ?? "a newer version";
-              return yield* new ProviderSetupError({
+            const refused =
+              version &&
+              brokenRuntimeError({
                 instanceId: adapterOptions.instanceId,
-                operation: "runtime",
-                detail: `Codex ${version} does not work with this GOAT release. Update Codex to ${target}, then retry.`,
+                name: "Codex",
+                version,
+                advisory,
               });
-            }
+            if (refused) return yield* refused;
             yield* client.notify("initialized", undefined);
             yield* verifySessionRoute();
             yield* Ref.set(initialized, true);
@@ -6520,8 +6521,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const credentialStale = applied !== next || foreign;
             const stale = credentialStale || limitChanged || threadStatuses.dropped(threadId);
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
-            // Other changes wait for background terminals too; a new driver alone does not
-            // (#1569), but one that comes with a new subagent limit does (#1572).
+            // Other changes wait for background terminals; a new driver alone waits only with a new subagent limit.
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
               stale &&
@@ -7097,7 +7097,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
-              // A held thread keeps the config it has; the next quiet turn reloads any change (#1569).
+              // A held thread keeps the config it has; the next quiet turn reloads any change.
               if (heldElsewhere) foreignConfigThreads.add(nativeThreadId);
               else if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
               // The first turn writes the post-resume goal snapshot if changed.
@@ -7902,7 +7902,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             (effect, requestedInput) =>
               effect.pipe(
-                // Then the thread's subagents that never started a turn end too (#1636, #1645).
+                // Then the thread's subagents that never started a turn end too.
                 Effect.andThen(
                   CodexSubagents.endStopped(
                     subagentThreads,

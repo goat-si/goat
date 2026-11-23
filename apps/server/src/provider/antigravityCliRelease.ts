@@ -1,4 +1,3 @@
-import { compareSemverVersions } from "@goat/shared/semver";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -49,7 +48,6 @@ export function parseAntigravityCliRelease(
   const decoded = decodeManifest(value);
   if (decoded._tag === "None" || antigravityCliTarget(platform, arch, musl) === null) return null;
   const manifest = decoded.value;
-  if (compareSemverVersions(manifest.version, "1.5.0") < 0) return null;
   const os = platform === "darwin" ? "mac" : platform === "win32" ? "windows" : "linux";
   const cpu = arch === "x64" ? "x64" : "arm64";
   const suffix = platform === "linux" && musl ? "_musl" : "";

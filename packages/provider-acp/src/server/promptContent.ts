@@ -1,5 +1,9 @@
 import type { ChatAttachment, ProviderDriverKind } from "@goat/contracts";
-import { isProviderNativeImageAttachment } from "@goat/provider-core/server/attachmentPrompt";
+import {
+  isProviderNativeImageAttachment,
+  providerMessageTextWithAttachmentPaths,
+} from "@goat/provider-core/server/attachmentPrompt";
+import type * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
@@ -15,12 +19,18 @@ export function makeAcpPromptContent(deps: {
   readonly driver: ProviderDriverKind;
   readonly flavor: Pick<AcpAdapterV2Flavor, "buildPrompt">;
   readonly supportsImagePrompts: boolean;
-  readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
+  readonly host: Pick<
+    ProviderHost.ProviderHost["Service"],
+    "resolveAttachmentPath" | "resolveExtractedTextPath"
+  >;
   readonly fileSystem: FileSystem.FileSystem;
   readonly activeSessionSetup: Ref.Ref<AcpSessionRuntime.AcpSessionRuntimeStartResult | null>;
   readonly configOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
 }) {
-  return Effect.fnUntraced(function* (text: string, attachments: ReadonlyArray<ChatAttachment>) {
+  const content = Effect.fnUntraced(function* (
+    text: string,
+    attachments: ReadonlyArray<ChatAttachment>,
+  ) {
     const prompt: Array<EffectAcpSchema.ContentBlock> =
       text.length > 0 ? [{ type: "text", text }] : [];
     const imageAttachments = attachments.filter(isProviderNativeImageAttachment);
@@ -38,7 +48,7 @@ export function makeAcpPromptContent(deps: {
         .buildPrompt({
           text,
           attachments,
-          resolveAttachmentPath: deps.resolveAttachmentPath,
+          resolveAttachmentPath: deps.host.resolveAttachmentPath,
           promptCapabilities: setup?.initializeResult.agentCapabilities?.promptCapabilities,
           agentVersion: setup?.initializeResult.agentInfo?.version,
           currentModel:
@@ -64,7 +74,7 @@ export function makeAcpPromptContent(deps: {
       return [...blocks];
     }
     for (const attachment of imageAttachments) {
-      const path = deps.resolveAttachmentPath(attachment as ChatAttachment);
+      const path = deps.host.resolveAttachmentPath(attachment as ChatAttachment);
       if (path === null) {
         return yield* new ProviderAdapter.ProviderAdapterProtocolError({
           driver: deps.driver,
@@ -90,4 +100,16 @@ export function makeAcpPromptContent(deps: {
     }
     return prompt;
   });
+  /** A steer's blocks: its text with attachment paths, then the flavor's prompt or images. */
+  const messageContent = (message: {
+    readonly text: string;
+    readonly attachments: ReadonlyArray<ChatAttachment>;
+  }) =>
+    providerMessageTextWithAttachmentPaths({
+      text: message.text,
+      attachments: message.attachments,
+      resolveAttachmentPath: deps.host.resolveAttachmentPath,
+      resolveExtractedTextPath: deps.host.resolveExtractedTextPath,
+    }).pipe(Effect.flatMap((text) => content(text, message.attachments)));
+  return { content, messageContent };
 }

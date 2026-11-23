@@ -148,6 +148,8 @@ export interface AcpAdapterV2Flavor {
     ) => Effect.Effect<OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined>
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;
+  /** The flavor's runtime refuses a version the policy rates broken when it starts. */
+  readonly checksVersionAtHandshake?: boolean;
   /**
    * Runs before attachment paths, GOAT instructions and native slash-command detection,
    * so a rewrite can turn the user's text into a native command.
