@@ -26,7 +26,11 @@ const processOutput = () => ({
 });
 const layer = (input: { git: Partial<GitVcsDriver.GitVcsDriver["Service"]> }) =>
   SourceControlRepositoryService.layer.pipe(
-    Layer.provide(Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({})),
+    Layer.provide(
+      Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+        resolveLink: () => undefined,
+      }),
+    ),
     Layer.provide(
       Layer.mock(GitVcsDriver.GitVcsDriver)({ invalidateRefs: () => Effect.void, ...input.git }),
     ),
