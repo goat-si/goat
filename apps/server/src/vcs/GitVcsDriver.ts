@@ -1267,7 +1267,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
-      const stageFiles = (exclusions: ReadonlyArray<string>) =>
+      const stageFiles = (exclusions: ReadonlyArray<string>, ignoreErrors = false) =>
         execute({
           operation,
           cwd: input.cwd,
@@ -1277,6 +1277,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             ...privateDurableWrite,
             ...stageConfig,
             "add",
+            ...(ignoreErrors ? ["--ignore-errors"] : []),
             ...(sparseCheckout ? ["--sparse"] : []),
             workspaceIgnored ? "-u" : "-A",
             "--",
@@ -1284,7 +1285,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             ...exclusions,
           ],
           env: commitEnv,
-        });
+        }).pipe(
+          Effect.catchIf(
+            (error) => ignoreErrors && error._tag === "VcsProcessExitError" && error.exitCode === 1,
+            () => Effect.void,
+          ),
+        );
       yield* input.strict
         ? stageFiles([])
         : stageFiles([]).pipe(
@@ -1337,9 +1343,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                       exclusions.push(`:(exclude,literal)${entry}`);
                     }
                   }
-                  if (exclusions.length === 0) return yield* error;
                   omittedContents = true;
-                  return yield* stageFiles(exclusions);
+                  return yield* stageFiles(exclusions, true);
                 }).pipe(
                   // One budget covers discovery, queued Git admission, probes, and the staging retry.
                   Effect.timeoutOrElse({
