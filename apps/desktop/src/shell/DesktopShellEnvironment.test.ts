@@ -19,11 +19,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeOS from "node:os";
 import { vi } from "vite-plus/test";
 
+import { assertUtf8Scripts } from "./desktopShellEncodingTest.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopShellEnvironment from "./DesktopShellEnvironment.ts";
 
 vi.mock("node:os", { spy: true });
-
 const textEncoder = new TextEncoder();
 const cacheCodec = Schema.fromJsonString(
   Schema.Struct({
@@ -896,13 +896,7 @@ describe("DesktopShellEnvironment", () => {
         env.FNM_MULTISHELL_PATH,
         "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\123",
       );
-      assert.isNotEmpty(scripts);
-      for (const script of scripts) {
-        assert.include(
-          script,
-          "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-        );
-      }
+      assertUtf8Scripts(scripts);
     }),
   );
 

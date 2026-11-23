@@ -37,6 +37,7 @@ import * as Effect from "effect/Effect";
 import { getInitialServerConfig, request } from "../rpc/client.ts";
 import type { StartThreadBootstrap } from "./startThreadBootstrap.ts";
 import { dispatch, dispatchMessage } from "./dispatch.ts";
+import { dispatchResending, resendAfterSocketLoss } from "./resendAfterSocketLoss.ts";
 import type {
   ForkThreadFromRunInput,
   ForkThreadAsSideChatInput,
@@ -644,6 +645,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     input.message.attachments,
     attachments,
   );
+  const resend = input.resendAfterSocketLoss ?? true;
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
   if (bootstrap !== undefined || prepareWorktree !== undefined) {
@@ -672,7 +674,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+    const launch = request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
@@ -691,6 +693,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         attachments,
       },
     });
+    return yield* resend ? resendAfterSocketLoss(launch) : launch;
   }
 
   const requestedMode = input.dispatchMode ?? "auto";
@@ -1042,7 +1045,7 @@ export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(
 export const resumeThreadQueue = Effect.fn("EnvironmentCommands.resumeThreadQueue")(function* (
   input: ResumeThreadQueueInput,
 ) {
-  return yield* dispatch({
+  return yield* dispatchResending({
     ...(input.runId === undefined
       ? { type: "queue.resume" as const }
       : { type: "queued-run.start" as const, runId: input.runId }),
@@ -1066,7 +1069,7 @@ export const reorderQueuedRun = Effect.fn("EnvironmentCommands.reorderQueuedRun"
 export const promoteQueuedRun = Effect.fn("EnvironmentCommands.promoteQueuedRun")(function* (
   input: PromoteQueuedRunInput,
 ) {
-  return yield* dispatch({
+  return yield* dispatchResending({
     type: "queued-message.promote-to-steer",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,

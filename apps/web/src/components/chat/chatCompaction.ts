@@ -15,7 +15,7 @@ type CompactionTurnRow = {
 export function chatCompactionState(input: {
   readonly turnItems: ReadonlyArray<CompactionTurnRow>;
   readonly activityRunId: string | undefined;
-  readonly activeRunId: string | null | undefined;
+  readonly activeRunId: Parameters<typeof threadCanSteer>[1]["activeRunId"];
   readonly compactRequestIsActive: boolean;
   readonly busy: boolean;
   readonly projection: Parameters<typeof threadCanSteer>[0];
