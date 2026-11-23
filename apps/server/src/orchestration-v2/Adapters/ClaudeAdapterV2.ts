@@ -139,6 +139,7 @@ import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
 import {
   claudeLaunchArgParseOptions,
+  claudeLaunchArgPlugins,
   readClaudeAppendSystemPromptFile,
   readClaudeLaunchArgSettings,
 } from "./ClaudeLaunchArgs.ts";
@@ -638,8 +639,8 @@ export function makeClaudeQueryOptions(input: {
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection, input.modelCatalog);
   const {
-    // claudeLaunchArgDirectories reads every --add-dir into additionalDirectories.
     "add-dir": _launchArgAddDir,
+    "plugin-dir": launchArgPluginDir,
     "permission-mode": launchArgPermissionMode,
     "dangerously-skip-permissions": launchArgSkipPermissions,
     "append-system-prompt": launchArgAppendSystemPrompt,
@@ -649,9 +650,7 @@ export function makeClaudeQueryOptions(input: {
   } = input.settings === undefined
     ? {}
     : parseCliArgs(input.settings.launchArgs, claudeLaunchArgParseOptions).flags;
-  // Claude Code overwrites its CLI append text with the SDK's initialize
-  // appendSystemPrompt, so launch-argument text has to travel in that value.
-  // The CLI puts file text before inline text and trims one trailing newline.
+  // Claude Code replaces CLI append text with the SDK initialize value.
   const launchAppendSystemPrompt = [
     input.appendSystemPromptFileText?.replace(/\r?\n$/, ""),
     launchArgAppendSystemPrompt,
@@ -662,6 +661,8 @@ export function makeClaudeQueryOptions(input: {
   if (requestThinkingSummaries && extraArgs["thinking-display"] === undefined) {
     extraArgs["thinking-display"] = "summarized";
   }
+  if (launchArgPluginDir === null) extraArgs["plugin-dir"] = null;
+  const plugins = claudeLaunchArgPlugins(input.settings?.launchArgs);
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
@@ -765,6 +766,7 @@ export function makeClaudeQueryOptions(input: {
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
+    ...(plugins.length === 0 ? {} : { plugins }),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
   const additionalDirectories = [
@@ -776,7 +778,6 @@ export function makeClaudeQueryOptions(input: {
     additionalDirectories.length === 0 ? options : { ...options, additionalDirectories };
   return input.cwd === null ? withDirectories : { ...withDirectories, cwd: input.cwd };
 }
-
 export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
 const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
 const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
