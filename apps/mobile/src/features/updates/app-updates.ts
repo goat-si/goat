@@ -218,12 +218,12 @@ async function performAppUpdateCheck(
   const check = await settlePromise(() => client.checkForUpdateAsync());
   if (check._tag === "Failure") {
     reportUpdateFailure(check, "Could not check for updates.", options.onFailure);
-    setState("idle");
+    setState(deferral.pendingInstall ? "ready" : "idle");
     return;
   }
   // Rollback directives report isAvailable: false and isRollBackToEmbedded: true; still drop the running OTA.
   if (!check.value.isAvailable && !check.value.isRollBackToEmbedded) {
-    setState("current");
+    setState(deferral.pendingInstall ? "ready" : "current");
     return;
   }
 
@@ -231,12 +231,12 @@ async function performAppUpdateCheck(
   const fetched = await settlePromise(() => client.fetchUpdateAsync());
   if (fetched._tag === "Failure") {
     reportUpdateFailure(fetched, "Could not download the update.", options.onFailure);
-    setState("idle");
+    setState(deferral.pendingInstall ? "ready" : "idle");
     return;
   }
   // isNew is always false for a rollback, so it cannot be the sole gate.
   if (!fetched.value.isNew && !fetched.value.isRollBackToEmbedded) {
-    setState("current");
+    setState(deferral.pendingInstall ? "ready" : "current");
     return;
   }
 

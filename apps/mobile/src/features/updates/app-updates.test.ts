@@ -108,6 +108,33 @@ describe("runAppUpdateCheck", () => {
     expect(client.reloadAsync).not.toHaveBeenCalled();
   });
 
+  it.each(["current", "check failure", "fetch current", "fetch failure"])(
+    "keeps a pending update ready after %s (#3830)",
+    async (outcome) => {
+      using _report = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = makeUpdateClient({
+        checkForUpdateAsync: async () => {
+          if (outcome === "check failure") throw new Error("check failed");
+          return { isAvailable: outcome.startsWith("fetch"), isRollBackToEmbedded: false };
+        },
+        fetchUpdateAsync: async () => {
+          if (outcome === "fetch failure") throw new Error("fetch failed");
+          return { isNew: false, isRollBackToEmbedded: false };
+        },
+      });
+      const deferral = createAppUpdateDeferral();
+      deferral.pendingInstall = true;
+      const states: AppUpdateCheckState[] = [];
+      await runAppUpdateCheck({
+        client,
+        deferral,
+        applyMode: "manual",
+        onStateChange: (state) => states.push(state),
+      });
+      expect(states.at(-1)).toBe("ready");
+    },
+  );
+
   it("a manual check joining while rollback flushes prevents restart (#3830)", async () => {
     const flushing = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
