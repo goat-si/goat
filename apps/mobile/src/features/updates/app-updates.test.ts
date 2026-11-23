@@ -75,6 +75,20 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
 }
 
 describe("runAppUpdateCheck", () => {
+  it("a manual check joining a background rollback does not restart (#3810)", async () => {
+    const check = Promise.withResolvers<{ isAvailable: boolean; isRollBackToEmbedded: boolean }>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: () => check.promise,
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment } = makeUpdateEnvironment();
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    const manual = runAppUpdateCheck({ client, environment, deferral, applyMode: "manual" });
+    check.resolve({ isAvailable: false, isRollBackToEmbedded: true });
+    await Promise.all([background, manual]);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+  });
   it("downloads a manual check without restarting until the user installs (#3810)", async () => {
     const client = makeAvailableUpdateClient();
     const { environment } = makeUpdateEnvironment();

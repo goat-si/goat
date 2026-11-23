@@ -67,6 +67,7 @@ interface AppUpdateCheckProgress {
 }
 
 interface AppUpdateCheckInFlight {
+  manualRequested: boolean;
   readonly failureListeners: Set<NonNullable<AppUpdateCheckOptions["onFailure"]>>;
   readonly progress: AppUpdateCheckProgress;
   readonly promise: Promise<void>;
@@ -95,6 +96,7 @@ export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Pr
   if (!isAppUpdateCheckAvailable(client)) return;
 
   if (appUpdateCheckInFlight) {
+    if (options.applyMode === "manual") appUpdateCheckInFlight.manualRequested = true;
     await observeAppUpdateCheck(appUpdateCheckInFlight, options);
     if (options.applyMode === "immediate") {
       const deferral = options.deferral ?? appUpdateDeferral;
@@ -117,6 +119,7 @@ export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Pr
 
   const deferred = createDeferred();
   const inFlight: AppUpdateCheckInFlight = {
+    manualRequested: options.applyMode === "manual",
     failureListeners,
     progress,
     promise: deferred.promise,
@@ -125,19 +128,23 @@ export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Pr
   // Publish the operation before any state listener can synchronously re-enter.
   appUpdateCheckInFlight = inFlight;
 
-  const execution = performAppUpdateCheck(client, {
-    applyMode: options.applyMode,
-    deferral: options.deferral,
-    environment: options.environment,
-    onFailure: (message) => {
-      progress.failure = message;
-      notifyListeners(failureListeners, message);
+  const execution = performAppUpdateCheck(
+    client,
+    {
+      applyMode: options.applyMode,
+      deferral: options.deferral,
+      environment: options.environment,
+      onFailure: (message) => {
+        progress.failure = message;
+        notifyListeners(failureListeners, message);
+      },
+      onStateChange: (state) => {
+        progress.state = state;
+        notifyListeners(stateListeners, state);
+      },
     },
-    onStateChange: (state) => {
-      progress.state = state;
-      notifyListeners(stateListeners, state);
-    },
-  });
+    () => inFlight.manualRequested,
+  );
   void execution.then(deferred.resolve, deferred.reject);
 
   try {
@@ -192,6 +199,7 @@ async function observeAppUpdateCheck(
 async function performAppUpdateCheck(
   client: AppUpdateClient,
   options: AppUpdateCheckOptions,
+  manualRequested: () => boolean,
 ): Promise<void> {
   const setState = options.onStateChange ?? (() => {});
   const environment = options.environment ?? defaultAppUpdateEnvironment;
@@ -228,7 +236,7 @@ async function performAppUpdateCheck(
     return;
   }
 
-  if (options.applyMode === "manual") {
+  if (manualRequested()) {
     deferral.pendingInstall = true;
     setState("ready");
     return;
