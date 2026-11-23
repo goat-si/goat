@@ -107,7 +107,7 @@
   "apps/mobile/src/lib/attachmentDownload.ts": { "nonNull": 1 },
   "apps/mobile/src/lib/composerContext.ts": { "nonNull": 1 },
   "apps/mobile/src/lib/composerFiles.test.ts": { "lines": 1008 },
-  "apps/mobile/src/lib/filePreview.test.ts": { "lines": 1426 },
+  "apps/mobile/src/lib/filePreview.test.ts": { "lines": 1429 },
   "apps/mobile/src/lib/highlightLanguage.ts": { "nonNull": 1 },
   "apps/mobile/src/lib/highlights.ts": { "nonNull": 7 },
   "apps/mobile/src/lib/markdownDocument.ts": { "nonNull": 9 },

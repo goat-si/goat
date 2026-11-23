@@ -1,3 +1,4 @@
+import { CollapsibleUserMessageBody } from "./CollapsibleUserMessageBody";
 import { useSetupDetails } from "./use-setup-details";
 import { ThreadStatusLine, type ThreadStatusLineModel } from "./thread-status-line";
 import { useMarkdownStyles, type MarkdownStyleSets } from "./threadMarkdownStyles";
@@ -1350,16 +1351,23 @@ function renderFeedEntry(
                   <MarkdownImageAvailableWidthContext
                     value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
                   >
-                    <UserMessageContent
-                      text={renderedText}
-                      environmentId={props.environmentId}
-                      context={message.context}
-                      markdownStyles={styles}
-                      reviewCommentColors={props.reviewCommentColors}
-                      skills={props.skills}
-                      linkHandlers={props.markdownLinkHandlers}
-                      renderImage={props.renderMarkdownImage}
-                    />
+                    <CollapsibleUserMessageBody
+                      collapsible={foldRowId === null}
+                      expanded={props.expandedWorkRows[`message:${message.id}`] ?? false}
+                      onToggle={() => props.onToggleWorkRow(`message:${message.id}`, entry.id)}
+                      bubbleColor={userBubbleColor}
+                    >
+                      <UserMessageContent
+                        text={renderedText}
+                        environmentId={props.environmentId}
+                        context={message.context}
+                        markdownStyles={styles}
+                        reviewCommentColors={props.reviewCommentColors}
+                        skills={props.skills}
+                        linkHandlers={props.markdownLinkHandlers}
+                        renderImage={props.renderMarkdownImage}
+                      />
+                    </CollapsibleUserMessageBody>
                   </MarkdownImageAvailableWidthContext>
                 ) : null}
               </View>
