@@ -16,6 +16,7 @@ import {
   AD_HOC_WARNING,
   buildComputerUseHelperCommand,
   chooseSigningIdentity,
+  compileComputerUseLauncher,
   helperBundleIdForChannel,
   helperDesignatedRequirement,
   renderHelperInfoPlist,
@@ -60,23 +61,31 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
-  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "darwin")(
-    "packages real Mach-O slices and rejects missing architectures (#3832)",
+  it.effect.skipIf(!macWithSwift)(
+    "builds matching launcher and driver slices and rejects missing architectures",
     () =>
       Effect.gen(function* () {
         const dir = NodeFS.mkdtempSync(
           NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), "goat-arch-"),
         );
         try {
-          const source = NodePath.join(dir, "fixture.c");
+          const source = NodePath.join(dir, "main.swift");
           const universal = NodePath.join(dir, "universal");
-          NodeFS.writeFileSync(source, "int main(void) { return 0; }\n");
+          NodeFS.writeFileSync(source, 'print("helper")\n');
           const command = (program: string, args: string[]) => {
             const result = NodeChildProcess.spawnSync(program, args, { encoding: "utf8" });
             assert.strictEqual(result.status, 0, result.stderr);
             return result.stdout.trim();
           };
-          command("cc", ["-arch", "arm64", "-arch", "x86_64", source, "-o", universal]);
+          yield* compileComputerUseLauncher(
+            [source],
+            universal,
+            dir,
+            "universal",
+            runReleaseCommand,
+          );
+          const slices = (executable: string) =>
+            new Set(command("lipo", ["-archs", executable]).split(/\s+/u));
           const stage = (src: string, dest: string, arch: "arm64" | "x64" | "universal") =>
             stageComputerUseDriver(src, dest, arch, runReleaseCommand);
           for (const [arch, expected] of [
@@ -85,14 +94,15 @@ describe("build-computer-use-helper", () => {
           ] as const) {
             const dest = NodePath.join(dir, arch);
             yield* stage(universal, dest, arch);
-            assert.strictEqual(command("lipo", ["-archs", dest]), expected);
+            const launcher = NodePath.join(dir, "launcher-" + arch);
+            yield* compileComputerUseLauncher([source], launcher, dir, arch, runReleaseCommand);
+            assert.deepEqual(slices(dest), new Set([expected]));
+            assert.deepEqual(slices(launcher), new Set([expected]));
           }
           const output = NodePath.join(dir, "both");
           yield* stage(universal, output, "universal");
-          assert.deepEqual(
-            new Set(command("lipo", ["-archs", output]).split(/\s+/u)),
-            new Set(["arm64", "x86_64"]),
-          );
+          assert.deepEqual(slices(output), new Set(["arm64", "x86_64"]));
+          assert.deepEqual(slices(universal), slices(output));
           assert.isTrue(
             Exit.isFailure(yield* Effect.exit(stage(NodePath.join(dir, "arm64"), output, "x64"))),
           );
@@ -125,6 +135,41 @@ describe("build-computer-use-helper", () => {
       );
       assert.strictEqual(result.status, 0, result.stdout + result.stderr);
     },
+  );
+
+  it.effect.each(["arm64", "x64", "universal"] as const)(
+    "compiles only the requested launcher slices for %s",
+    (arch) =>
+      Effect.gen(function* () {
+        const { runner, calls } = fakeRunner(() => ({}));
+        const sources = ["/src/main.swift", "/src/Protocol.swift"];
+        const executable = "/out/launcher";
+        const work = "/work";
+        const arm64 = NodePath.join(work, "helper-arm64");
+        const x64 = NodePath.join(work, "helper-x86_64");
+        yield* compileComputerUseLauncher(sources, executable, work, arch, runner);
+        const compile = (slice: string, output: string) => [
+          "xcrun",
+          "swiftc",
+          "-O",
+          "-target",
+          slice + "-apple-macos13.0",
+          "-lbsm",
+          "-o",
+          output,
+          ...sources,
+        ];
+        assert.deepEqual(
+          calls,
+          arch === "universal"
+            ? [
+                compile("arm64", arm64),
+                compile("x86_64", x64),
+                ["lipo", "-create", "-output", executable, arm64, x64],
+              ]
+            : [compile(arch === "x64" ? "x86_64" : arch, executable)],
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("parses a default build without --ad-hoc (#1349)", () =>
