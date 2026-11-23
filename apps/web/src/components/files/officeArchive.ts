@@ -292,13 +292,13 @@ function wordPartTypes() {
         const external =
           attr("TargetMode").toLowerCase() === "external" ||
           /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(attr("Target"));
-        const folder = path === "_rels/.rels" ? "" : path.replace(/_rels\/[^/]+\.rels$/, "");
-        // Preserve archive URL resolution, including literal query/fragment
-        // characters in ZIP names rather than silently classifying another file.
-        const target = new URL(attr("Target"), `https://docx.invalid/${folder}`)
-          .toString()
-          .slice("https://docx.invalid/".length);
         if (!external) {
+          const folder = path === "_rels/.rels" ? "" : path.replace(/_rels\/[^/]+\.rels$/, "");
+          // Preserve archive URL resolution, including literal query/fragment
+          // characters in ZIP names rather than silently classifying another file.
+          const target = new URL(attr("Target"), `https://docx.invalid/${folder}`)
+            .toString()
+            .slice("https://docx.invalid/".length);
           if (
             !WORD_BINARY_PARTS.has(role) &&
             role !== "hyperlink" &&
