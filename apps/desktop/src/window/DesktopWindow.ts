@@ -58,6 +58,7 @@ import {
 } from "./mainWindowPlacement.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
+import { attachMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
 
 function parseMailtoAddress(rawUrl: string): Option.Option<string> {
   let url: URL;
@@ -865,9 +866,8 @@ export const make = Effect.gen(function* () {
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 
-    // Desktop IPC answers only the main window, and the preload calls it as soon
-    // as the page starts loading.
     yield* electronWindow.setMain(window);
+    attachMainWindowRemoteRequestHeaderPolicy(window, environment);
     loadApplication();
     if (environment.isDevelopment) {
       window.webContents.openDevTools({ mode: "detach" });

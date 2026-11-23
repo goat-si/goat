@@ -66,12 +66,6 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
-import {
-  browserApiCorsAllowedHeaders,
-  browserApiCorsAllowedMethods,
-  DESKTOP_RENDERER_ORIGINS,
-  MCP_HTTP_PATH,
-} from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
@@ -356,33 +350,7 @@ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compres
   global: true,
 });
 
-export const layerBrowserApiCors = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* ServerConfig.ServerConfig;
-    const devOrigin = config.devUrl?.origin;
-    // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    const cors = HttpMiddleware.cors({
-      ...(devOrigin
-        ? {
-            allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
-            credentials: true,
-          }
-        : {}),
-      allowedMethods: browserApiCorsAllowedMethods,
-      allowedHeaders: browserApiCorsAllowedHeaders,
-      maxAge: 600,
-    });
-    return HttpRouter.middleware(
-      (httpEffect) => {
-        const withCors = cors(httpEffect);
-        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-          request.url.split("?", 1)[0] === MCP_HTTP_PATH ? httpEffect : withCors,
-        );
-      },
-      { global: true },
-    );
-  }),
-);
+export { layerBrowserApiCors } from "./httpBrowserCors.ts";
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname
