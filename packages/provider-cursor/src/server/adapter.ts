@@ -1389,12 +1389,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             );
             let delivery = receipt;
             let unknownDelivery = uncertain;
+            yield* unknownDelivery;
             let memorySettled = false;
             const settleMemory = (accepted: boolean) =>
               Effect.suspend(() => {
                 if (memorySettled) return Effect.void;
                 memorySettled = true;
-                return accepted ? delivery : unknownDelivery;
+                return accepted ? delivery : Effect.void;
               });
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
@@ -1413,6 +1414,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                     );
                     delivery = prepared.receipt;
                     unknownDelivery = prepared.uncertain;
+                    yield* unknownDelivery;
                     return {
                       message: prepared.message,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },

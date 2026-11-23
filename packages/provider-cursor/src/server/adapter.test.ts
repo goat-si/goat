@@ -856,6 +856,7 @@ describe("CursorAdapterV2", () => {
       };
       yield* runtime.startTurn(ordinaryInput);
       assert.equal(receipts.delivered, 0);
+      assert.equal(receipts.uncertain, 1);
       yield* Deferred.succeed(releaseFirst, undefined);
       const first = yield* runtime.events.pipe(
         Stream.filter((event) => event.type === "turn.terminal"),
