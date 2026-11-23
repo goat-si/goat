@@ -705,6 +705,8 @@ jobs:
         with:
           name: desktop-${{ inputs.platform }}-${{ inputs.arch }}
           path: release-publish/*
+          # The DMG and updater ZIP are already compressed.
+          compression-level: ${{ inputs.platform == 'mac' && '0' || '6' }}
           if-no-files-found: error
 
       - name: Upload resource monitor
