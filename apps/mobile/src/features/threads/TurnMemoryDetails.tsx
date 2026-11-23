@@ -23,7 +23,7 @@ function Disclosure(target: Target) {
         className="self-end py-1"
         onPress={() => setOpen(!open)}
       >
-        <AppText className="text-xs text-muted-foreground">Turn memory</AppText>
+        <AppText className="text-xs text-foreground-muted">Turn memory</AppText>
       </Pressable>
       {open ? <Receipts {...target} /> : null}
     </View>
@@ -56,7 +56,7 @@ function Receipts({ environmentId, threadId, runId }: Target) {
           {event.items.map((item) => (
             <View key={item.memoryId}>
               {item.excerpt && <AppText>{item.excerpt}</AppText>}
-              <AppText selectable className="text-xs text-muted-foreground">
+              <AppText selectable className="text-xs text-foreground-muted">
                 {item.memoryId} · Revision {item.revisionId}
               </AppText>
             </View>
