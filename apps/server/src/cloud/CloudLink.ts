@@ -36,6 +36,7 @@ import {
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
 import { isSecureRelayUrl } from "@goat/shared/relayUrl";
+import { makeReplayMarkerName } from "./replayMarkerName.ts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -538,6 +539,7 @@ const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const httpServer = yield* HttpServer.HttpServer;
   const awarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+  const replayMarkerName = yield* makeReplayMarkerName;
   const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -548,7 +550,6 @@ const make = Effect.gen(function* () {
       Effect.logWarning("GOAT Connect local withdrawal remains pending", { errorTag: cause._tag }),
     ),
   );
-
   const withSecrets = Effect.provideService(ServerSecretStore.ServerSecretStore, secrets);
   const withRuntimeFiles = <A, E>(
     effect: Effect.Effect<A, E, ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path>,
@@ -894,8 +895,7 @@ const make = Effect.gen(function* () {
     if (Option.isNone(token)) {
       return false;
     }
-    // The link belongs to the relay it was installed against, so target the
-    // persisted URL: GOAT_RELAY_URL may have changed since the link was made.
+    // Use the persisted relay URL; GOAT_RELAY_URL may have changed since linking.
     const relayUrl = yield* secrets.get(RELAY_URL_SECRET);
     if (Option.isNone(relayUrl)) {
       return false;
@@ -1121,8 +1121,8 @@ const make = Effect.gen(function* () {
       }
       const proof = proofOption.value;
 
-      const jtiSecretName = `${CLOUD_HEALTH_JTI_PREFIX}${proof.jti}`;
-      const nonceSecretName = `${CLOUD_HEALTH_NONCE_PREFIX}${proof.nonce}`;
+      const jtiSecretName = yield* replayMarkerName(CLOUD_HEALTH_JTI_PREFIX, proof.jti);
+      const nonceSecretName = yield* replayMarkerName(CLOUD_HEALTH_NONCE_PREFIX, proof.nonce);
       const consumedReplayGuards = yield* consumeCloudReplayGuards({
         secrets,
         names: [jtiSecretName, nonceSecretName],
@@ -1233,8 +1233,8 @@ const make = Effect.gen(function* () {
             }
             const proof = proofOption.value;
 
-            const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
-            const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
+            const jtiSecretName = yield* replayMarkerName(CLOUD_MINT_JTI_PREFIX, proof.jti);
+            const nonceSecretName = yield* replayMarkerName(CLOUD_MINT_NONCE_PREFIX, proof.nonce);
             const consumedReplayGuards = yield* consumeCloudReplayGuards({
               secrets,
               names: [jtiSecretName, nonceSecretName],
