@@ -167,7 +167,7 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
     detail: Schema.optional(
       Schema.Literals(["names", "summary", "full"]).annotate({
         description:
-          "names: path, name, summary. summary (default): adds effect, availability, description and arguments, and for path or paths the guide and examples. full: for path or paths, adds the JSON input and output schemas.",
+          "names: path, name, summary. summary (default; outside a GOAT thread, path or paths default to full): adds effect, availability, description and arguments, and for path or paths the guide and examples. full: for path or paths, adds the JSON input and output schemas.",
       }),
     ),
     limit: Schema.optional(

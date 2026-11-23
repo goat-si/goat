@@ -427,10 +427,13 @@ client-only, read-only client, not served, and for a GOAT thread the goatclaw ca
 effective profile lacks, judged as the call gate judges it. A profile that does not resolve
 reports its reason on every write that needs a capability. What depends on the call's
 arguments or the moment, such as a host allowlist and lanes left, is still judged
-only when the call is made. A path asked for by `path` or `paths` comes with its guide, the
-worked `examples` its registry entry declares and its arguments a level deep; the JSON input
-and output schemas come only at detail `full`, because Antigravity keeps about 10 KB of a tool
-result and cut them out of the middle of larger answers. Related paths are not in it yet.
+only when the call is made. For an agent in a GOAT thread, a path asked for by `path` or
+`paths` comes with its guide, the worked `examples` its registry entry declares and its
+arguments a level deep; the JSON input and output schemas come only at detail `full`, because
+Antigravity keeps about 10 KB of a tool result and cut them out of the middle of larger answers.
+Other callers keep `full` as that default: another GOAT forwarding `goat_describe {host}`
+arrives as a client, and an older one decodes only the entry shapes it knows. Related paths are
+not in it yet.
 `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See

@@ -278,6 +278,12 @@ it.effect("goat_describe answers several paths at once and shows signatures in l
       yield* describe({ paths: ["thread.read"], detail: "full" }),
     );
     expect(full.entries[0]?.inputSchema).toEqual(schemaOf(tools, "thread.read"));
+    // Another GOAT forwarding goat_describe {host} reaches this one as a client, and an older one
+    // decodes only the summary or full entry it knows; a client keeps full as its default.
+    const forwarded = structured<{ entries: ReadonlyArray<Described> }>(
+      yield* http.callTool("client", "goat_describe", { paths: ["thread.read"] }),
+    );
+    expect(forwarded.entries[0]?.inputSchema).toEqual(schemaOf(tools, "thread.read"));
     expect(batch.missing.map((entry) => entry.path)).toEqual(["thread.teleport"]);
     expect(batch.missing[0]?.nearest.length).toBeGreaterThan(0);
     expect((yield* describe({ paths: ["thread.read"], query: "read" })).isError).toBe(true);

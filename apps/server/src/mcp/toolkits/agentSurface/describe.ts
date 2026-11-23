@@ -263,6 +263,9 @@ export const makeDescribe = (
   }) {
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const detail = input.detail ?? "summary";
+    // Another GOAT forwarding goat_describe {host} arrives as a client, and an older one decodes
+    // only the full or summary entry it knows, so only a thread's agent gets usage by default.
+    const pathDetail = input.detail ?? (scope.thread === undefined ? "full" : "summary");
     // The surface depth names resources only, so it never pays for resolving a profile.
     const caller: Caller = {
       scope,
@@ -293,7 +296,7 @@ export const makeDescribe = (
       }
       return {
         depth: "paths" as const,
-        entries: [...found.values()].map((entry) => described(entry, caller, detail)),
+        entries: [...found.values()].map((entry) => described(entry, caller, pathDetail)),
         missing,
       } satisfies DescribeResult;
     }
@@ -340,7 +343,7 @@ export const makeDescribe = (
     if (entry !== undefined)
       return {
         depth: "path" as const,
-        entry: described(entry, caller, detail),
+        entry: described(entry, caller, pathDetail),
       } satisfies DescribeResult;
     const inResource = entries.filter((candidate) => candidate.resource === input.path);
     return {
