@@ -40,6 +40,7 @@ import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
 import { useBotTaskLookup } from "./useBotTaskLookup";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { goatBotDraftDestination } from "./GoatBotRouteDrafts";
 import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 
 export function GoatBotTaskPane({
@@ -422,6 +423,9 @@ export function GoatBotTaskPane({
           {/* Typed answers stay through a reconnect, while the bot's thread is unknown. */}
           <GoatBotTypedAnswersScope
             destination={thread === null ? null : destination}
+            routeDestination={
+              thread === null ? null : goatBotDraftDestination(environmentId, thread)
+            }
             visibleTurnItems={session.visibleTurnItems}
           >
             <GoatBotTimeline

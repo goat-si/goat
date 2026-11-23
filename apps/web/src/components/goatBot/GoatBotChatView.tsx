@@ -61,6 +61,11 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import {
+  goatBotDraftDestination,
+  useActivateGoatBotRouteDraft,
+  useGoatBotDraftReply,
+} from "./GoatBotRouteDrafts";
 import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
@@ -217,6 +222,13 @@ function GoatBotChatViewContent({
   const registerHomeDocked = useContext(GoatBotHomeDockedRegistry);
   const narrow = presentation === "sheet";
   const bot = availability.kind === "ready" ? availability.bot : null;
+  const destination = member
+    ? goatBotDraftDestination(member.environmentId, member.sessionThreadId)
+    : projectionRef
+      ? goatBotDraftDestination(projectionRef.environmentId, projectionRef.threadId)
+      : bot
+        ? goatBotDraftDestination(bot.environmentId, bot.threadId)
+        : null;
   const routineLanding = useGoatBotRoutineLanding(bot, panelOpen, () => setPanelOpen(true));
   const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
@@ -317,9 +329,7 @@ function GoatBotChatViewContent({
     }
     return result !== false;
   };
-  const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
-  if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
-  const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
+  const [replyTo, setReplyTo] = useGoatBotDraftReply(destination, botIdentity);
   // Home in its sheet over a task would fill a message box nobody can see.
   const onDraft =
     canSend && !hidden
@@ -422,11 +432,6 @@ function GoatBotChatViewContent({
   });
   // A draft belongs to the bot it was written for: another bot, or this one on another computer,
   // gets an empty box. A bot that is only briefly unavailable keeps it.
-  const destination = member
-    ? `${member.environmentId}:${member.sessionThreadId}`
-    : bot
-      ? `${bot.environmentId}:${bot.threadId}`
-      : null;
   const [draftFor, setDraftFor] = useState({ destination, generation: 0 });
   if (destination !== null && destination !== draftFor.destination) {
     const changed = draftFor.destination !== null;
@@ -436,6 +441,7 @@ function GoatBotChatViewContent({
       if (changed || text !== undefined) setSeed(text === undefined ? null : { text, nonce: 0 });
     }
   }
+  const routeDraft = useActivateGoatBotRouteDraft(destination, seed?.text);
   // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the destination commits.
   useEffect(() => {
     clearBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
@@ -597,6 +603,7 @@ function GoatBotChatViewContent({
               <GoatBotOpenFileContext value={fileOpening}>
                 <GoatBotTypedAnswersScope
                   destination={destination}
+                  routeDestination={destination}
                   visibleTurnItems={visibleTurnItems ?? NO_ITEMS}
                   mainChat
                 >
@@ -614,7 +621,7 @@ function GoatBotChatViewContent({
                       onReply={
                         canSend
                           ? (text) => {
-                              setReplyState({ botIdentity, text });
+                              setReplyTo(text);
                               composerRef.current?.focus();
                             }
                           : undefined
@@ -664,8 +671,17 @@ function GoatBotChatViewContent({
                       legacyAgentRoute={legacyAgentRoute}
                       onSelectExample={
                         canSend
-                          ? (text) =>
-                              setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                          ? (text) => {
+                              if (routeDraft !== null && destination !== null) {
+                                routeDraft.update(destination, "text", () => text);
+                                composerRef.current?.focus();
+                              } else {
+                                setSeed((previous) => ({
+                                  text,
+                                  nonce: (previous?.nonce ?? 0) + 1,
+                                }));
+                              }
+                            }
                           : undefined
                       }
                     />
@@ -687,6 +703,7 @@ function GoatBotChatViewContent({
             ref={composerRef}
             key={`${draftFor.generation}:${seed?.nonce ?? 0}`}
             initialText={seed?.text ?? ""}
+            routeDestination={destination}
             disabled={!canSend}
             botName={title}
             placeholder={
@@ -699,13 +716,13 @@ function GoatBotChatViewContent({
               member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
             }
             replyTo={replyTo}
-            onClearReply={() => setReplyState(null)}
+            onClearReply={() => setReplyTo(null)}
             onSend={(text, attachments) => {
               const result = onSend(
                 replyTo === null ? text : buildGoatBotQuote(replyTo, text),
                 attachments,
               );
-              if (result !== false) setReplyState(null);
+              if (result !== false) setReplyTo(null);
               return recordSubmission(result);
             }}
           />
