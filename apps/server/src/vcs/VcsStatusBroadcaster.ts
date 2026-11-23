@@ -1,3 +1,4 @@
+import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
 import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
 export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
@@ -126,13 +127,10 @@ export const make = Effect.gen(function* () {
   >();
   const publishBranch = branchUpdates.publish;
   const localRefreshLocks = yield* KeyedLock.make<string>();
-  const cache = new Map<string, CachedVcsStatus>();
-  // One permit per cwd for remote reads that write the cache. Without it a
-  // periodic poll that started before an agent creates a PR can finish after the
-  // turn-end refresh and overwrite the fresh PR with its stale `pr: null`.
-  const remoteWriteLocks = yield* KeyedLock.make<string>();
-  const withRemoteWriteLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
-    remoteWriteLocks.withLock(cwd, effect);
+  const { cache, withRemoteWriteLock } = yield* makeStatusCacheWithRemoteLock<CachedVcsStatus>(
+    (cwd) => detailedSubscribers.has(cwd),
+    (cwd) => localRefreshResults.delete(cwd),
+  );
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")((cwd: string) =>
@@ -864,6 +862,7 @@ export const make = Effect.gen(function* () {
               const remaining = (detailedSubscribers.get(cwd) ?? 1) - 1;
               if (remaining === 0) detailedSubscribers.delete(cwd);
               else detailedSubscribers.set(cwd, remaining);
+              cache.trim();
             }),
         );
         if (input.includeRemote !== false) yield* acquireBranchChangesDemand(cwd);
