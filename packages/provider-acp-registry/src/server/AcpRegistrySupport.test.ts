@@ -495,7 +495,7 @@ describe("AcpRegistrySupport", () => {
         registryUrl,
       }).pipe(
         Effect.provideService(HostProcess.Platform, "win32"),
-        Effect.provideService(SpawnExecutableResolution, (command) => {
+        Effect.provideService(SpawnExecutableResolution, async (command) => {
           if (command === "uv") return toolchain.uvPath;
           if (command === "fast-agent") return toolchain.executablePath;
           return undefined;

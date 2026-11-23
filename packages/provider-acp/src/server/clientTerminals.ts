@@ -16,7 +16,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
-import { gitForWindowsBash, SpawnExecutableResolution } from "@goat/shared/shell";
+import { gitForWindowsBashAsync, SpawnExecutableResolution } from "@goat/shared/shell";
 
 const MAX_LIVE_TERMINALS = 16;
 const MAX_UNRELEASED_TERMINALS = 64;
@@ -279,10 +279,12 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
           // Agents that send shell source write bash; Node's shell on Windows is cmd.exe.
           const gitExecutable =
             isWindows && options.shellCommands === true && (request.args?.length ?? 0) === 0
-              ? resolveExecutable("git", "win32", environment)
+              ? yield* Effect.promise(async () => resolveExecutable("git", "win32", environment))
               : undefined;
           const posixShell =
-            gitExecutable === undefined ? undefined : gitForWindowsBash(gitExecutable);
+            gitExecutable === undefined
+              ? undefined
+              : yield* Effect.promise(() => gitForWindowsBashAsync(gitExecutable));
           if (
             isWindows &&
             options.shellCommands === true &&

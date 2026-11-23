@@ -83,7 +83,9 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
       binaryPath:
         environment === undefined
           ? input.binaryPath
-          : (resolveExecutable(input.binaryPath, platform, environment) ?? input.binaryPath),
+          : ((yield* Effect.promise(async () =>
+              resolveExecutable(input.binaryPath, platform, environment),
+            )) ?? input.binaryPath),
     };
   });
   const cancelIdleClose = Effect.fn("OpenCodeServerOwner.cancelIdleClose")(function* (
