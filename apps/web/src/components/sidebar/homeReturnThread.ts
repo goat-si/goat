@@ -47,9 +47,9 @@ function readStored(): HomeReturnThread | null {
 function remember(next: HomeReturnThread | null) {
   remembered = next;
   for (const listener of listeners) listener();
-  if (next === null) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, encodeStored(next));
+    if (next === null) window.localStorage.removeItem(STORAGE_KEY);
+    else window.localStorage.setItem(STORAGE_KEY, encodeStored(next));
   } catch {
     // Blocked or full storage: this window still remembers.
   }
@@ -95,15 +95,23 @@ function sameTarget(left: HomeReturnThread | null, right: HomeReturnThread) {
         left.threadId === right.threadId;
 }
 
+const isBotTarget = (target: HomeReturnThread | null, botRef: ChannelBotRef | null) =>
+  target?.kind === "server" &&
+  isGoatBotThread({ environmentId: target.environmentId, id: target.threadId }, botRef);
+
 /**
  * Remembers the last thread or draft for Home. A remembered draft that is sent becomes its
  * thread before finalizing drops the draft, even when that happens after leaving it.
+ * GOAT can learn its main bot's thread after it opened, so the target it replaced is kept
+ * to return to once that thread turns out to be the bot's.
  */
 export function startHomeReturnMemory(): {
   readonly record: (params: RouteParams) => void;
   readonly stop: () => void;
 } {
-  remember(readStored());
+  const stored = readStored();
+  remember(isBotTarget(stored, useGlobalAgentStore.getState().botRef) ? null : stored);
+  let replaced: HomeReturnThread | null = null;
   const followSentDraft = () => {
     if (remembered?.kind !== "draft") return;
     const sentTo = useComposerDraftStore
@@ -112,14 +120,22 @@ export function startHomeReturnMemory(): {
     if (sentTo) remember(serverTarget(sentTo));
   };
   followSentDraft();
-  const unsubscribe = useComposerDraftStore.subscribe(followSentDraft);
+  const unsubscribeDrafts = useComposerDraftStore.subscribe(followSentDraft);
+  const unsubscribeBot = useGlobalAgentStore.subscribe((state) => {
+    if (!isBotTarget(remembered, state.botRef)) return;
+    remember(replaced);
+    replaced = null;
+  });
   return {
     record: (params) => {
       const next = homeReturnThreadAt(params);
-      if (next !== null && !sameTarget(remembered, next)) remember(next);
+      if (next === null || sameTarget(remembered, next)) return;
+      replaced = remembered;
+      remember(next);
     },
     stop: () => {
-      unsubscribe();
+      unsubscribeDrafts();
+      unsubscribeBot();
       remembered = null;
       for (const listener of listeners) listener();
     },
