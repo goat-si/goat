@@ -142,6 +142,8 @@
   "93c5ba55de154a9b": "Consulta periodicamente o estado de energia da máquina anfitriã enquanto houver clientes ativos.",
   "3188bc3b3c4508bc": "Política de privacidade",
   "860666d17c54dd3a": "Projetos e worktrees",
+  "6f12b76458e2ac1a": "Atualizar status dos provedores",
+  "e58b52d05807b929": "Atualizando provedores",
   "f8ba2ac54e8ca695": "Intervalo entre verificações dos provedores",
   "d166a1c83e0fdfd7": "Verificação de atualizações dos provedores",
   "91183562f4df6dea": "Monitoramento de pull requests",
