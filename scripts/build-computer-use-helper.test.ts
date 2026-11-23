@@ -2,11 +2,13 @@
 import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
 import { Command } from "effect/cli";
 
@@ -19,8 +21,13 @@ import {
   renderHelperInfoPlist,
   resolveSigningIdentity,
   signComputerUseHelper,
+  stageComputerUseDriver,
 } from "./build-computer-use-helper.ts";
-import type { CommandResult, ReleaseCommandRunner } from "./lib/release-verify.ts";
+import {
+  runReleaseCommand,
+  type CommandResult,
+  type ReleaseCommandRunner,
+} from "./lib/release-verify.ts";
 import { packagedHelperChannel } from "./lib/desktop-computer-use-helper.ts";
 
 const helperDir = NodePath.join(import.meta.dirname, "../apps/desktop/native/computer-use-helper");
@@ -53,6 +60,52 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
+  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "darwin")(
+    "packages real Mach-O slices and rejects missing architectures (#3832)",
+    () =>
+      Effect.gen(function* () {
+        const dir = NodeFS.mkdtempSync(
+          NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), "goat-arch-"),
+        );
+        try {
+          const source = NodePath.join(dir, "fixture.c");
+          const universal = NodePath.join(dir, "universal");
+          NodeFS.writeFileSync(source, "int main(void) { return 0; }\n");
+          const command = (program: string, args: string[]) => {
+            const result = NodeChildProcess.spawnSync(program, args, { encoding: "utf8" });
+            assert.strictEqual(result.status, 0, result.stderr);
+            return result.stdout.trim();
+          };
+          command("cc", ["-arch", "arm64", "-arch", "x86_64", source, "-o", universal]);
+          const stage = (src: string, dest: string, arch: "arm64" | "x64" | "universal") =>
+            stageComputerUseDriver(src, dest, arch, runReleaseCommand);
+          for (const [arch, expected] of [
+            ["arm64", "arm64"],
+            ["x64", "x86_64"],
+          ] as const) {
+            const dest = NodePath.join(dir, arch);
+            yield* stage(universal, dest, arch);
+            assert.strictEqual(command("lipo", ["-archs", dest]), expected);
+          }
+          const output = NodePath.join(dir, "both");
+          yield* stage(universal, output, "universal");
+          assert.deepEqual(
+            new Set(command("lipo", ["-archs", output]).split(/\s+/u)),
+            new Set(["arm64", "x86_64"]),
+          );
+          assert.isTrue(
+            Exit.isFailure(yield* Effect.exit(stage(NodePath.join(dir, "arm64"), output, "x64"))),
+          );
+          assert.isTrue(
+            Exit.isFailure(
+              yield* Effect.exit(stage(NodePath.join(dir, "arm64"), output, "universal")),
+            ),
+          );
+        } finally {
+          NodeFS.rmSync(dir, { recursive: true, force: true });
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.skipIf(!macWithSwift)(
     "typechecks the complete native helper with its macOS deployment target",
     () => {
@@ -86,6 +139,46 @@ describe("build-computer-use-helper", () => {
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide(NodeServices.layer),
     ),
+  );
+
+  it.effect.each([
+    ["arm64", "arm64"],
+    ["x64", "x86_64"],
+    ["universal", null],
+  ] as const)("stages the driver for %s", ([arch, slice]) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const source = NodePath.join(directory, "source");
+      const destination = NodePath.join(directory, "driver");
+      yield* fs.writeFileString(source, "verified release");
+      const calls: Array<readonly string[]> = [];
+      const runner: ReleaseCommandRunner = (program, args) =>
+        Effect.gen(function* () {
+          calls.push([program, ...args]);
+          yield* fs.writeFileString(destination, "selected slice").pipe(Effect.orDie);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        });
+      yield* stageComputerUseDriver(source, destination, arch, runner);
+      assert.deepEqual(
+        calls,
+        slice
+          ? [["lipo", source, "-thin", slice, "-output", destination]]
+          : [
+              ["lipo", source, "-verify_arch", "arm64"],
+              ["lipo", source, "-verify_arch", "x86_64"],
+            ],
+      );
+      assert.equal(yield* fs.readFileString(source), "verified release");
+      assert.equal(
+        yield* fs.readFileString(destination),
+        slice ? "selected slice" : "verified release",
+      );
+      if (HostProcess.Platform.defaultValue() !== "win32") {
+        const mode = (yield* fs.stat(destination)).mode;
+        assert.strictEqual(mode & 0o777, 0o755);
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("signs every channel, dev included, with the keychain's Developer ID and its team", () => {
