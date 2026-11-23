@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProjectId, type ServerSettings } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProjectId, ThreadId, type ServerSettings } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -8,6 +8,24 @@ import * as Path from "effect/Path";
 import { expect } from "vite-plus/test";
 
 import { providerTextWithSkills } from "./GoatSkillText.ts";
+
+it.effect("identifies the agent who sent a provider prompt while preserving commands", () =>
+  Effect.gen(function* () {
+    const send = (text: string) =>
+      providerTextWithSkills(Option.none(), {
+        message: {
+          text,
+          createdBy: "agent",
+          creationSource: "mcp",
+          senderThreadId: ThreadId.make("source"),
+        },
+        driver: "codex",
+        project: Effect.succeed(null),
+      });
+    expect(yield* send("Review this")).toContain('agent in GOAT thread "source"');
+    expect(yield* send("/compact")).toBe("/compact");
+  }),
+);
 
 it.effect("delivers an enabled GOAT skill to eligible drivers, read at send time", () =>
   Effect.gen(function* () {
