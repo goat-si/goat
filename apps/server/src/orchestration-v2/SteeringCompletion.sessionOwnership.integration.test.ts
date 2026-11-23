@@ -178,8 +178,17 @@ it.effect.each([
         if (!testCase.parentRunning) {
           // A's turn ends while its child is still owed; task B's run then takes the session.
           yield* endTurn(a.id);
+          // B queues behind A until A's checkpoint completes it; B's start then follows that drain.
+          const secondStarting = yield* watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.status === "starting" &&
+              event.payload.userMessageId === MessageId.make("message:b"),
+          );
           const secondRunning = yield* turnRunning();
           yield* send("b");
+          yield* worker.drain();
+          yield* Fiber.join(secondStarting);
           yield* worker.drain();
           yield* Fiber.join(secondRunning);
         }
