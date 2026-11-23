@@ -466,6 +466,7 @@ function* rtf(source: string): Generator<string, void> {
   let state = {
     skip: false,
     deleted: false,
+    hiddenText: false,
     uc: 1,
     font: 0,
     fontTable: false,
@@ -476,7 +477,7 @@ function* rtf(source: string): Generator<string, void> {
   const fonts = new Map<number, typeof state.decoder>();
   let defaultFont = 0;
   const decoder = () => fonts.get(state.font) ?? state.decoder;
-  const hidden = () => state.skip || state.deleted;
+  const hidden = () => state.skip || state.deleted || state.hiddenText;
   const symbols = new Map([
     ["endash", "–"],
     ["emdash", characterEntities.mdash],
@@ -555,8 +556,10 @@ function* rtf(source: string): Generator<string, void> {
           if (codePage) fonts.set(state.font, new TextDecoder(codePage));
         }
         if (control === "deleted") state.deleted = value !== 0;
+        else if (control === "v") state.hiddenText = value !== 0;
         else if (control === "plain") {
           state.deleted = false;
+          state.hiddenText = false;
           state.font = defaultFont;
         }
         if (control === "mac" || (control === "ansicpg" && value === 10000))
