@@ -85,6 +85,8 @@ export class ClaudeCodeStartupExitError extends Schema.TaggedError<ClaudeCodeSta
   }
 }
 
+const isClaudeCodeStartupExitError = Schema.is(ClaudeCodeStartupExitError);
+
 const CLAUDE_PROCESS_EXIT_ERROR_CLASSES: ReadonlySet<unknown> = new Set([
   "process_killed_by_signal",
   "process_exited_nonzero",
@@ -106,7 +108,7 @@ export function claudeProcessExitFailure(
 ): { readonly message: string; readonly code: string } | undefined {
   const error = Cause.squash(cause);
   const nested = isClaudeAgentSdkQueryRunnerError(error) ? error.cause : error;
-  const startup = nested instanceof ClaudeCodeStartupExitError ? nested : undefined;
+  const startup = isClaudeCodeStartupExitError(nested) ? nested : undefined;
   const exit = claudeProcessExit(startup?.cause ?? nested);
   return exit === undefined
     ? undefined

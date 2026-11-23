@@ -97,7 +97,6 @@ it.effect("resumes a session whose history exceeds the status-probe output limit
     const { mcpServers: _mcpServers, ...options } = resumedMcpQueryInput.options;
     const session = yield* runner.open({
       ...resumedMcpQueryInput,
-      resume: true,
       options: { ...options, cwd: "/repo", env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } },
     });
     yield* Effect.addFinalizer(() => session.close.pipe(Effect.orDie));
