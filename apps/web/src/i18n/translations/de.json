@@ -764,5 +764,17 @@
   "65d6260964ea1eda": "Isolierte Erinnerungen sind von der Suche ausgeschlossen. Lösche die Suche, um sie anzusehen.",
   "5c5a53ae73e4dc51": "Erinnerungen prüfen, die Aufmerksamkeit benötigen.",
   "45ea728edcbbc5eb": "Isolierte Erinnerungen einbeziehen",
-  "86d287aa1993a091": "Schließen"
+  "86d287aa1993a091": "Schließen",
+  "04bbcc29a55e564a": "Arbeitsbereichsdateien aktualisieren",
+  "a2bded0a93096ada": "Wird aktualisiert…",
+  "d01b4e0c6eb73eed": "Dateien aktualisieren",
+  "67e51fb7f3d0c0c0": "Dateien suchen",
+  "69858f722a57708c": "Dateien in {projectName} suchen",
+  "ec9e0be8ec693302": "Alle Ordner einklappen",
+  "b791dd86f7991cc0": "Alle Ordner ausklappen",
+  "e1e1094e43a5f3d7": "{error} Klicken, um es erneut zu versuchen.",
+  "fdf309c643382f9a": "Weitere Treffer verfügbar. Schränke deine Suche ein.",
+  "3603184704a873fc": "Dateien werden geladen…",
+  "01cdd37750608ba0": "Keine passenden Dateien.",
+  "ddb58ada5516a46d": "Dateien in {projectName}"
 }

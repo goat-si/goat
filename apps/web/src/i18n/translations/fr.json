@@ -764,5 +764,17 @@
   "65d6260964ea1eda": "Les mémoires en quarantaine sont exclues de la recherche. Effacez la recherche pour les consulter.",
   "5c5a53ae73e4dc51": "Consultez les mémoires qui nécessitent votre attention.",
   "45ea728edcbbc5eb": "Inclure les mémoires en quarantaine",
-  "86d287aa1993a091": "Fermer"
+  "86d287aa1993a091": "Fermer",
+  "04bbcc29a55e564a": "Actualiser les fichiers de l’espace de travail",
+  "a2bded0a93096ada": "Actualisation…",
+  "d01b4e0c6eb73eed": "Actualiser les fichiers",
+  "67e51fb7f3d0c0c0": "Rechercher des fichiers",
+  "69858f722a57708c": "Rechercher dans les fichiers de {projectName}",
+  "ec9e0be8ec693302": "Replier tous les dossiers",
+  "b791dd86f7991cc0": "Déplier tous les dossiers",
+  "e1e1094e43a5f3d7": "{error} Cliquez pour réessayer.",
+  "fdf309c643382f9a": "D’autres résultats sont disponibles. Affinez votre recherche.",
+  "3603184704a873fc": "Chargement des fichiers…",
+  "01cdd37750608ba0": "Aucun fichier correspondant.",
+  "ddb58ada5516a46d": "Fichiers de {projectName}"
 }

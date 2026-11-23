@@ -764,5 +764,17 @@
   "65d6260964ea1eda": "Quarantined memories are excluded from search. Clear search to review them.",
   "5c5a53ae73e4dc51": "Review memories that need attention.",
   "45ea728edcbbc5eb": "Include quarantined memories",
-  "86d287aa1993a091": "Close"
+  "86d287aa1993a091": "Close",
+  "04bbcc29a55e564a": "Refresh workspace files",
+  "a2bded0a93096ada": "Refreshing…",
+  "d01b4e0c6eb73eed": "Refresh files",
+  "67e51fb7f3d0c0c0": "Search files",
+  "69858f722a57708c": "Search {projectName} files",
+  "ec9e0be8ec693302": "Collapse all folders",
+  "b791dd86f7991cc0": "Expand all folders",
+  "e1e1094e43a5f3d7": "{error} Click to retry.",
+  "fdf309c643382f9a": "More matches available. Refine your search.",
+  "3603184704a873fc": "Loading files…",
+  "01cdd37750608ba0": "No matching files.",
+  "ddb58ada5516a46d": "{projectName} files"
 }
