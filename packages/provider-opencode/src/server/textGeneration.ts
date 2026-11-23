@@ -1,3 +1,4 @@
+import { brokenVersionDetail } from "@goat/provider-core/server/ProviderHost";
 import { openCodeVariant } from "./variant.ts";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -251,6 +252,22 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
             "url" | "serverPassword" | "version"
           >,
         ) {
+          const broken = brokenVersionDetail({
+            name: "OpenCode",
+            version: server.version,
+            advisory: yield* host.compatibility(
+              ProviderDriverKind.make("opencode"),
+              server.version,
+            ),
+          });
+          if (broken !== undefined)
+            return yield* new TextGenerationError({
+              operation: input.operation,
+              detail: broken,
+              ...(TextGenerationOperations.isMemoryOperation(input.operation)
+                ? { cause: new MemoryGenerationRunnerError({ code: "unavailable" }) }
+                : {}),
+            });
           const client = openCodeRuntime.createOpenCodeSdkClient({
             baseUrl: server.url,
             directory: cwd,

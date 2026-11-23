@@ -20,7 +20,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
 import { vi } from "vite-plus/test";
-import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
+import { checkPiProviderStatus } from "./status.ts";
 import { OMO_PROFILE } from "./profile.ts";
 
 const encoder = new TextEncoder();
@@ -375,13 +375,31 @@ describe("PiProvider", () => {
   );
   it.effect("requires the first published Pi version with entries and settlement hooks", () =>
     Effect.gen(function* () {
-      const snapshot = yield* checkPiProviderStatus(settings).pipe(
+      const snapshot = yield* checkPiProviderStatus(settings, {}, undefined, undefined, () =>
+        Effect.succeed({
+          status: "broken",
+          message: null,
+          recommendedVersion: null,
+          recommendedRange: ">=0.80.5",
+        }),
+      ).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.80.3")),
       );
       assert.equal(snapshot.status, "error");
       assert.equal(snapshot.version, "0.80.3");
       assert.equal(snapshot.cli, "present");
-      assert.include(snapshot.message ?? "", `Pi ${MINIMUM_PI_VERSION} or newer`);
+      assert.include(snapshot.message ?? "", ">=0.80.5");
+      const accepted = yield* checkPiProviderStatus(settings, {}, undefined, undefined, () =>
+        Effect.succeed({
+          status: "supported",
+          message: null,
+          recommendedVersion: null,
+          recommendedRange: ">=0.80.1",
+        }),
+      ).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.80.3")),
+      );
+      assert.notEqual(accepted.status, "error");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -522,7 +540,7 @@ describe("PiProvider", () => {
     },
     {
       label: "a pinned model on Pi without auth check",
-      version: MINIMUM_PI_VERSION,
+      version: "0.80.5",
       activeModel: { provider: "openai", id: "gpt-5" },
       authCheck: undefined,
       message: "Pi default (openai/gpt-5) uses openai, which has no available models in Pi.",

@@ -234,8 +234,8 @@ it.effect("drops an earlier error once a later attempt succeeds", () =>
 it.effect.each([
   { version: "0.84.3", expected: "high" },
   { version: "0.80.5", expected: undefined },
-  { version: "unknown", expected: undefined },
-  { version: "failed", expected: undefined },
+  { version: "unknown", expected: "error" },
+  { version: "failed", expected: "error" },
 ])("uses request thinking only on confirmed supported Pi $version", ({ version, expected }) =>
   Effect.gen(function* () {
     const pi = yield* makeFakePi(
@@ -249,7 +249,7 @@ it.effect.each([
       { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
       {},
     ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, pi.spawner));
-    const result = yield* generator.generateCommitMessage({
+    const request = generator.generateCommitMessage({
       cwd: process.cwd(),
       branch: "main",
       stagedSummary: "M README.md",
@@ -258,6 +258,12 @@ it.effect.each([
         { id: "thinking", value: "high" },
       ]),
     });
+    if (expected === "error") {
+      const error = yield* Effect.flip(request);
+      assert.include(error.detail, "could not determine the Pi version");
+      return;
+    }
+    const result = yield* request;
     assert.equal(result.subject, "Update README");
     assert.equal(
       pi.received.find((record) => record["type"] === "set_thinking_level")?.["level"],

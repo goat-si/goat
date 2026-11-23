@@ -95,6 +95,7 @@ const refreshedSnapshotSecond: ServerProvider = {
 const layerAlwaysRunTest = Layer.succeed(
   ProviderHost.ProviderHost,
   ProviderHost.ProviderHost.of({
+    compatibility: () => Effect.undefined,
     paths: {
       cwd: process.cwd(),
       baseDir: "/t3",

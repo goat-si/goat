@@ -267,6 +267,7 @@ const fenceLayer = Layer.effect(
   Effect.gen(function* () {
     const settings = yield* Settings.ServerSettingsService;
     return ProviderHost.ProviderHost.of({
+      compatibility: () => Effect.undefined,
       paths: { cwd: "", baseDir: "", stateDir: "", providerStatusCacheDir: "", attachmentsDir: "" },
       settings: {
         get: settings.getSettings,

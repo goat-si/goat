@@ -1,3 +1,8 @@
+import {
+  brokenVersionDetail,
+  type ProviderCompatibilityLookup,
+} from "@goat/provider-core/server/ProviderHost";
+import { ProviderDriverKind } from "@goat/contracts";
 import { openCodeVariantDescriptors } from "./variant.ts";
 import { settingsSecretLiteral } from "@goat/contracts";
 import {
@@ -16,7 +21,6 @@ import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
-import { compareSemverVersions } from "@goat/shared/semver";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   buildServerProvider,
@@ -736,6 +740,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     OpenCodeRuntime.OpenCodeRuntimeError
   > = Effect.succeed([]),
   environment?: NodeJS.ProcessEnv,
+  compatibility: ProviderCompatibilityLookup = () => Effect.undefined,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -820,6 +825,31 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     return fallback(Cause.squash(probedExit.cause));
   }
   const probed = probedExit.value;
+  const refuseBroken = Effect.fnUntraced(function* (version: string) {
+    const message = brokenVersionDetail({
+      name: "OpenCode",
+      version,
+      advisory: yield* compatibility(ProviderDriverKind.make("opencode"), version),
+    });
+    return message === undefined
+      ? undefined
+      : buildServerProvider({
+          presentation: OPENCODE_PRESENTATION,
+          enabled: openCodeSettings.enabled,
+          checkedAt,
+          models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
+          probe: {
+            cli: answered,
+            installed: true,
+            version,
+            status: "error",
+            auth: { status: "unknown" },
+            message,
+          },
+        });
+  });
+  const refused = yield* refuseBroken(probed.version);
+  if (refused !== undefined) return refused;
   if (probed.generation === "v2") {
     const draft = yield* checkOpenCode2(
       openCodeSettings,
@@ -829,22 +859,6 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       loadOpenCode2Skills,
     );
     return { ...draft, cli: answered, cliCheckedAt: checkedAt };
-  }
-  if (compareSemverVersions(probed.version, OpenCodeRuntime.MINIMUM_OPENCODE_VERSION) < 0) {
-    return buildServerProvider({
-      presentation: OPENCODE_PRESENTATION,
-      enabled: openCodeSettings.enabled,
-      checkedAt,
-      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
-      probe: {
-        cli: answered,
-        installed: true,
-        version: probed.version,
-        status: "error",
-        auth: { status: "unknown" },
-        message: `OpenCode v${probed.version} is too old. Upgrade to v${OpenCodeRuntime.MINIMUM_OPENCODE_VERSION} or newer.`,
-      },
-    });
   }
 
   const installedVersion = isExternalServer ? {} : { installedVersion: probed.version };
@@ -888,6 +902,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       ),
     ),
   );
+  const refusedServer = version === probed.version ? undefined : yield* refuseBroken(version);
+  if (refusedServer !== undefined) return { ...refusedServer, ...installedVersion };
   if (inventoryExit._tag === "Failure") {
     yield* logDiscoveryFailure({
       phase: "inventory",

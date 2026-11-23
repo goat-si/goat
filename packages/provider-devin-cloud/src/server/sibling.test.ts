@@ -20,6 +20,7 @@ import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSp
 const id = ProviderInstanceId.make("devin-sibling");
 const hostFor = (settings: ServerSettings) =>
   ProviderHost.ProviderHost.of({
+    compatibility: () => Effect.undefined,
     paths: {
       cwd: "/project",
       baseDir: "/sandbox",

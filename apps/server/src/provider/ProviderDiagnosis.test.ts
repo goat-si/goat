@@ -94,6 +94,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       }),
     );
     const host = ProviderHost.ProviderHost.of({
+      compatibility: () => Effect.undefined,
       paths: {
         cwd: "/project",
         baseDir: "/goat",

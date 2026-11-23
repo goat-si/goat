@@ -1,5 +1,7 @@
 import type {
   EnvironmentId,
+  ProviderDriverKind,
+  ServerProviderCompatibilityAdvisory,
   BackgroundScope,
   ChatAttachment,
   ServerSettings,
@@ -12,6 +14,22 @@ import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderCredentialError } from "./errors.ts";
+
+export type ProviderCompatibilityLookup = (
+  driver: ProviderDriverKind,
+  version: string,
+) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
+
+export function brokenVersionDetail(input: {
+  name: string;
+  version: string;
+  advisory: ServerProviderCompatibilityAdvisory | undefined;
+}): string | undefined {
+  if (input.advisory?.status !== "broken") return undefined;
+  const target =
+    input.advisory.recommendedVersion ?? input.advisory.recommendedRange ?? "a newer version";
+  return `${input.name} ${input.version} does not work with this GOAT release. Update ${input.name} to ${target}, then retry.`;
+}
 
 export interface ProviderHostPaths {
   readonly cwd: string;
@@ -34,6 +52,7 @@ export class ProviderHost extends Context.Service<
   ProviderHost,
   {
     readonly environmentId?: EnvironmentId;
+    readonly compatibility: ProviderCompatibilityLookup;
     readonly paths: ProviderHostPaths;
     readonly settings: {
       readonly get: Effect.Effect<ServerSettings, ServerSettingsError>;

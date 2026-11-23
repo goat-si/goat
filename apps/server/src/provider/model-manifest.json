@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-11-14T15:58:47Z",
+  "updatedAt": "2026-11-20T00:34:00Z",
   "compatibility": [
     {
       "driver": "codex",
@@ -104,7 +104,7 @@
       "recommendedRange": ">=1.0.0",
       "ranges": [
         { "range": ">=0.80.5", "status": "supported" },
-        { "range": "<0.80.5", "status": "unsupported" }
+        { "range": "<0.80.5", "status": "broken" }
       ]
     },
     {
