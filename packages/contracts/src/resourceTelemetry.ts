@@ -338,6 +338,7 @@ export const ShellEnvironmentPatch = Schema.Struct({
   GOAT_GITHUB_APP_CLIENT_ID: Schema.optionalKey(Schema.NullOr(Schema.String)),
   __MISE_DIFF: Schema.optionalKey(Schema.NullOr(Schema.String)),
   JAVA_HOME: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  PNPM_HOME: Schema.optionalKey(Schema.NullOr(Schema.String)),
   FNM_DIR: Schema.optionalKey(Schema.NullOr(Schema.String)),
   FNM_MULTISHELL_PATH: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });

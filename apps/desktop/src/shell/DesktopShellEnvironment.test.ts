@@ -208,7 +208,6 @@ describe("DesktopShellEnvironment", () => {
       });
     }),
   );
-
   it.effect(
     "reuses cached paths immediately and streams fresh discovery without keeping removed paths",
     () =>
@@ -226,12 +225,14 @@ describe("DesktopShellEnvironment", () => {
               __MISE_DIFF: "old-mise",
               SSH_AUTH_SOCK: "/old-session.sock",
               JAVA_HOME: "/old/java",
+              PNPM_HOME: "/old/pnpm",
               SSL_CERT_FILE: "/old/cert.pem",
             }),
         });
         const cachePath = `${stateDir}/shell-environment-cache.json`;
         const cached = yield* fs.readFileString(cachePath).pipe(Effect.flatMap(decodeCache));
         assert.equal(cached.environment.PATH, "/old/bin:/usr/bin");
+        assert.equal(cached.environment.PNPM_HOME, "/old/pnpm");
         assert.notProperty(cached.environment, "SSH_AUTH_SOCK");
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -279,6 +280,7 @@ describe("DesktopShellEnvironment", () => {
               assert.equal(env.PATH, `/fresh/bin:/launcher/bin:${DARWIN_CLI_DIRS}`);
               assert.equal(env.__MISE_DIFF, "fresh-mise");
               assert.isUndefined(env.JAVA_HOME);
+              assert.isUndefined(env.PNPM_HOME);
               assert.isUndefined(env.SSL_CERT_FILE);
               const fresh = yield* Stream.runHead(service.updates);
               assert.isTrue(Option.isSome(fresh));
@@ -292,10 +294,10 @@ describe("DesktopShellEnvironment", () => {
         const refreshed = yield* fs.readFileString(cachePath).pipe(Effect.flatMap(decodeCache));
         assert.equal(refreshed.environment.PATH, "/fresh/bin:/launcher/bin");
         assert.notProperty(refreshed.environment, "JAVA_HOME");
+        assert.notProperty(refreshed.environment, "PNPM_HOME");
         assert.notProperty(refreshed.environment, "SSL_CERT_FILE");
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect.each([
     "not json",
     '{"version":2,"key":"old","environment":{"PATH":"/bad/bin"}}',
@@ -333,7 +335,6 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.PATH, `/fresh/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect(
     "retains the last successful cache on refresh failure and ignores session values in the cache",
     () =>
@@ -347,6 +348,7 @@ describe("DesktopShellEnvironment", () => {
             PATH: "/cached/bin",
             __MISE_DIFF: "cached-mise",
             JAVA_HOME: "/cached/java",
+            PNPM_HOME: "/cached/pnpm",
             NODE_EXTRA_CA_CERTS: "/cached/ca.pem",
             SSL_CERT_FILE: "/cached/cert.pem",
             SSL_CERT_DIR: "/cached/certs",
@@ -386,6 +388,7 @@ describe("DesktopShellEnvironment", () => {
         assert.equal(env.PATH, `/cached/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
         assert.equal(env.__MISE_DIFF, "cached-mise");
         assert.equal(env.JAVA_HOME, "/launcher/java");
+        assert.equal(env.PNPM_HOME, "/cached/pnpm");
         assert.equal(env.NODE_EXTRA_CA_CERTS, "/launcher/ca.pem");
         assert.equal(env.SSL_CERT_FILE, "");
         assert.equal(env.SSL_CERT_DIR, "/cached/certs");
@@ -394,7 +397,6 @@ describe("DesktopShellEnvironment", () => {
         assert.equal(yield* fs.readFileString(cachePath), contents);
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect("cancels background discovery when the application scope closes", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
@@ -419,7 +421,6 @@ describe("DesktopShellEnvironment", () => {
       yield* Deferred.await(stopped);
     }),
   );
-
   it.effect(
     "captures the login-shell PATH when startup writes more than a pipe buffer to stderr",
     () =>
@@ -453,7 +454,6 @@ describe("DesktopShellEnvironment", () => {
         assert.deepEqual(commands, ["/test-shell"]);
       }),
   );
-
   it.effect("rejects PATH output from a failed shell and tries the next candidate", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { SHELL: "/bin/failing", PATH: "/usr/bin" };
@@ -476,7 +476,6 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.PATH, `/home/test/.local/bin:/usr/bin:${LINUX_CLI_DIRS}`);
     }),
   );
-
   it.effect("keeps literal whitespace and quotes in a POSIX login PATH", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
@@ -488,7 +487,6 @@ describe("DesktopShellEnvironment", () => {
       assert.isTrue(env.PATH?.startsWith(' /fixture path :"/literal":/usr/bin:') ?? false);
     }),
   );
-
   it.effect("hydrates PATH and missing SSH_AUTH_SOCK from the login shell on macOS", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = {
