@@ -57,6 +57,7 @@ import {
   pastedPathQueryLength,
 } from "~/composer-logic";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { preserveReadingPosition } from "~/lib/preserveReadingPosition";
 import { caretLineDirection, ComposerTextDirectionExtension } from "~/composer-text-direction";
 import {
   collapseShownMarkdownSource,
@@ -1468,12 +1469,14 @@ function ComposerPromptEditorTiptapInner(
   useLayoutEffect(() => {
     const view = mountedEditorView(editor);
     if (!editor || !view) return;
+    const stopPreservingReadingPosition = preserveReadingPosition(view.dom);
     if (restoreFocusRef.current) {
       restoreFocusRef.current = false;
       view.focus();
       scrollTiptapCaretIntoView(editor);
     }
     return () => {
+      stopPreservingReadingPosition();
       // Capture focus before the keyed editor's DOM is removed.
       restoreFocusRef.current = mountedEditorView(editor)?.hasFocus() ?? false;
     };
@@ -1756,11 +1759,9 @@ function scrollTiptapCaretIntoView(editor: TiptapEditor): void {
 }
 
 /**
- * The editor's ProseMirror view, or null before mount and after unmount or
- * destroy, when Tiptap throws on most `editor.view` reads. Read every view in
- * this file through it: @tiptap/react destroys an editor whose component has
- * not run its passive effects within a millisecond, which happens to a composer
- * React prerenders behind a Suspense fallback before revealing it.
+ * The editor's view, or null before mount and after destroy, when Tiptap throws on
+ * `editor.view`. Read views only through this: @tiptap/react destroys an editor whose
+ * passive effects don't run within a millisecond, as when prerendered behind Suspense.
  */
 function mountedEditorView(editor: TiptapEditor | null | undefined): EditorView | null {
   return editor && !editor.isDestroyed ? editor.view : null;
