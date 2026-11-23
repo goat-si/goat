@@ -982,10 +982,10 @@ it("localizes the checked status and refresh button name (PR #3835)", async () =
     </GTProvider>,
   );
   await expect
-    .element(screen.getByRole("button", { name: "공급자 상태 새로 고침 5분 전에 확인" }))
+    .element(screen.getByRole("button", { name: "프로바이더 상태 새로 고침 5분 전에 확인" }))
     .toBeVisible();
   await setProviders([{ ...provider(), checkedAt: "invalid" }]);
   await expect
-    .element(screen.getByRole("button", { name: "공급자 상태 새로 고침 확인 시간 알 수 없음" }))
+    .element(screen.getByRole("button", { name: "프로바이더 상태 새로 고침 확인 시간 알 수 없음" }))
     .toBeVisible();
 });
