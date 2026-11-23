@@ -226,7 +226,9 @@ function buildRepositoryIdentity(input: {
 
 /** A fork's own repository, when its primary remote is the upstream it was forked from. */
 export function ownRepositoryIdentity(identity: RepositoryIdentity): RepositoryIdentity | null {
-  const remoteUrl = identity.origin?.remoteUrl;
+  const origin = identity.origin;
+  if (origin === undefined) return null;
+  const remoteUrl = origin.remoteUrl;
   if (remoteUrl === undefined) return null;
   const own = buildRepositoryIdentity({
     remoteName: "origin",
@@ -237,11 +239,10 @@ export function ownRepositoryIdentity(identity: RepositoryIdentity): RepositoryI
     rootPath: identity.rootPath,
   });
   // A host only discovery could name serves the fork as it serves the upstream.
-  const sameHost =
-    identity.origin.canonicalKey.split("/")[0] === identity.canonicalKey.split("/")[0];
+  const sameHost = origin.canonicalKey.split("/")[0] === identity.canonicalKey.split("/")[0];
   return own.provider === undefined && identity.provider !== undefined && sameHost
-    ? { ...own, canonicalKey: identity.origin.canonicalKey, provider: identity.provider }
-    : { ...own, canonicalKey: identity.origin.canonicalKey };
+    ? { ...own, canonicalKey: origin.canonicalKey, provider: identity.provider }
+    : { ...own, canonicalKey: origin.canonicalKey };
 }
 
 class RepositoryIdentityCacheKey extends Data.Class<{
