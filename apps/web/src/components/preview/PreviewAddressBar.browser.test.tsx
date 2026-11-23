@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import chinese from "~/i18n/translations/zh.json";
 import { fakeTimers } from "../../../test/render";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { act } from "react";
@@ -21,8 +23,14 @@ describe("PreviewAddressBar", () => {
   let container: HTMLDivElement;
   let props: PreviewAddressBarProps;
   const input = () => container.querySelector<HTMLInputElement>("input")!;
-  const render = async () => {
-    await act(async () => root.render(<PreviewAddressBar key={props.addressKey} {...props} />));
+  const render = async (locale = "en") => {
+    await act(async () =>
+      root.render(
+        <GTProvider locale={locale} translations={{ zh: chinese }}>
+          <PreviewAddressBar key={props.addressKey} {...props} />
+        </GTProvider>,
+      ),
+    );
   };
   const type = async (value: string) => {
     await act(async () => {
@@ -89,6 +97,15 @@ describe("PreviewAddressBar", () => {
     container.remove();
     vi.unstubAllGlobals();
     timers[Symbol.dispose]();
+  });
+
+  it("localizes the address field and the open-in-browser action", async () => {
+    props.url = "";
+    props.onOpenInBrowser = vi.fn();
+    await render("zh");
+    expect(input().placeholder).toBe("搜索或输入网址");
+    expect(input().getAttribute("aria-label")).toBe("搜索或输入网址");
+    expect(container.querySelector('button[aria-label="在系统浏览器中打开"]')).not.toBeNull();
   });
 
   it("retains drafts through blur, late URL changes, tab remounts and identical ids in another environment", async () => {

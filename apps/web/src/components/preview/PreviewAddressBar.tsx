@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { resolveAddressBarInput } from "@goat/shared/preview";
 import { type RefObject, useRef, useState } from "react";
@@ -40,6 +41,7 @@ export interface PreviewAddressBarProps {
 
 /** Mount keyed by addressKey so tab switches dismiss the old tab's popup. */
 export function PreviewAddressBar(props: PreviewAddressBarProps) {
+  const gt = useGT();
   const localInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = props.inputRef ?? localInputRef;
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +118,7 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
           <AutocompleteInput
             ref={inputRef}
             render={<InputGroupInput size="sm" nativeInput />}
-            aria-label="Search or enter URL"
+            aria-label={gt("Search or enter URL")}
             data-workspace-focus-default
             onFocus={() => {
               setFocused(true);
@@ -146,7 +148,7 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
                 navigate(value);
               }
             }}
-            placeholder="Search or enter URL"
+            placeholder={gt("Search or enter URL")}
             spellCheck={false}
             disabled={props.disabled}
             data-preview-url-input
@@ -163,13 +165,13 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
                         size="icon-xs"
                         type="button"
                         onClick={props.onOpenInBrowser}
-                        aria-label="Open in system browser"
+                        aria-label={gt("Open in system browser")}
                       />
                     }
                   >
                     <ExternalLinkIcon />
                   </TooltipTrigger>
-                  <TooltipPopup>Open in system browser</TooltipPopup>
+                  <TooltipPopup>{gt("Open in system browser")}</TooltipPopup>
                 </Tooltip>
               </span>
             </InputGroupAddon>
@@ -194,10 +196,10 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {suggestion.kind === "tab"
-                    ? "Switch to tab"
+                    ? gt("Switch to tab")
                     : suggestion.kind === "history"
-                      ? "Recent"
-                      : "Go"}
+                      ? gt("Recent")
+                      : gt("Go")}
                 </span>
               </AutocompleteItem>
             ))}
