@@ -755,5 +755,13 @@
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes"
+  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes",
+  "2e2f3c6a94895504": "Buscar en la memoria",
+  "701964090d7b3438": "Borrar búsqueda",
+  "69f5bba063085343": "No se pudo cargar la memoria",
+  "1c79d42e902ff431": "Reintentar",
+  "a026f1d30905695a": "Memorias en cuarentena",
+  "65d6260964ea1eda": "Las memorias en cuarentena se excluyen de la búsqueda. Borra la búsqueda para revisarlas.",
+  "5c5a53ae73e4dc51": "Revisa las memorias que necesitan atención.",
+  "45ea728edcbbc5eb": "Incluir memorias en cuarentena"
 }

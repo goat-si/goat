@@ -636,7 +636,6 @@ function ScopedMemoryBrowser({
     !projectRef ||
     projects.some((project) => project.id === projectRef.projectId) ||
     (!seenProjects.has(projectRef.projectId) && params.project?.projectId === projectRef.projectId);
-
   const [quarantine, setQuarantine] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const forget = useAtomCommand(memory.forget);
@@ -683,7 +682,6 @@ function ScopedMemoryBrowser({
     setWasEnabled(memoryEnabled);
     setCreating(false);
   }
-
   const input = memoryBrowseInput({
     memorySpaceId,
     limit: PAGE_SIZE,
@@ -905,7 +903,9 @@ function ScopedMemoryBrowser({
           ) : null}
           <SettingsSwitchRow
             label="Include quarantined"
-            value={quarantine}
+            subtitle={search ? "Quarantined memories are excluded from search." : undefined}
+            value={search ? false : quarantine}
+            disabled={Boolean(search)}
             onValueChange={(value) => {
               setQuarantine(value);
               setCursor(undefined);
