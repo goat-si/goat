@@ -115,9 +115,7 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 import type { ThreadComposerProps } from "./thread-composer-props";
-
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
-
 export function ComposerSurface(props: {
   readonly children: ReactNode;
   readonly style: ViewStyle;
@@ -763,7 +761,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               <Animated.View
                 style={[
                   compactEditor.editorStyle,
-                  showsCompactDictation ? { display: "none" } : undefined,
+                  Platform.OS === "android" && showsCompactDictation
+                    ? { display: "none" }
+                    : undefined,
                 ]}
               >
                 <ComposerEditor
