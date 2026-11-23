@@ -226,6 +226,22 @@ function botRailLabel(face: GoatBotShownFace, name: string) {
   return spoken === null ? name : `${spoken}, ${name}`;
 }
 
+export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
+  return (
+    <RailTooltip label="Home">
+      <Link
+        to="/"
+        aria-label="Home"
+        activeOptions={EXACT_MATCH}
+        aria-current={active ? "page" : undefined}
+        className={railItemClassName(active)}
+      >
+        <HomeIcon aria-hidden />
+      </Link>
+    </RailTooltip>
+  );
+});
+
 export const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   // The rail's one read of the main face: its avatar and its link's label both show it.
   const face = useGoatBotMainFace(null, false);
