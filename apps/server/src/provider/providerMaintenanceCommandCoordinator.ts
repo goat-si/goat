@@ -25,7 +25,7 @@ class MachineLockError extends Schema.TaggedError<MachineLockError>()("MachineLo
   cause: Schema.Defect(),
 }) {}
 
-const lockDirectory = () => NodePath.join(NodeOS.tmpdir(), "t3code-provider-updates");
+const lockDirectory = () => NodePath.join(NodeOS.tmpdir(), "goat-provider-updates");
 
 /** @internal */
 export const machineLockFile = (lockKey: string) =>

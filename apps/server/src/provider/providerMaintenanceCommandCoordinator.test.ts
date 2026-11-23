@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - A separate Node process stands in for another server.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -45,5 +47,11 @@ it.live("holds the update's lock key against other server processes while it run
     });
     assert.strictEqual(duringUpdate, "blocked");
     assert.strictEqual(yield* probe(machineLockFile(lockKey)), "acquired");
-  }),
+  }).pipe(
+    Effect.ensuring(
+      Effect.promise(() =>
+        NodeFSP.rm(NodePath.dirname(machineLockFile("cleanup")), { recursive: true, force: true }),
+      ),
+    ),
+  ),
 );
