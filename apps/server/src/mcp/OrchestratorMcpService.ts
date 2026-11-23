@@ -1152,7 +1152,6 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(threadManagementFailure));
     const childProjection = {
       ...childControls,
-      runs: reportRuns,
       messages: [...childControls.messages, ...resultRecords.messages],
       turnItems: resultRecords.turnItems,
     };
@@ -1228,7 +1227,7 @@ const make = Effect.gen(function* () {
       task.result !== null
         ? task.result
         : taskResultRun !== undefined && isTerminalTaskStatus(status)
-          ? subagentResultForRun(childProjection, taskResultRun).text
+          ? subagentResultForRun({ ...childProjection, runs: reportRuns }, taskResultRun).text
           : null;
     const resultTransfers = childControls.contextTransfers.filter(
       (transfer) =>
