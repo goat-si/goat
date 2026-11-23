@@ -159,6 +159,7 @@ export function HostedBrowserWebview(props: {
     if (!clientSettingsHydrated || !webview || !config || !bridge) return;
     let disposed = false;
     let recoveryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let registeredWebContentsId: number | null = null;
     const register = () => {
       const lease = tabLeaseRef.current;
       if (!lease) return;
@@ -175,6 +176,7 @@ export function HostedBrowserWebview(props: {
               bridge.setCaptureDrawn !== undefined,
             );
             if (disposed || webviewRef.current !== webview) return;
+            registeredWebContentsId = webContentsId;
             setRegisteredGuestId(webContentsId);
             withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, reportedShown()));
           }
@@ -204,6 +206,13 @@ export function HostedBrowserWebview(props: {
         dismissHostPopups();
       }
     };
+    // The desktop clears a destroyed guest's id; nothing reattaches this element, so remount it.
+    const unsubscribeState = bridge.onStateChange((changedTabId, state) => {
+      if (changedTabId !== runtimeTabId || registeredWebContentsId === null) return;
+      if (state.webContentsId !== null) return;
+      registeredWebContentsId = null;
+      recoverGuest();
+    });
     webview.addEventListener("did-attach", register);
     webview.addEventListener("dom-ready", register);
     webview.addEventListener("render-process-gone", recoverGuest);
@@ -213,6 +222,7 @@ export function HostedBrowserWebview(props: {
     return () => {
       disposed = true;
       if (recoveryTimeout !== null) clearTimeout(recoveryTimeout);
+      unsubscribeState();
       webview.removeEventListener("did-attach", register);
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
@@ -379,6 +389,8 @@ export function HostedBrowserWebview(props: {
           />
         ) : null}
         <div
+          // Keyed here, not on the webview: a destroyed guest's element may already be detached.
+          key={webviewGeneration}
           className="absolute"
           style={{
             left: layout.viewportX,
@@ -389,7 +401,6 @@ export function HostedBrowserWebview(props: {
           }}
         >
           <webview
-            key={webviewGeneration}
             ref={setWebviewRef}
             // Electron needs allowpopups at attachment. React drops boolean values for unknown attributes.
             {...({ allowpopups: "true" } as unknown as { readonly allowpopups?: boolean })}

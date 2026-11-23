@@ -1,6 +1,7 @@
 import {
   flushMicrotasks,
   makeChangeSignal,
+  makeAttachingGuest as makeAttachingGuestFixture,
   makeFaviconWebContents as makeFaviconFixture,
   makeSourcePng,
   makeTestHostWebContents,
@@ -206,6 +207,8 @@ const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"
         }),
     };
   });
+
+const makeAttachingGuest = (id: number) => makeAttachingGuestFixture(webviewSend, id);
 
 describe("PreviewManager", () => {
   beforeEach(() => {
@@ -865,73 +868,6 @@ describe("PreviewManager", () => {
     ),
   );
 
-  const makeAttachingGuest = (id: number) => {
-    const listeners = new Map<string, () => void>();
-    const attach = vi.fn();
-    const detach = vi.fn();
-    const sendCommand = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
-      async () => undefined,
-    );
-    const detachListeners = new Set<() => void>();
-    let chromiumDetaches = 0;
-    let destroyed = false;
-    const wc = {
-      id,
-      isDestroyed: () => destroyed,
-      isDevToolsOpened: () => {
-        if (destroyed) throw new TypeError("Object has been destroyed");
-        return false;
-      },
-      getType: () => "webview",
-      getURL: () => "http://localhost:5173/README.md",
-      getTitle: () => "README.md",
-      isLoadingMainFrame: () => true,
-      getZoomFactor: () => 1,
-      setZoomFactor: vi.fn(),
-      setAudioMuted: vi.fn(),
-      isCurrentlyAudible: () => false,
-      on: vi.fn(),
-      off: vi.fn(),
-      once: (event: string, listener: () => void) => {
-        listeners.set(event, listener);
-      },
-      ipc: { on: vi.fn(), off: vi.fn() },
-      send: webviewSend,
-      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-      setIgnoreMenuShortcuts: vi.fn(),
-      setWindowOpenHandler: vi.fn(),
-      debugger: {
-        isAttached: () => attach.mock.calls.length > detach.mock.calls.length + chromiumDetaches,
-        attach,
-        detach,
-        sendCommand,
-        on: (event: string, listener: () => void) => {
-          if (event === "detach") detachListeners.add(listener);
-        },
-        off: (event: string, listener: () => void) => {
-          if (event === "detach") detachListeners.delete(listener);
-        },
-      },
-    };
-    /** Chromium dropping the debugger without a detach() call. */
-    const chromiumDetach = () => {
-      chromiumDetaches += 1;
-      // Snapshot like an EventEmitter, so a listener added during emit waits for the next one.
-      for (const listener of Array.from(detachListeners)) listener();
-    };
-    return {
-      wc: wc as unknown as Electron.WebContents,
-      attach,
-      detach,
-      sendCommand,
-      chromiumDetach,
-      destroy: () => {
-        destroyed = true;
-        listeners.get("destroyed")?.();
-      },
-    };
-  };
-
   effectIt.effect("reattaches a debugger that Chromium dropped on its own", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -948,6 +884,36 @@ describe("PreviewManager", () => {
         expect(guest.attach).toHaveBeenCalledTimes(2);
       }),
     ),
+  );
+
+  effectIt.effect(
+    "does not open picture-in-picture against a destroyed webview's WebContents",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const guest = makeAttachingGuest(49);
+          fromId.mockImplementation((id) =>
+            id === 49 && !guest.wc.isDestroyed() ? guest.wc : null,
+          );
+          yield* manager.prepareWebview(guest.wc);
+          yield* manager.createTab("tab_destroyed_guest");
+          yield* manager.registerWebview("tab_destroyed_guest", 49);
+
+          const detached = yield* Deferred.make<void>();
+          yield* manager.subscribeStateChanges((id, state) =>
+            id === "tab_destroyed_guest" && state.webContentsId === null
+              ? Deferred.succeed(detached, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+          );
+          guest.destroy();
+          yield* Deferred.await(detached);
+
+          const pictureInPicture = yield* Effect.flip(
+            manager.openPictureInPicture("tab_destroyed_guest"),
+          ).pipe(Effect.orDie);
+          expect(pictureInPicture._tag).toBe("PreviewWebviewNotInitializedError");
+        }),
+      ),
   );
 
   effectIt.effect("skips a guest destroyed while another guest's session opens", () =>
