@@ -29,14 +29,15 @@ Type `$` in the composer to list the skills fx finds in its skill folders, in th
 
 ## Permission modes
 
-fx offers two composer modes.
+fx offers these composer modes, depending on the installed version.
 
-| Mode           | Behavior                                                                            |
-| -------------- | ----------------------------------------------------------------------------------- |
-| **Supervised** | fx asks before it changes files or runs commands. Read requests run without asking. |
-| **Auto**       | fx handles routine actions itself. Anything it still asks about reaches you.        |
+| Mode            | Behavior                                                                            |
+| --------------- | ----------------------------------------------------------------------------------- |
+| **Supervised**  | fx asks before it changes files or runs commands. Read requests run without asking. |
+| **Auto**        | fx handles routine actions itself. Anything it still asks about reaches you.        |
+| **Full access** | Available when fx advertises it; actions run without approval prompts.              |
 
-GOAT does not offer **Full access** or **Auto-accept edits** for fx. A thread already set to one of those runs in **Supervised**. Changing the permission mode restarts the connection and reloads the same fx session.
+GOAT does not offer **Auto-accept edits** for fx. An unsupported mode runs in **Supervised**. Changing the permission mode restarts the connection and reloads the same fx session.
 
 On fx versions after [vercel-labs/fx#1189](https://github.com/vercel-labs/fx/pull/1189), fx saves the mode GOAT sets as its default permission mode. GOAT sets it each time it opens an fx thread, so fx in the terminal then starts in that thread's mode.
 

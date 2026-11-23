@@ -31,7 +31,7 @@ describe("fx permission prompts", () => {
     );
   });
 
-  it.each(["approval-required", "auto-accept-edits", "full-access"] as const)(
+  it.each(["approval-required", "auto-accept-edits"] as const)(
     "%s uses ask mode and requires approval for writes",
     (runtimeMode) => {
       const policy = ProviderAdapterV2RuntimePolicy.make({
@@ -43,6 +43,22 @@ describe("fx permission prompts", () => {
       assert.equal(fxPermissionDisposition(policy, editRequest), "ask");
     },
   );
+
+  it("allows Full access prompts unless an explicit policy confines them", () => {
+    const policy = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: "/work",
+    });
+    assert.equal(fxSessionModeForPolicy(policy), "full-access");
+    assert.equal(fxPermissionDisposition(policy, editRequest), "allow");
+    assert.equal(fxSessionModeForPolicy({ ...policy, approvalPolicy: "on-request" }), "ask");
+    assert.equal(
+      fxPermissionDisposition({ ...policy, approvalPolicy: "on-request" }, editRequest),
+      "ask",
+    );
+    assert.equal(fxSessionModeForPolicy({ ...policy, sandboxPolicy: { type: "readOnly" } }), "ask");
+  });
 
   it("keeps explicit approval and sandbox restrictions out of automatic review", () => {
     const auto = ProviderAdapterV2RuntimePolicy.make({

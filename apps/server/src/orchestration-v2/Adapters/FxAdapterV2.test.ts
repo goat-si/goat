@@ -303,16 +303,22 @@ describe("FxAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.effect("runs Auto as fx's `code` mode on 0.0.13 and as `auto` where fx advertises it", () =>
+  it.effect("runs Auto and Full access using the advertised fx mode", () =>
     Effect.forEach(
       [
-        { scenario: "auto-0-0-13", modes: FX_0_0_13_MODES, written: "code" },
-        { scenario: "auto-main", modes: FX_MAIN_MODES, written: "auto" },
-      ],
-      ({ scenario, modes, written }) =>
+        { scenario: "auto-0-0-13", runtimeMode: "auto", modes: FX_0_0_13_MODES, written: "code" },
+        { scenario: "auto-main", runtimeMode: "auto", modes: FX_MAIN_MODES, written: "auto" },
+        {
+          scenario: "full-access-main",
+          runtimeMode: "full-access",
+          modes: FX_MAIN_MODES,
+          written: "full-access",
+        },
+      ] as const,
+      ({ scenario, runtimeMode, modes, written }) =>
         openFxSession({
           scenario,
-          runtimeMode: "auto",
+          runtimeMode,
           frames: [
             ...initialize,
             outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
