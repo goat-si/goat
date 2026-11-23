@@ -592,7 +592,7 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             "shell_environment_policy.set.GOAT_THREAD_ID": input.threadId,
-            "shell_environment_policy.set.T3CODE_THREAD_ID": input.threadId,
+            "shell_environment_policy.set.T3CODE_THREAD_ID": input.threadId, // goat-rename: legacy
           }),
       ...input.stdioEnvironment,
       ...codexGoatServerConfig(mcpSession?.goatMcpServers, input.threadId),

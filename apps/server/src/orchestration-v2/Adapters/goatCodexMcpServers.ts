@@ -12,7 +12,7 @@ export function codexGoatServersWithThreadId(
   if (threadId === undefined) return servers;
   return servers?.map((server) =>
     server.transport === "stdio"
-      ? { ...server, env: { ...server.env, GOAT_THREAD_ID: threadId, T3CODE_THREAD_ID: threadId } }
+      ? { ...server, env: { ...server.env, GOAT_THREAD_ID: threadId, T3CODE_THREAD_ID: threadId } } // goat-rename: legacy
       : server,
   );
 }
@@ -35,7 +35,7 @@ export function codexStdioThreadEnvironment(servers: unknown, threadId: ThreadId
       )
       .flatMap(([name]) => [
         [`mcp_servers.${name}.env.GOAT_THREAD_ID`, threadId],
-        [`mcp_servers.${name}.env.T3CODE_THREAD_ID`, threadId],
+        [`mcp_servers.${name}.env.T3CODE_THREAD_ID`, threadId], // goat-rename: legacy
       ]),
   );
 }
