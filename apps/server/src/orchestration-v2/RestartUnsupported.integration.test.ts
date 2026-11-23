@@ -99,9 +99,15 @@ it.effect("starts a restart that stops the running turn ahead of an older held q
         yield* worker.drain();
 
         const { queue, started: startedTexts } = yield* read(threadId);
+        // Both later messages come from an agent through GOAT's tools, so the provider is told.
+        const viaTools = (text: string) =>
+          `[GOAT: this message came through GOAT's tools, not from the user typing in this chat.]\n\n${text}`;
         assert.deepEqual(
           { queue, started: startedTexts },
-          { queue: ["queued"], started: ["first", "second", "do this instead"] },
+          {
+            queue: ["queued"],
+            started: ["first", viaTools("second"), viaTools("do this instead")],
+          },
         );
       }).pipe(Effect.provide(layer));
     }),
