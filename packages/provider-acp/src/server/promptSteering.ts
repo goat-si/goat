@@ -108,14 +108,6 @@ export function makeAcpPromptSteer(deps: AcpPromptSteerDeps) {
             "is not active and cannot be steered",
           );
         }
-        // A wake turn has no prompt of its own to steer; its reply ends the run soon.
-        if (context.promptSequence === 0) {
-          return yield* new ProviderAdapter.ProviderAdapterSteerDeclinedError({
-            driver: deps.driver,
-            providerThreadId: turnInput.providerThread.id,
-            providerTurnId: turnInput.providerTurnId,
-          });
-        }
         const generation = yield* deps.currentGeneration;
         const settle = {
           generation,
@@ -156,8 +148,10 @@ export function makeAcpPromptSteer(deps: AcpPromptSteerDeps) {
       Deferred.await(dispatched).pipe(Effect.as(true)),
       Deferred.await(context.completed).pipe(Effect.as(false)),
     );
-    if (!sent) {
+    if (!sent && !(yield* Deferred.isDone(dispatched))) {
       return yield* notSteerable(turnInput.providerTurnId, "ended before it could be steered");
     }
+    // A wake run sent no prompt, so its inactivity watchdog waits for this one.
+    yield* Deferred.succeed(context.promptDispatched, undefined);
   });
 }
