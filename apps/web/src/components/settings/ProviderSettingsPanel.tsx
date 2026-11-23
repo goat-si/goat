@@ -1,3 +1,4 @@
+import { useGT, useLocale } from "gt-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
@@ -74,6 +75,7 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
+import { relativeTimeElapsedMs } from "../../timestampFormat";
 import {
   ConnectionStatusDot,
   connectionPhaseDotClassName,
@@ -102,6 +104,7 @@ import { readPrimaryEnvironmentTarget } from "../../environments/primary/target"
 import { ProviderCodexHomeRouteSection } from "./ProviderCodexHomeRouteSection";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { UsageProviderSettings } from "./TextGeneratorAndUsageSettings";
@@ -165,6 +168,8 @@ const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
 
 // Subscribe only in the label because every status push restamps all providers' checkedAt.
 function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
+  const locale = useLocale();
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const lastCheckedAt =
@@ -181,21 +186,20 @@ function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }
   }
 
   if (lastCheckedRelative.status === "invalid") {
-    return <span>Checked unavailable</span>;
+    return <span>{gt("Checked unavailable")}</span>;
   }
 
-  return (
-    <span>
-      {lastCheckedRelative.suffix ? (
-        <>
-          Checked <span className="font-mono tabular-nums">{lastCheckedRelative.value}</span>{" "}
-          {lastCheckedRelative.suffix}
-        </>
-      ) : (
-        <>Checked {lastCheckedRelative.value}</>
-      )}
-    </span>
-  );
+  const elapsed = lastCheckedAt === null ? 0 : (relativeTimeElapsedMs(lastCheckedAt) ?? 0);
+  const [amount, unit] =
+    elapsed < 60_000
+      ? ([0, "second"] as const)
+      : elapsed < 3_600_000
+        ? ([Math.floor(elapsed / 60_000), "minute"] as const)
+        : elapsed < 86_400_000
+          ? ([Math.floor(elapsed / 3_600_000), "hour"] as const)
+          : ([Math.floor(elapsed / 86_400_000), "day"] as const);
+  const time = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(-amount, unit);
+  return <span>{gt("Checked {time}", { time })}</span>;
 }
 
 function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
@@ -582,8 +586,10 @@ export function EnvironmentProviderSettings({
   readonly projectIds?: readonly ProjectId[];
   readonly readOnly?: boolean;
 }) {
+  const gt = useGT();
   const settings = useEnvironmentSettings(environmentId);
   const threadShells = useThreadShells();
+  const setting = useTranslatedSearchableSetting();
   const { environments: routeEnvironments } = useEnvironments();
   const routeEnvironment = routeEnvironments.find((entry) => entry.environmentId === environmentId);
   const canOpenHomeDashboard =
@@ -1133,10 +1139,10 @@ export function EnvironmentProviderSettings({
                     onClick={() => void refreshProviders()}
                   >
                     <RefreshIcon refreshing={isRefreshingProviders} />
-                    <span className="sr-only">Refresh provider status</span>
+                    <span className="sr-only">{gt("Refresh provider status")}</span>
                     <span className="hidden min-w-0 truncate sm:inline">
                       {isRefreshingProviders ? (
-                        "Refreshing providers"
+                        gt("Refreshing providers")
                       ) : (
                         <ProviderLastChecked environmentId={environmentId} />
                       )}
@@ -1144,7 +1150,7 @@ export function EnvironmentProviderSettings({
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+              <TooltipPopup side="top">{gt("Refresh provider status")}</TooltipPopup>
             </Tooltip>
           </div>
         }
@@ -1217,20 +1223,22 @@ export function EnvironmentProviderSettings({
         readOnly={readOnly}
       />
 
-      <SettingsSection title="Advanced">
+      <SettingsSection title={gt("Advanced")}>
         <SettingsRow
           id={searchableSetting("provider-health-check-interval").id}
           title={
             <span className="inline-flex items-center gap-1.5">
-              {searchableSetting("provider-health-check-interval").title}
+              {setting("provider-health-check-interval").title}
               <PolicyTooltip>
-                This interval is configured here, then the shared Background activity policy decides
-                whether provider probes may run when the timer fires. Custom intervals appear as
-                Advanced in General settings.
+                {gt(
+                  "This interval is configured here, then the shared Background activity policy decides whether provider probes may run when the timer fires. Custom intervals appear as Advanced in General settings.",
+                )}
               </PolicyTooltip>
             </span>
           }
-          description="Refresh provider status, versions, and models in the background. Set to 0 to disable."
+          description={gt(
+            "Refresh provider status, versions, and models in the background. Set to 0 to disable.",
+          )}
           resetAction={
             providerHealthRefreshIntervalSeconds !== defaultProviderHealthRefreshIntervalSeconds ? (
               <span
@@ -1238,7 +1246,7 @@ export function EnvironmentProviderSettings({
                 className={!canWriteSettings ? "opacity-50" : undefined}
               >
                 <SettingResetButton
-                  label="provider health check interval"
+                  label={setting("provider-health-check-interval").title}
                   onClick={() =>
                     updateSettings(
                       backgroundActivityOverrideSettings(
@@ -1262,7 +1270,7 @@ export function EnvironmentProviderSettings({
               )}
             >
               <IntervalSecondsField
-                label="provider health check interval"
+                label={gt("Provider health check interval")}
                 value={providerHealthRefreshIntervalSeconds}
                 min={0}
                 step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
@@ -1277,7 +1285,7 @@ export function EnvironmentProviderSettings({
                   )
                 }
               />
-              <span className="text-xs text-muted-foreground">seconds</span>
+              <span className="text-xs text-muted-foreground">{gt("seconds")}</span>
             </div>
           }
         />
