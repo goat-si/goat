@@ -10,6 +10,7 @@ import {
 } from "./providerSessionEventSubscription.ts";
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
 import { makeLostBackgroundWorkWriter, makeReleasedWorkNote } from "./providerSessionLostWork.ts";
+import { makeIdleTimeout } from "./providerSessionIdleTimeout.ts";
 import {
   makeReleasedBackgroundWork,
   type ReleasedProviderThread,
@@ -117,7 +118,6 @@ export type {
   ProviderSessionManagerV2Shape,
   ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
-const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
@@ -331,7 +331,7 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
-      const idleTimeoutMs = Math.max(1, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
+      const idleTimeoutFor = makeIdleTimeout(options.idleTimeoutMs);
       const maxIdlePinMs = Math.max(0, options.maxIdlePinMs ?? DEFAULT_MAX_IDLE_PIN_MS);
       interface PreparedMcpCredential {
         readonly mcpCredentialId: string | undefined;
@@ -1285,7 +1285,9 @@ export const layerWithOptions = (
               );
               // Recheck on this fiber; scheduleIdleReleaseInternal would interrupt it and self-deadlock.
               yield* Effect.sleep(
-                Duration.millis(entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs),
+                Duration.millis(
+                  entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutFor(entry.runtime),
+                ),
               );
               return yield* releaseIfStillIdle(input);
             }
@@ -1357,7 +1359,7 @@ export const layerWithOptions = (
 
         yield* cancelIdleFiber(entry.idleFiber);
         const generation = entry.idleGeneration + 1;
-        const delay = entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs;
+        const delay = entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutFor(entry.runtime);
         const idleFiber = yield* Effect.sleep(Duration.millis(delay)).pipe(
           Effect.andThen(releaseIfStillIdle({ providerSessionId, generation })),
           Effect.forkIn(layerScope),
@@ -1751,7 +1753,7 @@ export const layerWithOptions = (
           const pending = entry.idleThreadUnloads.get(providerThreadId);
           if (pending === undefined) return;
           const generation = pending.generation + 1;
-          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutFor(entry.runtime))).pipe(
             Effect.andThen(
               unloadIdleThread({
                 providerSessionId,
@@ -1840,10 +1842,11 @@ export const layerWithOptions = (
                   : yield* entry.runtime
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
-              if (hasPendingWork) return "deferred" as const;
+              if (hasPendingWork) return { retryAfterMs: idleTimeoutFor(entry.runtime) };
               const child = yield* delegatedChildArchive(input.threadId);
               // Unloading now would miss the archive once the parent takes the result.
-              if (child === "awaiting_delivery") return "deferred" as const;
+              if (child === "awaiting_delivery")
+                return { retryAfterMs: idleTimeoutFor(entry.runtime) };
               const archive = child === "ready";
               if (input.archiveOnly === true && !archive) return "skipped" as const;
               // null when skipped, otherwise whether this native thread is the app thread's loaded one.
@@ -1881,8 +1884,8 @@ export const layerWithOptions = (
             }),
           );
           // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred" && input.archiveOnly !== true) {
-            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
+          if (typeof outcome === "object" && input.archiveOnly !== true) {
+            yield* Effect.sleep(Duration.millis(outcome.retryAfterMs));
             return yield* unloadIdleThread(input);
           }
         },

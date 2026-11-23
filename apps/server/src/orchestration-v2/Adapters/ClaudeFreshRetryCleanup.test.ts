@@ -55,6 +55,9 @@ it.effect.each([true, false])(
               tracks++,
               {
                 refresh: Effect.void,
+                work: () => {},
+                settle: Effect.void,
+                follow: () => Effect.void,
                 stop: Deferred.succeed(stopping, undefined).pipe(
                   Effect.andThen(Deferred.await(gate)),
                 ),

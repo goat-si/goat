@@ -524,6 +524,7 @@ export const layerQueryRunner: Layer.Layer<
       };
       let refreshDescendants: Effect.Effect<void> = Effect.void;
       let awaitDescendants: Effect.Effect<void> = Effect.void;
+      let descendantTracker: ReturnType<typeof descendants.track> | undefined;
       const spawnProcess =
         options.spawnClaudeCodeProcess ??
         ((spawnOptions: ClaudeSpawnOptions) => {
@@ -544,6 +545,7 @@ export const layerQueryRunner: Layer.Layer<
                 runFork(tracker.stop.pipe(Effect.ensuring(Deferred.succeed(stopped, undefined)))),
               );
               refreshDescendants = tracker.refresh;
+              descendantTracker = tracker;
               awaitDescendants = Deferred.await(stopped);
             }
             return child;
@@ -712,6 +714,7 @@ export const layerQueryRunner: Layer.Layer<
               stderrTail = "";
             }),
           ),
+          Stream.tap((message) => descendantTracker?.follow(message) ?? Effect.void),
           Stream.tap((message) =>
             logProtocolEvent({
               direction: "incoming",
@@ -723,6 +726,7 @@ export const layerQueryRunner: Layer.Layer<
         offer: (message, onQueued) =>
           Effect.uninterruptibleMask((restore) =>
             restore(Queue.offer(promptQueue, message)).pipe(
+              Effect.tap(() => descendantTracker?.follow(message) ?? Effect.void),
               Effect.tap(() => Effect.sync(() => onQueued?.())),
             ),
           ).pipe(

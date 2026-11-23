@@ -244,7 +244,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 export function layerTest(input: {
   readonly normalizeCodexLoad?: boolean;
   readonly state: Ref.Ref<TestProviderRuntimeState>;
-  readonly idleTimeoutMs: number;
+  readonly idleTimeoutMs?: number;
   readonly adapterRegistryLayer?: Layer.Layer<
     ProviderAdapterRegistry.ProviderAdapterRegistryV2,
     never,
@@ -402,7 +402,7 @@ export function layerTest(input: {
     layerConfiguredMcpRegistry,
     McpProviderSessions.layer,
     ProviderSessionManager.layerWithOptions({
-      idleTimeoutMs: input.idleTimeoutMs,
+      ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
       ...(input.beforeIdleFiberInterrupt === undefined
         ? {}

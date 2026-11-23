@@ -96,6 +96,12 @@ function killClaudeDescendant(row: ClaudeProcessRow) {
 export interface ClaudeDescendantTracker {
   /** Records jobs started since the last sample; run before the CLI is told to exit. */
   readonly refresh: Effect.Effect<void>;
+  /** Samples this CLI from now until its turn settles. */
+  readonly work: () => void;
+  /** Leaves an idle CLI out of samples after one last read of its tree. */
+  readonly settle: Effect.Effect<void>;
+  /** A turn's messages keep its CLI sampled; its result waits for the turn's last tree read. */
+  readonly follow: (message: { readonly type: string }) => Effect.Effect<void>;
   /** After the CLI exited: stops what it left that is still the same process. */
   readonly stop: Effect.Effect<void>;
 }
@@ -107,7 +113,7 @@ export interface ClaudeDescendantSampler {
 /**
  * Without an agent scope, a job that left the CLI's group escapes the group kill and is
  * re-parented once the CLI exits. One sampler per server records every such CLI's tree from one
- * process table per interval, and polls only while one of those CLIs lives.
+ * process table per interval, and polls only while one of those CLIs works.
  */
 export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.make")(
   function* (input: {
@@ -149,6 +155,12 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
       }),
     );
 
+    const releasePollIfIdle = Effect.suspend(() => {
+      const idle = live.size === 0 ? polling : undefined;
+      if (idle !== undefined) polling = undefined;
+      return idle === undefined ? Effect.void : Fiber.interrupt(idle);
+    });
+
     const track = (cliPid: number): ClaudeDescendantTracker => {
       const tracked = new Map<string, ClaudeProcessRow>();
       const identity = (row: ClaudeProcessRow) => `${row.pid} ${row.started}`;
@@ -166,23 +178,38 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
         return running;
       };
       const observeRunning = (rows: ReadonlyArray<ClaudeProcessRow>) => void observe(rows, true);
-      live.add(observeRunning);
-      if (polling === undefined)
-        polling = runFork(sample.pipe(Effect.repeat(Schedule.spaced(input.interval))));
       let stopped = false;
+      const work = () => {
+        if (stopped) return;
+        live.add(observeRunning);
+        if (polling === undefined)
+          polling = runFork(sample.pipe(Effect.repeat(Schedule.spaced(input.interval))));
+      };
+      work();
+      const refresh = Effect.suspend(() =>
+        stopped
+          ? Effect.void
+          : reading.withPermits(1)(readTable.pipe(Effect.map(Option.map(observeRunning)))),
+      );
+      const settle = Effect.suspend(() => {
+        live.delete(observeRunning);
+        return releasePollIfIdle.pipe(Effect.andThen(refresh));
+      });
       return {
-        refresh: Effect.suspend(() =>
-          stopped
-            ? Effect.void
-            : reading.withPermits(1)(readTable.pipe(Effect.map(Option.map(observeRunning)))),
-        ),
+        refresh,
+        work,
+        settle,
+        follow: (message) =>
+          message.type === "result"
+            ? settle
+            : message.type === "assistant" || message.type === "user"
+              ? Effect.sync(work)
+              : Effect.void,
         stop: Effect.suspend(() => {
           if (stopped) return Effect.void;
           stopped = true;
           live.delete(observeRunning);
-          const idle = live.size === 0 ? polling : undefined;
-          if (idle !== undefined) polling = undefined;
-          return (idle === undefined ? Effect.void : Fiber.interrupt(idle)).pipe(
+          return releasePollIfIdle.pipe(
             Effect.andThen(
               reading.withPermits(1)(
                 readTable.pipe(

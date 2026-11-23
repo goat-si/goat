@@ -48,6 +48,41 @@ it.effect("samples one process table per interval however many CLIs it tracks", 
   }),
 );
 
+it.effect("samples a CLI only while it works and reads its tree once when its turn settles", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([]);
+    const { track } = yield* sampler;
+    const first = track(100);
+    const second = track(200);
+    yield* TestClock.adjust("1 second");
+    const working = state.reads;
+    yield* second.settle;
+    assert.equal(state.reads, working + 1);
+    yield* first.settle;
+    assert.equal(state.reads, working + 2);
+    yield* TestClock.adjust("10 seconds");
+    assert.equal(state.reads, working + 2);
+
+    first.work();
+    yield* TestClock.adjust("1 second");
+    assert.isAbove(state.reads, working + 2);
+  }),
+);
+
+it.effect("stops a job its settled turn left once the idle CLI exits", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A")]);
+    const tracker = (yield* sampler).track(100);
+    state.rows = [row(100, 1, "A"), row(200, 100, "B")];
+    yield* tracker.settle;
+    yield* TestClock.adjust("10 seconds");
+    // The CLI exited; its job was re-parented to launchd.
+    state.rows = [row(200, 1, "B")];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, [200]);
+  }),
+);
+
 it.effect("stops a job that left the CLI's group once the CLI has exited", () =>
   Effect.gen(function* () {
     const { state, sampler } = fakeTable([row(100, 1, "A"), row(200, 100, "B")]);
