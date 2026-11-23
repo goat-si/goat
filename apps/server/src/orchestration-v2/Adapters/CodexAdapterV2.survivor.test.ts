@@ -353,6 +353,8 @@ const runScenario = (
                   }
                   if (method === "thread/read" && mode === "guard-child")
                     return { thread: { parentThreadId: binding.nativeThreadId } };
+                  // A resume first reads the stdio MCP servers it passes the GOAT thread id to.
+                  if (method === "config/read") return { config: {}, origins: {} };
                   if (method === "thread/goal/set") {
                     if (mode !== "goal-paused")
                       return yield* CodexErrors.CodexAppServerRequestError.internalError(

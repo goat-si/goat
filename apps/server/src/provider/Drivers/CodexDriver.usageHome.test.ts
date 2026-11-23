@@ -25,6 +25,7 @@ import { CODEX_TEST_RUNTIME_POLICY } from "../../orchestration-v2/Adapters/Codex
 import {
   codexReplayPreamble,
   makeCodexReplayTranscript,
+  withThreadSetupReads,
 } from "../../orchestration-v2/Adapters/CodexReplay.testkit.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
@@ -165,7 +166,7 @@ const usageHarness = (input: {
             if (usedPercent === undefined) return yield* Effect.die("unknown session");
             yield* input.onOpen?.() ?? Effect.void;
             const transcript = usageTranscript(open.providerSessionId, usedPercent);
-            const driver = yield* CodexReplay.makeReplayDriver(transcript);
+            const driver = yield* CodexReplay.makeReplayDriver(withThreadSetupReads(transcript));
             const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
             return Context.get(context, CodexClient.CodexAppServerClient);
           }).pipe(

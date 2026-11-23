@@ -293,6 +293,18 @@ export function withThreadNames(
   return { ...transcript, entries };
 }
 
+// The requests a turn's quiet check sends before it reloads a thread.
+const QUIET_CHECK_METHODS = new Set([
+  "thread/goal/get",
+  "thread/backgroundTerminals/list",
+  "thread/loaded/list",
+  "thread/read",
+]);
+
+/**
+ * Inserts the stdio MCP config/read the adapter sends before each thread/start, thread/fork and
+ * thread/resume that carries config, and before a turn's reload; a held rejoin sends none.
+ */
 export function withThreadSetupReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
 ): CodexReplay.CodexAppServerReplayTranscript {
@@ -316,13 +328,19 @@ export function withThreadSetupReads(
         pendingRead = false;
       }
       const params = Predicate.isObject(frame.params) ? frame.params : {};
-      const next = transcript.entries
-        .slice(index + 1)
-        .find((candidate) => candidate.type === "expect_outbound");
-      const nextFrame =
-        next?.type === "expect_outbound" && Predicate.isObject(next.frame) ? next.frame : undefined;
-      const reload = frame.method === "thread/unsubscribe" && nextFrame?.method === "thread/resume";
-      const setup = ["thread/start", "thread/resume", "thread/fork"].includes(frame.method);
+      const nextFrame = outboundFrame(
+        transcript.entries
+          .slice(index + 1)
+          .find((candidate) => candidate.type === "expect_outbound"),
+      );
+      // An unload followed by a resume reads between them; a reload reads before unsubscribing.
+      const reload =
+        frame.method === "thread/unsubscribe" &&
+        nextFrame?.method === "thread/resume" &&
+        QUIET_CHECK_METHODS.has(previousMethod);
+      const setup =
+        ["thread/start", "thread/resume", "thread/fork"].includes(frame.method) &&
+        (frame.method !== "thread/resume" || "config" in params);
       if (frame.method === "config/read") pendingRead = previousMethod !== "thread/start";
       else if (setup && pendingRead) pendingRead = false;
       else if (
@@ -357,7 +375,15 @@ export function withThreadSetupReads(
       entries.push(withRequestId(entry, frame.id + offset));
       continue;
     }
-    if (entry.type === "emit_inbound" && frame.id === previousId && "error" in frame)
+    // Retried inside the same call without a new read: a closing thread's resume and an old
+    // Codex's refused threadSource.
+    if (
+      entry.type === "emit_inbound" &&
+      frame.id === previousId &&
+      Predicate.isObject(frame.error) &&
+      typeof frame.error.message === "string" &&
+      /\bis closing\b|thread.?source/iu.test(frame.error.message)
+    )
       failed = previousMethod;
     const mapped = ids.get(frame.id);
     entries.push(
