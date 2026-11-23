@@ -8,6 +8,27 @@ import { I18nProvider } from "../../i18n/I18nProvider";
 import { startI18n } from "../../i18n/runtime";
 import { MemoryRecordsError, MemorySearchControls } from "./MemorySearchControls";
 
+it("translates memory list and search errors and retries both", async () => {
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, language: "es" });
+  startI18n();
+  const retry = vi.fn();
+  await using screen = await render(
+    <I18nProvider>
+      <MemoryRecordsError searching={false} error="List error" onRetry={retry} />
+      <MemoryRecordsError searching error="Search error" onRetry={retry} />
+    </I18nProvider>,
+  );
+  try {
+    await expect.element(screen.getByText("No se pudo cargar la memoria").nth(0)).toBeVisible();
+    await expect.element(screen.getByText("No se pudo cargar la memoria").nth(1)).toBeVisible();
+    await screen.getByRole("button", { name: "Reintentar" }).nth(0).click();
+    await screen.getByRole("button", { name: "Reintentar" }).nth(1).click();
+    expect(retry).toHaveBeenCalledTimes(2);
+  } finally {
+    await persistClientSettingsPatch({ language: "en" }, async () => {});
+  }
+});
+
 it("translates memory search controls without changing a typed query or remote error", async () => {
   __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, language: "en" });
   startI18n();

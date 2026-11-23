@@ -51,7 +51,6 @@ export function MemorySearchControls({
 }
 
 export function MemoryRecordsError({
-  searching,
   error,
   onRetry,
 }: {
@@ -62,11 +61,11 @@ export function MemoryRecordsError({
   const gt = useGT();
   return (
     <SettingsRow
-      title={searching ? gt("Could not load memories") : "Could not load memories"}
+      title={gt("Could not load memories")}
       description={<span role="alert">{error}</span>}
       control={
         <Button size="sm" variant="outline" onClick={onRetry}>
-          {searching ? gt("Retry") : "Retry"}
+          {gt("Retry")}
         </Button>
       }
     />
