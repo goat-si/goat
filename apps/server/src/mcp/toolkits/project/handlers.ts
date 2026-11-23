@@ -1,4 +1,5 @@
-import { OrchestratorMcpFailure, ProjectId } from "@goat/contracts";
+import { OrchestratorMcpFailure, ProjectId, type Project as ProjectRecord } from "@goat/contracts";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -6,6 +7,7 @@ import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import { mutateProjectWithClone } from "../../../project/ProjectMutation.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Project from "../../../project/ProjectService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -33,6 +35,23 @@ function projectFailure(error: Project.ProjectServiceError) {
 const access = Effect.gen(function* () {
   yield* readCaller();
   return yield* Project.ProjectService;
+});
+
+const withSavedDefaultModel = Effect.gen(function* () {
+  const settings = yield* ServerSettings.ServerSettingsService.pipe(
+    Effect.flatMap((service) => service.getSettings),
+    Effect.mapError(unavailable),
+  );
+  return (project: ProjectRecord) => {
+    const resolved = resolveProjectSettings(settings, project.id, project);
+    return {
+      ...project,
+      defaultModelSelection:
+        resolved.sources.defaultModelSelection === "project"
+          ? resolved.settings.defaultModelSelection
+          : null,
+    };
+  };
 });
 
 /** Whether a project read goes to another machine. */
@@ -109,7 +128,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       const rows = snapshot.projects.filter((project) => project.deletedAt === null);
       const start = input.cursor ?? 0,
         end = start + (input.limit ?? 20);
-      return { projects: rows.slice(start, end), nextCursor: end < rows.length ? end : null };
+      return {
+        projects: rows.slice(start, end).map(yield* withSavedDefaultModel),
+        nextCursor: end < rows.length ? end : null,
+      };
     }),
   ),
   goat_project_read: McpToolAccess.readsOrReachesHost(reachesHost, ({ host, ...input }) =>
@@ -123,7 +145,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           code: "invalid_request",
           message: "The project was not found.",
         });
-      return result.value;
+      return (yield* withSavedDefaultModel)(result.value);
     }),
   ),
   goat_project_create: McpToolAccess.destructive(
@@ -177,9 +199,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     McpToolAccess.writesEnvironment((input) =>
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
-        return yield* projects
+        const updated = yield* projects
           .update({ ...input, commandId: yield* newCommandId() })
           .pipe(Effect.mapError(projectFailure));
+        return (yield* withSavedDefaultModel)(updated);
       }),
     ),
   ),
