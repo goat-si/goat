@@ -226,3 +226,16 @@ export function acpCanSwitchModelInSession(
 ): boolean {
   return findModelConfigOption(configOptions) !== undefined || models != null;
 }
+
+export const readAcpCapabilities = Effect.fn("AcpAdapter.readCapabilities")(function* (
+  flavor: Pick<
+    import("./adapterFlavor.ts").AcpAdapterV2Flavor,
+    "supportsNativeGoals" | "capabilities"
+  >,
+) {
+  if (flavor.supportsNativeGoals === undefined) return flavor.capabilities;
+  return {
+    ...flavor.capabilities,
+    turns: { ...flavor.capabilities.turns, supportsNativeGoals: yield* flavor.supportsNativeGoals },
+  };
+});

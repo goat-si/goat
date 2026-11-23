@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Tests exercise the CLI file-descriptor reader.
 import { describe, expect, it } from "@effect/vitest";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";

@@ -1,6 +1,9 @@
+import { AcpModelSelectionError } from "./adapterErrors.ts";
+import { prepareAcpAppContext, observeLateAcpCompaction } from "./acpAppContextEffect.ts";
+import { createAcpAppContext } from "./acpAppContext.ts";
 import { makeAcpMcpContextReader } from "./mcpCallLauncher.ts";
 import { readAgentModes, makeAgentModeReporter } from "./agentModeChanges.ts";
-import { acpCanSwitchModelInSession } from "./capabilities.ts";
+import { acpCanSwitchModelInSession, readAcpCapabilities } from "./capabilities.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
   acpSupportsImagePrompts,
@@ -124,7 +127,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -234,20 +236,9 @@ const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
 const ACP_SUBAGENT_TEXT_FLUSH_INTERVAL: Duration.Input = "400 millis";
 // Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
-class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>()(
-  "AcpModelSelectionError",
-  {
-    model: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `The agent did not accept the model "${this.model}". Choose another model for this provider, then retry.`;
-  }
-}
-
 import {
   MAX_RESUMABLE_TEXT_SEGMENTS,
+  acpSubagentHasPendingBackgroundWork,
   type ActiveTextSegment,
   type ActiveTextStream,
   type ActiveAcpTurn,
@@ -259,12 +250,6 @@ import {
   type PendingRuntimeRequest,
 } from "./activeTurn.ts";
 export { MAX_RESUMABLE_TEXT_SEGMENTS, type ActiveAcpTurn } from "./activeTurn.ts";
-
-function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
-  return (
-    acpSubagentStatusBlocksTurnSettlement(subagent.task.status) || !subagent.terminalStatusProjected
-  );
-}
 
 /** How long a Stop waits for the agent to confirm before the user is offered Force stop. */
 const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
@@ -286,16 +271,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const driver = flavor.driver;
   const continuationRequests = options.continuationRequests;
 
-  const readCapabilities = Effect.gen(function* () {
-    if (flavor.supportsNativeGoals === undefined) return flavor.capabilities;
-    return {
-      ...flavor.capabilities,
-      turns: {
-        ...flavor.capabilities.turns,
-        supportsNativeGoals: yield* flavor.supportsNativeGoals,
-      },
-    };
-  });
+  const readCapabilities = readAcpCapabilities(flavor);
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
@@ -583,6 +559,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         });
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
+        const appContextDelivery = createAcpAppContext();
         const advertisedCommandsBySession = yield* SubscriptionRef.make(AdvertisedCommands.empty);
         const compactsContext =
           flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
@@ -2835,6 +2812,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 : { beforeTokenCount: context.contextUsage.usedTokens }),
             };
             if (status === "completed") {
+              appContextDelivery.invalidate(context.nativeThreadId);
               context.contextUsage = null;
               yield* Ref.update(contextUsageBySessionId, (current) => {
                 const updated = new Map(current);
@@ -3805,6 +3783,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
           if (isReplayedAcpNotice(notification)) return;
+          yield* observeLateAcpCompaction(
+            appContextDelivery,
+            compactionMarkers,
+            activeSessionId,
+            notification,
+            context,
+          );
           if (
             followsAgentWorkState &&
             flavor.extractSubagentSessionEvent !== undefined &&
@@ -6020,6 +6005,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* Ref.set(activeInteractionMode, null);
             yield* Ref.set(promptInstructionStates, new Map());
             yield* Ref.set(compactionMarkers, new Map());
+            appContextDelivery.clear();
             yield* Ref.set(snapshot, emptySnapshotState());
             yield* continuationPermit.withPermit(
               Effect.gen(function* () {
@@ -6566,6 +6552,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const settledStatus = context.interrupted ? "interrupted" : status;
           context.finalizedStatus = settledStatus;
           context.finalized = true;
+          if (settledStatus === "completed") context.appContextCommit?.();
+          context.appContextCommit = undefined;
           const watchdog = context.inactivityWatchdog;
           context.inactivityWatchdog = undefined;
           if (watchdog !== undefined) {
@@ -6617,6 +6605,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               updated.delete(context.nativeThreadId);
               return updated;
             });
+            appContextDelivery.invalidate(context.nativeThreadId);
             const nativeItemId = `${context.nativeTurnId}:compaction`;
             yield* Ref.update(compactionMarkers, (current) => {
               const updated = new Map(current);
@@ -6991,6 +6980,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               detail: "ACP turn requires non-empty text or attachments",
             });
           }
+          const appContext = yield* prepareAcpAppContext(
+            appContextDelivery,
+            sessionId,
+            userText,
+            turnInput.appContext,
+            driver,
+          );
+          prompt.unshift(...appContext.blocks);
           if (!isNativeSlashCommand) {
             prompt.push({
               type: "text",
@@ -7008,6 +7005,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             prompt,
             instructionState: text === messageText ? undefined : instructionState,
             compactionMarker,
+            appContextCommit: appContext.commit,
           };
         });
 
@@ -7022,6 +7020,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* Ref.set(activeSessionSetup, null);
           yield* Ref.set(activeSelection, null);
           yield* Ref.set(activeInteractionMode, null);
+          appContextDelivery.clear();
           yield* Ref.set(snapshot, emptySnapshotState());
           return true;
         });
@@ -7189,6 +7188,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const {
               memoryContext: _memoryContext,
               refreshMemoryContext: _refreshMemoryContext,
+              appContext: _appContext,
               ...turnOwner
             } = turnInput;
             const context: ActiveAcpTurn = {
@@ -7199,6 +7199,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               startedAt,
               completed,
               itemOrdinals: new Map(),
+              appContextCommit: promptParts?.appContextCommit,
               outgoingPrompt:
                 (yield* Ref.get(activeSessionSetup))?.initializeResult.protocolVersion === 2
                   ? promptParts?.prompt

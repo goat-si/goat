@@ -9,6 +9,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
+import * as Fiber from "effect/Fiber";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -19,7 +21,11 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@goat/provider-acp/server/adapter";
+import {
+  AcpProviderCapabilitiesV2,
+  acpScopedNativeId,
+  makeAcpAdapterV2,
+} from "@goat/provider-acp/server/adapter";
 import { normalizeXAiAcpToolCallState } from "@goat/provider-grok/testing";
 import { layerTest, ACP_TEST_DRIVER } from "./AcpAdapterV2.host.testkit.ts";
 
@@ -147,7 +153,7 @@ describe("late ACP session load", () => {
                   if (acpRuntime === undefined) return Effect.die("ACP runtime was not created");
                   return acpRuntime
                     .request("_test/release-load", {})
-                    .pipe(Effect.andThen(Deferred.await(adoptionHandled)));
+                    .pipe(Effect.orDie, Effect.andThen(Deferred.await(adoptionHandled)));
                 })
               : Effect.void
             ).pipe(
@@ -273,6 +279,7 @@ describe("late ACP session load", () => {
                     return runtime
                       .request("_test/release-load", {})
                       .pipe(
+                        Effect.orDie,
                         Effect.andThen(Deferred.await(adoptionHandled)),
                         Effect.andThen(runtime.getModeState),
                       );
@@ -533,5 +540,291 @@ describe("late ACP session load", () => {
         ["old reply from history"],
       );
     }).pipe(Effect.provide(layerTest)),
+  );
+  it.live(
+    "delivers MCP appContext once per session, skips slash commands, and resends after unsuccessful turns, compaction, or runtime restart",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* bundledMockAgentPath;
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        let runtimeCount = 0;
+        let cancelCalled: Deferred.Deferred<void> | undefined;
+        const prompts: Array<string> = [];
+        const queuedResponses: Array<
+          | { readonly _tag: "immediate"; readonly response: EffectAcpSchema.PromptResponse }
+          | {
+              readonly _tag: "gated";
+              readonly started: Deferred.Deferred<void>;
+              readonly gate: Deferred.Deferred<EffectAcpSchema.PromptResponse>;
+            }
+        > = [];
+        const instanceId = ProviderInstanceId.make("acp-test-app-context-lifecycle");
+        const threadId = ThreadId.make("thread-acp-app-context-lifecycle");
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            restartRuntimeAfterInterrupt: true,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              wrapRuntime: (runtime) => {
+                runtimeCount += 1;
+                return {
+                  ...runtime,
+                  handleSessionUpdate: (handler) =>
+                    Effect.sync(() => {
+                      sessionUpdateHandler = handler;
+                    }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                  cancel: Effect.suspend(() =>
+                    cancelCalled === undefined
+                      ? Effect.void
+                      : Deferred.succeed(cancelCalled, undefined).pipe(Effect.asVoid),
+                  ),
+                  prompt: (payload, promptOptions) =>
+                    Effect.gen(function* () {
+                      prompts.push(
+                        payload.prompt
+                          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+                          .join("\n"),
+                      );
+                      if (promptOptions?.dispatched) {
+                        yield* Deferred.succeed(promptOptions.dispatched, undefined);
+                      }
+                      const next = queuedResponses.shift();
+                      if (next === undefined) {
+                        return { stopReason: "end_turn" as const };
+                      }
+                      if (next._tag === "immediate") {
+                        return next.response;
+                      }
+                      yield* Deferred.succeed(next.started, undefined);
+                      return yield* Deferred.await(next.gate);
+                    }),
+                };
+              },
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-app-context-lifecycle"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const sessionId = providerThread.nativeThreadRef?.nativeId;
+        if (sessionId == null) return assert.fail("expected native session id");
+        let ordinal = 0;
+        const runTurn = (input: {
+          readonly text: string;
+          readonly note: string;
+          readonly response?: EffectAcpSchema.PromptResponse;
+        }) =>
+          Effect.gen(function* () {
+            ordinal += 1;
+            if (input.response !== undefined) {
+              queuedResponses.push({ _tag: "immediate", response: input.response });
+            }
+            yield* runtime.startTurn({
+              ...makeTurnInput({
+                threadId,
+                providerThread,
+                instanceId,
+                runtimePolicy,
+                now: yield* DateTime.now,
+                ordinal,
+                messageText: input.text,
+              }),
+              appContext: [{ key: "mcp_app_item-1", text: input.note }],
+            });
+            const events = Array.from(
+              yield* runtime.events.pipe(
+                Stream.takeUntil((event) => event.type === "turn.terminal"),
+                Stream.runCollect,
+              ),
+            );
+            const terminal = events.at(-1);
+            return {
+              prompt: prompts.at(-1) ?? "",
+              status: terminal?.type === "turn.terminal" ? terminal.status : null,
+            };
+          });
+
+        const tag = (note: string) => `<external_mcp_app_item-1>${note}</external_mcp_app_item-1>`;
+
+        // An unsuccessful stop reason must not mark appContext delivered.
+        const refusedTurn = yield* runTurn({
+          text: "Refused attempt",
+          note: "Created Jira issue PROJ-42",
+          response: { stopReason: "refusal" },
+        });
+        assert.include(refusedTurn.prompt, tag("Created Jira issue PROJ-42"));
+
+        // Interrupted turns must not mark appContext delivered even if the prompt answers end_turn.
+        const interruptedStarted = yield* Deferred.make<void>();
+        const interruptedGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        cancelCalled = yield* Deferred.make<void>();
+        queuedResponses.push({
+          _tag: "gated",
+          started: interruptedStarted,
+          gate: interruptedGate,
+        });
+        ordinal += 1;
+        const interruptedOrdinal = ordinal;
+        yield* runtime.startTurn({
+          ...makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: interruptedOrdinal,
+            messageText: "Interrupted attempt",
+          }),
+          appContext: [{ key: "mcp_app_item-1", text: "Created Jira issue PROJ-42" }],
+        });
+        yield* Deferred.await(interruptedStarted);
+        assert.include(prompts.at(-1) ?? "", tag("Created Jira issue PROJ-42"));
+        const interruptFiber = yield* runtime
+          .interruptTurn({
+            providerThread,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: ACP_TEST_DRIVER,
+              nativeTurnId: acpScopedNativeId(
+                instanceId,
+                `${sessionId}:turn:${interruptedOrdinal}`,
+              ),
+            }),
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(cancelCalled);
+        yield* Deferred.succeed(interruptedGate, { stopReason: "end_turn" });
+        yield* Fiber.join(interruptFiber);
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+
+        // Native slash commands skip appContext injection; the next normal turn sends it.
+        const slashTurn = yield* runTurn({
+          text: "  /repro-skill",
+          note: "Created Jira issue PROJ-42",
+        });
+        assert.equal(slashTurn.status, "completed");
+        assert.notInclude(slashTurn.prompt, "external_mcp_app_item-1");
+
+        const deliveredTurn = yield* runTurn({
+          text: "What did the app report?",
+          note: "Created Jira issue PROJ-42",
+        });
+        assert.equal(deliveredTurn.status, "completed");
+        assert.include(deliveredTurn.prompt, tag("Created Jira issue PROJ-42"));
+
+        // Unchanged note is not resent; changed note is sent once.
+        const unchangedTurn = yield* runTurn({
+          text: "Follow up",
+          note: "Created Jira issue PROJ-42",
+        });
+        assert.notInclude(unchangedTurn.prompt, "external_mcp_app_item-1");
+
+        const changedTurn = yield* runTurn({
+          text: "Updated check",
+          note: "Updated Jira issue PROJ-43",
+        });
+        assert.include(changedTurn.prompt, tag("Updated Jira issue PROJ-43"));
+
+        const afterChangeTurn = yield* runTurn({
+          text: "Second follow up",
+          note: "Updated Jira issue PROJ-43",
+        });
+        assert.notInclude(afterChangeTurn.prompt, "external_mcp_app_item-1");
+
+        // Compaction clears delivered appContext so the next turn resends it.
+        yield* sessionUpdateHandler!({
+          sessionId,
+          update: {
+            sessionUpdate: "compaction_update",
+            compactionId: "compact-app-context",
+            status: "completed",
+          },
+        });
+        const postCompactTurn = yield* runTurn({
+          text: "After compaction",
+          note: "Updated Jira issue PROJ-43",
+        });
+        assert.include(postCompactTurn.prompt, tag("Updated Jira issue PROJ-43"));
+
+        const afterPostCompactTurn = yield* runTurn({
+          text: "Already resent after compaction",
+          note: "Updated Jira issue PROJ-43",
+        });
+        assert.notInclude(afterPostCompactTurn.prompt, "external_mcp_app_item-1");
+
+        // Runtime restart clears delivered appContext even when resuming the same session id.
+        const restartStarted = yield* Deferred.make<void>();
+        const restartGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        cancelCalled = yield* Deferred.make<void>();
+        queuedResponses.push({
+          _tag: "gated",
+          started: restartStarted,
+          gate: restartGate,
+        });
+        ordinal += 1;
+        const restartOrdinal = ordinal;
+        yield* runtime.startTurn({
+          ...makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: restartOrdinal,
+            messageText: "Trigger restart",
+          }),
+          appContext: [{ key: "mcp_app_item-1", text: "Updated Jira issue PROJ-43" }],
+        });
+        yield* Deferred.await(restartStarted);
+        const restartInterruptFiber = yield* runtime
+          .interruptTurn({
+            providerThread,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: ACP_TEST_DRIVER,
+              nativeTurnId: acpScopedNativeId(instanceId, `${sessionId}:turn:${restartOrdinal}`),
+            }),
+            requestRuntimeRestart: true,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(cancelCalled);
+        yield* Deferred.succeed(restartGate, { stopReason: "cancelled" });
+        yield* Fiber.join(restartInterruptFiber);
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+
+        const postRestartTurn = yield* runTurn({
+          text: "After runtime restart",
+          note: "Updated Jira issue PROJ-43",
+        });
+        assert.isAbove(runtimeCount, 1);
+        assert.include(postRestartTurn.prompt, tag("Updated Jira issue PROJ-43"));
+      }).pipe(Effect.provide(layerTest)),
   );
 });
