@@ -150,7 +150,14 @@ vi.mock("./sdk.ts", () => ({
         list: vi.fn(async () => []),
       },
     },
-    createAgentPlatform: vi.fn(),
+    CursorAgentPlatform: class {
+      createAgent = cursorSdkMock.create;
+      resumeAgent = cursorSdkMock.resume;
+      listRuns = cursorSdkMock.listRuns;
+      cancelRun = cursorSdkMock.cancelRun;
+      getAgentMessages = vi.fn(async () => []);
+    },
+    createAgentPlatform: vi.fn(async () => ({})),
   }),
   loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
 }));
@@ -295,20 +302,14 @@ describe("CursorAgentSdkRunner", () => {
       ]);
       assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[0], [
         "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd() },
+        {},
       ]);
       assert.strictEqual(cursorSdkMock.listRuns.mock.calls.length, 2);
       assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[1], [
         "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd(), cursor: "50" },
+        { cursor: "50" },
       ]);
-      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], [
-        "run-stale",
-        {
-          runtime: "local",
-          cwd: process.cwd(),
-        },
-      ]);
+      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], ["run-stale"]);
     }).pipe(Effect.provide(layerTest)),
   );
 
