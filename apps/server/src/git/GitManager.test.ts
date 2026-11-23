@@ -1933,11 +1933,31 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("status avoids remote lookups without remotes and notices a later remote", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const gitCommands: string[] = [];
+      const { manager } = yield* makeManager({ gitCommands });
+      expect((yield* manager.localStatus({ cwd: repoDir })).hasPrimaryRemote).toBe(false);
+      expect((yield* manager.remoteStatus({ cwd: repoDir }))?.pr ?? null).toBeNull();
+      expect(
+        gitCommands.filter((args) =>
+          /remote get-url|remote\.[^ ]+\.url|branch\.[^ ]+\.remote|refs\/remotes/.test(args),
+        ),
+      ).toEqual([]);
+      yield* runGit(repoDir, ["remote", "add", "origin", "https://github.com/example/repo.git"]);
+      yield* TestClock.adjust("2 seconds");
+      expect((yield* manager.localStatus({ cwd: repoDir })).hasPrimaryRemote).toBe(true);
+    }),
+  );
+
   it.effect("status prefers open PR when merged PR has newer updatedAt", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       yield* runGit(repoDir, ["checkout", "-b", "feature/status-open-over-merged"]);
+      yield* runGit(repoDir, ["remote", "add", "origin", "https://github.com/example/repo.git"]);
 
       const { manager } = yield* makeManager({
         providerScenario: {

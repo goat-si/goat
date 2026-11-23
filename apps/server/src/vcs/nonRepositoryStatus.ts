@@ -16,6 +16,7 @@ export const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatu
 export const NON_REPOSITORY_REMOTE_STATUS_DETAILS =
   Object.freeze<GitVcsDriver.GitRemoteStatusDetails>({
     isRepo: false,
+    hasPrimaryRemote: false,
     defaultBranch: null,
     isDefaultBranch: false,
     branch: null,

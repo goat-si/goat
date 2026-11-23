@@ -4,6 +4,7 @@ import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
+import { refuseOptionLikeRefName } from "./refuseOptionLikeRefName.ts";
 import { parseUpstreamRefWithRemoteNames } from "./parseUpstreamRemote.ts";
 import { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
 export { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
@@ -216,20 +217,6 @@ interface ExecuteGitOptions {
   writesSharedConfig?: boolean | undefined;
   retryConfigLock?: boolean | undefined;
 }
-
-// Checkout/worktree add parse leading dashes as options; pre-2.44 Git cannot guard with --end-of-options.
-// A lone - still means previous checkout.
-const refuseOptionLikeRefName = (operation: string, cwd: string, refName: string | undefined) =>
-  refName !== undefined && refName !== "-" && refName.startsWith("-")
-    ? Effect.fail(
-        new GitCommandError({
-          operation,
-          command: "git",
-          cwd,
-          detail: "Ref names cannot start with '-'.",
-        }),
-      )
-    : Effect.void;
 
 /** Windows Git needs core.longpaths beyond MAX_PATH (260); OS LongPathsEnabled alone is insufficient. */
 export const windowsLongPathConfigEnv = (
@@ -930,7 +917,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     {
       capacity: 2_048,
       timeToLive: Exit.match({
-        onSuccess: () => STATUS_ORIGIN_EXISTS_CACHE_TTL,
+        onSuccess: (exists) => (exists ? STATUS_ORIGIN_EXISTS_CACHE_TTL : Duration.zero),
         onFailure: () => Duration.zero,
       }),
     },
@@ -1076,8 +1063,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map(parseRemoteNamesInGitOrder),
     );
 
+  const hasAnyRemote = (cwd: string) =>
+    resolveRepositoryPaths(cwd).pipe(
+      Effect.orElseSucceed(() => null),
+      Effect.flatMap((paths) =>
+        paths === null
+          ? listRemoteNames(cwd).pipe(Effect.map((names) => names.length > 0))
+          : Cache.get(primaryRemoteExistsCache, paths.gitCommonDir),
+      ),
+    );
   const resolvePublishBranchName = makeResolvePublishBranchName(listRemoteNames);
   const findPrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
+    if (!(yield* hasAnyRemote(cwd))) return null;
     if (yield* originRemoteExists(cwd)) {
       return "origin";
     }
@@ -1457,7 +1454,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     }
 
-    const defaultBranch = yield* resolvePrimaryDefaultBranch(cwd, [], executeGit);
+    const hasPrimaryRemote = yield* hasAnyRemote(cwd);
+    const defaultBranch = hasPrimaryRemote
+      ? yield* resolvePrimaryDefaultBranch(cwd, [], executeGit)
+      : null;
     const isDefaultBranch =
       branch !== null &&
       (branch === defaultBranch ||
@@ -1473,6 +1473,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     return {
       isRepo: true,
+      hasPrimaryRemote,
       defaultBranch,
       isDefaultBranch,
       branch,
@@ -1551,7 +1552,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         { allowNonZeroExit: true, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
       );
     // diff-index does not read status output, so both spawn together; a non-repository discards it.
-    const [statusResult, numstatResult, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
+    const [statusResult, numstatResult, [hasPrimaryRemote, defaultBranch]] = yield* Effect.all(
       [
         readStatus,
         readNumstat("HEAD").pipe(
@@ -1577,17 +1578,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           }),
           Effect.result,
         ),
-        statusCacheKey
-          ? Cache.get(defaultBranchCache, statusCacheKey).pipe(Effect.orElseSucceed(() => null))
-          : resolvePrimaryDefaultBranch(cwd, [], executeGit).pipe(Effect.orElseSucceed(() => null)),
-        statusCacheKey
-          ? Cache.get(primaryRemoteExistsCache, statusCacheKey).pipe(
-              Effect.orElseSucceed(() => false),
-            )
-          : listRemoteNames(cwd).pipe(
-              Effect.map((remoteNames) => remoteNames.length > 0),
-              Effect.orElseSucceed(() => false),
+        (statusCacheKey
+          ? Cache.get(primaryRemoteExistsCache, statusCacheKey)
+          : listRemoteNames(cwd).pipe(Effect.map((names) => names.length > 0))
+        ).pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.flatMap((hasRemote) =>
+            (hasRemote
+              ? statusCacheKey
+                ? Cache.get(defaultBranchCache, statusCacheKey)
+                : resolvePrimaryDefaultBranch(cwd, [], executeGit)
+              : Effect.succeed(null)
+            ).pipe(
+              Effect.orElseSucceed(() => null),
+              Effect.map((defaultBranch) => [hasRemote, defaultBranch] as const),
             ),
+          ),
+        ),
       ],
       { concurrency: "unbounded" },
     );
