@@ -1,6 +1,7 @@
 import { GlobalVoiceRecording } from "../speech/GlobalVoiceRecording";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
+import { GoatBotRouteDrafts } from "../components/goatBot/GoatBotRouteDrafts";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { PreviewSessionStack } from "../components/preview/sessions/PreviewSessionStack";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
@@ -19,7 +20,7 @@ function ChatRouteLayout() {
   const sessionsEnvironmentId =
     shownTarget?.kind === "server" ? shownTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
-    <>
+    <GoatBotRouteDrafts>
       <GlobalVoiceRecording />
       <PreviewSessionStack
         environmentId={sessionsEnvironmentId}
@@ -39,7 +40,7 @@ function ChatRouteLayout() {
         <Outlet />
       )}
       {modalOpen ? <Outlet /> : null}
-    </>
+    </GoatBotRouteDrafts>
   );
 }
 
