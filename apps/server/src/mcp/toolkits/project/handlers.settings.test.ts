@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Project from "../../../project/ProjectService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as HostThreads from "../../HostThreadsMcpService.ts";
 import * as ProjectHandlers from "./handlers.ts";
 import { clientLaunchHarness } from "./handlers.testkit.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -16,7 +17,13 @@ it.effect("reading a project shows the default model and actions saved in Settin
       model: "claude-sonnet",
     };
     const overrideScripts = [
-      { id: "test", name: "Test", command: "pnpm test", icon: "test", runOnWorktreeCreate: false },
+      {
+        id: "test",
+        name: "Test",
+        command: "pnpm test",
+        icon: "test" as const,
+        runOnWorktreeCreate: false,
+      },
     ];
     const harness = clientLaunchHarness({
       runtimeModeCeiling: "full-access",
@@ -24,8 +31,9 @@ it.effect("reading a project shows the default model and actions saved in Settin
       overrideScripts,
       launched: [],
     });
-    const dependencies = Layer.merge(
+    const dependencies = Layer.mergeAll(
       harness.dependencies,
+      Layer.mock(HostThreads.HostThreadsMcpService)({}),
       Layer.mock(Project.ProjectService)({
         getById: (projectId) =>
           Effect.succeedSome({

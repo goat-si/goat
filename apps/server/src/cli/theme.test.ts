@@ -13,6 +13,7 @@ import * as TestConsole from "effect/testing/TestConsole";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { vi } from "vite-plus/test";
 import { cli } from "../binCli.ts";
 
 vi.mock("node:fs", { spy: true });
