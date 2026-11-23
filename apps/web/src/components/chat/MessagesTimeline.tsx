@@ -171,6 +171,7 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   isWorking: boolean;
+  syncing?: boolean;
   runlessWorkActive?: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt?: string | null;
@@ -279,6 +280,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
   isWorking,
+  syncing = false,
   runlessWorkActive = false,
   activeTurnInProgress,
   activeTurnStartedAt = null,
@@ -1274,7 +1276,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     </TimelineRowCtx>
   );
   const listExtraData = { identity: listIdentityKey, rowCount: rows.length, sharedState };
-
   const endMaintenance =
     citationPositioning ||
     (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
@@ -1283,7 +1284,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     fullscreenAppRowId !== null ||
     disclosureToggleSettling
       ? false
-      : isWorking && !prefersReducedMotion && settlingListIdentity === null
+      : isWorking && !syncing && !prefersReducedMotion && settlingListIdentity === null
         ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
         : TIMELINE_MAINTAIN_SCROLL_AT_END;
   useTimelineEndPin({
@@ -1292,7 +1293,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     enabled: endMaintenance !== false,
     smooth: endMaintenance === TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH,
   });
-
   const forwardMinimapWheel = (event: WheelEvent) => {
     const scrollNode = listRef.current?.getScrollableNode();
     if (scrollNode) forwardWheelToTimeline(event, scrollNode);
