@@ -97,6 +97,7 @@ export * from "./pullRequestReviewGuide.ts";
 export * from "./orchestrationDispatch.ts";
 export * from "./orchestrationProject.ts";
 export * from "./orchestrationV2.ts";
+export * from "./messageSenderNote.ts";
 export * from "./threadFork.ts";
 export * from "./guestShare.ts";
 export * from "./guestStream.ts";

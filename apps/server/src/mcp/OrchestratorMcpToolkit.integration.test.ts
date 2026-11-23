@@ -74,7 +74,6 @@ import {
   makeDeterministicAdapter,
   makeProviderSnapshot,
 } from "./OrchestratorMcpToolkit.adapter.testkit.ts";
-
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
@@ -689,6 +688,8 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         },
       );
       const requestId = RuntimeRequestId.make("live-child-question");
+      const childPrompt =
+        '[GOAT: the agent in GOAT thread "question-wait-parent" sent this message, not the user.]\n\nAsk before deciding.';
       const answerValues: Array<ProviderUserInputAnswers | undefined> = [];
       const driver = ProviderDriverKind.make("codex");
       const adapter = makeDeterministicAdapter({
@@ -698,8 +699,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         capturedTurns,
         shouldComplete: () => false,
         detachedCompletion: true,
-        terminalGate: (turn) =>
-          turn.message.text === "Ask before deciding." ? answered : undefined,
+        terminalGate: (turn) => (turn.message.text === childPrompt ? answered : undefined),
         response: () => "Answered and completed.",
         onRespond: (response) =>
           Effect.gen(function* () {
@@ -708,7 +708,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
           }),
         startEvents: (turn, providerTurnId) =>
           Effect.gen(function* () {
-            if (turn.message.text !== "Ask before deciding.") return [];
+            if (turn.message.text !== childPrompt) return [];
             const now = yield* DateTime.now;
             const nodeId = NodeId.make("live-child-question-node");
             const providerSessionId = turn.providerThread.providerSessionId;

@@ -1,3 +1,4 @@
+import { withMessageSenderNote } from "@goat/contracts";
 import type {
   ChatAttachment,
   ModelSelection,
@@ -136,6 +137,8 @@ export function historicalMessage(
   let text: string;
   switch (item.type) {
     case "user_message":
+      text = withMessageSenderNote(item, item.text);
+      break;
     case "assistant_message":
       text = item.text;
       break;
