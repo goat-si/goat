@@ -9,6 +9,7 @@ import {
   type ProviderSessionEventSignal,
 } from "./providerSessionEventSubscription.ts";
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
+import { makeLostBackgroundWorkWriter, makeReleasedWorkNote } from "./providerSessionLostWork.ts";
 import {
   makeReleasedBackgroundWork,
   type ReleasedProviderThread,
@@ -954,6 +955,9 @@ export const layerWithOptions = (
         writeReleasedProcessTaskEvents,
         writeReleasedBackgroundWorkEvents,
       } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
+      const writeLostBackgroundWork = makeLostBackgroundWorkWriter(
+        makeReleasedWorkNote({ projectionStore, eventSink, idAllocator }),
+      );
 
       const writeReleaseRecords = (input: {
         readonly entry: LiveSessionEntry;
@@ -2208,6 +2212,8 @@ export const layerWithOptions = (
             if (nativeEvent.type === "command_output.delta") {
               return commandOutput.append(nativeEvent);
             }
+            if (nativeEvent.type === "background_work.lost")
+              return writeLostBackgroundWork(nativeEvent, entry.runtime);
             const tracked = retryStalls.track(nativeEvent);
             const event = tracked.event;
             const releaseLiveOutput =

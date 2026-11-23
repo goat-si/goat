@@ -1,12 +1,17 @@
 import {
   CommandId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2RestartCancelledBackgroundWork as Work,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  type ProviderSessionId,
+  type ProviderThreadId,
   type RunId,
+  type ThreadId,
 } from "@goat/contracts";
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as EventSink from "./EventSink.ts";
@@ -42,7 +47,10 @@ export const makeReleasedWorkNote = ({
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
 }) =>
   Effect.fn("ProviderSessionManager.writeReleasedWorkNote")(function* (
-    released: ReleasedProviderThread,
+    released: Pick<
+      ReleasedProviderThread,
+      "threadId" | "providerSessionId" | "providerThreadId" | "lostTasks" | "lostItems"
+    >,
   ) {
     const { threadId, providerSessionId, lostTasks, lostItems } = released;
     if (lostTasks.length === 0 && lostItems.length === 0) return;
@@ -100,3 +108,36 @@ export const makeReleasedWorkNote = ({
     }
     yield* eventSink.writeWithEffects({ events, effects });
   });
+
+/** A query process can exit under a live session, after the run's last event. */
+export const makeLostBackgroundWorkWriter =
+  <E>(
+    writeNote: (released: {
+      readonly threadId: ThreadId;
+      readonly providerSessionId: ProviderSessionId;
+      readonly providerThreadId: ProviderThreadId;
+      readonly lostTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+      readonly lostItems: Array<never>;
+    }) => Effect.Effect<void, E>,
+  ) =>
+  (
+    event: Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "background_work.lost" }>,
+    runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "driver" | "providerSessionId">,
+  ) =>
+    writeNote({
+      threadId: event.threadId,
+      providerSessionId: runtime.providerSessionId,
+      providerThreadId: event.providerThreadId,
+      lostTasks: event.tasks,
+      lostItems: [],
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapter.ProviderAdapterEventStreamError({
+            driver: runtime.driver,
+            providerSessionId: runtime.providerSessionId,
+            raisedByGoat: true,
+            cause,
+          }),
+      ),
+    );
