@@ -96,7 +96,7 @@ import {
   lateChildPrefix,
 } from "./CodexAdapterV2.replay.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
-import { GOAT_MEMORY_TOOLS, wp4Memory } from "./CodexAdapterV2.attachment.testkit.ts";
+import { GOAT_MEMORY_TOOLS } from "./CodexAdapterV2.attachment.testkit.ts";
 import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const layerAdapterTest = Layer.mergeAll(
