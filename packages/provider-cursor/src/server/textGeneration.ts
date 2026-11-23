@@ -286,42 +286,40 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         return result;
       }, Effect.scoped);
       // The SDK can check sandbox support at create or send. Retry only before it accepts a run.
-      const request = runPrompt(true).pipe(
-        Effect.catchTags({
-          CursorSandboxUnavailable: () =>
-            // The fallback still uses the empty workspace and disabled setting sources.
-            isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
+      const request = Effect.gen(function* () {
+        const promptResult = yield* runPrompt(true).pipe(
+          Effect.catchTags({
+            CursorSandboxUnavailable: () =>
+              isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
+          }),
+        );
+        const rawResult = promptResult.result?.trim() ?? "";
+        if (promptResult.status !== "finished" || !rawResult) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: cursorSdkResultDetail(promptResult),
+            ...(promptResult.error ? { cause: promptResult.error } : {}),
+          });
+        }
+        return yield* TextGenerationOperations.decodeJsonReply(input, "Cursor SDK", rawResult);
+      }).pipe(
+        Effect.retry({
+          times: 1,
+          while: (cause) =>
+            !isMemory && isTextGenerationError(cause) && Schema.isSchemaError(cause.cause),
         }),
       );
-      const promptResult = yield* request.pipe(
+      const result = yield* request.pipe(
         Effect.timeoutOption(CURSOR_TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>
               Effect.fail(
-                new TextGenerationError({
-                  operation,
-                  detail: "Cursor SDK request timed out.",
-                }),
+                new TextGenerationError({ operation, detail: "Cursor SDK request timed out." }),
               ),
             onSome: (value) => Effect.succeed(value),
           }),
         ),
-      );
-
-      const rawResult = promptResult.result?.trim() ?? "";
-      if (promptResult.status !== "finished" || !rawResult) {
-        return yield* new TextGenerationError({
-          operation,
-          detail: cursorSdkResultDetail(promptResult),
-          ...(promptResult.error ? { cause: promptResult.error } : {}),
-        });
-      }
-
-      const result = yield* TextGenerationOperations.decodeJsonReply(
-        input,
-        "Cursor SDK",
-        rawResult,
       );
       return { result, effectiveModel: selectedModel.id };
     },
