@@ -101,6 +101,7 @@ export const cleanupFixture = (
     let onLiveCheck: Effect.Effect<void> = Effect.void;
     let outboxStatus: string | null = null;
     let fullStatusCalls = 0;
+    let statusCommands = 0;
     let gitfileDiagnostic: string | null = null;
     let snapshotReads = 0;
     let checkpointReads = 0;
@@ -120,6 +121,7 @@ export const cleanupFixture = (
         ...git,
         execute: (input) =>
           Effect.gen(function* () {
+            if (input.args[0] === "status") statusCommands++;
             if (
               editBeforeRemoval &&
               (input.args.includes("remove") || input.args.includes("--porcelain"))
@@ -325,6 +327,7 @@ export const cleanupFixture = (
           },
         }) ?? Effect.void,
       fullStatusCalls: () => fullStatusCalls,
+      statusCommands: () => statusCommands,
       setGitfileDiagnostic: (diagnostic: string | null) => {
         gitfileDiagnostic = diagnostic;
       },

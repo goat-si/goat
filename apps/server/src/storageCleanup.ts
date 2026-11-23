@@ -654,8 +654,6 @@ const make = Effect.gen(function* () {
           return keep("not a linked worktree");
         if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed");
-        const changes = yield* localChangesReason(worktreePath, settings);
-        if (changes !== null && !snapshotCovers) return keep(changes);
         if (
           group.some(
             (member) =>
@@ -743,6 +741,8 @@ const make = Effect.gen(function* () {
                     ? "not merged"
                     : "has commits beyond the default branch",
           );
+        const changes = yield* localChangesReason(worktreePath, settings);
+        if (changes !== null && !snapshotCovers) return keep(changes);
         // Re-read this path's threads and sessions so new activity cancels removal; full per-worktree snapshots take seconds.
         const blockedSinceCheck = Effect.fnUntraced(function* () {
           invalidate();
