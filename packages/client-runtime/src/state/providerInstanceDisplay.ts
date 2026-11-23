@@ -46,7 +46,7 @@ export function providerInstanceInitials(label: string): string {
       .map((word) => word.replace(/^['’]+|['’]+$/gu, ""))
       .filter(Boolean);
   let words = toWords(label.replace(/[^\P{P}'’]+/gu, " "));
-  if (words.length === 1) words = toWords(words[0]!.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2"));
+  if (words.length === 1) words = toWords((words[0] ?? "").replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2"));
   if (words.length === 0) return "";
   if (words.length === 1) return Array.from(words[0]!).slice(0, 2).join("").toUpperCase();
   return words

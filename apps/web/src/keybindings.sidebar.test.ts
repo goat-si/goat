@@ -1,7 +1,19 @@
 import { assert, describe, it } from "vite-plus/test";
 import { isSidebarToggleShortcut, type ShortcutEventLike } from "./keybindings";
 
-const DEFAULT_BINDINGS = [{ command: "sidebar.toggle" as const, shortcut: { key: "b", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, modKey: true } }];
+const DEFAULT_BINDINGS = [
+  {
+    command: "sidebar.toggle" as const,
+    shortcut: {
+      key: "b",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      modKey: true,
+    },
+  },
+];
 function event(overrides: Partial<ShortcutEventLike>): ShortcutEventLike {
   return { key: "j", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...overrides };
 }
@@ -32,4 +44,3 @@ describe("isSidebarToggleShortcut", () => {
     );
   });
 });
-
