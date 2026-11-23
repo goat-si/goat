@@ -470,6 +470,12 @@ export const make = Effect.gen(function* () {
             candidate.runId === run.id &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate, delegatedTaskNodeIds) &&
+            !(
+              candidate.type === "user_message" &&
+              candidate.status === "pending" &&
+              (candidate.inputIntent === "steer" ||
+                candidate.inputIntent === "promoted_queued_to_steer")
+            ) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -655,7 +661,7 @@ export const make = Effect.gen(function* () {
         });
       }
       for (const [providerThreadId, work] of cancelledBackgroundWork) {
-        const noteRun = latestStartedRun(projection, providerThreadId);
+        const noteRun = latestStartedRun(projection.runs, providerThreadId);
         if (noteRun === undefined) continue;
         // Use a separate event; stale run snapshots can overwrite intervening lifecycle changes.
         events.push({

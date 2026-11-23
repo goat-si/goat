@@ -131,18 +131,24 @@ describe("OpenCodex Home provider on native threads", () => {
             ...preamble.slice(0, 3),
             ...configRead(2),
             ...configRead(3),
+            // Each start, resume and fork rechecks the Home route, then reads the stdio MCP servers
+            // it passes the thread id to.
+            ...configRead(4),
+            ...configRead(5),
             {
               type: "expect_outbound",
               label: "thread/start",
-              frame: { id: 4, method: "thread/start", params: routed },
+              frame: { id: 6, method: "thread/start", params: routed },
             },
-            withReplayRequestId(started, 4),
-            ...configRead(5),
+            withReplayRequestId(started, 6),
+            ...configRead(7),
+            ...configRead(8),
+            ...configRead(9),
             {
               type: "expect_outbound",
               label: "thread/resume",
               frame: {
-                id: 6,
+                id: 10,
                 method: "thread/resume",
                 params: { threadId: nativeThreadId, excludeTurns: true, ...routed },
               },
@@ -150,14 +156,16 @@ describe("OpenCodex Home provider on native threads", () => {
             {
               type: "emit_inbound",
               label: "thread/resume",
-              frame: { id: 6, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
+              frame: { id: 10, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
             },
-            ...configRead(7),
+            ...configRead(11),
+            ...configRead(12),
+            ...configRead(13),
             {
               type: "expect_outbound",
               label: "thread/fork",
               frame: {
-                id: 8,
+                id: 14,
                 method: "thread/fork",
                 params: { threadId: nativeThreadId, excludeTurns: true, ...routed },
               },
@@ -166,7 +174,7 @@ describe("OpenCodex Home provider on native threads", () => {
               type: "emit_inbound",
               label: "thread/fork",
               frame: {
-                id: 8,
+                id: 14,
                 result: {
                   ...startedResult,
                   thread: {
@@ -180,7 +188,7 @@ describe("OpenCodex Home provider on native threads", () => {
             },
           ],
         });
-        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
+        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript, false));
         const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
           instanceId: CODEX_TEST_MODEL_SELECTION.instanceId,
           settings,
@@ -308,14 +316,28 @@ describe("OpenCodex Home routing", () => {
                 },
               },
             },
+            {
+              type: "expect_outbound",
+              label: "stdio-config",
+              frame: {
+                id: 4,
+                method: "config/read",
+                params: { cwd: workspace, includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "stdio-config",
+              frame: { id: 4, result: { config: {}, origins: {} } },
+            },
             ...preamble
               .slice(3, 5)
-              .map((entry) => withReplayRequestId(withHomeOpenAiProvider(entry), 4)),
+              .map((entry) => withReplayRequestId(withHomeOpenAiProvider(entry), 5)),
             {
               type: "expect_outbound",
               label: "existing-context-config",
               frame: {
-                id: 5,
+                id: 6,
                 method: "config/read",
                 params: { cwd: workspace, includeLayers: false },
               },
@@ -324,7 +346,7 @@ describe("OpenCodex Home routing", () => {
               type: "emit_inbound",
               label: "existing-context-config",
               frame: {
-                id: 5,
+                id: 6,
                 result: {
                   config: {
                     model_provider: "openai",
@@ -339,7 +361,7 @@ describe("OpenCodex Home routing", () => {
               type: "expect_outbound",
               label: "second-cwd-config",
               frame: {
-                id: 6,
+                id: 7,
                 method: "config/read",
                 params: { cwd: "/second-project", includeLayers: false },
               },
@@ -348,7 +370,7 @@ describe("OpenCodex Home routing", () => {
               type: "emit_inbound",
               label: "second-cwd-config",
               frame: {
-                id: 6,
+                id: 7,
                 result: {
                   config: {
                     model_provider: "openai",
@@ -361,7 +383,7 @@ describe("OpenCodex Home routing", () => {
             },
           ],
         });
-        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
+        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript, false));
         let disconnected = false;
         let opens = 0;
         const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({

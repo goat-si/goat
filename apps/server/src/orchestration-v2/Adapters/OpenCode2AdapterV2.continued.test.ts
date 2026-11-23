@@ -187,7 +187,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
           ],
           "msg_external",
         );
-        const snapshot = yield* runtime.rollbackThread({
+        yield* runtime.rollbackThread({
           providerThread: thread,
           target: {
             type: "provider_turn",
@@ -197,10 +197,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
           },
           providerThreadTurns: [first, second],
         });
-        assert.deepEqual(
-          snapshot.providerTurns.map((turn) => turn.id),
-          [first.id],
-        );
       }).pipe(Effect.scoped),
   );
 
@@ -322,7 +318,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
         yield* runtime.startTurn(continuationTurn(thread, offers[1]!));
         yield* Deferred.await(bothEnded);
         const [first, continuation] = turns;
-        const snapshot = yield* runtime.rollbackThread({
+        yield* runtime.rollbackThread({
           providerThread: thread,
           target: {
             type: "provider_turn",
@@ -332,10 +328,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
           },
           providerThreadTurns: [first!, continuation!],
         });
-        assert.deepEqual(
-          snapshot.providerTurns.map((turn) => turn.id),
-          [first!.id],
-        );
       }).pipe(Effect.scoped),
   );
 
@@ -444,7 +436,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
         yield* runtime.startTurn(continuationTurn(thread, yield* Deferred.await(offered)));
         yield* Deferred.await(bothEnded);
         const [first, continuation] = turns;
-        const snapshot = yield* runtime.rollbackThread({
+        yield* runtime.rollbackThread({
           providerThread: thread,
           target: {
             type: "provider_turn",
@@ -454,10 +446,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 continuations", (it) => {
           },
           providerThreadTurns: [first!, continuation!],
         });
-        assert.deepEqual(
-          snapshot.providerTurns.map((turn) => turn.id),
-          [first!.id],
-        );
       }).pipe(Effect.scoped),
   );
 

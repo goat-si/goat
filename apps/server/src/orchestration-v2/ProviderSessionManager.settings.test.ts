@@ -60,7 +60,7 @@ const runtimePolicy = {
 const threadA = ThreadId.make("thread-settings-a");
 const threadB = ThreadId.make("thread-settings-b");
 const threadC = ThreadId.make("thread-settings-c");
-/** A retiring process stops within one probe after its work ends; idle sessions wait 30 minutes. */
+/** A retiring process stops within one probe after its work ends; idle sessions here wait 30 minutes. */
 const retireProbe = "5 seconds";
 
 interface Fixture {
@@ -281,6 +281,7 @@ const layer = (fixture: Fixture) => {
     IdAllocator.layer,
     layerTestStores,
     ProviderSessionManager.layerWithOptions({
+      idleTimeoutMs: 30 * 60_000,
       beforeIdleFiberInterrupt: Effect.suspend(() => fixture.beforeIdleInterrupt),
     }).pipe(
       Layer.provide(

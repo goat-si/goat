@@ -287,6 +287,8 @@ export function getProviderOptionStatedValue(
   );
 }
 
+export const DEFAULT_VARIANT_CHOICE_ID = "goat:default";
+
 export function getProviderOptionCurrentValue(
   descriptor: ProviderOptionDescriptor | null | undefined,
   selection?: ModelSelection | null,
@@ -299,6 +301,14 @@ export function getProviderOptionCurrentValue(
   // Reported values are display-only; callers that build dispatch options omit this context.
   const reportedValue = getReportedOptionValue(descriptor.id, selection, reportedSelection);
   if (reportedValue !== undefined) return reportedValue;
+  if (
+    descriptor.type === "select" &&
+    descriptor.id === "variant" &&
+    selection &&
+    !hasExplicitOption &&
+    descriptor.options.some((option) => option.id === DEFAULT_VARIANT_CHOICE_ID)
+  )
+    return DEFAULT_VARIANT_CHOICE_ID;
   if (descriptor.id === "variant" && selection && !hasExplicitOption) return undefined;
   if (descriptor.type === "boolean") {
     return descriptor.currentValue;

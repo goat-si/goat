@@ -129,7 +129,7 @@ const handlers = {
         }),
     ),
   ),
-  goat_background_wait: McpToolAccess.actsAsCaller((input) =>
+  goat_background_wait: McpToolAccess.actsAsCallerDuringWake((input) =>
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
       const caller = yield* McpInvocationContext.requireThreadScope(scope, "goat_background_wait");

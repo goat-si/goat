@@ -212,10 +212,13 @@ const makePiFamilyDriver = (
         undefined,
         profile,
         currentEnvironment,
+        host.compatibility,
       );
 
       const checkProvider = currentEnvironment.pipe(
-        Effect.flatMap((env) => checkPiProviderStatus(effectiveConfig, env, probeCwd, profile)),
+        Effect.flatMap((env) =>
+          checkPiProviderStatus(effectiveConfig, env, probeCwd, profile, host.compatibility),
+        ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );

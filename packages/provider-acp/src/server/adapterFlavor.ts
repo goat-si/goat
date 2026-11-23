@@ -27,6 +27,8 @@ import type * as ProviderContinuationRequests from "@goat/provider-core/server/P
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
+type AcpNegotiatedFlag = boolean | ((result: EffectAcpSchema.InitializeResponse) => boolean);
+
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -109,6 +111,12 @@ export interface AcpAdapterV2ExtensionContext {
  * with invalid params. `makeProviderFailure` shows its message to the user;
  * the agent's reply stays on `cause`.
  */
+/** The native session can carry on: a prompt-steering turn resends resumeWith once before failing. */
+export interface AcpResumablePromptFailure {
+  readonly failure: OrchestrationV2ProviderFailure;
+  readonly resumeWith: string;
+}
+
 export interface AcpAdapterV2Flavor {
   readonly preferHttpMcp?: boolean;
   readonly buildPrompt?: (input: {
@@ -124,7 +132,7 @@ export interface AcpAdapterV2Flavor {
   /**
    * Runs before `session/prompt`. The returned check sees a prompt the agent ended
    * without an error or cancel, and reports a failure its stop reason hid. A reported
-   * failure restarts the runtime before the next turn.
+   * failure restarts the runtime before the next turn, unless it names a prompt to resume with.
    */
   readonly watchPromptOutcome?: (
     sessionId: string,
@@ -136,9 +144,12 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<
     (
       result: EffectAcpSchema.PromptResponse,
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
+      options?: { readonly retired?: boolean },
+    ) => Effect.Effect<OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined>
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;
+  /** The flavor's runtime refuses a version the policy rates broken when it starts. */
+  readonly checksVersionAtHandshake?: boolean;
   /**
    * Runs before attachment paths, GOAT instructions and native slash-command detection,
    * so a rewrite can turn the user's text into a native command.
@@ -212,6 +223,9 @@ export interface AcpAdapterV2Flavor {
   }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
   readonly ownedModelOptionIds?: ReadonlyArray<string>;
   readonly lockSessionModeToPolicy?: true;
+  readonly runtimeModeForSessionMode?: (
+    modeId: string,
+  ) => import("@goat/contracts").RuntimeMode | undefined;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
@@ -248,8 +262,13 @@ export interface AcpAdapterV2Flavor {
   readonly preferResumeSession?: boolean;
   readonly onSessionEvent?: (
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
+    cwd: string,
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
+  readonly subagentsOutlivingPrompt?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskIds: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<string>>;
   readonly supportsCompaction?: boolean;
   /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
   readonly compactViaAdvertisedCommand?: boolean;
@@ -289,10 +308,18 @@ export interface AcpAdapterV2Flavor {
     readonly appendOutput: string;
   }>;
   readonly isPersistentBackgroundTool?: (toolCall: AcpToolCallState) => boolean;
+  readonly toolOutlivesPrompt?: (toolCall: AcpToolCallState) => boolean;
+  readonly postSettleCommandHold?: {
+    readonly timeout: Duration.Input;
+    readonly isCommand: (toolCall: AcpToolCallState) => boolean;
+  };
   readonly isProviderWakeNotification?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => boolean;
-  readonly deferFinalizeForBackgroundWork?: boolean;
+  readonly deferFinalizeForBackgroundWork?: AcpNegotiatedFlag;
+  readonly replyEndsWithUsageUpdate?: boolean;
+  readonly hasPendingReply?: (sessionId: string) => Effect.Effect<boolean>;
+  readonly wakeOnDetachedRequest?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
@@ -301,7 +328,7 @@ export interface AcpAdapterV2Flavor {
    * leaves usage semantics open, so this stays unset until proven live.
    */
   readonly reportsPerTurnPromptUsage?: boolean;
-  /** Gemini-style usage: inputTokens leaves out cachedReadTokens, outputTokens leaves out thoughtTokens. */
+  /** Gemini-style usage: inputTokens leaves out cachedReadTokens; outputTokens includes thoughtTokens. */
   readonly geminiPromptUsage?: boolean;
   /**
    * Fails a dispatched prompt after this long with no update for its session while no
@@ -315,7 +342,14 @@ export interface AcpAdapterV2Flavor {
   readonly restartRuntimeOnEveryInterrupt?: boolean;
   readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
   readonly preserveRuntimeOnSettledInterrupt?: boolean;
-  readonly enablePostSettleContinuation?: boolean;
+  /**
+   * Steers with another `session/prompt` while one runs: the agent answers the running prompt
+   * `end_turn` and carries the turn on under the new one, leaving its tools and subagents alone.
+   */
+  readonly steersWithPrompt?: (
+    initializeResult: AcpSessionRuntime.AcpSessionRuntimeStartResult["initializeResult"],
+  ) => boolean;
+  readonly enablePostSettleContinuation?: AcpNegotiatedFlag;
   readonly requireForegroundWakeTransition?: boolean;
   /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */
   readonly followAgentWorkState?: boolean;

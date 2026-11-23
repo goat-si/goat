@@ -15,6 +15,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type { PlatformError } from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -61,7 +63,9 @@ import {
 } from "./AntigravityInstallationLookup.ts";
 import { makeAntigravityValidator } from "./AntigravityInstallationValidate.ts";
 import { isNewer } from "./managedRelease.ts";
+import { launcherTargetFromContents } from "./AntigravityInstallationLauncher.ts";
 import * as ModelManifest from "./ModelManifest.ts";
+import type { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import {
   resolveAntigravityReleaseAsset,
   type AntigravityReleaseAsset,
@@ -71,6 +75,9 @@ export { AntigravityInstallationError, type AntigravityExecutable };
 
 interface AntigravityInstallationService {
   readonly managedDirectory: string;
+  readonly compatibility: (
+    version: string,
+  ) => Effect.Effect<ReturnType<typeof resolveProviderCompatibility>>;
   readonly resolve: (
     binaryPath?: string,
     environment?: NodeJS.ProcessEnv,
@@ -128,11 +135,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const environment = yield* HostProcess.Environment;
-  // The pinned release stays the fallback whenever Google's CLI manifest offers nothing usable.
-  const pinned =
+  const { isWithdrawn, isSupported, ensureEligible } = makeWithdrawalCheck(manifestService);
+  // The pinned release is the fallback when Google's CLI manifest offers nothing usable, unless
+  // it is refused: the 1.4.5 pin is below 1.5, so it is never offered.
+  const pinCandidate =
     options.releaseAsset === undefined
       ? resolveAntigravityReleaseAsset(platform, arch, yield* hostUsesMusl({ fs, platform, arch }))
       : options.releaseAsset;
+  const pinned =
+    pinCandidate !== null && (yield* isWithdrawn(pinCandidate.version)) ? null : pinCandidate;
   let releaseAsset: AntigravityReleaseAsset | AntigravityCliReleaseAsset | null = pinned;
   const supported =
     options.releaseAsset === undefined
@@ -147,6 +158,18 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   );
   const versionsDirectory = path.join(managedDirectory, "versions");
   const activePath = path.join(managedDirectory, "active.json");
+  // Windows briefly keeps handles on fresh runtime files after taskkill or an antivirus scan; retry for up to 10 seconds.
+  const retryWhileWindowsHoldsHandles = <A, R>(effect: Effect.Effect<A, PlatformError, R>) =>
+    effect.pipe(
+      Effect.retry({
+        times: platform === "win32" ? 40 : 0,
+        schedule: Schedule.spaced("250 millis"),
+        while: (error) =>
+          error.reason._tag === "PermissionDenied" ||
+          error.reason._tag === "Busy" ||
+          error.reason._tag === "Unknown",
+      }),
+    );
   const gate = yield* Semaphore.make(1);
   const leases = new Map<string, number>();
   let running: { readonly operationId: string; readonly fiber: Fiber.Fiber<void> } | undefined;
@@ -163,7 +186,6 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     message: null,
   });
 
-  const { isWithdrawn, isSupported, ensureEligible } = makeWithdrawalCheck(manifestService);
   const { readRecord, executableFile } = makeRecordReaders({ fs, platform });
   const commandCandidates = makeCommandCandidates({ fs, path, platform, environment });
 
@@ -209,18 +231,25 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   ) {
     if (!(yield* executableFile(candidate))) return null;
     const executablePath = yield* fs.realPath(candidate);
+    const target =
+      platform === "win32" && /\.(?:bat|cmd)$/iu.test(executablePath)
+        ? launcherTargetFromContents(path, executablePath, yield* fs.readFileString(executablePath))
+        : null;
+    const launched = target && (yield* executableFile(target)) ? yield* fs.realPath(target) : null;
     const realVersions = yield* fs.realPath(versionsDirectory).pipe(Effect.option);
-    const directory = path.dirname(executablePath);
+    const directory = path.dirname(launched ?? executablePath);
     if (
       Option.isSome(realVersions) &&
       path.dirname(directory) === realVersions.value &&
       /^[a-f0-9]{64}$/u.test(path.basename(directory))
     ) {
       const installed = yield* completedRelease(path.basename(directory));
-      return { ...installed, source };
+      return launched === null
+        ? { ...installed, source }
+        : { ...installed, executablePath, source };
     }
     // Keep launcher symlinks intact: version-manager shims dispatch by their invoked name.
-    if (isAntigravityCli(candidate, executablePath)) {
+    if (launched === null && isAntigravityCli(candidate, executablePath)) {
       return {
         executablePath: candidate,
         harnessPath: null,
@@ -498,6 +527,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         { flag: "wx", mode: 0o600 },
       );
       yield* fs.rename(pairDirectory, destination).pipe(
+        retryWhileWindowsHoldsHandles,
         Effect.catch((cause) =>
           completedRelease(releaseId).pipe(
             Effect.flatMap((existing) =>
@@ -781,6 +811,9 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
 
   return AntigravityInstallation.of({
     managedDirectory,
+    compatibility: Effect.fn("AntigravityInstallation.compatibility")(function* (version: string) {
+      return ModelManifest.providerCompatibility(yield* manifestService.current, DRIVER, version);
+    }),
     resolve,
     acquire,
     start,

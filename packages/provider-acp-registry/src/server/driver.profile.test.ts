@@ -138,6 +138,7 @@ it.live(
           }),
         search: () => Effect.die("unused"),
         prepare: () => Effect.die("unused"),
+        prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
         uninstallManagedBinary: () => Effect.die("unused"),
       };
       const instance = yield* AcpRegistryDriver.create({

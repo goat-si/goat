@@ -14,7 +14,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
+import { gitForWindowsBashAsync, SpawnExecutableResolution } from "@goat/shared/shell";
 
 const MAX_LIVE_TERMINALS = 16;
 const MAX_UNRELEASED_TERMINALS = 64;
@@ -141,18 +143,29 @@ export interface AcpClientTerminalsOptions {
 function acpTerminalCommand(input: {
   readonly request: EffectAcpSchema.CreateTerminalRequest;
   readonly shellCommands?: boolean | undefined;
+  /** Windows only: the shell source runs here instead of Node's cmd.exe. */
+  readonly posixShell: string | undefined;
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly forceKillAfter: Duration.Input;
   readonly nice: string | undefined;
 }) {
+  const isShellSource = input.shellCommands === true && (input.request.args?.length ?? 0) === 0;
   const launch =
-    input.shellCommands === true && (input.request.args?.length ?? 0) === 0
-      ? toolPriorityShellLaunch(input.nice, input.request.command)
-      : {
-          ...toolPriorityLaunch(input.nice, input.request.command, input.request.args ?? []),
+    isShellSource && input.posixShell !== undefined
+      ? {
+          ...toolPriorityLaunch(input.nice, input.posixShell, [
+            "-c",
+            `chcp.com 65001 >/dev/null 2>&1\n${input.request.command}`,
+          ]),
           shell: false,
-        };
+        }
+      : isShellSource
+        ? toolPriorityShellLaunch(input.nice, input.request.command)
+        : {
+            ...toolPriorityLaunch(input.nice, input.request.command, input.request.args ?? []),
+            shell: false,
+          };
   return ChildProcess.make(launch.command, launch.args, {
     cwd: input.request.cwd ?? input.defaultCwd,
     ...(input.environment === undefined ? {} : { env: input.environment }),
@@ -161,11 +174,26 @@ function acpTerminalCommand(input: {
   });
 }
 
+function mergeEnvironments(
+  isWindows: boolean,
+  layers: ReadonlyArray<Iterable<readonly [string, string | undefined]>>,
+) {
+  const variables = new Map<string, readonly [string, string | undefined]>();
+  for (const layer of layers) {
+    for (const [name, value] of layer) {
+      variables.set(isWindows ? name.toUpperCase() : name, [name, value]);
+    }
+  }
+  return Object.fromEntries(variables.values());
+}
+
 export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(function* (
   options: AcpClientTerminalsOptions,
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
+  const isWindows = yield* HostProcess.isWindows;
+  const resolveExecutable = yield* SpawnExecutableResolution;
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
   let nextTerminalNumber = 1;
@@ -228,22 +256,45 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
               `ACP terminal/create exceeded the limit of ${MAX_LIVE_TERMINALS} concurrent terminals.`,
             );
           }
-          const requestEnvironment = Object.fromEntries(
-            (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
+          const inheritedEnvironment = Object.fromEntries(
+            Object.entries(options.environment ?? (yield* HostProcess.Environment)).filter(
+              ([name]) => {
+                const key = name.toUpperCase();
+                return (
+                  !key.startsWith("GOAT_ACP_MCP_") &&
+                  !key.startsWith("T3_ACP_MCP_") && // goat-rename: legacy
+                  key !== "GOAT_THREAD_ID" &&
+                  key !== "T3CODE_THREAD_ID" // goat-rename: legacy
+                );
+              },
+            ),
           );
           const sessionEnvironment = options.environmentForSession?.(request.sessionId);
-          const environment =
-            options.environment === undefined &&
-            sessionEnvironment === undefined &&
-            (request.env?.length ?? 0) === 0
+          const environment = mergeEnvironments(isWindows, [
+            Object.entries(
+              McpProviderSession.mergeThreadEnvironment(inheritedEnvironment, sessionEnvironment),
+            ),
+            (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
+          ]);
+          // Agents that send shell source write bash; Node's shell on Windows is cmd.exe.
+          const gitExecutable =
+            isWindows && options.shellCommands === true && (request.args?.length ?? 0) === 0
+              ? yield* Effect.promise(async () => resolveExecutable("git", "win32", environment))
+              : undefined;
+          const posixShell =
+            gitExecutable === undefined
               ? undefined
-              : {
-                  ...McpProviderSession.mergeThreadEnvironment(
-                    options.environment,
-                    sessionEnvironment,
-                  ),
-                  ...requestEnvironment,
-                };
+              : yield* Effect.promise(() => gitForWindowsBashAsync(gitExecutable));
+          if (
+            isWindows &&
+            options.shellCommands === true &&
+            (request.args?.length ?? 0) === 0 &&
+            posixShell === undefined
+          ) {
+            return yield* terminalRequestError(
+              "Git Bash is required to run ACP shell commands on Windows.",
+            );
+          }
           const terminalScope = yield* Scope.make();
           const child = yield* restore(
             spawner
@@ -251,6 +302,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                 acpTerminalCommand({
                   request,
                   shellCommands: options.shellCommands,
+                  posixShell,
                   defaultCwd: options.defaultCwd,
                   environment,
                   forceKillAfter,

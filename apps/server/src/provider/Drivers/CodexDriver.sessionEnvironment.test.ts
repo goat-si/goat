@@ -14,6 +14,7 @@ import { CODEX_TEST_RUNTIME_POLICY } from "../../orchestration-v2/Adapters/Codex
 import {
   codexReplayPreamble,
   makeCodexReplayTranscript,
+  withThreadSetupReads,
 } from "../../orchestration-v2/Adapters/CodexReplay.testkit.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
@@ -55,7 +56,9 @@ it.layer(layerTest)("Codex session environment", (it) => {
             open: (input) =>
               Effect.gen(function* () {
                 launches.push(input.environment);
-                const driver = yield* CodexReplay.makeReplayDriver(transcript);
+                const driver = yield* CodexReplay.makeReplayDriver(
+                  withThreadSetupReads(transcript),
+                );
                 const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
                 return Context.get(context, CodexClient.CodexAppServerClient);
               }).pipe(

@@ -19,11 +19,7 @@ import type {
 export type { ActiveTurn } from "./adapterState.ts";
 import { makeNewThreadState, trackImageJob } from "./adapterState.ts";
 import { makeTurnStatusItems } from "./turnStatusItems.ts";
-import {
-  OWNED_RECOVERY_RETRY,
-  OpenCode2ServerExitedError,
-  isPermanentRecoveryError,
-} from "./ownedRecovery.ts";
+import { whileAlive, isPermanentRecoveryError } from "./ownedRecovery.ts";
 import { recordString } from "../records.ts";
 import { OpenCode2ProviderCapabilities } from "./capabilities.ts";
 import {
@@ -42,6 +38,8 @@ import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
+import { validateOpenCodeCompatibility } from "../validateCompatibility.ts";
+import { finishIdleCommand } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
@@ -260,15 +258,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.unsettled = true;
       state.unsettledStarted = busy.has(state.sessionId);
     };
-
     const newThreadState = makeNewThreadState(input);
-
     const rootOf = (state: ThreadState): ThreadState => {
       let current = state;
       while (current.subagent !== undefined) current = current.subagent.call.state;
       return current;
     };
-
     const {
       directoryOf,
       windowOf,
@@ -285,7 +280,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       mcpServerNameFor,
       cuaServerNameFor,
     });
-
     const sessionsOf = (thread: ThreadState): ReadonlyArray<ThreadState> => [
       thread,
       ...[...threads.values()].filter((state) => {
@@ -295,7 +289,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         return false;
       }),
     ];
-
     const runningCalls = (thread: ThreadState): ReadonlyArray<SubagentCall> =>
       sessionsOf(thread).flatMap((state) => [...state.calls.values()]);
 
@@ -308,7 +301,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (parent === undefined) return [];
       return [...parent.calls.values()].filter((candidate) => candidate.child === child);
     };
-
     const callsAbove = (sessionId: string) => {
       const calls: Array<SubagentCall> = [];
       let current = threads.get(sessionId);
@@ -318,7 +310,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       return calls;
     };
-
     const requestTurn = makeRequestTurn({
       ownerOf,
       callsAbove,
@@ -326,7 +317,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       isExecuting: (sessionId) =>
         busy.has(sessionId) || threads.get(sessionId)?.active !== undefined,
     });
-
     const owesWork = (state: ThreadState) =>
       shellJobs.owes(state) ||
       [...state.imageJobs.values()].some((job) => job.status === "running") ||
@@ -334,9 +324,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.reports.size > 0 ||
       (state.subagent !== undefined && busy.has(state.sessionId)) ||
       [...state.calls.values()].some((call) => call.background);
-
     const hasBackground = (thread: ThreadState) => sessionsOf(thread).some(owesWork);
-
     const emitProviderThread = Effect.fnUntraced(function* (state: ThreadState) {
       const pendingBackgroundWork = hasBackground(state);
       state.publishedBackgroundWork = pendingBackgroundWork;
@@ -372,7 +360,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       };
       yield* emitProviderThread(state);
     });
-
     const readGoal = Effect.fn("OpenCode2Adapter.readGoal")(function* (
       state: ThreadState,
       revision = state.goalRevision,
@@ -392,7 +379,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         }),
       );
     });
-
     const setSessionStatus =
       /* Provider events include streaming deltas; avoid a span for each update. */
       Effect.fnUntraced(function* (
@@ -405,7 +391,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({ type: "provider_session.updated", driver, providerSession: session });
       });
-
     const ordinalOf = (turn: ActiveTurn, nativeId: string) => {
       const known = turn.ordinals.get(nativeId);
       if (known !== undefined) return known;
@@ -717,12 +702,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     const { emitCompaction, emitRetry, updateRetry } = makeTurnStatusItems({
+      emitProviderThread,
       driver,
       emit,
       ordinalOf,
       itemBase,
     });
-
     const retainedRequestsOf = (turn: ActiveTurn) => {
       const ids = [...pending.values()].flatMap((entry) =>
         entry.turn === turn ? [entry.request.id] : [],
@@ -730,20 +715,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return ids.length === 0 ? {} : { retainedRuntimeRequestIds: ids };
     };
 
-    const emitProviderTurn = (
-      state: ThreadState,
-      turn: ActiveTurn,
-      providerTurn: OrchestrationV2ProviderTurn,
-    ) => {
-      state.providerTurns.set(String(providerTurn.id), providerTurn);
-      return emit({
+    const emitProviderTurn = (turn: ActiveTurn, providerTurn: OrchestrationV2ProviderTurn) =>
+      emit({
         type: "provider_turn.updated",
         driver,
         threadId: turn.input.threadId,
         providerTurn,
         ...(providerTurn.completedAt === null ? {} : retainedRequestsOf(turn)),
       });
-    };
 
     const makeTurn = (
       owner: TurnOwner,
@@ -1169,7 +1148,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           completedAt: null,
         },
       });
-      yield* emitProviderTurn(child, turn, providerTurn);
+      yield* emitProviderTurn(turn, providerTurn);
       const prompt = subagent.prompt;
       subagent.prompt = undefined;
       if (prompt !== undefined && prompt.length > 0) {
@@ -1282,7 +1261,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
       const window = windowOf(turn.input.runtimePolicy.cwd, turn.input.modelSelection.model);
       const lastStep = turn.lastStep;
-      yield* emitProviderTurn(state, turn, {
+      yield* emitProviderTurn(turn, {
         ...turn.providerTurn,
         status: terminal.status,
         completedAt,
@@ -1882,6 +1861,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         after: delivered.at(-1)?.inboxId,
         first: leading ?? delivered[0]?.inboxId,
         children: new Set(),
+        awaited: new Set(),
+        ended: new Map(),
       };
       state.wakes.push(wake);
       yield* Effect.logInfo("OpenCode started a turn on its own; asking for a continuation.", {
@@ -2570,7 +2551,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const next = yield* borrowConnection(server, initial.launch).pipe(
           Effect.provideService(Scope.Scope, scope),
         );
-        return { next, stream: yield* next.events.pipe(Effect.provideService(Scope.Scope, scope)) };
+        const events = next.events.pipe(Effect.provideService(Scope.Scope, scope));
+        return { next, stream: yield* whileAlive(next.processExit, events) };
       }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
       const previous = currentScope;
       connection = next;
@@ -2607,15 +2589,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       // An owned process's exit, rather than a read deadline, bounds recovery; the bounded retry
       // below then borrows a restarted server. HTTP waits stay outside the event lock so Stop can still settle.
-      const exited = next.processExit;
-      yield* exited === undefined
+      yield* next.processExit === undefined
         ? reconcile().pipe(Effect.timeout(RECONCILE_TIMEOUT))
-        : reconcile().pipe(
-            Effect.retry(OWNED_RECOVERY_RETRY),
-            Effect.raceFirst(
-              exited.pipe(Effect.andThen(Effect.fail(new OpenCode2ServerExitedError()))),
-            ),
-          );
+        : whileAlive(next.processExit, reconcile());
       return stream;
     }).pipe(
       // Borrows and process exits stay bounded; only a live owned process is waited on above.
@@ -2900,7 +2876,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         ];
       });
       const lastUser = history.findLast((message) => message.type === "user")?.id;
-      const state = threads.get(sessionId);
       return {
         providerThread: {
           ...providerThread,
@@ -2909,7 +2884,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           status: "idle" as const,
           updatedAt: snapshotAt,
         },
-        providerTurns: state === undefined ? [] : [...state.providerTurns.values()],
         messages,
         runtimeRequests: [],
       };
@@ -3136,7 +3110,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       state.active = turn;
       state.sessionScopedBackground = false;
-      yield* emitProviderTurn(state, turn, providerTurn);
+      yield* emitProviderTurn(turn, providerTurn);
       state.providerThread = {
         ...state.providerThread,
         status: "active",
@@ -3151,7 +3125,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const replay = Effect.fnUntraced(function* (wake: Wake) {
       wake.dropped = true;
-      for (const event of wake.events) yield* route(event, sessionOfEvent(event), true);
+      yield* shellJobs.replay(
+        wake,
+        Effect.forEach(wake.events, (event) => route(event, sessionOfEvent(event), true), {
+          discard: true,
+        }),
+      );
     });
 
     const discardWakes = (caller: ThreadState, wakes: ReadonlyArray<Wake>) => {
@@ -3370,7 +3349,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (commands.some((entry) => entry.name === command.name)) {
           // session.command neither accepts nor returns our ID; record the preceding history boundary.
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
-          yield* markBefore(sessionId, newest.data[0]?.id ?? null);
+          const before = newest.data[0]?.id ?? null;
+          yield* markBefore(sessionId, before);
           if (state.active !== turn || turn.interrupted) return;
           const { uncertain } = yield* prepareMemory(sessionId, state, turnInput);
           if (!(yield* sending())) return;
@@ -3381,9 +3361,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             return yield* finishControl;
           }
           yield* uncertain;
-          return yield* client.session
+          yield* client.session
             .command({ sessionID, ...command })
             .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
+          return yield* finishIdleCommand({
+            client,
+            sessionId,
+            before,
+            state,
+            turn,
+            busy,
+            lock,
+            end: endExecution,
+          });
         }
       }
       const mentions = skillMentions(text);
@@ -4066,22 +4056,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (boundary !== null) {
             yield* rollBackTo(sessionId, SessionMessage.ID.make(boundary));
           }
-          const keptOrdinal = target.type === "provider_turn" ? target.providerTurn.ordinal : 0;
-          const loaded = threads.get(sessionId);
-          for (const [id, turn] of loaded?.providerTurns ?? []) {
-            if (turn.ordinal > keptOrdinal) loaded?.providerTurns.delete(id);
-          }
-          const snapshot = yield* snapshotOf(providerThread, sessionId);
-          const kept = new Map(
-            rollbackInput.providerThreadTurns
-              .filter(
-                (turn) =>
-                  turn.providerThreadId === providerThread.id && turn.ordinal <= keptOrdinal,
-              )
-              .map((turn) => [turn.id, turn] as const),
-          );
-          for (const turn of snapshot.providerTurns) kept.set(turn.id, turn);
-          return { ...snapshot, providerTurns: [...kept.values()] };
+          return yield* snapshotOf(providerThread, sessionId);
         },
         (effect, rollbackInput) =>
           effect.pipe(
@@ -4205,6 +4180,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const connection = yield* borrowConnection(server, launch).pipe(
           Effect.provideService(Scope.Scope, scope),
         );
+        yield* validateOpenCodeCompatibility(host, instanceId, connection.version);
         return yield* openSession(input, {
           connection,
           scope,

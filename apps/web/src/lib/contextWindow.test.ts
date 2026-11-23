@@ -45,6 +45,44 @@ describe("V2 context window presentation", () => {
     expect(snapshot?.usedTokens).toBe(2_000);
     expect(snapshot?.totalProcessedTokens).toBe(10_000);
   });
+  it("prefers a completed compaction to older usage, but accepts usage at the same time", () => {
+    const item = {
+      id: "compact" as never,
+      threadId: "thread" as never,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed" as const,
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:00.000Z"),
+      type: "compaction" as const,
+      driver: null,
+      beforeTokenCount: 985_000,
+      afterTokenCount: 2_000,
+    };
+    const before = decodeTokenUsage({
+      usedTokens: 985_000,
+      maxTokens: 1_000_000,
+      updatedAt: "2026-06-19T23:55:00.000Z",
+    });
+    const result = deriveLatestContextWindowSnapshot([{ item }], before);
+    expect(result?.usedTokens).toBe(2_000);
+    expect(result?.maxTokens).toBe(1_000_000);
+    const sameTime = decodeTokenUsage({
+      usedTokens: 3_000,
+      maxTokens: 1_000_000,
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    });
+    expect(deriveLatestContextWindowSnapshot([{ item }], sameTime)?.usedTokens).toBe(3_000);
+    const { afterTokenCount: _, ...withoutCount } = item;
+    expect(deriveLatestContextWindowSnapshot([{ item: withoutCount }], before)).toBeNull();
+  });
 });
 
 describe("live provider-turn usage (#8144)", () => {

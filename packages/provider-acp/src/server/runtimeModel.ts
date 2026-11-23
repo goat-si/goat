@@ -1,4 +1,9 @@
 import {
+  TOOL_CALL_CONTENT_MAX_CHARS,
+  TOOL_CALL_CONTENT_TRUNCATION_MARKER,
+  retainedToolCallOutputTail,
+} from "./toolOutputText.ts";
+import {
   LEGACY_SESSION_LOAD_READY_KEY,
   GOAT_SESSION_LOAD_READY_KEY,
 } from "@goat/contracts/legacyT3Names";
@@ -11,8 +16,6 @@ import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
-import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
-import { acpMcpFallbackInput, hermesGoatTool, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -63,9 +66,12 @@ type AcpAgentTerminalUpdate = Extract<
   { readonly sessionUpdate: "terminal_update" | "terminal_output_chunk" }
 >;
 
-const MAX_ACP_TERMINAL_OUTPUT_BYTES = 16 * 1024 * 1024;
-const ACP_TERMINAL_OUTPUT_TRIM_BYTES = 1024 * 1024;
-const MAX_ACP_TERMINAL_FRAME_BYTES = MAX_ACP_TERMINAL_OUTPUT_BYTES;
+// CommandOutputHub reads the last 256 KiB; retain more so its display cut stays unchanged.
+const MAX_AGENT_TERMINAL_OUTPUT_CHARS = 320 * 1024;
+// A UTF-16 code unit is at most 3 UTF-8 bytes, so the post-trim floor still holds the projected tail.
+const MAX_ACP_TERMINAL_OUTPUT_BYTES = 4 * MAX_AGENT_TERMINAL_OUTPUT_CHARS;
+const ACP_TERMINAL_OUTPUT_TRIM_BYTES = 256 * 1024;
+const MAX_ACP_TERMINAL_FRAME_BYTES = 16 * 1024 * 1024;
 
 function isBase64DataCode(code: number): boolean {
   return (
@@ -647,15 +653,9 @@ function locationsFromToolCallInput(input: {
 }
 
 // Agents resend cumulative output; bound it to avoid flooding event ingestion.
-const TOOL_CALL_CONTENT_MAX_CHARS = 8_000;
-const TOOL_CALL_CONTENT_TRUNCATION_MARKER = "[Earlier output truncated]\n\n";
-
 function boundToolCallOutputText(text: string): string {
-  if (text.length <= TOOL_CALL_CONTENT_MAX_CHARS) {
-    return text;
-  }
-  const tail = text.slice(text.length - TOOL_CALL_CONTENT_MAX_CHARS);
-  return `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`;
+  const tail = retainedToolCallOutputTail(text);
+  return tail === undefined ? text : `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`;
 }
 
 const RAW_OUTPUT_TEXT_FIELDS = ["content", "stdout", "stderr", "output"] as const;
@@ -728,13 +728,12 @@ function extractTextContentFromToolCallContent(
     return { text: undefined, content: boundToolCallContentEntries(content) };
   }
   const joined = chunks.join("\n");
-  if (joined.length <= TOOL_CALL_CONTENT_MAX_CHARS) {
+  const tail = retainedToolCallOutputTail(joined);
+  if (tail === undefined) {
     return { text: joined, content: boundToolCallContentEntries(content) };
   }
-  const bounded = boundToolCallOutputText(joined);
-  const tail = joined.slice(joined.length - TOOL_CALL_CONTENT_MAX_CHARS);
   return {
-    text: bounded,
+    text: `${TOOL_CALL_CONTENT_TRUNCATION_MARKER}${tail}`,
     content: distributeRetainedTailAcrossContent(content, tail),
   };
 }
@@ -812,6 +811,8 @@ function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecyc
       return "dynamic_tool_call";
   }
 }
+
+const TOOL_FALLBACK_SUMMARY = "Tool";
 
 function makeToolCallState(
   input: {
@@ -901,14 +902,19 @@ function makeToolCallState(
         title,
         detail: fallbackDetail,
         data,
-        fallbackSummary: title ?? "Tool",
+        fallbackSummary: title ?? TOOL_FALLBACK_SUMMARY,
       })
     : undefined;
+  // A titleless update omits an unchanged title; the generic fallback must not replace it.
+  const presentationTitle =
+    title === undefined && presentation?.summary === TOOL_FALLBACK_SUMMARY
+      ? undefined
+      : presentation?.summary;
   const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
   return {
     toolCallId,
     ...(kind ? { kind } : {}),
-    ...(presentation?.summary ? { title: presentation.summary } : {}),
+    ...(presentationTitle ? { title: presentationTitle } : {}),
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
     ...(presentation?.detail ? { detail: presentation.detail } : {}),
@@ -1021,12 +1027,19 @@ function toolCallContentTexts(state: AcpToolCallState): string {
     .join("\u0000");
 }
 
+function toolCallLocationsChanged(previous: AcpToolCallState, next: AcpToolCallState): boolean {
+  const before = previous.data.locations;
+  const after = next.data.locations;
+  return before !== after && JSON.stringify(before) !== JSON.stringify(after);
+}
+
 export function toolCallVisibleOutputChanged(
   previous: AcpToolCallState,
   next: AcpToolCallState,
 ): boolean {
   return (
     previous.detail !== next.detail ||
+    toolCallLocationsChanged(previous, next) ||
     toolCallContentTexts(previous) !== toolCallContentTexts(next) ||
     JSON.stringify(previous.data.rawOutput) !== JSON.stringify(next.data.rawOutput)
   );
@@ -1039,7 +1052,12 @@ export function decideToolCallUpdateEmission(
   if (next.status === "completed" || next.status === "failed") {
     return { emit: true, skippedSinceEmit: 0 };
   }
-  if (previous === undefined || previous.title !== next.title || previous.status !== next.status) {
+  if (
+    previous === undefined ||
+    previous.title !== next.title ||
+    previous.status !== next.status ||
+    toolCallLocationsChanged(previous, next)
+  ) {
     return { emit: true, skippedSinceEmit: 0 };
   }
   if (previous.detail === next.detail && toolCallOutputUnchanged(previous, next)) {
@@ -1055,136 +1073,7 @@ export function decideToolCallUpdateEmission(
   return { emit: false, skippedSinceEmit: skippedSinceEmit + 1 };
 }
 
-export interface AcpMcpToolCallIdentity {
-  readonly server: string;
-  readonly tool: string;
-  readonly input?: Record<string, unknown>;
-}
-
-const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)(?:\s+(.+?))?\s*$/u;
-
-/**
- * GOAT always injects its server as "goat", and matches are additionally gated on the known GOAT
- * tool inventory, so the separator match can stay loose.
- */
-const GOAT_MCP_TITLE_CALL =
-  /^(?:@|mcp[-_]{1,2})?goat[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
-
-/**
- * Gemini CLI titles injected MCP calls "<tool> (<server> MCP Server)" and
- * qwen-code appends ": <args json>" to the same template; Auggie namespaces
- * tool-first as "<tool>_goat".
- */
-const GOAT_MCP_TITLE_SUFFIX_CALL =
-  /^(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*?)(?: \(goat MCP Server\)(?::|$)|[-_.]goat$)/i;
-
-/**
- * glm and Kimi use bare names; Antigravity uses "Running <tool>". Kimi appends
- * streamed JSON arguments. Require a name or JSON opening brace so built-ins
- * titled "<tool>: <description>" cannot impersonate an inventory entry.
- */
-const GOAT_MCP_BARE_TITLE_CALL = /^(?:Running )?(?<tool>[A-Za-z0-9_]+)(?::\s*\{|$)/;
-
-/**
- * ACP has no typed MCP tool-call item, so agents surface MCP calls in agent-specific shapes:
- * codex-acp tags execute calls with `rawInput.server`/`rawInput.tool`, while agents on GOAT's
- * terminal fallback run the `acp-mcp-call <tool>` CLI through their command or an embedded client
- * terminal.
- */
-export function extractMcpToolCallIdentity(
-  toolCall: AcpToolCallState,
-  options?: {
-    readonly embeddedTerminalCommands?: ReadonlyArray<string>;
-  },
-): AcpMcpToolCallIdentity | undefined {
-  const rawInput = isRecord(toolCall.data.rawInput) ? toolCall.data.rawInput : undefined;
-  const meta = isRecord(toolCall.data.meta) ? toolCall.data.meta : undefined;
-  const server = typeof rawInput?.server === "string" ? rawInput.server.trim() : "";
-  const tool = typeof rawInput?.tool === "string" ? rawInput.tool.trim() : "";
-  if (meta?.is_mcp_tool_call === true && server.length > 0 && tool.length > 0) {
-    return { server, tool };
-  }
-  const claudeCode = isRecord(meta?.claudeCode) ? meta.claudeCode : undefined;
-  const gooseToolCall = isRecord(meta?.goose)
-    ? isRecord(meta.goose.toolCall)
-      ? meta.goose.toolCall
-      : undefined
-    : undefined;
-  const metaServerId = typeof meta?.serverId === "string" ? meta.serverId.trim() : "";
-  const metaToolName = typeof meta?.toolName === "string" ? meta.toolName.trim() : "";
-  if (/^goat$/i.test(metaServerId) && metaToolName.length > 0) {
-    for (const knownTool of GOAT_MCP_TOOL_NAMES) {
-      const boundary = metaToolName.length - knownTool.length - 1;
-      if (
-        metaToolName === knownTool ||
-        (metaToolName.endsWith(knownTool) &&
-          boundary >= 0 &&
-          !/[A-Za-z0-9]/.test(metaToolName.charAt(boundary)))
-      ) {
-        return { server: "goat", tool: knownTool };
-      }
-    }
-  }
-  const gooseExtension =
-    typeof gooseToolCall?.extensionName === "string" ? gooseToolCall.extensionName.trim() : "";
-  const assertsForeignOrigin =
-    (metaServerId.length > 0 && !/^goat$/i.test(metaServerId)) ||
-    (gooseExtension.length > 0 && !/^goat$/i.test(gooseExtension));
-  // qwen's serverId marks a real MCP server, but goose reports its built-in
-  // extensions (developer__shell, edits) the same way as user MCP servers, so
-  // goose stays unclassified and keeps its command and file-change projections.
-  if (assertsForeignOrigin) {
-    if (metaServerId.length === 0 || metaToolName.length === 0) return undefined;
-    const prefix = [`mcp__${metaServerId}__`, `mcp::${metaServerId}::`].find((prefix) =>
-      metaToolName.startsWith(prefix),
-    );
-    const tool = prefix === undefined ? metaToolName : metaToolName.slice(prefix.length);
-    return tool ? { server: metaServerId, tool } : undefined;
-  }
-  const deviceCall = ompDeviceGoatToolCall(rawInput, GOAT_MCP_TITLE_CALL);
-  if (deviceCall !== undefined) return { server: "goat", ...deviceCall };
-  const candidates = [
-    meta?.toolName,
-    claudeCode?.toolName,
-    gooseToolCall?.toolName,
-    toolCall.data.title,
-  ].filter((value): value is string => typeof value === "string");
-  for (const candidate of candidates) {
-    const trimmed = candidate.trim();
-    const qualified = /^mcp__(.+?)__(.+)$/i.exec(trimmed);
-    const hermesTool = hermesGoatTool(qualified?.[1], qualified?.[2]);
-    if (hermesTool !== undefined) return { server: "goat", tool: hermesTool };
-    if (qualified?.[1] && qualified[2] && !/^goat$/i.test(qualified[1]))
-      return { server: qualified[1], tool: qualified[2] };
-    // The server key and the tool prefix are both "goat", so "goat_thread_send"
-    // also reads as server "goat" + tool "thread_send". Try every convention and
-    // keep the first one that names a known tool.
-    for (const convention of [
-      GOAT_MCP_TITLE_CALL,
-      GOAT_MCP_TITLE_SUFFIX_CALL,
-      GOAT_MCP_BARE_TITLE_CALL,
-    ]) {
-      const candidateTool = convention.exec(trimmed)?.groups?.tool;
-      if (candidateTool !== undefined && GOAT_MCP_TOOL_NAMES.has(candidateTool)) {
-        return { server: "goat", tool: candidateTool };
-      }
-    }
-  }
-  const commands = [
-    ...(toolCall.command === undefined ? [] : [toolCall.command]),
-    // pi-acp reports the exec command line only as the verbatim title.
-    ...(typeof toolCall.data.title === "string" ? [toolCall.data.title] : []),
-    ...(options?.embeddedTerminalCommands ?? []),
-  ];
-  for (const command of commands) {
-    const match = ACP_MCP_FALLBACK_CALL.exec(command);
-    if (match?.[1] !== undefined) {
-      const input = acpMcpFallbackInput(match[2]);
-      return { server: "goat", tool: match[1], ...(input === undefined ? {} : { input }) };
-    }
-  }
-  return undefined;
-}
+export { extractMcpToolCallIdentity, type AcpMcpToolCallIdentity } from "./acpMcpCallIdentity.ts";
 
 /** Capture IDs before resolveEmbeddedTerminalContent replaces them with text, to recover commands later. */
 export function embeddedTerminalIdsFromSessionUpdate(
@@ -1547,11 +1436,19 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         title: "Compact context",
         kind: "think",
         status,
-        rawOutput: (upd.error ?? summary) || undefined,
+        rawOutput: upd.summary === undefined ? undefined : summary || null,
         _meta: upd._meta,
       });
       if (toolCall !== undefined) {
-        events.push({ _tag: "ToolCallUpdated", toolCall, rawPayload: params });
+        // Summary and error are independent patches; null clears only its own field.
+        events.push({
+          _tag: "ToolCallUpdated",
+          toolCall:
+            upd.error === undefined
+              ? toolCall
+              : { ...toolCall, data: { ...toolCall.data, compactionError: upd.error } },
+          rawPayload: params,
+        });
       }
       break;
     }

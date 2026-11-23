@@ -18,13 +18,48 @@ export function materializeReplayTranscriptRuntimeInstructions(
             : undefined;
   if (harness === undefined) return transcript;
   const instructions = buildRuntimeInstructions({ harness, model: runtime.model });
+  let cursorDelivered: string | undefined;
+  let cursorPending: { instructions: string | undefined; compacted: boolean } | undefined;
 
   return {
     ...transcript,
     entries: transcript.entries.map((entry) => {
+      if (runtime.driver === "cursor" && entry.type === "emit_inbound") {
+        const frame = entry.frame;
+        if (typeof frame === "object" && frame !== null && "type" in frame) {
+          if (
+            frame.type === "interaction.update" &&
+            "update" in frame &&
+            typeof frame.update === "object" &&
+            frame.update !== null &&
+            "type" in frame.update &&
+            frame.update.type === "summary-completed" &&
+            !("failed" in frame.update && frame.update.failed === true)
+          ) {
+            cursorDelivered = undefined;
+            if (cursorPending !== undefined) cursorPending.compacted = true;
+          }
+          if (frame.type === "run.completed" && cursorPending !== undefined) {
+            const result = "result" in frame ? frame.result : undefined;
+            const finished =
+              typeof result === "object" &&
+              result !== null &&
+              "status" in result &&
+              result.status === "finished";
+            if (cursorPending.compacted) cursorDelivered = undefined;
+            else if (cursorPending.instructions !== undefined)
+              cursorDelivered = finished ? cursorPending.instructions : undefined;
+            cursorPending = undefined;
+          }
+        }
+        return entry;
+      }
       if (entry.type !== "expect_outbound") return entry;
       const frame = entry.frame;
       if (typeof frame !== "object" || frame === null) return entry;
+      if (runtime.driver === "cursor" && "type" in frame && frame.type === "agent.close") {
+        cursorDelivered = undefined;
+      }
       if (
         runtime.driver === "cursor" &&
         "type" in frame &&
@@ -32,7 +67,13 @@ export function materializeReplayTranscriptRuntimeInstructions(
         "message" in frame &&
         typeof frame.message === "string"
       ) {
-        return frame.message.endsWith(instructions)
+        if (frame.message.trim() === "/compress") {
+          cursorPending = { instructions: undefined, compacted: false };
+          return entry;
+        }
+        const shouldSend = cursorDelivered !== instructions;
+        cursorPending = { instructions: shouldSend ? instructions : undefined, compacted: false };
+        return !shouldSend || frame.message.endsWith(instructions)
           ? entry
           : { ...entry, frame: { ...frame, message: `${frame.message}\n\n${instructions}` } };
       }

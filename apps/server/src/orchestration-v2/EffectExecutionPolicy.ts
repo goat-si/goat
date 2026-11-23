@@ -5,6 +5,7 @@ export type EffectLane = "general" | "control" | "cleanup" | "start";
 export const EFFECT_LANES = {
   "provider-runtime.continue": "general",
   "provider-session.detach": "control",
+  "provider-session.apply-thread-title": "general",
   "provider-turn.reattach": "general",
   "provider-turn.start": "start",
   "provider-turn.interrupt": "control",

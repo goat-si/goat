@@ -199,8 +199,11 @@ describe("OpenCode replay fixtures", () => {
               });
             });
           yield* start(1);
-          const { providerTurns } = yield* runtime.readThreadSnapshot({ providerThread });
-          const turn = providerTurns.at(-1)!;
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          const turnId = idAllocator.derive.providerTurn({
+            driver: ProviderDriverKind.make("opencode"),
+            nativeTurnId: `${root.id}:attempt:${idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 })}`,
+          });
           const terminal = yield* runtime.events.pipe(
             Stream.filter((event) => event.type === "turn.terminal"),
             Stream.runHead,
@@ -244,7 +247,7 @@ describe("OpenCode replay fixtures", () => {
           const stopping = yield* runtime
             .interruptTurn({
               providerThread,
-              providerTurnId: turn.id,
+              providerTurnId: turnId,
               requestRuntimeRestart: true,
             })
             .pipe(Effect.result, Effect.forkChild);

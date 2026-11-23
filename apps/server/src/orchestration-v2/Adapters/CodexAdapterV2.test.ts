@@ -2950,7 +2950,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "cause.method",
             failAt === 4 ? "thread/unarchive" : "thread/resume",
           );
-          assert.nestedPropertyVal(error, "cause.requestId", String(failAt));
+          assert.nestedPropertyVal(error, "cause.requestId", String(failAt + 2));
           return;
         }
         const resumed = yield* resume;
@@ -4218,7 +4218,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* encodeStringJson(cwd),
           ),
         );
-        const replayDriver = yield* CodexReplay.makeReplayDriver(withConfigReads(localTranscript));
+        const replayDriver = yield* CodexReplay.makeReplayDriver(
+          withConfigReads(localTranscript, true, "Background stop"),
+        );
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, ["init", "--quiet"]))), 0);
         assert.equal(
@@ -4424,7 +4426,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(
               { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
-              CodexAdapterV2Testkit.layer({ transcript: withConfigReads(localTranscript) }),
+              CodexAdapterV2Testkit.layer({
+                transcript: withConfigReads(localTranscript, true, "Background stop untracked"),
+              }),
               { runEffectWorker: false },
             ),
           ),
@@ -7656,7 +7660,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "cause.method",
             failAt === 4 ? "thread/unarchive" : "thread/resume",
           );
-          assert.nestedPropertyVal(error, "cause.requestId", String(failAt));
+          assert.nestedPropertyVal(error, "cause.requestId", String(failAt + 2));
           return;
         }
         const resumed = yield* resume;
@@ -8142,6 +8146,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 thread: {
                   id: nativeThreadId,
                   historyMode: "paginated",
+                  cwd: "/workspace",
                   status: { type: "notLoaded" },
                 },
               },
@@ -8855,6 +8860,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           model: "gpt-5.4",
           config: {
             ...CODEX_EXPECTED_THREAD_CONFIG,
+            "shell_environment_policy.set.GOAT_THREAD_ID": `thread-${scenario}`,
+            "shell_environment_policy.set.T3CODE_THREAD_ID": `thread-${scenario}`,
             "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
             "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
@@ -8925,6 +8932,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               scenario: "mcp-config-normalization",
               entries,
             }),
+            false,
           ),
         );
         yield* Effect.gen(function* () {

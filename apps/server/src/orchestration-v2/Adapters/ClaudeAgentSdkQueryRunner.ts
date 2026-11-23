@@ -55,14 +55,12 @@ import {
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
-  CLAUDE_ROOT_REFUSAL,
   CLAUDE_CONVERSATION_NOT_FOUND,
-  ClaudeConversationNotFoundError,
   ClaudeAgentSdkQueryRunnerError,
-  ClaudeCodeRootRefusalError,
   ClaudeMcpRegistrationTimeoutError,
   isClaudeMcpRegistrationTimeoutError,
   queryRunnerError,
+  claudeStreamFailure,
 } from "./ClaudeQueryRunnerErrors.ts";
 export {
   ClaudeAgentSdkQueryRunnerError,
@@ -70,7 +68,6 @@ export {
   claudeProcessExitFailure,
   queryRunnerError,
 } from "./ClaudeQueryRunnerErrors.ts";
-
 const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
@@ -416,6 +413,7 @@ const runClaudeWorker = Effect.fn("runClaudeWorker")(function* (input: {
         },
       },
     ),
+    input.method === "getSessionMessages" ? { maxStdoutBytes: 64 * 1024 * 1024 } : undefined,
   ).pipe(Effect.timeout("30 seconds"));
   if (result.code !== 0) {
     return yield* new ClaudeAgentSdkQueryRunnerError({
@@ -526,6 +524,7 @@ export const layerQueryRunner: Layer.Layer<
       };
       let refreshDescendants: Effect.Effect<void> = Effect.void;
       let awaitDescendants: Effect.Effect<void> = Effect.void;
+      let descendantTracker: ReturnType<typeof descendants.track> | undefined;
       const spawnProcess =
         options.spawnClaudeCodeProcess ??
         ((spawnOptions: ClaudeSpawnOptions) => {
@@ -546,6 +545,7 @@ export const layerQueryRunner: Layer.Layer<
                 runFork(tracker.stop.pipe(Effect.ensuring(Deferred.succeed(stopped, undefined)))),
               );
               refreshDescendants = tracker.refresh;
+              descendantTracker = tracker;
               awaitDescendants = Deferred.await(stopped);
             }
             return child;
@@ -692,16 +692,13 @@ export const layerQueryRunner: Layer.Layer<
               Effect.gen(function* () {
                 if (!answered)
                   yield* Effect.promise(() => stderrClosed).pipe(Effect.timeoutOption("1 second"));
-                const refusedRoot = !answered && stderrTail.includes(CLAUDE_ROOT_REFUSAL);
-                return yield* queryRunnerError(
-                  refusedRoot
-                    ? new ClaudeCodeRootRefusalError({ cause })
-                    : conversationMissing ||
-                        (!answered && stderrTail.includes(CLAUDE_CONVERSATION_NOT_FOUND))
-                      ? new ClaudeConversationNotFoundError({ cause })
-                      : cause,
-                  "fromAsyncIterable",
-                );
+                return yield* yield* claudeStreamFailure({
+                  cause,
+                  answered,
+                  conversationMissing,
+                  stderr: stderrTail,
+                  threadId: input.threadId,
+                });
               }),
             ),
           ),
@@ -717,6 +714,7 @@ export const layerQueryRunner: Layer.Layer<
               stderrTail = "";
             }),
           ),
+          Stream.tap((message) => descendantTracker?.follow(message) ?? Effect.void),
           Stream.tap((message) =>
             logProtocolEvent({
               direction: "incoming",
@@ -728,6 +726,7 @@ export const layerQueryRunner: Layer.Layer<
         offer: (message, onQueued) =>
           Effect.uninterruptibleMask((restore) =>
             restore(Queue.offer(promptQueue, message)).pipe(
+              Effect.tap(() => descendantTracker?.follow(message) ?? Effect.void),
               Effect.tap(() => Effect.sync(() => onQueued?.())),
             ),
           ).pipe(

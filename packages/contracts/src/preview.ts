@@ -323,6 +323,7 @@ export const DiscoveredLocalServer = Schema.Struct({
   url: Url,
   processName: Schema.NullOr(TrimmedNonEmptyString),
   pid: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
+  agent: Schema.optionalKey(Schema.NullOr(Schema.Struct({ threadId: ThreadId }))),
   terminal: Schema.NullOr(
     Schema.Struct({
       threadId: ThreadId,

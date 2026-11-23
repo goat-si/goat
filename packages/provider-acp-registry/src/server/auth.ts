@@ -83,7 +83,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
           failure("start", "Could not prepare the selected ACP agent.", cause),
         ),
       );
-  const makeRuntime =
+  const makeRuntimeImpl =
     options.makeRuntime ??
     ((spawn) =>
       Effect.gen(function* () {
@@ -117,6 +117,14 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         ),
       ));
 
+  const makeRuntime = (resolved: AcpRegistrySupport.ResolvedAcpRegistryAgent) =>
+    catalog.prepareRuntimeSpawn(resolved).pipe(
+      Effect.mapError((cause) =>
+        failure("start", "Could not prepare the selected ACP agent.", cause),
+      ),
+      Effect.flatMap(makeRuntimeImpl),
+    );
+
   let knownMethods:
     | {
         readonly version: string;
@@ -147,7 +155,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         knownMethods.key === key
       )
         return knownMethods.methods;
-      const runtime = yield* makeRuntime(resolved.spawn);
+      const runtime = yield* makeRuntime(resolved);
       const initialized = yield* runtime
         .initialize()
         .pipe(
@@ -204,12 +212,20 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         "start",
         "Interactive provider login is unavailable on this environment.",
       );
+    const spawn = yield* catalog
+      .prepareRuntimeSpawn(resolved)
+      .pipe(
+        Effect.mapError((cause) =>
+          failure("start", "Could not prepare the selected ACP agent.", cause),
+        ),
+      );
     yield* runProviderLoginTerminal({
       pty: pty.value,
-      command: resolved.spawn.command,
-      args: [...resolved.spawn.args, ...(method.args ?? [])],
+      retainFailureOutput: true,
+      command: spawn.command,
+      args: [...spawn.args, ...(method.args ?? [])],
       cwd: options.cwd,
-      env: { ...environment, ...resolved.spawn.env, ...method.env },
+      env: { ...environment, ...spawn.env, ...method.env },
       context,
       failure,
     });
@@ -229,7 +245,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         const resolved = yield* resolve(environment);
         const runtimeScope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(runtimeScope, Exit.void));
-        const runtime = yield* makeRuntime(resolved.spawn).pipe(
+        const runtime = yield* makeRuntime(resolved).pipe(
           Effect.provideService(Scope.Scope, runtimeScope),
         );
         yield* runtime.handleElicitation((request) =>
@@ -273,7 +289,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
           yield* runTerminal(resolved, method, context, environment).pipe(Effect.scoped);
           // Terminal login is a separate invocation. Reconnect after it exits so
           // the ACP process reads the credentials its login command persisted.
-          const verifiedRuntime = yield* makeRuntime(resolved.spawn);
+          const verifiedRuntime = yield* makeRuntime(resolved);
           yield* context.verifying;
           yield* verifiedRuntime
             .start()
@@ -323,7 +339,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         ...(yield* options.currentEnvironment ?? Effect.succeed(options.environment)),
       };
       const resolved = yield* resolve(environment);
-      const runtime = yield* makeRuntime(resolved.spawn);
+      const runtime = yield* makeRuntime(resolved);
       yield* runtime.logout.pipe(
         Effect.mapError((cause) =>
           failure(

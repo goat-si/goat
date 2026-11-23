@@ -75,3 +75,73 @@ export function npmShimExecutable(
   const executable = path.join(path.dirname(shimPath), target);
   return isFile(executable) ? executable : undefined;
 }
+
+/** Git for Windows' bash beside a git.exe from its install, never WSL's System32 bash.exe. */
+export function gitForWindowsBash(
+  gitExecutable: string,
+  isFile: (filePath: string) => boolean = isFileSync,
+): string | undefined {
+  const path = NodePath.win32;
+  if (path.basename(gitExecutable).toLowerCase() !== "git.exe") return undefined;
+  // git.exe lives in <root>\cmd, <root>\bin, or <root>\<build>\bin.
+  const launcherRoot = path.dirname(path.dirname(gitExecutable));
+  return [launcherRoot, path.dirname(launcherRoot)]
+    .map((root) => path.join(root, "bin", "bash.exe"))
+    .find(isFile);
+}
+
+async function isFileAsync(filePath: string): Promise<boolean> {
+  try {
+    return (await NodeFS.promises.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export async function preferGitForWindowsBinaryAsync(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  if (env.MSYSTEM) return executable;
+  const path = NodePath.win32;
+  if (path.basename(executable).toLowerCase() !== "git.exe") return executable;
+  const launcherDirectory = path.dirname(executable);
+  const launcherFolder = path.basename(launcherDirectory).toLowerCase();
+  if (launcherFolder !== "cmd" && launcherFolder !== "bin") return executable;
+  const installRoot = path.dirname(launcherDirectory);
+  for (const build of GIT_FOR_WINDOWS_BUILDS) {
+    const candidate = path.join(installRoot, build, "bin", "git.exe");
+    if (await isFileAsync(candidate)) return candidate;
+  }
+  return executable;
+}
+
+export async function npmShimExecutableAsync(shimPath: string): Promise<string | undefined> {
+  const path = NodePath.win32;
+  if (path.extname(shimPath).toLowerCase() !== ".cmd") return undefined;
+  let contents: string;
+  try {
+    contents = await NodeFS.promises.readFile(shimPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  const lines = contents.split(/\r?\n/).filter((line) => line.length > 0);
+  if (lines.length !== NPM_EXECUTABLE_SHIM_PREFIX.length + 1) return undefined;
+  if (NPM_EXECUTABLE_SHIM_PREFIX.some((expected, index) => lines[index] !== expected))
+    return undefined;
+  const target = NPM_EXECUTABLE_SHIM_RUN.exec(lines.at(-1) ?? "")?.[1];
+  if (target === undefined) return undefined;
+  const executable = path.join(path.dirname(shimPath), target);
+  return (await isFileAsync(executable)) ? executable : undefined;
+}
+
+export async function gitForWindowsBashAsync(gitExecutable: string): Promise<string | undefined> {
+  const path = NodePath.win32;
+  if (path.basename(gitExecutable).toLowerCase() !== "git.exe") return undefined;
+  const launcherRoot = path.dirname(path.dirname(gitExecutable));
+  for (const root of [launcherRoot, path.dirname(launcherRoot)]) {
+    const candidate = path.join(root, "bin", "bash.exe");
+    if (await isFileAsync(candidate)) return candidate;
+  }
+  return undefined;
+}

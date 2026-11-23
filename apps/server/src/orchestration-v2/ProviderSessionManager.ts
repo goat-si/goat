@@ -1,9 +1,16 @@
+import {
+  claimIdleThreadUnload,
+  detachIdleThreads,
+  type IdleThreadUnload,
+} from "./ProviderSessionIdleThreads.ts";
 import { busyTurnPrefix, busyTurnKey } from "./ProviderSessionBusyKeys.ts";
 import {
   makeProviderSessionEventSubscription,
   type ProviderSessionEventSignal,
 } from "./providerSessionEventSubscription.ts";
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
+import { makeLostBackgroundWorkWriter, makeReleasedWorkNote } from "./providerSessionLostWork.ts";
+import { makeIdleTimeout } from "./providerSessionIdleTimeout.ts";
 import {
   makeReleasedBackgroundWork,
   type ReleasedProviderThread,
@@ -111,7 +118,6 @@ export type {
   ProviderSessionManagerV2Shape,
   ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
-const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
@@ -136,7 +142,7 @@ export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2Shape
 >()("goat/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
-interface LiveSessionEntry {
+export interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /** Scope revocation to recorded credential ids so superseded sessions cannot revoke replacements opened before detach. */
@@ -158,13 +164,7 @@ interface LiveSessionEntry {
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   readonly pinnedSinceMs: number | null;
-  readonly idleThreadUnloads: ReadonlyMap<ThreadId, IdleThreadUnload>;
-}
-
-interface IdleThreadUnload {
-  readonly providerThread: OrchestrationV2ProviderThread;
-  readonly generation: number;
-  readonly fiber: Fiber.Fiber<void, never> | null;
+  readonly idleThreadUnloads: ReadonlyMap<ProviderThreadId, IdleThreadUnload>;
 }
 
 export const layerWithOptions = (
@@ -331,7 +331,7 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
-      const idleTimeoutMs = Math.max(1, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
+      const idleTimeoutFor = makeIdleTimeout(options.idleTimeoutMs);
       const maxIdlePinMs = Math.max(0, options.maxIdlePinMs ?? DEFAULT_MAX_IDLE_PIN_MS);
       interface PreparedMcpCredential {
         readonly mcpCredentialId: string | undefined;
@@ -955,6 +955,9 @@ export const layerWithOptions = (
         writeReleasedProcessTaskEvents,
         writeReleasedBackgroundWorkEvents,
       } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
+      const writeLostBackgroundWork = makeLostBackgroundWorkWriter(
+        makeReleasedWorkNote({ projectionStore, eventSink, idAllocator }),
+      );
 
       const writeReleaseRecords = (input: {
         readonly entry: LiveSessionEntry;
@@ -1239,7 +1242,7 @@ export const layerWithOptions = (
                 )) ||
             // Closing now would skip the archive of a child whose parent has not taken its result.
             Option.isSome(
-              yield* Effect.findFirst(entry.idleThreadUnloads.keys(), (threadId) =>
+              yield* Effect.findFirst(entry.idleThreadUnloads.values(), ({ threadId }) =>
                 delegatedChildArchive(threadId).pipe(
                   Effect.map((child) => child === "awaiting_delivery"),
                 ),
@@ -1282,7 +1285,9 @@ export const layerWithOptions = (
               );
               // Recheck on this fiber; scheduleIdleReleaseInternal would interrupt it and self-deadlock.
               yield* Effect.sleep(
-                Duration.millis(entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs),
+                Duration.millis(
+                  entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutFor(entry.runtime),
+                ),
               );
               return yield* releaseIfStillIdle(input);
             }
@@ -1294,10 +1299,11 @@ export const layerWithOptions = (
           // Closing skips the threads' own idle unloads, so archive delivered children first.
           yield* Effect.forEach(
             entry.idleThreadUnloads,
-            ([threadId, pending]) =>
+            ([providerThreadId, pending]) =>
               unloadIdleThread({
                 providerSessionId: input.providerSessionId,
-                threadId,
+                threadId: pending.threadId,
+                providerThreadId,
                 generation: pending.generation,
                 archiveOnly: true,
               }),
@@ -1353,7 +1359,7 @@ export const layerWithOptions = (
 
         yield* cancelIdleFiber(entry.idleFiber);
         const generation = entry.idleGeneration + 1;
-        const delay = entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs;
+        const delay = entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutFor(entry.runtime);
         const idleFiber = yield* Effect.sleep(Duration.millis(delay)).pipe(
           Effect.andThen(releaseIfStillIdle({ providerSessionId, generation })),
           Effect.forkIn(layerScope),
@@ -1689,18 +1695,18 @@ export const layerWithOptions = (
 
       const updateIdleThreadUnload = (
         providerSessionId: ProviderSessionId,
-        threadId: ThreadId,
+        providerThreadId: ProviderThreadId,
         update: (current: IdleThreadUnload | undefined) => IdleThreadUnload | undefined,
       ) =>
         Ref.modify(sessions, (current) => {
           const key = sessionKey(providerSessionId);
           const entry = current.get(key);
           if (entry === undefined) return [undefined, current] as const;
-          const previous = entry.idleThreadUnloads.get(threadId);
+          const previous = entry.idleThreadUnloads.get(providerThreadId);
           const next = update(previous);
           const idleThreadUnloads = new Map(entry.idleThreadUnloads);
-          if (next === undefined) idleThreadUnloads.delete(threadId);
-          else idleThreadUnloads.set(threadId, next);
+          if (next === undefined) idleThreadUnloads.delete(providerThreadId);
+          else idleThreadUnloads.set(providerThreadId, next);
           const updated = new Map(current);
           updated.set(key, { ...entry, idleThreadUnloads });
           return [previous, updated] as const;
@@ -1728,8 +1734,9 @@ export const layerWithOptions = (
           }
           const previous = yield* updateIdleThreadUnload(
             input.providerSessionId,
-            input.threadId,
+            input.providerThread.id,
             (current) => ({
+              threadId: input.threadId,
               providerThread: input.providerThread,
               generation: (current?.generation ?? 0) + 1,
               fiber: null,
@@ -1743,20 +1750,27 @@ export const layerWithOptions = (
         function* (providerSessionId: ProviderSessionId, providerThreadId: ProviderThreadId) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(providerSessionId));
           if (entry === undefined || hasBusyTurn(entry, providerThreadId)) return;
-          const tracked = Array.from(entry.idleThreadUnloads).find(
-            ([, pending]) => pending.providerThread.id === providerThreadId,
-          );
-          if (tracked === undefined) return;
-          const [threadId, pending] = tracked;
+          const pending = entry.idleThreadUnloads.get(providerThreadId);
+          if (pending === undefined) return;
           const generation = pending.generation + 1;
-          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
-            Effect.andThen(unloadIdleThread({ providerSessionId, threadId, generation })),
+          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutFor(entry.runtime))).pipe(
+            Effect.andThen(
+              unloadIdleThread({
+                providerSessionId,
+                threadId: pending.threadId,
+                providerThreadId,
+                generation,
+              }),
+            ),
             Effect.forkIn(layerScope),
           );
-          const previous = yield* updateIdleThreadUnload(providerSessionId, threadId, (current) =>
-            current?.generation === pending.generation
-              ? { ...current, generation, fiber }
-              : current,
+          const previous = yield* updateIdleThreadUnload(
+            providerSessionId,
+            providerThreadId,
+            (current) =>
+              current?.generation === pending.generation
+                ? { ...current, generation, fiber }
+                : current,
           );
           yield* cancelIdleFiber(
             previous?.generation === pending.generation ? previous.fiber : fiber,
@@ -1799,6 +1813,7 @@ export const layerWithOptions = (
         function* (input: {
           readonly providerSessionId: ProviderSessionId;
           readonly threadId: ThreadId;
+          readonly providerThreadId: ProviderThreadId;
           readonly generation: number;
           /** Session release unloads only the threads it would archive, and never waits. */
           readonly archiveOnly?: boolean;
@@ -1808,7 +1823,7 @@ export const layerWithOptions = (
             Effect.gen(function* () {
               const key = sessionKey(input.providerSessionId);
               const entry = (yield* Ref.get(sessions)).get(key);
-              const pending = entry?.idleThreadUnloads.get(input.threadId);
+              const pending = entry?.idleThreadUnloads.get(input.providerThreadId);
               const unloadThread = entry?.exposedRuntime.unloadThread;
               if (
                 entry === undefined ||
@@ -1827,35 +1842,18 @@ export const layerWithOptions = (
                   : yield* entry.runtime
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
-              if (hasPendingWork) return "deferred" as const;
+              if (hasPendingWork) return { retryAfterMs: idleTimeoutFor(entry.runtime) };
               const child = yield* delegatedChildArchive(input.threadId);
               // Unloading now would miss the archive once the parent takes the result.
-              if (child === "awaiting_delivery") return "deferred" as const;
+              if (child === "awaiting_delivery")
+                return { retryAfterMs: idleTimeoutFor(entry.runtime) };
               const archive = child === "ready";
               if (input.archiveOnly === true && !archive) return "skipped" as const;
-              const unloading = yield* Ref.modify(sessions, (current) => {
-                const latest = current.get(key);
-                if (
-                  latest?.runtime !== entry.runtime ||
-                  latest.idleThreadUnloads.get(input.threadId)?.generation !== input.generation
-                ) {
-                  return [false, current] as const;
-                }
-                const loadedProviderThreadKeyByThread = new Map(
-                  latest.loadedProviderThreadKeyByThread,
-                );
-                loadedProviderThreadKeyByThread.delete(input.threadId);
-                const idleThreadUnloads = new Map(latest.idleThreadUnloads);
-                idleThreadUnloads.delete(input.threadId);
-                const updated = new Map(current);
-                updated.set(key, {
-                  ...latest,
-                  loadedProviderThreadKeyByThread,
-                  idleThreadUnloads,
-                });
-                return [true, updated] as const;
-              });
-              if (!unloading) return "skipped" as const;
+              // null when skipped, otherwise whether this native thread is the app thread's loaded one.
+              const unloadsLoadedThread = yield* Ref.modify(sessions, (current) =>
+                claimIdleThreadUnload(current, key, entry.runtime, input, pending),
+              );
+              if (unloadsLoadedThread === null) return "skipped" as const;
               const unload = (archiveThread: boolean) =>
                 unloadThread({
                   providerThread: pending.providerThread,
@@ -1886,8 +1884,8 @@ export const layerWithOptions = (
             }),
           );
           // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred" && input.archiveOnly !== true) {
-            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
+          if (typeof outcome === "object" && input.archiveOnly !== true) {
+            yield* Effect.sleep(Duration.millis(outcome.retryAfterMs));
             return yield* unloadIdleThread(input);
           }
         },
@@ -2217,6 +2215,8 @@ export const layerWithOptions = (
             if (nativeEvent.type === "command_output.delta") {
               return commandOutput.append(nativeEvent);
             }
+            if (nativeEvent.type === "background_work.lost")
+              return writeLostBackgroundWork(nativeEvent, entry.runtime);
             const tracked = retryStalls.track(nativeEvent);
             const event = tracked.event;
             const releaseLiveOutput =
@@ -2858,7 +2858,7 @@ export const layerWithOptions = (
                 return [
                   Option.none<{
                     readonly entry: LiveSessionEntry;
-                    readonly idleUnloadFiber: Fiber.Fiber<void, never> | null;
+                    readonly idleUnloadFibers: ReadonlyArray<Fiber.Fiber<void, never>>;
                   }>(),
                   current,
                 ] as const;
@@ -2877,8 +2877,10 @@ export const layerWithOptions = (
                       return pruned;
                     })()
                   : entry.mcpCredentialIdByThread;
-              const idleThreadUnloads = new Map(entry.idleThreadUnloads);
-              idleThreadUnloads.delete(input.threadId);
+              const { remaining: idleThreadUnloads, fibers: idleUnloadFibers } = detachIdleThreads(
+                entry.idleThreadUnloads,
+                input.threadId,
+              );
               const updatedEntry = {
                 ...entry,
                 attachedThreadIds,
@@ -2891,7 +2893,7 @@ export const layerWithOptions = (
               return [
                 Option.some({
                   entry: updatedEntry,
-                  idleUnloadFiber: entry.idleThreadUnloads.get(input.threadId)?.fiber ?? null,
+                  idleUnloadFibers,
                 }),
                 updated,
               ] as const;
@@ -2900,7 +2902,9 @@ export const layerWithOptions = (
               const credentialId = currentEntry?.mcpCredentialIdByThread.get(input.threadId);
               if (credentialId !== undefined)
                 yield* revokeProxyChannel(input.threadId, credentialId);
-              yield* cancelIdleFiber(detachResult.value.idleUnloadFiber);
+              yield* Effect.forEach(detachResult.value.idleUnloadFibers, cancelIdleFiber, {
+                discard: true,
+              });
             }
             const detached = Option.map(detachResult, (result) => result.entry);
             // Plain detaches preserve credentials held by live shared providers across workspace handoffs.

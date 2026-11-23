@@ -106,7 +106,7 @@ describe("CloudProviderAutoSetup.apply", () => {
         ProviderDriverKind.make("devinCloud"),
       );
     }).pipe(
-      Effect.provideService(SpawnExecutableResolution, (command) =>
+      Effect.provideService(SpawnExecutableResolution, async (command) =>
         command === "devin" ? cli.devin : command === "cursor-agent" ? cli.cursorAgent : undefined,
       ),
       Effect.provide(ServerSettingsModule.ServerSettingsService.layerTest()),

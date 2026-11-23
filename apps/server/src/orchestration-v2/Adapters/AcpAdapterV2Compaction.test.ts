@@ -175,14 +175,18 @@ describe("ACP compaction through an advertised command", () => {
 
   it.live.each([
     { active: "plan", target: "compact", allowed: true },
+    { active: "plan", target: "compact", allowed: true, loadedCommandsDelayMs: 50 },
     { active: "compact", target: "plan", allowed: false },
     { active: "compact", target: undefined, allowed: false },
   ])(
     "validates the target session's compact command ($active -> $target)",
-    ({ active, target, allowed }) =>
+    ({ active, target, allowed, loadedCommandsDelayMs }) =>
       Effect.gen(function* () {
         const harness = yield* makeAdvertisedCompactionHarness({
           GOAT_ACP_AVAILABLE_COMMANDS: active,
+          ...(loadedCommandsDelayMs === undefined
+            ? {}
+            : { GOAT_ACP_LOADED_COMMANDS_DELAY_MS: String(loadedCommandsDelayMs) }),
           ...(target === undefined ? {} : { GOAT_ACP_LOADED_COMMANDS: target }),
         });
         const result = yield* harness.compact(true);

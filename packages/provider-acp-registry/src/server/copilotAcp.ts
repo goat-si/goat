@@ -68,7 +68,7 @@ type CopilotToolIdentity =
   | { readonly kind: "mcp"; readonly server: string; readonly tool: string }
   | { readonly kind: "search" };
 
-const COPILOT_SEARCH_TOOLS = new Set(["glob", "grep"]);
+const COPILOT_SEARCH_TOOLS = new Set(["glob", "grep", "rg"]);
 const COPILOT_MAX_SEEN_CALLS = 8192;
 const COPILOT_MAX_SESSION_CALLS = 256;
 const COPILOT_MAX_TOTAL_CALLS = 4096;
@@ -153,12 +153,19 @@ export function makeCopilotSubagentRouting() {
       if (retired.has(context.runtime)) return Effect.void;
       const sessions = sessionsFor(context.runtime);
       const data = event.data ?? {};
-      const task = typeof data.parentToolCallId === "string" ? data.parentToolCallId : undefined;
       switch (event.type) {
         case "assistant.message_delta":
         case "assistant.reasoning_delta": {
           if (typeof data.deltaContent !== "string") return Effect.void;
-          session(context.runtime, event.sessionId).delta = {
+          const current = session(context.runtime, event.sessionId);
+          // Copilot 1.0.114+ names a subagent's deltas only by agentId, without parentToolCallId.
+          const task =
+            typeof data.parentToolCallId === "string"
+              ? data.parentToolCallId
+              : event.agentId === undefined
+                ? undefined
+                : current.taskByAgentId.get(event.agentId);
+          current.delta = {
             kind: event.type,
             text: data.deltaContent,
             ...(task === undefined ? {} : { task }),

@@ -1,4 +1,4 @@
-import { CommandId, ProviderTurnId, RunId, ThreadId } from "@goat/contracts";
+import { CommandId, MessageId, ProviderTurnId, RunId, ThreadId } from "@goat/contracts";
 import { MAX_RECOVERY_RESENDS } from "./goat/RecoveryResendLimits.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
@@ -88,6 +88,10 @@ export interface EffectOutboxV2Shape {
   readonly listByCommandId: (
     commandId: CommandId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly firstSteer: (
+    threadId: ThreadId,
+    messageId: MessageId,
+  ) => Effect.Effect<Option.Option<OrchestrationEffectV2>, EffectOutboxError>;
   readonly hasDelegatedStop: (
     parentThreadId: ThreadId,
     childThreadId: ThreadId,
@@ -484,6 +488,17 @@ export const layer = Layer.effect(
             isEffectOutboxError(cause)
               ? cause
               : new EffectOutboxError({ operation: "list", cause }),
+          ),
+        ),
+      firstSteer: (threadId, messageId) =>
+        sql<EffectRow>`SELECT * FROM orchestration_v2_effect_outbox WHERE thread_id = ${threadId} AND effect_type = 'provider-turn.steer' AND json_extract(payload_json, '$.messageId') = ${messageId} ORDER BY rowid ASC LIMIT 1`.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.flatMap((rows) => decodeRows("first-steer", rows)),
+          Effect.map((effects) => Option.fromNullishOr(effects[0])),
+          Effect.mapError((cause) =>
+            isEffectOutboxError(cause)
+              ? cause
+              : new EffectOutboxError({ operation: "first-steer", cause }),
           ),
         ),
       listNeverAttemptedStarts: (threadId) =>

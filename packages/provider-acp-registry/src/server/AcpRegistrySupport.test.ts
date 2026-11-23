@@ -346,6 +346,27 @@ describe("AcpRegistrySupport", () => {
       const npmCommands = yield* fileSystem.readFileString(toolchain.logPath);
       expect(npmCommands.match(/^install --global /gmu)).toHaveLength(1);
       expect(npmCommands).toContain("install --global @example/acp@V1.2.3");
+
+      // A missing npm bin link must not select an unrelated command from the user's PATH.
+      const userBin = `${cacheDir}/user-bin`;
+      yield* fileSystem.makeDirectory(userBin);
+      yield* fileSystem.writeFileString(`${userBin}/example-agent`, "#!/bin/sh\n");
+      yield* fileSystem.chmod(`${userBin}/example-agent`, 0o755);
+      yield* fileSystem.remove(toolchain.executablePath);
+      const userEnvironment = {
+        ...toolchain.environment,
+        PATH: `${userBin}:${toolchain.environment.PATH}`,
+      };
+      const repaired = yield* resolver.resolve(settings(), "/workspace", userEnvironment);
+      expect(repaired.spawn.command).toBe(toolchain.executablePath);
+      const repairCommands = yield* fileSystem.readFileString(toolchain.logPath);
+      expect(repairCommands.match(/^install --global /gmu)).toHaveLength(2);
+
+      yield* fileSystem.remove(toolchain.executablePath);
+      const failedRepair = yield* resolver
+        .resolve(settings(), "/workspace", { ...userEnvironment, npm_config_bin_links: "false" })
+        .pipe(Effect.flip);
+      expect(failedRepair.reason).toBe("install_failed");
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -386,6 +407,56 @@ describe("AcpRegistrySupport", () => {
         command: path.join(userGlobalBin, "example-agent"),
         env: { PATH: expect.stringMatching(new RegExp(`^${userGlobalBin}:`, "u")) },
       });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+        ),
+      ),
+    );
+  });
+
+  it.effect("gives Windows npm commands only the managed prefix spelling", () => {
+    const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-windows-npm-prefix-",
+      });
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
+      const environment = { ...toolchain.environment, NPM_CONFIG_PREFIX: "C:\\inherited-npm" };
+      const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const npmEnvironments: Array<Record<string, unknown>> = [];
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, environment),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(SpawnExecutableResolution, (command) =>
+          command === "npm" ? toolchain.npmPath : undefined,
+        ),
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) => {
+            if (command._tag === "StandardCommand" && command.command === toolchain.npmPath) {
+              npmEnvironments.push({ ...command.options.env });
+            }
+            return realSpawner.spawn(command);
+          }),
+        ),
+      );
+
+      yield* resolver.resolve(settings(), "C:\\workspace", environment).pipe(Effect.ignore);
+
+      expect(npmEnvironments.length).toBeGreaterThan(0);
+      for (const env of npmEnvironments) {
+        expect(Object.keys(env).filter((key) => key.toLowerCase() === "npm_config_prefix")).toEqual(
+          ["npm_config_prefix"],
+        );
+      }
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -495,7 +566,7 @@ describe("AcpRegistrySupport", () => {
         registryUrl,
       }).pipe(
         Effect.provideService(HostProcess.Platform, "win32"),
-        Effect.provideService(SpawnExecutableResolution, (command) => {
+        Effect.provideService(SpawnExecutableResolution, async (command) => {
           if (command === "uv") return toolchain.uvPath;
           if (command === "fast-agent") return toolchain.executablePath;
           return undefined;

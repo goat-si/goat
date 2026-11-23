@@ -80,6 +80,13 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
       threadDisposition: "reusable",
     };
 
+    const modeEvent: ProviderAdapter.ProviderAdapterV2Event = {
+      type: "thread_model_selection.updated",
+      driver,
+      threadId: first.threadId,
+      instanceId: ProviderInstanceId.make("mode-provider"),
+      changes: [{ id: "mode", from: "plan", to: "default" }],
+    };
     const firstInitial = RunExecutionService.makeProviderEventRoutingState({
       identity: first,
       providerTurnId: null,
@@ -99,6 +106,8 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
       secondInitial,
     );
 
+    assert.isTrue(RunExecutionService.routeProviderEvent(modeEvent, first, firstInitial)[0]);
+    assert.isFalse(RunExecutionService.routeProviderEvent(modeEvent, second, secondInitial)[0]);
     assert.isTrue(firstTurnAccepted);
     assert.isFalse(secondTurnAccepted);
     assert.isTrue(RunExecutionService.routeProviderEvent(messageEvent, first, firstAfterTurn)[0]);

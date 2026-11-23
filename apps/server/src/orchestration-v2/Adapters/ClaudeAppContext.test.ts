@@ -1,5 +1,6 @@
-import { CheckpointId, RunAttemptId } from "@goat/contracts";
+import { CheckpointId, RunAttemptId, MessageId, RunId } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -198,4 +199,46 @@ it.effect("resends app context after rewinding the same Claude session", () =>
       assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
     }).pipe(Effect.provide(layerClaudeAdapterTest)),
   ),
+);
+
+it.effect("sends changed app context on a steer only once", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeWakeHarnessWithOptions();
+    const attempt = RunAttemptId.make("app-steer");
+    yield* harness.runtime.startTurn({
+      ...makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: DateTime.makeUnsafe(0),
+        attemptId: attempt,
+        text: "start",
+        attachments: [],
+      }),
+      appContext: [{ key: "mcp_app_1", text: "old" }],
+    });
+    const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+      driver: CLAUDE_PROVIDER,
+      nativeTurnId: `turn:${attempt}`,
+    });
+    const steer = (ordinal: number) =>
+      harness.runtime.steerTurn({
+        threadId: harness.threadId,
+        runId: RunId.make(`run-${attempt}`),
+        providerThread: harness.providerThread,
+        providerTurnId,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make(`steer-${ordinal}`),
+          text: "continue",
+          attachments: [],
+        },
+        appContext: [{ key: "mcp_app_1", text: "new <state>" }],
+      });
+    yield* steer(1);
+    const text = (index: number) => JSON.stringify(harness.offeredMessages[index]?.message.content);
+    assert.include(text(1), "new &lt;state&gt;");
+    yield* steer(2);
+    assert.notInclude(text(2), "new &lt;state&gt;");
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );

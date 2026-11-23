@@ -252,3 +252,13 @@ export function makeAcpClientPolicyGrants(): AcpClientPolicyGrants {
     allowsExecute: (turnKey) => sessionExecute || (turnKey !== null && turnExecute === turnKey),
   };
 }
+
+export function acpModeAllowed(mode: RuntimeMode | undefined, ceiling: RuntimeMode): boolean {
+  const order: ReadonlyArray<RuntimeMode> = [
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+  ];
+  return mode !== undefined && order.indexOf(mode) <= order.indexOf(ceiling);
+}

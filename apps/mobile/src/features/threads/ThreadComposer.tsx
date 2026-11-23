@@ -299,11 +299,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
       Date.now(),
+      currentModelSelection.model,
     );
     onShowUsageLimits(report);
-    if (!report) {
+    if (!report)
       Dialog.alert("Usage limits unavailable", "This provider does not currently report limits.");
-    }
     return report !== null;
   };
   const composerFork = useComposerFork({

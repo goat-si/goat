@@ -123,21 +123,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
       }),
   );
 
-  it.effect("falls back to runtime 1.4.5 when Google's CLI manifest offers no release", () =>
-    Effect.gen(function* () {
-      const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
-      const started = yield* installation.start;
-      expect(started.version).toBe("1.4.5");
-      yield* terminalState(installation);
-      expect(requests).toEqual([
-        hostPlatform === "win32"
-          ? "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json"
-          : "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json",
-        hostPlatform === "win32"
-          ? "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-x86_64.zip"
-          : "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.5-linux-x86_64.zip",
-      ]);
-    }),
+  it.effect(
+    "does not install the incompatible legacy runtime when the CLI channel is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
+        const error = yield* installation.start.pipe(Effect.flip);
+        expect(error.detail).toContain("No Antigravity release is available");
+        expect(requests).toEqual([
+          hostPlatform === "win32"
+            ? "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json"
+            : "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json",
+        ]);
+      }),
   );
 
   it.effect("reports missing Node before downloading the standalone provider runtime", () =>
@@ -820,6 +818,55 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
           path.join(installation.managedDirectory, "active.json"),
         ]);
       }),
+  );
+
+  it.effect("publishes a Windows release once a transient EPERM on the release rename clears", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const archive = Buffer.from(zipFixtures.windows, "base64");
+      const releaseRenameDenied = yield* Deferred.make<void>();
+      let releaseRenameDenials = 3;
+      const { installation } = yield* makeHarness({
+        platform: "win32",
+        archive,
+        fileSystem: FileSystem.FileSystem.of({
+          ...fs,
+          rename: (source, target) =>
+            Effect.suspend(() => {
+              if (
+                path.basename(path.dirname(target)) !== "versions" ||
+                releaseRenameDenials === 0
+              ) {
+                return fs.rename(source, target);
+              }
+              releaseRenameDenials -= 1;
+              return Deferred.succeed(releaseRenameDenied, undefined).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "Unknown",
+                      module: "FileSystem",
+                      method: "rename",
+                      pathOrDescriptor: source,
+                      description: "EPERM: operation not permitted, rename",
+                    }),
+                  ),
+                ),
+              );
+            }),
+        }),
+      });
+      yield* installation.start;
+      const terminal = yield* terminalState(installation).pipe(Effect.forkChild);
+      yield* Deferred.await(releaseRenameDenied);
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* Fiber.join(terminal)).toMatchObject({
+        phase: "succeeded",
+        installedVersion: "fixture-new",
+      });
+      expect((yield* installation.resolve()).version).toBe("fixture-new");
+    }),
   );
 
   it.effect("reports unsupported hosts without downloading or changing state", () =>

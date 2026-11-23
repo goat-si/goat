@@ -340,6 +340,29 @@ export function commandVerb(status: ReturnType<typeof liveActivityToolStatus>): 
   return COMMAND_VERBS[status] ?? "Ran";
 }
 
+function genericCommandStatusLabel(status: ReturnType<typeof liveActivityToolStatus>): string {
+  return `${commandVerb(status)} command`;
+}
+
+const GENERIC_COMMAND_TITLES = new Set(["Ran command", "Run command", "Command"]);
+
+export function commandlessCommandLabel(
+  entry: Pick<
+    WorkLogPresentationEntry,
+    "itemType" | "command" | "toolTitle" | "label" | "structuredPayload"
+  >,
+  status: ReturnType<typeof liveActivityToolStatus>,
+): string | null {
+  if (entry.itemType !== "command_execution" || entry.command?.trim()) return null;
+  // The provider's own title, before a client substitutes its translated fallback.
+  const title = (
+    entry.structuredPayload ? entry.structuredPayload.title : entry.toolTitle || entry.label
+  )?.trim();
+  return !title || GENERIC_COMMAND_TITLES.has(normalizeCompactToolLabel(title))
+    ? genericCommandStatusLabel(status)
+    : null;
+}
+
 export function resolveWorkEntryToolPresentation(
   entry: Pick<
     WorkLogPresentationEntry,

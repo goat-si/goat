@@ -33,6 +33,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -186,6 +187,7 @@ const worktreeAutomationHarness = () => {
     Layer.provide(layerServerConfig),
     Layer.provide(ServerSettings.layerTest()),
     Layer.provide(providers),
+    Layer.provide(ModelManifest.layerTest),
     Layer.provide(layerGitWorkflowTest),
     Layer.provide(layerProjectServiceTest),
     Layer.provide(layerPlatformTest),

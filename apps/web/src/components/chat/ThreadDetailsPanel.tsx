@@ -1,3 +1,4 @@
+import { ThreadDetailsLimits } from "./ThreadDetailsLimits";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { isScratchProject } from "@goat/client-runtime/state/projects";
 import { useProject, useQuietThreadShell, useServerConfigs } from "../../state/entities";
@@ -33,6 +34,8 @@ import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
 
 const GitActionsControl = memo(BaseGitActionsControl);
+const EMPTY_PROVIDER_STATUSES: readonly import("@goat/contracts").ServerProvider[] = [];
+const EMPTY_USAGE_SOURCES: import("@goat/contracts").UsageLimitSourceSnapshots = [];
 
 export interface ThreadDetailsPanelProps
   extends
@@ -104,9 +107,22 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       projection?.thread.providerInstanceId ??
       thread?.providerInstanceId,
   );
-  const selectedProvider = useAtomValue(
-    serverEnvironment.providersValueAtom(props.environmentId),
-  )?.find((provider) => provider.instanceId === selectedInstanceId);
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
+    EMPTY_PROVIDER_STATUSES;
+  const selectedProvider = providers.find((provider) => provider.instanceId === selectedInstanceId);
+  const draftModel = useComposerDraftStore((store) =>
+    selectedInstanceId
+      ? store.getComposerDraft(props.draftId ?? activeThreadRef)?.modelSelectionByProvider[
+          selectedInstanceId
+        ]?.model
+      : undefined,
+  );
+  const selectedModel =
+    draftModel ??
+    (projection !== undefined && projection.thread.modelSelection.instanceId === selectedInstanceId
+      ? projection.thread.modelSelection.model
+      : null);
   const { showLocalWorkspace } = deriveCloudTaskState(projection, selectedProvider);
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
@@ -227,6 +243,15 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density !== "essential" && !props.draftId ? (
+            <ThreadDetailsLimits
+              providerInstanceId={selectedInstanceId ?? null}
+              model={selectedModel}
+              providers={providers}
+              sources={config?.usageLimitSources ?? EMPTY_USAGE_SOURCES}
+            />
           ) : null}
 
           {!props.draftId ? (

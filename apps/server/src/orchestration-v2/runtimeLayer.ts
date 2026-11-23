@@ -225,6 +225,7 @@ const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer
   Layer.provide(
     Layer.mergeAll(
       ProjectionStore.layer,
+      McpAppModelContext.layer,
       layerProviderSessionManagerProvided,
       layerEventSinkProvided,
     ),
@@ -254,6 +255,7 @@ const layerCheckpointCaptureServiceProvided = CheckpointCaptureService.layer.pip
       layerEventSinkProvided,
       IdAllocator.layer,
       ProjectionStore.layer,
+      ThreadCommandExecutor.layer,
     ),
   ),
 );

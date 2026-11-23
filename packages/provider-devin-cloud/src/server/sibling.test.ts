@@ -20,6 +20,7 @@ import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSp
 const id = ProviderInstanceId.make("devin-sibling");
 const hostFor = (settings: ServerSettings) =>
   ProviderHost.ProviderHost.of({
+    compatibility: () => Effect.undefined,
     paths: {
       cwd: "/project",
       baseDir: "/sandbox",
@@ -58,6 +59,7 @@ const catalogFor = (
     search: () => Effect.die("No registry search"),
     prepare: () => Effect.die("No install"),
     uninstallManagedBinary: () => Effect.die("No uninstall"),
+    prepareRuntimeSpawn: () => Effect.die("No runtime spawn"),
     inspect,
     resolve,
   });

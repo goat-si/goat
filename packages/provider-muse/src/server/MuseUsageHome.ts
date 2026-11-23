@@ -62,7 +62,12 @@ const make = Effect.gen(function* () {
       if (Option.isSome(settled)) return settled;
       // Spawn failures surface asynchronously; without this a missing CLI would report as pending.
       const resolveExecutable = yield* SpawnExecutableResolution;
-      if (resolveExecutable(binaryPath, yield* HostProcess.Platform, environment) === undefined) {
+      const hostPlatform = yield* HostProcess.Platform;
+      if (
+        (yield* Effect.promise(async () =>
+          resolveExecutable(binaryPath, hostPlatform, environment),
+        )) === undefined
+      ) {
         return Option.some(undefined);
       }
       if (awaitRefresh) return Option.some(yield* Cache.get(cache, key));

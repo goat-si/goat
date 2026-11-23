@@ -147,11 +147,22 @@ describe("provider compatibility", () => {
     );
   });
 
+  it("classifies OpenCode prerelease builds using the manifest's stable version", () => {
+    const advisory = resolveProviderCompatibility(
+      ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      ProviderDriverKind.make("opencode"),
+      "1.14.18-beta.1",
+      "0.1.2",
+    );
+    assert.strictEqual(advisory?.status, "broken");
+  });
+
   it("compares Cursor build dates without treating semver prereleases as stable", () => {
     const cursor = ProviderDriverKind.make("cursor");
     const cursorPolicy: ProviderCompatibilityPolicy = {
       driver: cursor,
       t3CodeRange: policy.t3CodeRange,
+      versionPattern: "^(\\d{4}\\.\\d{2}\\.\\d{2})-[a-f0-9]+$",
       ranges: [
         { range: "<2026.05.09", status: "unsupported" },
         { range: ">=2026.05.09", status: "supported" },
@@ -186,7 +197,7 @@ describe("provider compatibility", () => {
       ["agy_acp_server_2.0.0", "supported"],
       ["2.0.0", "supported"],
       ["agy_acp_server_2.0.1", "unknown"],
-      ["agy_acp_server_2.0.0-beta.1", "unknown"],
+      ["agy_acp_server_2.0.0-beta.1", "supported"],
       ["agy_acp_server_20260818_01_RC01", "unknown"],
     ] as const) {
       assert.strictEqual(
@@ -196,7 +207,19 @@ describe("provider compatibility", () => {
     }
   });
 
-  it("supports the managed Antigravity runtime in the bundled manifest", () => {
+  it("refuses an old Antigravity runtime even when a cached policy calls it supported", () => {
+    const antigravity = ProviderDriverKind.make("antigravity");
+    const stale = {
+      ...policy,
+      driver: antigravity,
+      ranges: [{ range: "=1.4.5", status: "supported" as const }],
+    };
+    const advisory = resolveProviderCompatibility([stale], antigravity, "agy_acp_server_1.4.5");
+    assert.equal(advisory?.status, "broken");
+    assert.equal(advisory?.recommendedRange, ">=1.5.12 <2");
+  });
+
+  it("marks the old managed Antigravity runtime broken in the bundled manifest", () => {
     const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
     const release = resolveAntigravityReleaseAsset("darwin", "arm64");
     assert.strictEqual(release?.version, "1.4.5");
@@ -206,7 +229,7 @@ describe("provider compatibility", () => {
         ProviderDriverKind.make("antigravity"),
         `agy_acp_server_${release?.version}`,
       )?.recommendedRange,
-      ">=1.5.1 <2",
+      ">=1.5.12 <2",
     );
     assert.strictEqual(
       resolveProviderCompatibility(
@@ -214,7 +237,7 @@ describe("provider compatibility", () => {
         ProviderDriverKind.make("antigravity"),
         "agy_acp_server_1.3.0",
       )?.status,
-      "supported",
+      "broken",
     );
     assert.strictEqual(
       resolveProviderCompatibility(
@@ -222,24 +245,24 @@ describe("provider compatibility", () => {
         ProviderDriverKind.make("antigravity"),
         `agy_acp_server_${release?.version}`,
       )?.status,
-      "supported",
+      "broken",
     );
   });
 
-  it.each(["1.4.5", "1.5.7"])(
-    "supports the legacy and native Antigravity runtime %s in the bundled manifest",
-    (version) => {
-      const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
-      assert.strictEqual(
-        resolveProviderCompatibility(
-          policies,
-          ProviderDriverKind.make("antigravity"),
-          `agy_acp_server_${version}`,
-        )?.status,
-        "supported",
-      );
-    },
-  );
+  it.each([
+    ["1.4.5", "broken"],
+    ["1.5.7", "supported"],
+  ] as const)("classifies Antigravity runtime %s in the bundled manifest", (version, expected) => {
+    const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
+    assert.strictEqual(
+      resolveProviderCompatibility(
+        policies,
+        ProviderDriverKind.make("antigravity"),
+        `agy_acp_server_${version}`,
+      )?.status,
+      expected,
+    );
+  });
 
   it("classifies boundaries and treats unlisted versions and release tags as unknown", () => {
     for (const [version, expected] of [

@@ -1,4 +1,4 @@
-import { indexRunInputDelivery } from "../inputDeliveryEvidence.ts";
+import { indexRunInputDelivery } from "@goat/shared/orchestrationV2ManualContinuation";
 import {
   getProviderAttachmentLimitError,
   isCompactionCommandMessage,

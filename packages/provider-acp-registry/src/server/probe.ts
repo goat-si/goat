@@ -1,3 +1,5 @@
+import { isolateDeepSeekProbeHistory } from "./deepSeekProbeHistory.ts";
+import { shellDisplayToken } from "./shellDisplayToken.ts";
 import { boundedAgentVersion } from "./agentVersion.ts";
 import {
   AcpRegistryListProvidersResult,
@@ -15,8 +17,10 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -37,6 +41,7 @@ import {
 import {
   acpProviderOptionDescriptors,
   flattenSelectChoices,
+  isAcpThoughtLevelOption,
 } from "@goat/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import type { AcpRegistrySessionPage } from "@goat/provider-core/server/driver";
@@ -142,12 +147,6 @@ export interface AcpRegistryAuthSpawnContext {
   readonly args: ReadonlyArray<string>;
 }
 
-const SHELL_SAFE_TOKEN = /^[A-Za-z0-9_@%+=:,./-]+$/u;
-
-function shellDisplayToken(token: string): string {
-  return SHELL_SAFE_TOKEN.test(token) ? token : `'${token.replaceAll("'", `'\\''`)}'`;
-}
-
 function terminalAuthCommand(
   method: Extract<EffectAcpSchema.AuthMethod, { readonly type: "terminal" }>,
   spawn: AcpRegistryAuthSpawnContext,
@@ -244,7 +243,9 @@ export function normalizeAcpRegistryLiveConfiguration(
     currentModelId === undefined
       ? null
       : (boundedOpaqueValue(currentModelId, MAX_ID_LENGTH) ?? null);
-  const effortOption = configOptions.find((option) => option.category === "thought_level");
+  const effortOption =
+    configOptions.find((option) => option.category === "thought_level") ??
+    configOptions.find(isAcpThoughtLevelOption);
   const models = normalizeModels(candidates, boundedCurrentModelId).map((model) => {
     const reasoningEffort = advertisedReasoningEffort(
       effortOption,
@@ -255,7 +256,7 @@ export function normalizeAcpRegistryLiveConfiguration(
   const descriptors = acpProviderOptionDescriptors({ configOptions, modeState });
   const modelOptionIds = new Set(
     configOptions
-      .filter((option) => option.category === "thought_level" || option.category === "model_config")
+      .filter((option) => isAcpThoughtLevelOption(option) || option.category === "model_config")
       .map((option) => option.id),
   );
   return {
@@ -413,6 +414,8 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
     AcpRegistryOperationError,
     | AcpRegistrySupport.AcpRegistryCatalog
     | ChildProcessSpawner.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | Path.Path
     | SecureRandom.SecureRandom
   > {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
@@ -430,6 +433,10 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       const resolved = yield* catalog
         .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
         .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+      const prepared = yield* catalog
+        .prepareRuntimeSpawn(resolved)
+        .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+      const spawn = yield* isolateDeepSeekProbeHistory(input.settings.commandPath, prepared);
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
       const runtimeCoordinator = yield* Effect.serviceOption(
@@ -438,8 +445,8 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       const runtimeContext = yield* Layer.build(
         AcpSessionRuntime.layer({
           spawn: {
-            ...resolved.spawn,
-            env: providerProbeEnvironment(resolved.spawn.env ?? input.environment),
+            ...spawn,
+            env: providerProbeEnvironment(spawn.env ?? input.environment),
           },
           cwd: input.cwd,
           clientCapabilities: {
@@ -622,9 +629,12 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
     const resolved = yield* catalog
       .resolve(input.settings, input.cwd, input.environment)
       .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+    const spawn = yield* catalog
+      .prepareRuntimeSpawn(resolved)
+      .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
     const runtimeContext = yield* Layer.build(
       AcpSessionRuntime.layer({
-        spawn: resolved.spawn,
+        spawn,
         cwd: input.cwd,
         clientCapabilities: {
           auth: { terminal: false },

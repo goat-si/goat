@@ -439,7 +439,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
           { name: "already-off", enabled: false },
         ],
         requireArg:
-          'exec --config mcp_servers={"augmenter"={enabled=false},"my.server"={enabled=false}} --config features.plugins=false',
+          'exec --config mcp_servers={"augmenter"={enabled=false},"my.server"={enabled=false}} --config features.connectors=false --config features.plugins=false',
       },
       (textGeneration) =>
         Effect.gen(function* () {
@@ -477,9 +477,10 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     withFakeCodexEnv(
       {
         output: JSON.stringify({ title: "Remove default shapes" }),
-        launchArgs: "--config features.plugins=true --config features.apps=true",
+        launchArgs:
+          "--config features.plugins=true --config features.apps=true --config features.connectors=true",
         requireArg:
-          "--config features.plugins=true --config features.apps=true --config features.plugins=false --config features.apps=false --ephemeral",
+          "--config features.plugins=true --config features.apps=true --config features.connectors=true --config features.connectors=false --config features.plugins=false --config features.apps=false --ephemeral",
       },
       (textGeneration) =>
         Effect.gen(function* () {

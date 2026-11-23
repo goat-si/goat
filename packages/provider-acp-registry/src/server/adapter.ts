@@ -143,7 +143,10 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
   });
 }
 
-function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
+function makeAcpRegistryRuntime(
+  options: AcpRegistryAdapterV2Options,
+  catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
+) {
   return (
     input: AcpAdapterV2RuntimeInput,
   ): Effect.Effect<
@@ -154,18 +157,30 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     Effect.gen(function* () {
       const { processEnvironment, sessionEnvironment, sessionLaunch, ...runtimeInput } = input;
       const resolved = sessionLaunch as AcpRegistrySupport.ResolvedAcpRegistryAgent;
-      const spawn = { ...resolved.spawn, cwd: input.cwd };
+      const spawnEnvironment =
+        processEnvironment === undefined
+          ? resolved.spawn.env
+          : McpProviderSession.mergeThreadEnvironment(resolved.spawn.env, processEnvironment);
+      const prepared = yield* catalog
+        .prepareRuntimeSpawn({
+          ...resolved,
+          spawn: {
+            ...resolved.spawn,
+            ...(spawnEnvironment === undefined ? {} : { env: spawnEnvironment }),
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EffectAcpErrors.AcpSpawnError({ command: options.settings.agentId, cause }),
+          ),
+        );
+      const spawn = { ...prepared, cwd: input.cwd };
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
           sessionEnvironment,
-          spawn:
-            processEnvironment === undefined
-              ? spawn
-              : {
-                  ...spawn,
-                  env: McpProviderSession.mergeThreadEnvironment(spawn.env, processEnvironment),
-                },
+          spawn,
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(
             (entry) => entry.slug,
@@ -197,6 +212,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const registryAgentId = options.settings.source === "local" ? "" : options.settings.agentId;
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
+  const isAntigravityCli =
+    options.settings.source === "local" &&
+    /^agy(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
   const isOmp =
     options.settings.source === "local" &&
     /^omp(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
@@ -228,6 +246,24 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^claude-agent-acp(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
+  const isDroid =
+    registryAgentId === "factory-droid" ||
+    (options.settings.source === "local" &&
+      /^(?:factory-)?droid(\.exe|\.cmd)?$/i.test(
+        options.settings.commandPath.split(/[\\/]/).pop() ?? "",
+      ));
+  const isGlm =
+    registryAgentId === "glm-acp-agent" ||
+    (options.settings.source === "local" &&
+      /^glm(?:-acp-agent)?(\.exe|\.cmd)?$/i.test(
+        options.settings.commandPath.split(/[\\/]/).pop() ?? "",
+      ));
+  const isVibe =
+    registryAgentId === "mistral-vibe" ||
+    (options.settings.source === "local" &&
+      /^(?:mistral-)?vibe(?:-acp)?(\.exe|\.cmd)?$/i.test(
+        options.settings.commandPath.split(/[\\/]/).pop() ?? "",
+      ));
   const withClaudeEnvironment = (environment: NodeJS.ProcessEnv) =>
     acpRegistrySessionEnvironment(options.settings, environment);
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
@@ -243,7 +279,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       : AcpProviderCapabilitiesV2,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     compactViaAdvertisedCommand: true,
-    promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
+    ...(isAntigravityCli ? { wakeOnDetachedRequest: true, replyEndsWithUsageUpdate: true } : {}),
+    promptFailure: (cause) =>
+      acpRegistryPromptFailure(isVibe ? "mistral-vibe" : registryAgentId, cause),
     ...(watchKimiPromptOutcome === undefined
       ? {}
       : {
@@ -257,7 +295,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
               ),
             ),
         }),
-    ...(registryAgentId === "factory-droid"
+    ...(isDroid
       ? { extractElicitationForm: extractDroidElicitationForm }
       : isOmp
         ? { extractElicitationForm: extractOmpElicitationForm }
@@ -265,10 +303,8 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           ? { extractElicitationForm: extractOpenCodeElicitationForm }
           : {}),
     // glm-acp-agent is the one agent whose per-turn usage a live probe has verified.
-    ...(registryAgentId === "glm-acp-agent" ? { reportsPerTurnPromptUsage: true } : {}),
-    ...(registryAgentId === "mistral-vibe"
-      ? { registerExtensions: registerMistralVibeAcpExtensions }
-      : {}),
+    ...(isGlm ? { reportsPerTurnPromptUsage: true } : {}),
+    ...(isVibe ? { registerExtensions: registerMistralVibeAcpExtensions } : {}),
     ...(isClaude
       ? {
           followAgentWorkState: true,
@@ -277,6 +313,12 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           extractSubagentSessionEvent: extractClaudeSubagentSessionEvent,
         }
       : {}),
+    // Hermes replies on the root session when a background process it started exits; no
+    // prompt response follows, so the continuation ends on the deferred-finalize debounce.
+    enablePostSettleContinuation: (result) =>
+      isAntigravityCli || result.agentInfo?.name === "hermes-agent",
+    deferFinalizeForBackgroundWork: (result) =>
+      isAntigravityCli || result.agentInfo?.name === "hermes-agent",
     ...(isDevin
       ? {
           clientCapabilitiesMeta: {
@@ -325,7 +367,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
               ),
         }
       : {}),
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
+    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options, catalog),
     ...(runtimeCoordinator === undefined
       ? {}
       : {

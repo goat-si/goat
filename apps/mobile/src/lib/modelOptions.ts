@@ -62,7 +62,7 @@ export type ModelOption = {
 
 type ProviderUpdateRequired = Pick<
   GoatServerConfig["providers"][number],
-  "driver" | "updateRequiredModels"
+  "driver" | "updateRequiredModels" | "versionAdvisory"
 >;
 
 export type ProviderGroup = {
@@ -337,7 +337,11 @@ export function buildModelOptions(
     const providerLabel = providerDisplayLabel(provider);
     const providerBadge = providerBadgeFor(provider.instanceId);
     const updateRequired = provider.updateRequiredModels?.length
-      ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
+      ? {
+          driver: provider.driver,
+          updateRequiredModels: provider.updateRequiredModels,
+          ...(provider.versionAdvisory ? { versionAdvisory: provider.versionAdvisory } : {}),
+        }
       : undefined;
     const preferences = config?.settings?.providerModelPreferences?.[provider.instanceId];
     const hiddenModels = new Set(preferences?.hiddenModels ?? []);

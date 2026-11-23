@@ -46,7 +46,7 @@ import {
 import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
 import * as PullRequestSnapshot from "./pullRequestSnapshot.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
-import { needsRecovery } from "./ProjectionRecoveryCandidates.ts";
+import { needsRecovery, unreadSteerCandidates } from "./ProjectionRecoveryCandidates.ts";
 import {
   matchingTimelineRows,
   boundedTimelinePage,
@@ -70,7 +70,7 @@ import {
 } from "./ProjectionShellThreadRows.ts";
 import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
-import { turnStartMessageIds } from "./manualContinuation.ts";
+import { turnStartMessageIds } from "@goat/shared/orchestrationV2ManualContinuation";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   applyOrchestrationV2ThreadVisit,
@@ -306,7 +306,8 @@ export type ProjectionRecoveryKind =
   | "runtime"
   | "runtime-cleanup"
   | "subagent-results"
-  | "delegated-completions";
+  | "delegated-completions"
+  | "unread-steers";
 export type ProjectionLimitRecoveryCandidate = Pick<
   OrchestrationV2ThreadShell,
   | "id"
@@ -3762,6 +3763,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND active.status IN ('preparing', 'starting', 'running', 'waiting')
                   )
               `;
+            case "unread-steers":
+              return unreadSteerCandidates(sql);
             case "delegated-completions":
               return sql`
                 SELECT thread_id FROM orchestration_v2_projection_runs

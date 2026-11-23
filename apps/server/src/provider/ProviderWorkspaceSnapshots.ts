@@ -2,7 +2,7 @@ import type { ServerProvider } from "@goat/contracts";
 import type { ProviderWorkspaceSnapshot } from "@goat/provider-core/server/driver";
 import * as Equal from "effect/Equal";
 
-const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
+export const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
 
 function workspaceModelDifferences(
   machineModels: ServerProvider["models"],

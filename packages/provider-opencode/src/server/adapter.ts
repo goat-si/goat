@@ -1,3 +1,4 @@
+import { validateOpenCodeCompatibility } from "./validateCompatibility.ts";
 import { takeMemoryReceipt } from "./memoryReceipt.ts";
 import { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 export { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
@@ -68,6 +69,7 @@ export {
   openCodePermissionRules,
 } from "./permissionRules.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { openCodeVariant } from "./variant.ts";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -287,6 +289,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             : {}),
           environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
         });
+        yield* validateOpenCodeCompatibility(host, options.instanceId, connection.version);
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,
           directory: cwd,
@@ -392,7 +395,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         let hasConnected = false;
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
-
         const logProtocolEvent = makeOpenCodeProtocolLogger({
           nativeEventLogger: options.nativeEventLogger,
           idAllocator,
@@ -400,7 +402,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           providerSessionId: input.providerSessionId,
           threadId: input.threadId,
         });
-
         const sdkCall = <A>(
           method: string,
           payload: unknown,
@@ -495,7 +496,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: state.providerThread,
             });
           });
-
         const itemOrdinal = (turn: ActiveOpenCodeTurn, nativeItemId: string): number => {
           const existing = turn.itemOrdinals.get(nativeItemId);
           if (existing !== undefined) return existing;
@@ -548,7 +548,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 }),
           };
           Object.assign(turn.providerTurn, providerTurn);
-          state.providerTurns.set(String(providerTurn.id), providerTurn);
           return emitProviderEvent({
             type: "provider_turn.updated",
             driver: OPENCODE_PROVIDER,
@@ -927,7 +926,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: childProviderThread,
               appThread: childThread,
               activeTurn: null,
-              providerTurns: new Map(),
               runtimeRequests: new Map(),
               messageRoles: resumedChild?.messageRoles ?? new Map(),
               userMessageIds: resumedChild?.userMessageIds ?? [],
@@ -1817,7 +1815,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             admissionAbortController: null,
           };
           state.activeTurn = turn;
-          state.providerTurns.set(String(providerTurnId), providerTurn);
           yield* emitProviderEvent({
             type: "node.updated",
             driver: OPENCODE_PROVIDER,
@@ -1904,13 +1901,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             },
           });
         });
-
         const emitCompactionItem = Effect.fn("OpenCodeAdapterV2.emitCompactionItem")(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
         ) {
           const nativeItemId = `${turn.providerTurnId}:compaction`;
           if (turn.itemOrdinals.has(nativeItemId)) return;
+          turn.usage.lastStep = null;
+          if (state.providerThread.contextUsage !== null)
+            yield* updateProviderThread(state, { contextUsage: null });
           const now = yield* DateTime.now;
           yield* emitProviderEvent({
             type: "turn_item.updated",
@@ -1938,7 +1937,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             },
           });
         });
-
         const handleMessageUpdated = Effect.fnUntraced(function* (
           event: Extract<OpenCodeEvent, { type: "message.updated" }>,
           historical = false,
@@ -2446,7 +2444,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             providerThread,
             appThread,
             activeTurn: null,
-            providerTurns: new Map(),
             runtimeRequests: new Map(),
             messageRoles: new Map(),
             userMessageIds: [],
@@ -2545,7 +2542,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               status: "idle" as const,
               updatedAt: snapshotNow,
             },
-            providerTurns: state === undefined ? [] : [...state.providerTurns.values()],
             messages,
             runtimeRequests: state === undefined ? [] : [...state.runtimeRequests.values()],
             providerPayload: nativeMessages,
@@ -3128,7 +3124,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       }
                       state.appThread = turnInput.appThread;
                       state.activeTurn = turn;
-                      state.providerTurns.set(String(providerTurnId), providerTurn);
                       yield* emitProviderTurn(state, turn, "running", null);
                       yield* updateProviderThread(state, {
                         status: "active",
@@ -3231,10 +3226,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const agent =
                 getModelSelectionStringOptionValue(turnInput.modelSelection, "agent") ??
                 (turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : undefined);
-              const variant = getModelSelectionStringOptionValue(
-                turnInput.modelSelection,
-                "variant",
-              );
+              const variant = openCodeVariant(turnInput.modelSelection);
               turn.promptOptions = {
                 ...(agent === undefined ? {} : { agent }),
                 ...(variant === undefined ? {} : { variant }),

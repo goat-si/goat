@@ -13,6 +13,7 @@ import type * as DateTime from "effect/DateTime";
 import type * as Fiber from "effect/Fiber";
 import type { PiCompactionState, PiProviderRetryState } from "./compactionTitle.ts";
 import type { PiCustomAnswerRoute } from "./extensionDialog.ts";
+import type { PiMessageTokenUsage } from "./tokenUsage.ts";
 import type { PiRpcRecord } from "./rpc.ts";
 
 export interface PiStreamItemState {
@@ -45,6 +46,7 @@ export interface ActivePiTurn {
   promptMayBeCommandOnly: boolean;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
+  lastMessageUsage: PiMessageTokenUsage | undefined;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;

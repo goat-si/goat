@@ -5840,3 +5840,38 @@ it.effect(
       );
     }),
 );
+
+it.effect.each([
+  { resume: "native resume", supportsNativeResume: true, minutes: 2 },
+  { resume: "no native resume", supportsNativeResume: false, minutes: 30 },
+])(
+  "ProviderSessionManagerV2 releases an idle session with $resume after $minutes minutes",
+  ({ supportsNativeResume, minutes }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const capabilities = {
+        ...CodexProviderCapabilitiesV2,
+        turns: { ...CodexProviderCapabilitiesV2.turns, supportsNativeResume },
+      };
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("thread-default-idle-timeout");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+          ],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        yield* TestClock.adjust(minutes * 60_000 - 1_000);
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* manager.isLive(providerSessionId));
+      }).pipe(Effect.provide(layerTest({ state, capabilities })));
+    }),
+);

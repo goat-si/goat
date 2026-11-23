@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileSearchFixtures, imageReadFixture, webSearchFixtures } from "./acp-search-fixtures.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
 import { crashOnPrompt } from "./acp-mock-prompt-crash.ts";
@@ -18,19 +19,25 @@ import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
+import * as mockOptions from "./acpMockScenarioOptions.ts";
+import * as LateLoad from "./acpMockLateLoad.ts";
+import { availableModels } from "./acpMockModels.ts";
+import { promptIdFromRequestMeta } from "./acpMockPrompt.ts";
+import {
+  harnessFailure,
+  handleHarnessFailure,
+  writeHarnessFailure,
+} from "./acpMockHarnessFailure.ts";
+import {
+  advertisedCommandNames,
+  loadedCommandNames,
+  copilotModeId,
+  modeOptionCategory,
+} from "./acpMockAvailableCommands.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
 const copilotModesProfile = process.env.GOAT_ACP_COPILOT_MODES === "1";
-const copilotModeId = (name: string) =>
-  `https://agentclientprotocol.com/protocol/session-modes#${name}`;
-const modeOptionCategory = process.env.GOAT_ACP_MODE_OPTION_CATEGORY ?? "mode";
-// Comma-separated command names the mock advertises, so `/compact` support is testable.
-const advertisedCommandNames = (process.env.GOAT_ACP_AVAILABLE_COMMANDS ?? "")
-  .split(",")
-  .map((name) => name.trim())
-  .filter((name) => name.length > 0);
-const loadedCommandNames = process.env.GOAT_ACP_LOADED_COMMANDS?.split(",").filter(Boolean);
 const emitToolCalls = process.env.GOAT_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.GOAT_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
@@ -54,22 +61,6 @@ const decodeElicitationSchema = Schema.decodeUnknownSync(
 const emitMcpToolApprovalElicitation =
   process.env.GOAT_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const emitUrlElicitation = process.env.GOAT_ACP_EMIT_URL_ELICITATION === "1";
-const emitXAiAskUserQuestion = process.env.GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
-const emitXAiExitPlanMode = process.env.GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE === "1";
-const emitXAiPlanMdWrite = process.env.GOAT_ACP_EMIT_XAI_PLAN_MD_WRITE === "1";
-const emitXAiPromptCompleteThenHang =
-  process.env.GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
-const emitXAiRateLimitThenHang = process.env.GOAT_ACP_EMIT_XAI_RATE_LIMIT_THEN_HANG === "1";
-const emitXAiAskUserQuestionThenHang =
-  process.env.GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION_THEN_HANG === "1";
-const emitContentThenHang = process.env.GOAT_ACP_EMIT_CONTENT_THEN_HANG === "1";
-const emitPlanThenHang = process.env.GOAT_ACP_EMIT_PLAN_THEN_HANG === "1";
-const grokKillTaskShape = process.env.GOAT_ACP_GROK_KILL_TASK_SHAPE;
-const emitActiveToolThenHang = process.env.GOAT_ACP_EMIT_ACTIVE_TOOL_THEN_HANG === "1";
-const emitGrokMonitorPostTurnPoll = process.env.GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL === "1";
-const emitGrokBackgroundTaskStarted =
-  process.env.GOAT_ACP_EMIT_GROK_BACKGROUND_TASK_STARTED === "1";
-const emitGrokBackgroundTaskPoll = process.env.GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION === "poll";
 const emitForeignSessionUpdates = process.env.GOAT_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const omitInitializeModelState = process.env.GOAT_ACP_OMIT_INITIALIZE_MODEL_STATE === "1";
 const waitForResumeRelease = process.env.GOAT_ACP_WAIT_FOR_RESUME_RELEASE === "1";
@@ -109,6 +100,10 @@ const emitLoadReplay = process.env.GOAT_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.GOAT_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.GOAT_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
 const loadSessionDelayMs = Number(process.env.GOAT_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
+const holdLoadAfterReplay = process.env.GOAT_ACP_HOLD_LOAD_AFTER_REPLAY === "1";
+const modeNotifiedBeforeDelayedLoadReply = process.env.GOAT_ACP_NOTIFY_MODE_BEFORE_LOAD_REPLY;
+const holdSetConfigOptionUntilLoadReply =
+  process.env.GOAT_ACP_HOLD_SET_CONFIG_OPTION_UNTIL_LOAD_REPLY === "1";
 const emitStaleXAiPromptCompleteBeforeSecondHang =
   process.env.GOAT_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
 const emitOverlappingXAiPromptCompleteOutOfOrder =
@@ -175,16 +170,6 @@ let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
 let configuredProvider: AcpSchema.ProviderCurrentConfig | null = null;
-function promptIdFromRequestMeta(
-  request: Pick<AcpSchema.PromptRequest, "_meta">,
-): string | undefined {
-  const meta = request._meta;
-  if (meta === null || typeof meta !== "object") {
-    return undefined;
-  }
-  const promptId = meta.promptId ?? meta.requestId;
-  return typeof promptId === "string" && promptId.length > 0 ? promptId : undefined;
-}
 function logExit(reason: string): void {
   if (!exitLogPath) {
     return;
@@ -402,23 +387,6 @@ function modelConfigOptionsFor(modelId: string): ReadonlyArray<AcpSchema.Session
     currentModelId = previousModelId;
   }
 }
-function availableModels(): ReadonlyArray<{
-  readonly value: string;
-  readonly name: string;
-  readonly configOptions: ReadonlyArray<AcpSchema.SessionConfigOption>;
-}> {
-  return [
-    { value: "default", name: "Auto" },
-    { value: "composer-2", name: "Composer 2" },
-    { value: "gpt-5.4", name: "GPT-5.4" },
-    { value: "claude-opus-4-6", name: "Opus 4.6" },
-  ].map((model) => ({
-    value: model.value,
-    name: model.name,
-    configOptions: modelConfigOptionsFor(model.value),
-  }));
-}
-
 const antigravityModels = [
   { modelId: "gemini-test-low", name: "Gemini Test Low" },
   { modelId: "gemini-test-high", name: "Gemini Test High" },
@@ -498,6 +466,8 @@ const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
   const loadRelease = yield* Deferred.make<void>();
+  const delayedLoadReplied = yield* Deferred.make<void>();
+  const configRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
   const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
@@ -690,13 +660,14 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (loadedCommandNames !== undefined) {
-        yield* agent.client.sessionUpdate({
+        const publish = agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "available_commands_update",
             availableCommands: loadedCommandNames.map((name) => ({ name, description: name })),
           },
         });
+        yield* LateLoad.publishLoadedCommands(publish, LateLoad.loadedCommandsDelayMs);
       }
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
@@ -722,18 +693,31 @@ const program = Effect.gen(function* () {
       }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);
-        yield* agent.client.sessionUpdate({
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            messageId: "mock-user-message",
-            content: { type: "text", text: "replay-tail" },
-          },
+        return yield* LateLoad.delayedLoadResponse({
+          replay: agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              messageId: "mock-user-message",
+              content: { type: "text", text: "replay-tail" },
+            },
+          }),
+          config: configOptions,
+          hold: holdLoadAfterReplay,
+          release: loadRelease,
+          replied: delayedLoadReplied,
+          delayMs: loadSessionDelayMs,
+          notify:
+            modeNotifiedBeforeDelayedLoadReply === undefined
+              ? Effect.void
+              : Effect.suspend(() => {
+                  currentModeId = modeNotifiedBeforeDelayedLoadReply;
+                  return agent.client.sessionUpdate({
+                    sessionId: requestedSessionId,
+                    update: { sessionUpdate: "current_mode_update", currentModeId },
+                  });
+                }),
         });
-        yield* Effect.sleep(loadSessionDelayMs);
-        return {
-          configOptions: configOptions(),
-        };
       }
       if (emitLoadReplay) {
         emitLoadReplayNotifications(requestedSessionId);
@@ -833,6 +817,10 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionConfigOption((request) =>
     Effect.gen(function* () {
+      if (holdSetConfigOptionUntilLoadReply) {
+        yield* Deferred.await(delayedLoadReplied);
+        yield* Deferred.await(configRelease);
+      }
       if (exitOnSetConfigOption) {
         return yield* Effect.sync(() => {
           process.exit(7);
@@ -1057,6 +1045,8 @@ const program = Effect.gen(function* () {
         return {};
       }
       if (process.env.GOAT_ACP_CRASH_PROMPT) yield* crashOnPrompt(request, agent);
+      if (harnessFailure)
+        return yield* handleHarnessFailure(finishPrompt(requestedSessionId, "end_turn"));
 
       if (clientFsProbePath !== undefined && clientFsProbeLogPath !== undefined) {
         const probes = [
@@ -1276,6 +1266,7 @@ const program = Effect.gen(function* () {
             rawInput: { path: "src/env.ts" },
             locations: [{ path: "src/env.ts" }],
           },
+          imageReadFixture,
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "structured-search",
@@ -1284,7 +1275,7 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawInput: { query: "TODO", path: "apps/web" },
           },
-          // Grok backend searches: the query only arrives in the completed rawOutput.
+          ...fileSearchFixtures,
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "grok-x-search",
@@ -1348,6 +1339,7 @@ const program = Effect.gen(function* () {
             rawInput: { command: "cat probe.txt" },
             rawOutput: { commandLine: "cat probe.txt", exitCode: 0, combinedOutput: "after\n" },
           },
+          ...webSearchFixtures,
           {
             sessionUpdate: "compaction_update",
             compactionId: "compact-1",
@@ -1676,7 +1668,7 @@ const program = Effect.gen(function* () {
         return yield* finishPrompt(requestedSessionId, "cancelled");
       }
 
-      if (emitXAiRateLimitThenHang) {
+      if (mockOptions.emitXAiRateLimitThenHang) {
         writeJsonRpcNotification("_x.ai/session/prompt_complete", {
           sessionId: requestedSessionId,
           promptId: promptIdFromRequestMeta(request) ?? "mock-xai-rate-limit-prompt-1",
@@ -1686,7 +1678,7 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitContentThenHang) {
+      if (mockOptions.emitContentThenHang) {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
@@ -1697,17 +1689,17 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (grokKillTaskShape !== undefined) {
+      if (mockOptions.grokKillTaskShape !== undefined) {
         emitGrokKillTaskScenario(
           requestedSessionId,
           promptIdFromRequestMeta(request),
-          grokKillTaskShape,
+          mockOptions.grokKillTaskShape,
         );
         // Keep the prompt RPC and peer alive after the kill result.
         return yield* Effect.never;
       }
 
-      if (emitPlanThenHang) {
+      if (mockOptions.emitPlanThenHang) {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
@@ -1724,7 +1716,7 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitActiveToolThenHang) {
+      if (mockOptions.emitActiveToolThenHang) {
         const toolCallId = "tool-call-long-running-1";
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -1766,7 +1758,7 @@ const program = Effect.gen(function* () {
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
-      if (emitXAiPromptCompleteThenHang) {
+      if (mockOptions.emitXAiPromptCompleteThenHang) {
         writeJsonRpcNotification("session/update", {
           sessionId: requestedSessionId,
           update: {
@@ -1830,7 +1822,7 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitGrokMonitorPostTurnPoll) {
+      if (mockOptions.emitGrokMonitorPostTurnPoll) {
         const monitorCallId = "call-monitor-1";
         const pollCallId = "call-monitor-poll-1";
         const taskId = "01a05f41-5107-7550-821e-79e8d1cd7687";
@@ -1894,15 +1886,17 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
-      if (emitGrokBackgroundTaskStarted || emitGrokBackgroundTaskPoll) {
-        const toolCallId = !emitGrokBackgroundTaskPoll
+      if (mockOptions.emitGrokBackgroundTaskStarted || mockOptions.emitGrokBackgroundTaskPoll) {
+        const toolCallId = !mockOptions.emitGrokBackgroundTaskPoll
           ? "call-fb9d0000-0000-0000-0000-000000000026"
           : "call-fb9d0000-0000-0000-0000-000000000026-29";
         const command = "sleep 40; echo done-a";
         writeJsonRpcNotification("session/update", {
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: !emitGrokBackgroundTaskPoll ? "tool_call" : "tool_call_update",
+            sessionUpdate: !mockOptions.emitGrokBackgroundTaskPoll
+              ? "tool_call"
+              : "tool_call_update",
             toolCallId,
             title: "run_terminal_command",
             kind: "execute",
@@ -1925,7 +1919,7 @@ const program = Effect.gen(function* () {
             },
           },
         });
-        if (emitGrokBackgroundTaskPoll) {
+        if (mockOptions.emitGrokBackgroundTaskPoll) {
           writeJsonRpcNotification("session/update", {
             sessionId: requestedSessionId,
             update: {
@@ -2416,7 +2410,7 @@ const program = Effect.gen(function* () {
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
-      if (emitXAiAskUserQuestion || emitXAiAskUserQuestionThenHang) {
+      if (mockOptions.emitXAiAskUserQuestion || mockOptions.emitXAiAskUserQuestionThenHang) {
         const result = yield* agent.client.extRequest("_x.ai/ask_user_question", {
           method: "x.ai/ask_user_question",
           params: {
@@ -2450,15 +2444,14 @@ const program = Effect.gen(function* () {
           throw new Error("Expected accepted _x.ai/ask_user_question response answers.");
         }
 
-        if (emitXAiAskUserQuestionThenHang) {
+        if (mockOptions.emitXAiAskUserQuestionThenHang) {
           return yield* Effect.never;
         }
 
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
-      if (emitXAiPlanMdWrite) {
-        // isGrokPlanMarkdownPath requires Grok's session layout.
+      if (mockOptions.emitXAiPlanMdWrite) {
         const planRoot = process.env.GOAT_ACP_PLAN_ROOT ?? "/tmp/mock-home/.grok";
         const planPath = `${planRoot}/sessions/${requestedSessionId}/plan.md`;
         const planBody = "# Mock plan\n\n- Write the feature\n- Add a test\n- Ship it\n";
@@ -2505,7 +2498,7 @@ const program = Effect.gen(function* () {
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-      if (emitXAiExitPlanMode) {
+      if (mockOptions.emitXAiExitPlanMode) {
         const result = yield* agent.client.extRequest("_x.ai/exit_plan_mode", {
           method: "x.ai/exit_plan_mode",
           params: {
@@ -2609,6 +2602,9 @@ const program = Effect.gen(function* () {
     if (method === "_test/release-load") {
       return Deferred.succeed(loadRelease, undefined).pipe(Effect.as({}));
     }
+    if (method === "_test/release-config") {
+      return Deferred.succeed(configRelease, undefined).pipe(Effect.as({}));
+    }
     if (method === "_test/release-resume") {
       return Deferred.succeed(resumeRelease, undefined).pipe(Effect.as({}));
     }
@@ -2660,7 +2656,7 @@ const program = Effect.gen(function* () {
     }
     if (method === "cursor/list_available_models") {
       return Effect.succeed({
-        models: availableModels(),
+        models: availableModels(modelConfigOptionsFor),
       });
     }
     if (method !== "session/mode/set") {
@@ -2706,7 +2702,9 @@ const program = Effect.gen(function* () {
             typeof params === "object" && params !== null ? Reflect.get(params, "code") : undefined;
           process.exit(typeof code === "number" ? code : 19);
         })
-      : Effect.void,
+      : method === "_test/harness-failure"
+        ? writeHarnessFailure
+        : Effect.void,
   );
   return yield* Effect.never;
 }).pipe(

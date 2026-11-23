@@ -1,7 +1,7 @@
 import type { OrchestrationV2Run } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { MAX_CONTINUATION_CHAIN } from "../ContinuationChain.ts";
+import { MAX_CONTINUATION_CHAIN } from "@goat/shared/orchestrationV2ManualContinuation";
 import type { EffectOutboxV2 } from "../EffectOutbox.ts";
 
 export const continuationCrashCount = Effect.fn("ContinuationCrashBudget.count")(function* (

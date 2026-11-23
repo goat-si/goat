@@ -664,6 +664,7 @@ export function registerPiToolChecks({
         statuses: ["running", "running"],
         pending: [true],
       });
+      yield* emitSnapshot("failed", "running", "failed");
       yield* emitSnapshot("failed", "complete", "failed");
       assert.deepEqual(yield* collect("marker-2"), {
         statuses: ["completed", "failed"],

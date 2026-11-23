@@ -1,3 +1,4 @@
+import { connectionFailureCases } from "./connectionFailureCases.testkit.ts";
 import * as Deferred from "effect/Deferred";
 import type { AuthEnvironmentScope } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
@@ -26,7 +27,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -38,9 +38,7 @@ import { loadCursorSdk } from "./sdk.ts";
 import { gatedCursorRun, wp4Snapshot, cursorReceiptCounter } from "./adapterMemory.testkit.ts";
 
 const { ConfigurationError } = loadCursorSdk();
-
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
-
 describe("CursorAdapterV2", () => {
   it.effect.each([
     { status: "finished", model: undefined, lateModel: undefined },
@@ -405,6 +403,7 @@ describe("CursorAdapterV2", () => {
       failure: null,
       answers: [],
     },
+    ...connectionFailureCases,
     {
       reason: "the token usage Cursor reported",
       // Cursor's inputTokens already include cache reads and writes.

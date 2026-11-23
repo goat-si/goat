@@ -1,3 +1,9 @@
+import {
+  brokenVersionDetail,
+  type ProviderCompatibilityLookup,
+} from "@goat/provider-core/server/ProviderHost";
+import { ProviderDriverKind } from "@goat/contracts";
+import { openCodeVariantDescriptors } from "./variant.ts";
 import { settingsSecretLiteral } from "@goat/contracts";
 import {
   type ModelCapabilities,
@@ -15,7 +21,6 @@ import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
-import { compareSemverVersions } from "@goat/shared/semver";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   buildServerProvider,
@@ -73,22 +78,6 @@ function titleCaseSlug(value: string): string {
   return segments.join(" ");
 }
 
-function inferDefaultVariant(
-  providerID: string,
-  variants: ReadonlyArray<string>,
-): string | undefined {
-  if (variants.length === 1) {
-    return variants[0];
-  }
-  if (providerID === "anthropic" || providerID.startsWith("google")) {
-    return variants.includes("high") ? "high" : undefined;
-  }
-  if (providerID === "openai" || providerID === "opencode" || providerID === "opencode-go") {
-    return variants.includes("medium") ? "medium" : variants.includes("high") ? "high" : undefined;
-  }
-  return undefined;
-}
-
 function inferDefaultAgent(agents: ReadonlyArray<Agent>): string | undefined {
   return agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name ?? undefined;
 }
@@ -125,13 +114,6 @@ function openCodeCapabilitiesForModel(input: {
   readonly model: ProviderListResponse["all"][number]["models"][string];
   readonly agents: ReadonlyArray<Agent>;
 }): ModelCapabilities {
-  const variantValues = Object.keys(input.model.variants ?? {});
-  const defaultVariant = inferDefaultVariant(input.providerID, variantValues);
-  const variantOptions = variantValues.map((value) =>
-    defaultVariant === value
-      ? { id: value, label: titleCaseSlug(value), isDefault: true as const }
-      : { id: value, label: titleCaseSlug(value) },
-  );
   const primaryAgents = input.agents.filter(
     (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
   );
@@ -143,17 +125,7 @@ function openCodeCapabilitiesForModel(input: {
   );
   return createModelCapabilities({
     optionDescriptors: [
-      ...(variantOptions.length > 0
-        ? [
-            {
-              id: "variant",
-              label: "Reasoning",
-              type: "select" as const,
-              options: variantOptions,
-              ...(defaultVariant ? { currentValue: defaultVariant } : {}),
-            },
-          ]
-        : []),
+      ...openCodeVariantDescriptors(input.providerID, Object.keys(input.model.variants ?? {})),
       ...(agentOptions.length > 0
         ? [
             {
@@ -171,15 +143,32 @@ function openCodeCapabilitiesForModel(input: {
 
 interface OpenCodeRelease {
   readonly providerID: string;
+  readonly id: string;
   readonly family?: string | undefined;
   readonly released?: number | undefined;
   readonly deprecated?: boolean | undefined;
+  /** Base input and output price, which a model size keeps when it is renamed. */
+  readonly price?: string | undefined;
 }
 
+export const openCodePrice = (cost: { readonly input: number; readonly output: number }) =>
+  `${cost.input}/${cost.output}`;
+
 /**
- * OpenCode catalogs keep every release of a family, such as Claude Opus 4.5
- * through 5.5. Only the newest active release of each family within a
- * sub-provider stays current; older releases and deprecated models are legacy.
+ * `claude-opus-5` and `claude-opus-5-5` are one release line; `gemini-4-carbon` is another.
+ * A parameter count such as `8b` or `70b` names a size, so it stays in the line.
+ */
+const releaseLine = (id: string) =>
+  id
+    .toLowerCase()
+    .split(/[-_]/)
+    .map((token) => (/^\d+(\.\d+)?[bm]$/.test(token) ? token : token.replace(/[\d.]+/g, "")))
+    .join("");
+
+/**
+ * One OpenCode family can hold several model sizes, such as Gemini 4 Carbon and Hydrogen.
+ * A release is legacy when deprecated, or when its family in the same sub-provider has a
+ * newer active release whose id differs only in version or that is sold at the same price.
  */
 function markOpenCodeLegacy(
   entries: ReadonlyArray<{
@@ -189,17 +178,33 @@ function markOpenCodeLegacy(
 ): Array<ServerProviderModel> {
   const familyKey = ({ providerID, family }: OpenCodeRelease) =>
     family ? `${providerID}/${family}` : undefined;
-  const newest = new Map<string, number>();
+  const active = new Map<
+    string,
+    Array<{ readonly released: number; readonly line: string; readonly price: string | undefined }>
+  >();
   for (const { release } of entries) {
     const key = familyKey(release);
     if (key === undefined || release.released === undefined || release.deprecated) continue;
-    newest.set(key, Math.max(newest.get(key) ?? release.released, release.released));
+    const releases = active.get(key) ?? [];
+    releases.push({
+      released: release.released,
+      line: releaseLine(release.id),
+      price: release.price,
+    });
+    active.set(key, releases);
   }
   return entries.map(({ model, release }) => {
     const key = familyKey(release);
-    const latest = key === undefined ? undefined : newest.get(key);
+    const { released, price } = release;
+    const line = releaseLine(release.id);
     const superseded =
-      latest !== undefined && release.released !== undefined && release.released < latest;
+      key !== undefined &&
+      released !== undefined &&
+      (active.get(key) ?? []).some(
+        (other) =>
+          other.released > released &&
+          (other.line === line || (price !== undefined && other.price === price)),
+      );
     return release.deprecated || superseded ? { ...model, isLegacy: true } : model;
   });
 }
@@ -237,9 +242,11 @@ function flattenOpenCodeModels(
         },
         release: {
           providerID: provider.id,
+          id: model.id,
           family: model.family,
           released: Number.isNaN(released) ? undefined : released,
           deprecated: model.status === "deprecated",
+          price: model.cost ? openCodePrice(model.cost) : undefined,
         },
       });
     }
@@ -356,7 +363,6 @@ export const makePendingOpenCodeProvider = Effect.fn(
 });
 
 export interface OpenCode2Model extends OpenCodeRelease {
-  readonly id: string;
   readonly name: string;
   readonly providerName?: string;
   readonly variants: ReadonlyArray<{ readonly id: string }>;
@@ -615,25 +621,11 @@ const OPENCODE_2_PRESENTATION = {
 } as const;
 
 function openCode2ModelCapabilities(model: OpenCode2Model): ModelCapabilities {
-  const variants = model.variants.map((variant) => variant.id);
-  const defaultVariant = inferDefaultVariant(model.providerID, variants);
   return createModelCapabilities({
-    optionDescriptors:
-      variants.length === 0
-        ? []
-        : [
-            {
-              id: "variant",
-              label: "Reasoning",
-              type: "select",
-              options: variants.map((id) => ({
-                id,
-                label: titleCaseSlug(id),
-                ...(id === defaultVariant ? { isDefault: true } : {}),
-              })),
-              ...(defaultVariant === undefined ? {} : { currentValue: defaultVariant }),
-            },
-          ],
+    optionDescriptors: openCodeVariantDescriptors(
+      model.providerID,
+      model.variants.map((variant) => variant.id),
+    ),
   });
 }
 
@@ -748,6 +740,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     OpenCodeRuntime.OpenCodeRuntimeError
   > = Effect.succeed([]),
   environment?: NodeJS.ProcessEnv,
+  compatibility: ProviderCompatibilityLookup = () => Effect.undefined,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -832,6 +825,31 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     return fallback(Cause.squash(probedExit.cause));
   }
   const probed = probedExit.value;
+  const refuseBroken = Effect.fnUntraced(function* (version: string) {
+    const message = brokenVersionDetail({
+      name: "OpenCode",
+      version,
+      advisory: yield* compatibility(ProviderDriverKind.make("opencode"), version),
+    });
+    return message === undefined
+      ? undefined
+      : buildServerProvider({
+          presentation: OPENCODE_PRESENTATION,
+          enabled: openCodeSettings.enabled,
+          checkedAt,
+          models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
+          probe: {
+            cli: answered,
+            installed: true,
+            version,
+            status: "error",
+            auth: { status: "unknown" },
+            message,
+          },
+        });
+  });
+  const refused = yield* refuseBroken(probed.version);
+  if (refused !== undefined) return refused;
   if (probed.generation === "v2") {
     const draft = yield* checkOpenCode2(
       openCodeSettings,
@@ -841,22 +859,6 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       loadOpenCode2Skills,
     );
     return { ...draft, cli: answered, cliCheckedAt: checkedAt };
-  }
-  if (compareSemverVersions(probed.version, OpenCodeRuntime.MINIMUM_OPENCODE_VERSION) < 0) {
-    return buildServerProvider({
-      presentation: OPENCODE_PRESENTATION,
-      enabled: openCodeSettings.enabled,
-      checkedAt,
-      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
-      probe: {
-        cli: answered,
-        installed: true,
-        version: probed.version,
-        status: "error",
-        auth: { status: "unknown" },
-        message: `OpenCode v${probed.version} is too old. Upgrade to v${OpenCodeRuntime.MINIMUM_OPENCODE_VERSION} or newer.`,
-      },
-    });
   }
 
   const installedVersion = isExternalServer ? {} : { installedVersion: probed.version };
@@ -900,6 +902,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       ),
     ),
   );
+  const refusedServer = version === probed.version ? undefined : yield* refuseBroken(version);
+  if (refusedServer !== undefined) return { ...refusedServer, ...installedVersion };
   if (inventoryExit._tag === "Failure") {
     yield* logDiscoveryFailure({
       phase: "inventory",

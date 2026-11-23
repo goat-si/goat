@@ -21,7 +21,7 @@ import * as TextGenerationOperations from "@goat/provider-core/server/textGenera
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import { cursorSdkModelSelection } from "./sdkModel.ts";
 import type { CursorAuth } from "./auth.ts";
-import type { CatalogModels } from "./sessionEnvironment.ts";
+import type { CatalogModels, CatalogSdkModels } from "./sessionEnvironment.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import * as CursorSdk from "./CursorSdk.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -71,6 +71,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   memoryRunnerContext?: MemoryGenerationRunnerContext,
   currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment ?? process.env),
   getModels?: CatalogModels,
+  getSdkModels?: CatalogSdkModels,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
@@ -159,6 +160,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const selectedModel = cursorSdkModelSelection(
         modelSelection,
         getModels?.(apiKey, requestEnvironment) ?? [],
+        getSdkModels?.(apiKey, requestEnvironment) ?? [],
       );
       // The SDK keeps SQLite handles open after `agent.close()` and only releases
       // them from a store the caller disposes. Its state lives outside `cwd` so the
@@ -286,42 +288,40 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         return result;
       }, Effect.scoped);
       // The SDK can check sandbox support at create or send. Retry only before it accepts a run.
-      const request = runPrompt(true).pipe(
-        Effect.catchTags({
-          CursorSandboxUnavailable: () =>
-            // The fallback still uses the empty workspace and disabled setting sources.
-            isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
+      const request = Effect.gen(function* () {
+        const promptResult = yield* runPrompt(true).pipe(
+          Effect.catchTags({
+            CursorSandboxUnavailable: () =>
+              isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
+          }),
+        );
+        const rawResult = promptResult.result?.trim() ?? "";
+        if (promptResult.status !== "finished" || !rawResult) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: cursorSdkResultDetail(promptResult),
+            ...(promptResult.error ? { cause: promptResult.error } : {}),
+          });
+        }
+        return yield* TextGenerationOperations.decodeJsonReply(input, "Cursor SDK", rawResult);
+      }).pipe(
+        Effect.retry({
+          times: 1,
+          while: (cause) =>
+            !isMemory && isTextGenerationError(cause) && Schema.isSchemaError(cause.cause),
         }),
       );
-      const promptResult = yield* request.pipe(
+      const result = yield* request.pipe(
         Effect.timeoutOption(CURSOR_TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>
               Effect.fail(
-                new TextGenerationError({
-                  operation,
-                  detail: "Cursor SDK request timed out.",
-                }),
+                new TextGenerationError({ operation, detail: "Cursor SDK request timed out." }),
               ),
             onSome: (value) => Effect.succeed(value),
           }),
         ),
-      );
-
-      const rawResult = promptResult.result?.trim() ?? "";
-      if (promptResult.status !== "finished" || !rawResult) {
-        return yield* new TextGenerationError({
-          operation,
-          detail: cursorSdkResultDetail(promptResult),
-          ...(promptResult.error ? { cause: promptResult.error } : {}),
-        });
-      }
-
-      const result = yield* TextGenerationOperations.decodeJsonReply(
-        input,
-        "Cursor SDK",
-        rawResult,
       );
       return { result, effectiveModel: selectedModel.id };
     },

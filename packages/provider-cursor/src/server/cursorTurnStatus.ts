@@ -1,11 +1,17 @@
 import type { RunResult } from "@cursor/sdk";
 import type { OrchestrationV2ProviderTurn } from "@goat/contracts";
 
-const RESUME_NO_PROGRESS = "Agent turn stopped after repeated resume attempts made no progress";
+// After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
+const POST_TURN_RETRY_ERRORS = new Set([
+  "Agent turn stopped after repeated resume attempts made no progress",
+  "Connection failed repeatedly",
+]);
 type TurnState = { readonly interrupted: boolean; readonly turnEnded: boolean };
 
 export const isResumeFailureAfterTurnEnded = (context: TurnState, result: RunResult) =>
-  context.turnEnded && result.status === "error" && result.error?.message === RESUME_NO_PROGRESS;
+  context.turnEnded &&
+  result.status === "error" &&
+  POST_TURN_RETRY_ERRORS.has(result.error?.message ?? "");
 
 export const terminalStatus = (
   context: TurnState,

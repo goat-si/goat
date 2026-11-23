@@ -1,3 +1,4 @@
+import { claudeLaunchArgPluginDirectories } from "./ClaudePluginLaunchArgs.ts";
 import {
   listClaudeDiscoveryDirectory,
   readClaudeSkillScanText,
@@ -437,7 +438,9 @@ const expandInlinePluginDirectory = Effect.fn("expandInlinePluginDirectory")(fun
 
 /** Plugin folders Claude Code loads inline from CLAUDE_CODE_PLUGIN_DIRS, and their plugin names. */
 const discoverInlinePluginSkillRoots = Effect.fn("discoverInlinePluginSkillRoots")(function* (
+  launchArgDirectories: ReadonlyArray<string>,
   pluginDirectories: string | undefined,
+  cwd: string | undefined,
   enabledPlugins: ReadonlyMap<string, boolean>,
   managedPluginNames: ReadonlySet<string>,
   budget: ClaudeSkillScanBudget,
@@ -449,10 +452,17 @@ const discoverInlinePluginSkillRoots = Effect.fn("discoverInlinePluginSkillRoots
   const roots: Array<ClaudeSkillRoot> = [];
   const names = new Set<string>();
   const seen = new Set<string>();
-  for (const entry of (pluginDirectories ?? "").split(
-    platform === "win32" ? ";" : ":",
-    MAX_INLINE_DIRECTORIES,
-  )) {
+  const directories = [
+    ...launchArgDirectories
+      .filter((directory) => directory && (cwd || path.isAbsolute(directory)))
+      .map((directory) => path.resolve(cwd ?? ".", directory)),
+    ...(pluginDirectories ?? "")
+      .split(platform === "win32" ? ";" : ":", MAX_INLINE_DIRECTORIES)
+      .map((entry) => expandHomePath(entry.trim(), home))
+      .filter((directory) => directory && path.isAbsolute(directory))
+      .map((directory) => path.resolve(directory)),
+  ];
+  for (const directory of directories.slice(0, MAX_INLINE_DIRECTORIES)) {
     if (
       budget.remainingEntries <= 0 ||
       budget.remainingBytes <= 0 ||
@@ -460,10 +470,7 @@ const discoverInlinePluginSkillRoots = Effect.fn("discoverInlinePluginSkillRoots
     )
       break;
     budget.remainingEntries--;
-    const directory = expandHomePath(entry.trim(), home);
-    // Claude skips relative entries rather than resolving them against its cwd.
-    if (!directory || !path.isAbsolute(directory)) continue;
-    for (const installPath of yield* expandInlinePluginDirectory(path.resolve(directory), budget)) {
+    for (const installPath of yield* expandInlinePluginDirectory(directory, budget)) {
       if (seen.size >= MAX_INLINE_PLUGINS || budget.remainingBytes <= 0) break;
       if (seen.has(installPath)) continue;
       seen.add(installPath);
@@ -730,9 +737,11 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
   const configuredInlineDirectories = (yield* readClaudeSettingsEnv(config, cwd, env))
     .CLAUDE_CODE_PLUGIN_DIRS;
   const inlinePlugins = yield* discoverInlinePluginSkillRoots(
+    claudeLaunchArgPluginDirectories(config.launchArgs),
     typeof configuredInlineDirectories === "string"
       ? configuredInlineDirectories
       : env.CLAUDE_CODE_PLUGIN_DIRS,
+    cwd,
     enabledPlugins,
     managedPluginNames,
     pluginBudget,

@@ -346,17 +346,19 @@ function ProviderAccount({
                 {interaction.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")}
               </Text>
             </ScrollView>
-            {field("input", "Terminal response", true)}
-            <SettingsActionRow
-              icon="arrow.up"
-              label="Send response"
-              disabled={disabled}
-              onPress={() => {
-                void send({ type: "terminal", data: `${values.input ?? ""}\r` }).then((sent) => {
-                  if (sent) setDraft({ id: "", values: {} });
-                });
-              }}
-            />
+            {active ? field("input", "Terminal response", true) : null}
+            {active ? (
+              <SettingsActionRow
+                icon="arrow.up"
+                label="Send response"
+                disabled={disabled}
+                onPress={() => {
+                  void send({ type: "terminal", data: `${values.input ?? ""}\r` }).then((sent) => {
+                    if (sent) setDraft({ id: "", values: {} });
+                  });
+                }}
+              />
+            ) : null}
           </>
         ) : null}
         {interaction?.type === "credentials" ? (

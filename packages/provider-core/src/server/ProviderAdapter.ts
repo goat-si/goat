@@ -10,6 +10,7 @@ import {
   OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
   OrchestrationV2ExecutionNode,
+  OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderSession,
   OrchestrationV2PlanArtifact,
   OrchestrationV2ProviderCapabilities,
@@ -101,6 +102,17 @@ export const ProviderAdapterV2Event = Schema.Union([
     sessionScoped: Schema.optional(Schema.Boolean),
     retainedNativeTurnIds: Schema.optional(Schema.Array(Schema.String)),
   }),
+  /** The agent changed selected options itself, such as leaving plan mode once its plan ran. */
+  Schema.Struct({
+    type: Schema.Literal("thread_model_selection.updated"),
+    driver: ProviderDriverKind,
+    threadId: ThreadId,
+    instanceId: ProviderInstanceId,
+    /** Applies only where the thread still holds `from`, so newer user picks win. */
+    changes: Schema.Array(
+      Schema.Struct({ id: Schema.String, from: Schema.String, to: Schema.String }),
+    ),
+  }),
   Schema.Struct({
     type: Schema.Literal("provider_turn.updated"),
     driver: ProviderDriverKind,
@@ -150,6 +162,14 @@ export const ProviderAdapterV2Event = Schema.Union([
     driver: ProviderDriverKind,
     providerTurnId: ProviderTurnId,
     pending: Schema.Boolean,
+  }),
+  // The query process exited under a live session before this work reported back.
+  Schema.Struct({
+    type: Schema.Literal("background_work.lost"),
+    driver: ProviderDriverKind,
+    threadId: ThreadId,
+    providerThreadId: ProviderThreadId,
+    tasks: Schema.Array(OrchestrationV2PendingBackgroundTask),
   }),
   /** Unpersisted deltas go only to clients showing the row; final output arrives in turn_item.updated. */
   Schema.Struct({
@@ -640,6 +660,8 @@ export interface ProviderAdapterV2SteerInput {
   readonly message: ProviderAdapterV2TurnMessage;
   /** The selection sent with the message when it differs from the running turn's. */
   readonly modelSelection?: ModelSelection;
+  /** The thread's MCP app notes; the adapter sends those the agent has not seen yet. */
+  readonly appContext?: ProviderAdapterV2TurnInput["appContext"];
 }
 
 export interface ProviderAdapterV2InterruptInput {
@@ -660,7 +682,6 @@ export interface ProviderAdapterV2RuntimeRequestResponseInput {
 
 export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerThread: OrchestrationV2ProviderThread;
-  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
   readonly reasoningMessageIds?: ReadonlyArray<OrchestrationV2ConversationMessage["id"]>;
   readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;
@@ -819,6 +840,8 @@ export interface ProviderAdapterV2SessionRuntime {
     readonly threadId?: ThreadId;
     readonly modelSelection?: ModelSelection;
     readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
+    /** The native session is the only copy of the thread's imported history: fail when it is gone. */
+    readonly importedNativeSession?: boolean;
   }) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
   /** False means the native protocol explicitly does not support history injection. */
   readonly injectHistory?: (
@@ -849,6 +872,10 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly applyModelSelection?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
+  readonly applyThreadTitle?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly title: string;
   }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly stopTask?: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
@@ -902,6 +929,11 @@ export class ProviderAdapterV2 extends Context.Service<
   {
     readonly instanceId: ProviderInstanceId;
     readonly driver: ProviderDriverKind;
+    /**
+     * Set when openSession rates the version the runtime reports at its handshake. The host then
+     * skips its own check, which only knows the version from the last status probe.
+     */
+    readonly checksVersionAtHandshake?: boolean;
     /** Identifies the settings a session's process starts with; sessions opened under another key retire. */
     readonly sessionConfigKey?: string;
     readonly getCapabilities: () => Effect.Effect<

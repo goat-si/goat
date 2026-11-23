@@ -43,6 +43,7 @@ const cursorSdkMock = vi.hoisted(() => {
   const runOperations: Array<string> = [];
   const sentMessages: Array<string> = [];
   let agentCloseFailure: unknown;
+  let summarizeNext = false;
   // The local store lists runs oldest first, like the real SDK.
   let storedRuns: Array<{ readonly id: string; readonly status: string }> = [];
   const runWait = vi.fn(async () => ({
@@ -73,6 +74,10 @@ const cursorSdkMock = vi.hoisted(() => {
       sentMessages.push(typeof message === "string" ? message : message.text);
       if (storedRuns.some((run) => run.status === "running")) {
         throw new Error("Agent agent-cursor-agent-sdk-test already has active run");
+      }
+      if (summarizeNext) {
+        summarizeNext = false;
+        await options.onDelta?.({ update: { type: "summary-completed" } });
       }
       await options.onDelta?.({
         update: {
@@ -129,6 +134,9 @@ const cursorSdkMock = vi.hoisted(() => {
     runWait,
     send,
     sentMessages,
+    summarizeNext: () => {
+      summarizeNext = true;
+    },
     setAgentCloseFailure: (failure: unknown) => {
       agentCloseFailure = failure;
     },
@@ -150,7 +158,14 @@ vi.mock("./sdk.ts", () => ({
         list: vi.fn(async () => []),
       },
     },
-    createAgentPlatform: vi.fn(),
+    CursorAgentPlatform: class {
+      createAgent = cursorSdkMock.create;
+      resumeAgent = cursorSdkMock.resume;
+      listRuns = cursorSdkMock.listRuns;
+      cancelRun = cursorSdkMock.cancelRun;
+      getAgentMessages = vi.fn(async () => []);
+    },
+    createAgentPlatform: vi.fn(async () => ({})),
   }),
   loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
 }));
@@ -295,20 +310,14 @@ describe("CursorAgentSdkRunner", () => {
       ]);
       assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[0], [
         "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd() },
+        {},
       ]);
       assert.strictEqual(cursorSdkMock.listRuns.mock.calls.length, 2);
       assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[1], [
         "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd(), cursor: "50" },
+        { cursor: "50" },
       ]);
-      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], [
-        "run-stale",
-        {
-          runtime: "local",
-          cwd: process.cwd(),
-        },
-      ]);
+      assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], ["run-stale"]);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -447,6 +456,7 @@ describe("CursorAgentSdkRunner", () => {
           });
         yield* finishTurn(1);
         assert.include(cursorSdkMock.sentMessages[0]!, "read=true, write=false, source=false");
+        assert.include(cursorSdkMock.sentMessages[0]!, "<runtime_info>");
         yield* sessions.clear(threadId);
         yield* sessions.set({
           ...attachment,
@@ -470,6 +480,7 @@ describe("CursorAgentSdkRunner", () => {
         cursorSdkMock.setStoredRuns([{ id: "run-stale", status: "running" }]);
         cursorSdkMock.runOperations.length = 0;
         yield* finishTurn(2);
+        assert.notInclude(cursorSdkMock.sentMessages[1]!, "<runtime_info>");
         assert.deepStrictEqual(cursorSdkMock.runOperations, [
           "run.start",
           "agent.listRuns",
@@ -499,6 +510,16 @@ describe("CursorAgentSdkRunner", () => {
           assert.notInclude(cursorSdkMock.sentMessages[3]!, "GOAT memory tools:");
         }
         assert.equal(refreshes, restoreGrant ? 5 : 4);
+        yield* sessions.set({ ...attachment, builtInSkills: ["screen-code"] });
+        const beforeScreen = cursorSdkMock.sentMessages.length;
+        yield* finishTurn(5);
+        assert.include(cursorSdkMock.sentMessages[beforeScreen]!, "goat_screen_run");
+        yield* finishTurn(6);
+        assert.notInclude(cursorSdkMock.sentMessages[beforeScreen + 1]!, "<runtime_info>");
+        cursorSdkMock.summarizeNext();
+        yield* finishTurn(7);
+        yield* finishTurn(8);
+        assert.include(cursorSdkMock.sentMessages[beforeScreen + 3]!, "goat_screen_run");
       }).pipe(
         Effect.scoped,
         Effect.provide(

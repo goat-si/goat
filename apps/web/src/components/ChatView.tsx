@@ -58,9 +58,8 @@ import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@goat/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
-import type { UsageLimitSourceSnapshots } from "@goat/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
-import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
+import { useUsageLimitsPanel, usageModelForProvider } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
 import { useChatShortcuts } from "./chat/useChatShortcuts";
 import { ChatBannerLane } from "./chat/ChatBannerLane";
@@ -243,7 +242,6 @@ import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
 import { resolveProvidersForCwd } from "@goat/client-runtime/providerSkills";
 import { chatGitStatusAtom, NO_CHAT_GIT_STATUS_ATOM, vcsEnvironment } from "../state/vcs";
 import {
-  type EnvironmentPresentation,
   useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironment,
@@ -407,15 +405,8 @@ import { useGlobalAgentStore } from "../globalAgentStore";
 import type { DraftSshDestination } from "../composerDraftStore";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
-const EMPTY_PROVIDERS: ServerProvider[] = [];
-const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
-const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
-const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
+const EMPTY_CHAT_DATA: never[] = [];
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
-
-const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
-const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
-const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -653,8 +644,7 @@ export default function ChatView(props: ChatViewProps) {
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
-  const feedbackSubmissions =
-    feedbackSubmissionsByThreadKey[routeThreadKey] ?? EMPTY_FEEDBACK_SUBMISSIONS;
+  const feedbackSubmissions = feedbackSubmissionsByThreadKey[routeThreadKey] ?? EMPTY_CHAT_DATA;
   const feedbackUploading = feedbackSubmissions.some(
     (submission) => submission.status === "uploading",
   );
@@ -1228,7 +1218,7 @@ export default function ChatView(props: ChatViewProps) {
   const providerStatuses = resolveProvidersForCwd(
     (providerEnvironmentId === undefined
       ? undefined
-      : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS,
+      : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_CHAT_DATA,
     gitCwd,
   );
   const threadProvider =
@@ -1293,7 +1283,7 @@ export default function ChatView(props: ChatViewProps) {
         const environment = environmentById.get(environmentId);
         return environment ? [environment] : [];
       })
-    : EMPTY_AUTO_UPDATE_ENVIRONMENTS;
+    : EMPTY_CHAT_DATA;
   const systemComposerBannerItems = useSystemComposerBanners({
     activeEnvironment,
     activeEnvironmentUnavailable,
@@ -1418,9 +1408,14 @@ export default function ChatView(props: ChatViewProps) {
     threadKey: routeThreadKey,
     panelKey: usageLimitsKey,
     providerInstanceId: activeProviderInstanceId,
+    model: usageModelForProvider(
+      activeProviderInstanceId,
+      modelSelectionByProvider,
+      activeThread?.modelSelection,
+    ),
     providerDriver: activeProviderStatus?.driver ?? null,
     providers: providerStatuses,
-    sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
+    sources: serverConfig?.usageLimitSources ?? EMPTY_CHAT_DATA,
   });
   const {
     beginLocalDispatch,
@@ -1844,7 +1839,7 @@ export default function ChatView(props: ChatViewProps) {
   const showProviderSubagentBar = isProviderSubagent;
   const composerArea = workspaceAreaProps("composer", 2, isProviderSubagent ? "Subagent" : "");
   const composerMounted = !showProviderSubagentBar;
-  const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
+  const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_CHAT_DATA;
   // Providers can report dated model ids or aliases.
   const providerSubagentModelSlug = selectedProviderEntry
     ? resolveSelectableModel(
@@ -3554,7 +3549,7 @@ export default function ChatView(props: ChatViewProps) {
                   }
                   runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
                   turnDiffSummaries={
-                    paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
+                    paintOnlyDisplayedTimeline ? EMPTY_CHAT_DATA : turnDiffSummaries
                   }
                   activeThreadEnvironmentId={
                     displayedThreadRef?.environmentId ?? activeThread.environmentId
@@ -3797,7 +3792,7 @@ export default function ChatView(props: ChatViewProps) {
                                 queuedRunsControl={queuedRunsControl}
                                 bannerItems={
                                   composerBannerItems.length === 0
-                                    ? EMPTY_COMPOSER_BANNER_ITEMS
+                                    ? EMPTY_CHAT_DATA
                                     : composerBannerItems
                                 }
                                 resumeCompactionTokens={resumeCompactionTokens}

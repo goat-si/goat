@@ -9,6 +9,7 @@ import type { ModelCapabilities } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelCapabilities } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -430,5 +431,56 @@ describe("resolveProviderProbeTimeoutMs", () => {
         resolveProviderProbeTimeoutMs("claude", 25000, { GOAT_CLAUDE_PROBE_TIMEOUT_MS: value }),
       ).toBe(25000);
     },
+  );
+});
+
+describe("spawnAndCollect", () => {
+  it.effect.each(["stdout", "stderr"] as const)(
+    "rejects oversized %s after draining the process streams",
+    (stream) =>
+      Effect.gen(function* () {
+        let drainedChunks = 0;
+        const chunk = new Uint8Array(1024 * 1024).fill(120);
+        const output = Stream.fromIterable(Array.from({ length: 9 }, () => chunk)).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              drainedChunks += 1;
+            }),
+          ),
+        );
+        const spawner = ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: stream === "stdout" ? output : Stream.empty,
+              stderr: stream === "stderr" ? output : Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          ),
+        );
+        const result = yield* spawnAndCollect(
+          "fixture-cli",
+          ChildProcess.make("fixture-cli", ["--version"]),
+        ).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.result,
+        );
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({
+            _tag: "ProviderProbeOutputLimitError",
+            stream,
+            maxBytes: 8 * 1024 * 1024,
+          });
+        }
+        expect(drainedChunks).toBe(9);
+      }),
   );
 });

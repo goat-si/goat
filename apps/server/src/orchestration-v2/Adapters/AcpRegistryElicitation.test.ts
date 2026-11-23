@@ -36,6 +36,10 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factory-droid" });
+const DROID_LOCAL_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({
+  source: "local",
+  commandPath: "/opt/droid/bin/droid",
+});
 const DEVIN_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "devin" });
 const OMP_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({
   source: "local",
@@ -186,6 +190,17 @@ describe("ACP Registry elicitation", () => {
     },
     {
       scenario: "preserves selected IDs and encodes custom answers",
+      schema: droidSchema,
+      questions: droidQuestions,
+      answers: { question_1: "option_1", question_2: "Markdown" },
+      result: {
+        action: "accept",
+        content: { question_1: "option_1", question_2: "other", question_2_other: "Markdown" },
+      },
+    },
+    {
+      scenario: "extracts the paired form for a local droid command",
+      settings: DROID_LOCAL_SETTINGS,
       schema: droidSchema,
       questions: droidQuestions,
       answers: { question_1: "option_1", question_2: "Markdown" },

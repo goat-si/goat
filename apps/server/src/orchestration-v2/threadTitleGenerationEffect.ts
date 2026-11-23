@@ -22,6 +22,7 @@ export const placeholderThreadTitle = (parentTitle: string, index: number): stri
   `${parentTitle} thread ${index + 1}`;
 
 export function hasTitleSetBeforeFirstMessage(thread: OrchestrationV2AppThread, titleSeed: string) {
+  if (thread.titleRenamed === true) return true;
   const title = thread.title.trim();
   return (
     thread.forkedFrom === null &&

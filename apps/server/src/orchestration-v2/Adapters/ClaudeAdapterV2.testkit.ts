@@ -1426,13 +1426,13 @@ async function recordMessagesUntilToolUse(input: {
   }
 }
 
-// The SDK may lack a platform executable. Prefer installed Claude only when directly spawnable,
-// including Windows shims resolved to package entries.
 const resolveClaudeRecordingExecutablePath = Effect.fn("resolveClaudeRecordingExecutablePath")(
   function* (environment: NodeJS.ProcessEnv) {
     const resolveExecutable = yield* SpawnExecutableResolution;
     const platform = yield* HostProcess.Platform;
-    const resolved = resolveExecutable("claude", platform, environment);
+    const resolved = yield* Effect.promise(async () =>
+      resolveExecutable("claude", platform, environment),
+    );
     if (resolved === undefined) {
       return undefined;
     }

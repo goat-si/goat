@@ -711,7 +711,6 @@ export function useThreadComposerState() {
     }
 
     // Resolve at send time because outbox delivery may be delayed.
-    // Steering uses "auto" so an ended turn queues a run instead of restoring the draft.
     // An approval redirect must steer the waiting turn instead of queueing behind it.
     const activeTurnDefault = beforeDispatch !== undefined ? "steer" : followUpBehavior;
     const followUpAction = resolveComposerDispatchMode({
@@ -726,9 +725,7 @@ export function useThreadComposerState() {
       ? "queue"
       : followUpAction === "auto"
         ? null
-        : followUpAction === "queue"
-          ? "queue"
-          : "auto";
+        : followUpAction;
 
     // Only a send the notice announced compacts, since the notice's minute clock can trail the
     // exact deadline.

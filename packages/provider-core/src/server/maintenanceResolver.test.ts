@@ -201,9 +201,7 @@ it.layer(
   it.effect.each([
     { install: "native", stdout: '"1.2.0"', exitCode: 0, latest: "1.2.0" },
     { install: "manual", stdout: '["1.2.0"]', exitCode: 0, latest: "1.2.0" },
-    { install: "npm", stdout: '"1.2.0"', exitCode: 0, latest: "1.2.0" },
     { install: "native", stdout: "", exitCode: 1, latest: null },
-    { install: "npm", stdout: '"1.2.0"', exitCode: 1, latest: null },
     { install: "native", stdout: "not json", exitCode: 0, latest: null },
     { install: "manual", stdout: '["1.2.0", "1.3.0"]', exitCode: 0, latest: null },
     { install: "manual", stdout: '""', exitCode: 0, latest: null },
@@ -214,20 +212,12 @@ it.layer(
         const tempDir = yield* makeTempDir("goat-registry-version");
         const npmBinDir = NodePath.join(tempDir, "npm-bin");
         writeExecutable(NodePath.join(npmBinDir, "npm"));
-        const binaryPath =
-          fixture.install === "npm"
-            ? linkIntoPackage(tempDir, "package-tool", [
-                "lib",
-                "node_modules",
-                "@example",
-                "package-tool",
-              ])
-            : NodePath.join(tempDir, ".local/bin/native-package-tool");
-        if (fixture.install !== "npm") writeExecutable(binaryPath);
+        const binaryPath = NodePath.join(tempDir, ".local/bin/native-package-tool");
+        writeExecutable(binaryPath);
         let probes = 0;
         const capabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(
           fixture.install === "native" ? nativePackageToolUpdate : packageToolUpdate,
-          { binaryPath, env: { PATH: fixture.install === "npm" ? npmBinDir : "" } },
+          { binaryPath, env: { PATH: "" } },
         ).pipe(
           Effect.provideService(HostProcess.Environment, { PATH: npmBinDir }),
           Effect.provideService(
@@ -239,7 +229,6 @@ it.layer(
                 expect(args).toEqual([
                   "view",
                   "--global",
-                  ...(fixture.install === "npm" ? ["--prefix", tempDir] : []),
                   "--json",
                   `${capabilities.packageName}@latest`,
                   "version",
@@ -433,6 +422,9 @@ it.layer(
         expect(capabilities).toEqual({
           provider: driver("packageTool"),
           packageName: "@example/package-tool",
+          latestVersion: null,
+          lookupLatestVersion: expect.anything(),
+          latestVersionCacheKey: expect.any(String),
           update: {
             command: `npm install -g --prefix ${tempDir} --allow-scripts=@example/package-tool @example/package-tool@latest`,
             executable: "npm",

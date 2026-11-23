@@ -1,3 +1,21 @@
+import { makeCodexThreadTitle } from "./CodexThreadTitle.ts";
+import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
+import {
+  codexMcpAppResourceUri,
+  type CodexDynamicToolItem,
+  type CodexDynamicToolProjection,
+} from "./CodexDynamicToolProjection.ts";
+export type { CodexDynamicToolItem } from "./CodexDynamicToolProjection.ts";
+export type { CodexDynamicToolProjection } from "./CodexDynamicToolProjection.ts";
+import { toProtocolError } from "./CodexProtocolError.ts";
+import { codexTimestamp, codexSkillMentionText } from "./CodexTextHelpers.ts";
+export { codexTimestamp } from "./CodexTextHelpers.ts";
+import {
+  decodeCodexBackgroundTerminalTerminateResponse,
+  decodeCodexBackgroundTerminalsListResponse,
+  type CodexBackgroundTerminalsListPage,
+} from "./CodexBackgroundTerminalSchemas.ts";
+import { sendCodexSteerContext } from "./CodexSteerAppContext.ts";
 import { providerSession } from "./CodexSessionProjection.ts";
 import {
   codexItemStatus,
@@ -54,7 +72,6 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
-import { goatMemoryToolsWithout } from "./goatMcpToolNames.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -85,9 +102,7 @@ import {
   OrchestrationV2ProviderGoal,
   parseGoalCommand,
   ProviderDriverKind,
-  ProviderSetupError,
 } from "@goat/contracts";
-import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import {
   appendGeneratedImageMarkdown,
   type CodexImageGenerationItem,
@@ -184,6 +199,7 @@ import {
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
 import {
+  codexHomeLaunchArgs,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "../../provider/Drivers/CodexHomeLayout.ts";
@@ -191,12 +207,7 @@ import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../../provider/code
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import {
-  MCP_APP_EXTENSION_ID,
-  MCP_APP_MIME_TYPE,
-  MCP_APP_OUTPUT_KEY,
-  MCP_APP_RESOURCE_SCHEME,
-} from "@goat/shared/mcpApp";
+import { MCP_APP_EXTENSION_ID, MCP_APP_MIME_TYPE, MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -225,6 +236,7 @@ import { providerThreadFromCodexThread } from "./codexProviderThread.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
+import { acceptsFullAccessCommand } from "./CodexFullAccessApproval.ts";
 import {
   codexExhaustionHttpStatus,
   codexHttpStatus,
@@ -237,7 +249,7 @@ import {
 import { codexManagedCuaDriver, codexTurnSkills } from "./CodexTurnSkills.ts";
 import { descendsFromCodexThread, makeCodexLiveWork } from "./CodexLiveWork.ts";
 import { codexSessionConfigKey } from "../../provider/CodexSessionConfigKey.ts";
-import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
+import { makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
 import {
   type CodexTurnStartParamsWithCollaborationMode,
   buildCodexTurnStartParams,
@@ -273,81 +285,21 @@ type CodexFileChangeKinds = Readonly<
   Record<string, CodexSchema.V2ItemStartedNotification__PatchChangeKind>
 >;
 
-import { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
-export { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
-import { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
-export { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
+import { canReuseCodexContextUsage, codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
+export { canReuseCodexContextUsage, codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 
-// Each plan flush stores the whole plan three times (node, plan, turn item), so
-// flush at the cadence clients already see for assistant text.
+// A plan flush stores three copies; use the visible assistant-text cadence.
 const CODEX_PLAN_DELTA_FLUSH_INTERVAL_MS = 400;
-const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
-  terminated: Schema.Boolean,
-});
-const CodexBackgroundTerminalsListResponse = Schema.Struct({
-  data: Schema.Array(
-    Schema.Struct({
-      processId: Schema.String,
-    }),
-  ),
-  nextCursor: Schema.NullOr(Schema.String),
-});
-type CodexBackgroundTerminalsListPage = typeof CodexBackgroundTerminalsListResponse.Type;
-const decodeCodexBackgroundTerminalTerminateResponse = Schema.decodeUnknownEffect(
-  CodexBackgroundTerminalTerminateResponse,
-);
-const decodeCodexBackgroundTerminalsListResponse = Schema.decodeUnknownEffect(
-  CodexBackgroundTerminalsListResponse,
-);
 const CODEX_CLIENT_CAPABILITIES = {
   experimentalApi: true,
   optOutNotificationMethods: ["turn/diff/updated"],
   extensions: { [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
 } as const;
 
-function toProtocolError(
-  detail: string,
-  payload?: unknown,
-): ProviderAdapter.ProviderAdapterProtocolError {
-  return new ProviderAdapter.ProviderAdapterProtocolError({
-    driver: CODEX_PROVIDER,
-    detail,
-    ...(payload === undefined ? {} : { payload }),
-  });
-}
-
-export function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
-  return seconds === null || seconds === undefined
-    ? DateTime.nowUnsafe()
-    : DateTime.makeUnsafe(seconds * 1000);
-}
-
-/**
- * The composers let a skill be typed with any currency sigil (`€review`), but
- * Codex only parses `$name` as a skill mention.
- */
-function codexSkillMentionText(text: string): string {
-  return text.replace(SKILL_MENTION_PATTERN, "$1$$$2");
-}
-
-export interface CodexDynamicToolProjection extends McpToolPresentation {
-  readonly toolName: string;
-  readonly title?: string;
-  readonly input: unknown;
-  readonly output?: unknown;
-  readonly status: OrchestrationV2TurnItem["status"];
-}
-
 // A hung MCP resource read must not hold run ingestion open.
 const MCP_APP_CAPTURE_TIMEOUT = "20 seconds";
-
-function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined {
-  if (item.type !== "mcpToolCall") return undefined;
-  const uri = item.mcpAppUi?.resourceUri ?? item.mcpAppResourceUri ?? item.appContext?.resourceUri;
-  return typeof uri === "string" && uri.startsWith(MCP_APP_RESOURCE_SCHEME) ? uri : undefined;
-}
 
 const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(function* (
   item: CodexDynamicToolItem,
@@ -560,12 +512,6 @@ type PendingCodexRuntimeRequest =
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers, never>;
     };
 
-export type CodexDynamicToolItem = Extract<
-  | CodexSchema.V2ItemStartedNotification__ThreadItem
-  | CodexSchema.V2ItemCompletedNotification__ThreadItem,
-  { readonly type: "mcpToolCall" | "dynamicToolCall" }
->;
-
 type CodexCollabAgentToolCallItem = Extract<
   CodexSchema.V2ItemCompletedNotification__ThreadItem,
   { readonly type: "collabAgentToolCall" }
@@ -577,102 +523,9 @@ type CodexSubAgentActivityItem = Extract<
   { readonly type: "subAgentActivity" }
 >;
 
-/**
- * Codex waits this long for MCP servers before the first model request and
- *   leaves out any server still starting (default 1 s, too short for cold
- *   `npx`/`uvx` servers).
- */
-export const CODEX_THREAD_CONFIG = {
-  ...codexThreadMcpEnvironment(undefined),
-  "tools.update_plan.enabled": true,
-  mcp_optional_startup_grace_ms: 10_000,
-  // Tool calls stop waiting on the reasoning summary. Codex applies it only to its
-  // built-in OpenAI provider and sends each summary section whole, not as token deltas.
-  "features.concurrent_reasoning_summaries": true,
-} as const;
-
-// Keep Codex MCP calls longer than GOAT's hour-long wait tools.
-const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
-
 export { codexNativeSubagentConfig };
-
-export function codexThreadRuntimeParams(input: {
-  readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
-  readonly threadId?: ThreadId;
-  readonly modelSelection?: { readonly model: string };
-  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-  /** From `initialize`; unknown omits the subagent keys older Codex rejects. */
-  readonly codexVersion?: string | undefined;
-  /** The user's Codex config already defines `cua-driver`; theirs wins unless overridden. */
-  readonly userCuaDriver?: boolean;
-  /** A managed driver an earlier config attached to this live thread; disabled when dropped. */
-  readonly previousCuaDriver?: CuaDriverMcpConfiguration | undefined;
-}): {
-  readonly cwd?: string;
-  readonly model?: string;
-  readonly config: Readonly<Record<string, Schema.Json>>;
-} {
-  const { mcpSession } = input;
-  const memory = McpProviderSession.memoryToolAvailability(mcpSession);
-  const disabledMemoryTools = goatMemoryToolsWithout(memory);
-  const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
-  // Codex merges a dotted thread-config entry over the user's own `cua-driver`; disabling the
-  // whole entry keeps theirs from running for an unattended turn without a lease.
-  const cuaServer =
-    cuaDriver !== undefined
-      ? McpProviderSession.cuaCodexMcpServer(cuaDriver)
-      : input.previousCuaDriver !== undefined
-        ? { ...McpProviderSession.cuaCodexMcpServer(input.previousCuaDriver), enabled: false }
-        : mcpSession?.cuaDriverBlocked === true
-          ? {
-              command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
-              args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
-              env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
-              enabled: false,
-            }
-          : undefined;
-  return {
-    ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
-    ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
-    config: {
-      ...CODEX_THREAD_CONFIG,
-      ...(isGoatBotSessionThreadId(input.threadId ?? mcpSession?.threadId ?? "")
-        ? // The owner's hooks would steer a bot turn into running their own tools. Only this
-          // Codex session drops them: threads it launches, Claude sessions and text already in a
-          // session keep theirs, which the personal data rule in the brief covers.
-          { "features.default_mode_request_user_input": false, "features.hooks": false }
-        : {}),
-      ...codexThreadMcpEnvironment(mcpSession),
-      ...McpProviderSession.goatCodexServers(mcpSession?.goatMcpServers, {}),
-      ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
-      ...(mcpSession === undefined
-        ? {}
-        : {
-            // Override only GOAT's server so launch-argument MCP servers survive.
-            "mcp_servers.goat": {
-              url: mcpSession.endpoint,
-              disabled_tools: [...disabledMemoryTools, "goat_thread_wait", "goat_task_create"],
-              tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
-              http_headers: {
-                Authorization: mcpSession.authorizationHeader,
-              },
-            },
-            "mcp_servers.goat-direct": {
-              url: mcpSession.endpoint,
-              tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
-              http_headers: { Authorization: mcpSession.authorizationHeader },
-              enabled_tools: ["goat_thread_wait", "goat_task_create"],
-              omit_tools_from: ["code_mode", "deferred"],
-            },
-            // Its own path too: a dotted override replaces only this server,
-            // including a user's `cua-driver` when the decision overrides it.
-            ...(cuaServer === undefined
-              ? {}
-              : { [`mcp_servers.${McpProviderSession.CUA_MCP_SERVER_NAME}`]: cuaServer }),
-          }),
-    },
-  };
-}
+import { codexThreadRuntimeParams } from "./CodexThreadRuntimeParams.ts";
+export { CODEX_THREAD_CONFIG, codexThreadRuntimeParams } from "./CodexThreadRuntimeParams.ts";
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -743,6 +596,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
     enabled,
     binaryPath,
     homePath: homeLayout.effectiveHomePath ?? "",
+    launchArgs: codexHomeLaunchArgs(yield* Path.Path, homeLayout, config.launchArgs),
   } satisfies CodexSettings;
   const processEnvironment = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
 
@@ -815,6 +669,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
+    checksVersionAtHandshake: adapterOptions.compatibility !== undefined,
     sessionConfigKey:
       adapterOptions.sessionConfigKey ??
       codexSessionConfigKey(adapterOptions.settings, adapterOptions.environment),
@@ -896,6 +751,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             connection: processStart?.connection,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
+        const applyThreadName = makeCodexThreadTitle(client);
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
@@ -1079,25 +935,26 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               version && adapterOptions.compatibility
                 ? yield* adapterOptions.compatibility(version)
                 : undefined;
-            if (advisory?.status === "broken") {
-              const target =
-                advisory.recommendedVersion ?? advisory.recommendedRange ?? "a newer version";
-              return yield* new ProviderSetupError({
+            const refused =
+              version &&
+              brokenRuntimeError({
                 instanceId: adapterOptions.instanceId,
-                operation: "runtime",
-                detail: `Codex ${version} does not work with this GOAT release. Update Codex to ${target}, then retry.`,
+                name: "Codex",
+                version,
+                advisory,
               });
-            }
+            if (refused) return yield* refused;
             yield* client.notify("initialized", undefined);
             yield* verifySessionRoute();
             yield* Ref.set(initialized, true);
           }),
         );
-        const { userCuaDriver, filterGoatServers } = makeCodexMcpConfigReader((cwd) =>
-          ensureInitialized.pipe(
-            Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
-            Effect.map((response) => ({ config: { mcp_servers: response.config.mcp_servers } })),
-          ),
+        const { userCuaDriver, filterGoatServers, stdioEnvironment } = makeCodexMcpConfigReader(
+          (cwd) =>
+            ensureInitialized.pipe(
+              Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+              Effect.map((response) => ({ config: { mcp_servers: response.config.mcp_servers } })),
+            ),
         );
         const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
           ensureInitialized.pipe(
@@ -1108,6 +965,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const sessionThreadId = input.threadId;
         const threadRuntimeParams = (input: {
           readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+          readonly appThreadId?: ThreadId | null;
+          readonly includeStdio?: boolean;
+          readonly stdioCwd?: string | undefined;
           readonly modelSelection?: { readonly model: string } | undefined;
           readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy | undefined;
           readonly nativeThreadId?: string;
@@ -1129,11 +989,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 { codexVersion: codexVersion ?? "unknown", omitted: subagents.omitted },
               );
             }
+            const appThreadId =
+              input.appThreadId === undefined
+                ? (input.mcpSession?.threadId ?? sessionThreadId)
+                : input.appThreadId;
+            const savedCwd =
+              input.includeStdio &&
+              appThreadId != null &&
+              (input.stdioCwd ?? input.runtimePolicy?.cwd) == null &&
+              input.nativeThreadId !== undefined
+                ? yield* Meta.readCodexThreadCwd(client.raw, input.nativeThreadId)
+                : (input.stdioCwd ?? input.runtimePolicy?.cwd);
+            const stdio = input.includeStdio ? yield* stdioEnvironment(appThreadId, savedCwd) : {};
             return {
               params: mergeCodexHomeThreadParams(
                 launchSettings,
                 codexThreadRuntimeParams({
-                  threadId: input.mcpSession?.threadId ?? sessionThreadId,
+                  ...(appThreadId == null ? {} : { threadId: appThreadId }),
+                  stdioEnvironment: stdio,
                   mcpSession: yield* withoutConfiguredBrowser(
                     yield* filterGoatServers(input.mcpSession, input.runtimePolicy?.cwd),
                     input.runtimePolicy?.cwd,
@@ -4930,13 +4803,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (acceptsFullAccessCommand(context.input.runtimePolicy, payload))
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
                 decision: "acceptForSession",
               } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
             }
-
             const nativeRequestId = payload.approvalId ?? payload.itemId;
             const artifacts = yield* buildApprovalRequestArtifacts({
               context,
@@ -4974,7 +4850,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
             });
-
             const resolved = yield* Deferred.await(decision).pipe(
               Effect.ensuring(
                 Ref.update(pendingRuntimeRequests, (current) => {
@@ -6524,6 +6399,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const mcpSession = yield* readMcpSession(turnInput.threadId);
             const runtime = yield* threadRuntimeParams({
               mcpSession,
+              appThreadId: turnInput.threadId,
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
               nativeThreadId: threadId,
@@ -6542,8 +6418,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const credentialStale = applied !== next || foreign;
             const stale = credentialStale || limitChanged || threadStatuses.dropped(threadId);
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
-            // Other changes wait for background terminals too; a new driver alone does not
-            // (#1569), but one that comes with a new subagent limit does (#1572).
+            // Other changes wait for background terminals; a new driver alone waits only with a new subagent limit.
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
               stale &&
@@ -6571,11 +6446,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               };
               // The unsubscribe can stop terminals even when the resume that follows fails.
               if (foreign) restartNotices.add(threadId);
+              const stdio = yield* stdioEnvironment(
+                turnInput.threadId,
+                turnInput.runtimePolicy.cwd,
+              );
               yield* threadStatuses.reload(client, threadId, threadClosings, resumeNativeThread, {
                 ...runtime.params,
+                config: { ...runtime.params.config, ...stdio },
                 ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
-                  : { config: { ...runtime.params.config, mcp_servers: detached } }),
+                  : { config: { ...runtime.params.config, ...stdio, mcp_servers: detached } }),
               });
               recordLoaded(threadId, runtime, mcpSession);
             }
@@ -6766,6 +6646,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const activation = { stopped: false };
           goalActivations.set(threadId, activation);
           yield* Effect.gen(function* () {
+            yield* applyThreadName(threadId, turnInput.appThread.title);
             yield* startNativeTurn(turnInput, yield* codexInput, steer);
             if (activation.stopped) return;
             const { goal } = yield* client.request("thread/goal/set", {
@@ -6914,8 +6795,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...(providerThread.appThreadId === null
                   ? {}
                   : { threadId: providerThread.appThreadId }),
-                modelSelection: current?.modelSelection ?? input.modelSelection,
-                runtimePolicy: current?.runtimePolicy ?? input.runtimePolicy,
+                ...(current === undefined ? {} : current),
               });
             }),
           );
@@ -7049,6 +6929,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.flatMap((mcpSession) =>
                 threadRuntimeParams({
                   mcpSession,
+                  appThreadId: threadInput.threadId,
+                  includeStdio: true,
                   modelSelection: threadInput.modelSelection,
                   runtimePolicy: threadInput.runtimePolicy,
                 }).pipe(
@@ -7105,6 +6987,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 (yield* Meta.codexThreadHeld(client.raw, nativeThreadId));
               const resumedRuntime = yield* threadRuntimeParams({
                 mcpSession: resumedMcp,
+                appThreadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
+                includeStdio: !heldElsewhere,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
                 nativeThreadId,
@@ -7114,15 +6998,27 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 excludeTurns: true,
                 ...(heldElsewhere ? {} : resumedRuntime.params),
               });
-              const response = yield* resume.pipe(Effect.flatMap(decodeCodexResumeMetadata));
+              const previousRoot = rootProviderThreads.get(nativeThreadId);
+              rootProviderThreads.set(nativeThreadId, threadInput.providerThread);
+              goalUpdatesHeld.add(nativeThreadId);
+              const response = yield* resume.pipe(
+                Effect.flatMap(decodeCodexResumeMetadata),
+                Effect.onError(() =>
+                  Effect.suspend(() => {
+                    if (previousRoot !== undefined)
+                      rootProviderThreads.set(nativeThreadId, previousRoot);
+                    return releaseGoalUpdates(nativeThreadId);
+                  }),
+                ),
+              );
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
-              // A held thread keeps the config it has; the next quiet turn reloads any change (#1569).
+              // A held thread keeps the config it has; the next quiet turn reloads any change.
               if (heldElsewhere) foreignConfigThreads.add(nativeThreadId);
               else if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
               // The first turn writes the post-resume goal snapshot if changed.
-              return {
+              const resumed = {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
@@ -7135,6 +7031,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
               } satisfies OrchestrationV2ProviderThread;
+              rootProviderThreads.set(nativeThreadId, resumed);
+              yield* releaseGoalUpdates(nativeThreadId);
+              return rootProviderThreads.get(nativeThreadId) ?? resumed;
             },
             (effect, threadInput) =>
               effect.pipe(
@@ -7313,6 +7212,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         true,
                       );
                     }
+                    if (nativeThreadId != null)
+                      yield* applyThreadName(nativeThreadId, turnInput.appThread.title);
                     yield* startNativeTurn(
                       turnInput,
                       turnInput.resume ? [] : yield* toCodexInput(turnInput),
@@ -7365,13 +7266,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               yield* turnStartGuard.awaitSteerable(activeTurn);
               yield* applyLiveTier(threadId, turnInput.modelSelection);
-
               const codexInput = yield* toCodexInput(turnInput);
-              yield* client.request("turn/steer", {
-                expectedTurnId: activeTurn.nativeTurnId,
-                input: codexInput,
+              yield* sendCodexSteerContext(
+                additionalContextByThread,
                 threadId,
-              });
+                turnInput.appContext ?? [],
+                (notes) =>
+                  client.request("turn/steer", {
+                    expectedTurnId: activeTurn.nativeTurnId,
+                    input: [...notes, ...codexInput],
+                    threadId,
+                  }),
+              );
             },
             (effect, turnInput) =>
               effect.pipe(
@@ -7386,6 +7292,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
+          applyThreadTitle: Effect.fn("CodexAdapterV2.applyThreadTitle")(function* ({
+            providerThread,
+            title,
+          }) {
+            const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
+            if (nativeThreadId != null) yield* applyThreadName(nativeThreadId, title);
+          }),
           applyModelSelection: Effect.fn("CodexAdapterV2.applyModelSelection")(function* ({
             providerThread,
             modelSelection,
@@ -7910,7 +7823,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             (effect, requestedInput) =>
               effect.pipe(
-                // Then the thread's subagents that never started a turn end too (#1636, #1645).
+                // Then the thread's subagents that never started a turn end too.
                 Effect.andThen(
                   CodexSubagents.endStopped(
                     subagentThreads,
@@ -8022,7 +7935,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
                 providerPayload: response.thread,
@@ -8055,12 +7967,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     nativeConversationHeadRef,
                     status: "idle" as const,
                   },
-                  providerTurns: [],
                   messages: [],
                   runtimeRequests: [],
                 };
               }
-              const { historyMode, loaded } = yield* ensureInitialized.pipe(
+              const {
+                historyMode,
+                loaded,
+                cwd: savedCwd,
+              } = yield* ensureInitialized.pipe(
                 Effect.andThen(Meta.readCodexThreadHistoryMetadata(client.raw, threadId)),
               );
               if (historyMode !== "paginated") {
@@ -8075,8 +7990,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const loadMcp = yield* readMcpSession(threadInput.providerThread.appThreadId);
                 const loadRuntime = yield* threadRuntimeParams({
                   mcpSession: loadMcp,
-                  modelSelection: input.modelSelection,
-                  runtimePolicy: input.runtimePolicy,
+                  appThreadId: threadInput.providerThread.appThreadId,
+                  includeStdio: true,
+                  nativeThreadId: threadId,
+                  stdioCwd: savedCwd,
                 });
                 yield* resumeNativeThread(threadId, {
                   excludeTurns: true,
@@ -8100,7 +8017,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
                 providerPayload: response.thread,
@@ -8125,6 +8041,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const forkMcp = yield* mcpSessions.read(threadInput.targetThreadId);
               const forkRuntime = yield* threadRuntimeParams({
                 mcpSession: forkMcp,
+                appThreadId: threadInput.targetThreadId,
+                includeStdio: true,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
               });

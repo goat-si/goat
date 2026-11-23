@@ -16,7 +16,8 @@ import { readCursorUsageLimits } from "./usageLimits.ts";
 import { cursorAccountIdentity } from "./accountIdentity.ts";
 import { instanceCredentials } from "./credentialScope.ts";
 import { cursorVerificationUrl, sameCursorBackend } from "./sdkBackend.ts";
-import type { CatalogModels } from "./sessionEnvironment.ts";
+import type { CatalogModels, CatalogSdkModels } from "./sessionEnvironment.ts";
+import type { SDKModel } from "@cursor/sdk";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { makeCursorTextGeneration } from "./textGeneration.ts";
@@ -269,11 +270,17 @@ export const CursorDriver: ProviderDriver<
     let catalog: {
       readonly account: string | undefined;
       readonly models: ReadonlyArray<ServerProviderModel>;
-    } = { account: undefined, models: [] };
+      readonly sdkModels: ReadonlyArray<SDKModel>;
+    } = { account: undefined, models: [], sdkModels: [] };
     const catalogModelsFor: CatalogModels = (apiKey, environment) =>
       apiKey !== undefined &&
       catalog.account === cursorAccountIdentity(apiKey, environment.CURSOR_BACKEND_URL)
         ? catalog.models
+        : [];
+    const catalogSdkModelsFor: CatalogSdkModels = (apiKey, environment) =>
+      apiKey !== undefined &&
+      catalog.account === cursorAccountIdentity(apiKey, environment.CURSOR_BACKEND_URL)
+        ? catalog.sdkModels
         : [];
     const orchestrationAdapter = yield* makeCursorAdapterV2({
       instanceId,
@@ -283,6 +290,7 @@ export const CursorDriver: ProviderDriver<
       validateSessionApiKey: auth.validateSessionApiKey,
       agentTransportRefusal: (yield* CursorSdk.CursorSdk).agentTransportRefusal,
       getModels: catalogModelsFor,
+      getSdkModels: catalogSdkModelsFor,
     }).pipe(
       Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
         ...sdkRunner,
@@ -326,6 +334,7 @@ export const CursorDriver: ProviderDriver<
       },
       currentEnvironment,
       catalogModelsFor,
+      catalogSdkModelsFor,
     );
 
     // One captured environment gives the check its key, backend and sign-in label.
@@ -340,6 +349,7 @@ export const CursorDriver: ProviderDriver<
       const usesApiKey = Boolean(processEnv.CURSOR_API_KEY?.trim());
       // An inherited key names the server's account, so its usage never shows on another endpoint.
       const usageKey = captured.usageTakesEnvironmentKey || !usesApiKey ? apiKey : undefined;
+      let checkedSdkModels: ReadonlyArray<SDKModel> = [];
       const draft = yield* checkCursorProviderStatus(
         effectiveConfig,
         { ...processEnv, CURSOR_API_KEY: apiKey },
@@ -375,9 +385,23 @@ export const CursorDriver: ProviderDriver<
                     ? undefined
                     : cursorAccountIdentity(apiKey, processEnv.CURSOR_BACKEND_URL),
                 models: provider.models,
+                sdkModels: checkedSdkModels,
               };
             }
           }),
+        ),
+        Effect.provideServiceEffect(
+          CursorSdkCatalog.CursorSdkCatalog,
+          Effect.map(CursorSdkCatalog.CursorSdkCatalog, (source) =>
+            CursorSdkCatalog.CursorSdkCatalog.of({
+              // The underlying catalog read already creates a span.
+              read: Effect.fnUntraced(function* (key) {
+                const result = yield* source.read(key);
+                checkedSdkModels = result.models;
+                return result;
+              }),
+            }),
+          ),
         ),
         // The catalog's backend comes from the environment this check sends the key with.
         Effect.provide(

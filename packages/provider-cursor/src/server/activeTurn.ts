@@ -79,6 +79,8 @@ export interface ActiveCursorTurn {
   readonly reasoning: ActiveCursorTextStream;
   /** The user text this run sent, before GOAT and runtime instructions; absent for /compress. */
   readonly prompt: CursorRunPrompt | undefined;
+  readonly runtimeInstructions: { value: string | undefined };
+  compacted: boolean;
   interrupted: boolean;
   finalized: boolean;
   /** The agent's latest turn ended and no new work has started since. */

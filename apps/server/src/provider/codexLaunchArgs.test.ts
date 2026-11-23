@@ -10,6 +10,20 @@ import {
 } from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
+  it("preserves an escaped trailing space in the GOAT environment override", () => {
+    const args = resolveCodexLaunchArgs("--strict-config", {
+      GOAT_CODEX_LAUNCH_ARGS: "--cloud-skills-snapshot skills.json\\ ",
+    });
+    NodeAssert.deepStrictEqual(codexAppServerArgs(args), [
+      "app-server",
+      "--cloud-skills-snapshot",
+      "skills.json ",
+    ]);
+    NodeAssert.equal(
+      resolveCodexLaunchArgs("--strict-config", { GOAT_CODEX_LAUNCH_ARGS: " \t " }),
+      "--strict-config",
+    );
+  });
   it("requests immediate unload while allowing an explicit override", () => {
     NodeAssert.deepStrictEqual(codexAppServerArgs("-c thread_unload_delay_secs=1800", [], true), [
       "app-server",
@@ -52,6 +66,24 @@ it("keeps local provider flags for exec and filters them from mcp list", () => {
 });
 
 describe("codexExecLaunchArgs", () => {
+  it("filters apps, connectors and plugins from text generation and MCP listing", () => {
+    const input = "--enable apps --enable=connectors --enable plugins --enable foo";
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs(input), ["--enable", "foo"]);
+    NodeAssert.deepStrictEqual(codexMcpListLaunchArgs(codexExecLaunchArgs(input)), [
+      "--enable",
+      "foo",
+    ]);
+    NodeAssert.deepStrictEqual(
+      codexMcpListLaunchArgs(["--enable", "apps", "--enable=plugins"]),
+      [],
+    );
+  });
+  it("keeps compact config and profile options", () => {
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs("-pwork -cmodel_provider=ollama"), [
+      "-p=work",
+      "-c=model_provider=ollama",
+    ]);
+  });
   it("drops hook enabling flags while retaining routing arguments", () => {
     NodeAssert.deepStrictEqual(
       codexExecLaunchArgs(

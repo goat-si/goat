@@ -111,7 +111,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
     Effect.gen(function* () {
       yield* sessions.set(limit === undefined ? config : { ...config, nativeSubagentLimit: limit });
       yield* harness.startTurn("work");
-      const terminal = yield* harness.runtime.events.pipe(
+      const terminal = yield* harness.events.pipe(
         Stream.takeUntil((event) => event.type === "turn.terminal"),
         Stream.runDrain,
         Effect.forkScoped,
@@ -432,16 +432,14 @@ describe("OpenCode native subagent limit", () => {
       yield* turn(
         undefined,
         Effect.gen(function* () {
-          const snapshot = yield* harness.runtime.readThreadSnapshot({
-            providerThread: harness.providerThread,
-          });
+          const latest = yield* harness.awaitLatestTurn();
           yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
           const steer = harness.runtime
             .steerTurn({
               threadId: harness.threadId,
               runId: harness.runId,
               providerThread: harness.providerThread,
-              providerTurnId: snapshot.providerTurns.at(-1)!.id,
+              providerTurnId: latest.id,
               message: {
                 messageId: MessageId.make("message-opencode-steer-limit"),
                 text: "more",

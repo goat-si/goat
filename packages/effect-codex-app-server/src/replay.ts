@@ -264,6 +264,8 @@ function normalizeReplayFrame(value: unknown): unknown {
  */
 const THREAD_CREDENTIAL_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set(
   [
+    "GOAT_THREAD_ID",
+    "T3CODE_THREAD_ID", // goat-rename: legacy
     "GOAT_ACP_MCP_ENDPOINT",
     "GOAT_ACP_MCP_AUTHORIZATION",
     "TMPDIR",
@@ -290,6 +292,14 @@ function recorderThreadConfigKeys(transcript: CodexAppServerReplayTranscript): R
 function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<string>): unknown {
   if (typeof frame !== "object" || frame === null) return frame;
   const record = frame as Record<string, unknown>;
+  if (
+    record.method === "config/read" &&
+    typeof record.params === "object" &&
+    record.params !== null
+  ) {
+    const { cwd: _cwd, ...params } = record.params as Record<string, unknown>;
+    return { ...record, params };
+  }
   if (
     (record.method !== "thread/start" &&
       record.method !== "thread/resume" &&

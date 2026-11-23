@@ -56,13 +56,18 @@ const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 describe("CodexAdapterV2 session initialize", () => {
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
-    beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
-    ownerThreadId?: ThreadId,
-    compatibility?: CodexAdapterV2.CodexAdapterV2Options["compatibility"],
+    options: {
+      readonly beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"];
+      readonly ownerThreadId?: ThreadId;
+      readonly compatibility?: CodexAdapterV2.CodexAdapterV2Options["compatibility"];
+      /** False when the transcript scripts each thread's stdio MCP config/read itself. */
+      readonly setupReads?: boolean;
+    } = {},
   ) =>
     Effect.gen(function* () {
+      const { beforeEmitInbound, ownerThreadId, compatibility } = options;
       const driver = yield* CodexReplay.makeReplayDriver(
-        withConfigReads(transcript),
+        withConfigReads(transcript, options.setupReads ?? true),
         beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
       );
       let initializeRequests = 0;
@@ -151,19 +156,34 @@ describe("CodexAdapterV2 session initialize", () => {
         makeCodexReplayTranscript({
           scenario: "concurrent-initialize",
           entries: [
-            ...replayPreamble("concurrent-first").slice(0, 5),
+            ...replayPreamble("concurrent-first").slice(0, 3),
+            // Both threads read their stdio MCP servers before either starts.
+            ...[2, 3].flatMap((id): Array<CodexReplay.CodexAppServerReplayEntry> => [
+              {
+                type: "expect_outbound",
+                label: "config/read",
+                frame: { id, method: "config/read", params: { includeLayers: false } },
+              },
+              { type: "emit_inbound", frame: { id, result: { config: {}, origins: {} } } },
+            ]),
+            ...replayPreamble("concurrent-first")
+              .slice(3, 5)
+              .map((entry) => withReplayRequestId(entry, 4)),
             ...replayPreamble("concurrent-second")
               .slice(3, 5)
-              .map((entry) => withReplayRequestId(entry, 3)),
+              .map((entry) => withReplayRequestId(entry, 5)),
           ],
         }),
-        (entry) =>
-          entry.label === "initialize"
-            ? Deferred.succeed(initializeAwaitingResponse, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseInitialize)),
-              )
-            : Effect.void,
-        ThreadId.make("thread-concurrent-first"),
+        {
+          beforeEmitInbound: (entry) =>
+            entry.label === "initialize"
+              ? Deferred.succeed(initializeAwaitingResponse, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseInitialize)),
+                )
+              : Effect.void,
+          ownerThreadId: ThreadId.make("thread-concurrent-first"),
+          setupReads: false,
+        },
       );
 
       const first = yield* session
@@ -248,16 +268,16 @@ describe("CodexAdapterV2 session initialize", () => {
             },
           ],
         }),
-        undefined,
-        undefined,
-        (version) =>
-          Effect.succeed(
-            resolveProviderCompatibility(
-              ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-              CodexAdapterV2.CODEX_DRIVER_KIND,
-              version,
+        {
+          compatibility: (version) =>
+            Effect.succeed(
+              resolveProviderCompatibility(
+                ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+                CodexAdapterV2.CODEX_DRIVER_KIND,
+                version,
+              ),
             ),
-          ),
+        },
       ).pipe(Effect.flip);
 
       assert.instanceOf(failure, ProviderAdapter.ProviderAdapterOpenSessionError);
@@ -289,12 +309,14 @@ describe("CodexAdapterV2 session initialize", () => {
             ...preamble.slice(3, 5).map((entry) => withReplayRequestId(entry, 3)),
           ],
         }),
-        (entry) =>
-          entry.label === "initialize"
-            ? Deferred.succeed(initializeAwaitingResponse, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseInitialize)),
-              )
-            : Effect.void,
+        {
+          beforeEmitInbound: (entry) =>
+            entry.label === "initialize"
+              ? Deferred.succeed(initializeAwaitingResponse, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseInitialize)),
+                )
+              : Effect.void,
+        },
       );
 
       const interrupted = yield* session

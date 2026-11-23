@@ -445,7 +445,7 @@ export const acpMemoryDelivery = (
         "acp-mcp-bridge",
       );
     }
-    if (kind === "antigravity") assert.isUndefined(runtime.compactThread);
+    if (kind === "antigravity") assert.isDefined(runtime.compactThread);
   }).pipe(
     Effect.scoped,
     Effect.provide(

@@ -35,6 +35,17 @@ function providerThreadRuntimeKey(
     : `${nativeThreadRef.driver}:${nativeThreadRef.nativeId}`;
 }
 
+export function isLoadKeyFor(
+  loadKey: string | undefined,
+  providerThread: Parameters<typeof providerThreadRuntimeKey>[0],
+): boolean {
+  return (
+    loadKey === undefined ||
+    (JSON.parse(loadKey) as { providerThread: string }).providerThread ===
+      providerThreadRuntimeKey(providerThread)
+  );
+}
+
 export function providerThreadLoadKey(
   runtime:
     | Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "normalizeThreadLoadModelSelection">

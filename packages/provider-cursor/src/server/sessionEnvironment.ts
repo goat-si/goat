@@ -1,4 +1,5 @@
 import { sdkBackendMatches } from "./cloud/credentials.ts";
+import type { SDKModel } from "@cursor/sdk";
 import type {
   ProviderInstanceEnvironment,
   ProviderSetupError,
@@ -17,6 +18,10 @@ export type CatalogModels = (
   apiKey: string | undefined,
   environment: NodeJS.ProcessEnv,
 ) => ReadonlyArray<ServerProviderModel>;
+export type CatalogSdkModels = (
+  apiKey: string | undefined,
+  environment: NodeJS.ProcessEnv,
+) => ReadonlyArray<SDKModel>;
 
 export interface SessionAuth {
   readonly resolveSessionApiKey?: (

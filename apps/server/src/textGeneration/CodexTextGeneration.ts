@@ -77,7 +77,10 @@ const CODEX_CHANNEL_RECEPTION_ARGS = [
 ] as const;
 const CODEX_MCP_LIST_TIMEOUT_MS = 10_000;
 // Plugins/apps add MCP servers; use trailing config overrides because --disable loses to user -c flags.
+// Codex also reads the legacy connectors key for apps.
 const CODEX_NO_PLUGIN_ARGS = [
+  "--config",
+  "features.connectors=false",
   "--config",
   "features.plugins=false",
   "--config",

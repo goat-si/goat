@@ -10,6 +10,7 @@ import {
   out,
   promptAccepted,
   reply,
+  replyData,
   providerThread,
   resumed,
   terminalOf,
@@ -67,6 +68,9 @@ export const testCommandMemoryDelivery = () =>
         reply("message.list", { data: [], cursor: {} }),
         out("session.command", { sessionID: SESSION, name: "git/hello", text: "WORLD" }),
         reply("session.command", null),
+        // The command runs the model, so the idle-command probe finds the session running.
+        out("session.active"),
+        replyData("session.active", { [SESSION]: { type: "running" } }),
         event("session.execution.succeeded", { sessionID: SESSION }, "command-execution"),
       ],
       { replayGate: gate, memoryInstructions: () => new Response(null, { status: 204 }) },

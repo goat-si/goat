@@ -31,7 +31,7 @@ const layerSession = Layer.mergeAll(
 
 describe("AntigravityAdapterV2 native goals", () => {
   it.live.each([false, true])(
-    "negotiates native goals (%s) without enabling manual compaction",
+    "negotiates native goals (%s) independently of advertised compaction",
     (nativeGoals) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -93,7 +93,7 @@ describe("AntigravityAdapterV2 native goals", () => {
         yield* Deferred.await(startupMilestone);
         yield* Deferred.succeed(consumeStartupCommands, undefined);
         const session = yield* Fiber.join(opening);
-        assert.isUndefined(session.compactThread);
+        assert.isDefined(session.compactThread);
         assert.equal(session.providerSession.capabilities.turns.supportsNativeGoals, nativeGoals);
         assert.equal((yield* adapter.getCapabilities()).turns.supportsNativeGoals, nativeGoals);
       }).pipe(Effect.provide(layerSession), Effect.scoped),

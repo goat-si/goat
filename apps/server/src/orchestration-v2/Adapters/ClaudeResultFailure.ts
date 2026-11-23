@@ -1,3 +1,4 @@
+import { claudeTruncate } from "./ClaudeUnicode.ts";
 import type { ClaudeScopedLimitNames } from "../../provider/claudeUsageLimits.ts";
 import * as Schema from "effect/Schema";
 import type {
@@ -150,7 +151,7 @@ export function providerFailureFromResult(
     message.subtype === "success" &&
     message.terminal_reason === "api_error" &&
     message.result.trim().startsWith("API Error:")
-      ? makeProviderFailure({ message: message.result }).message.slice(0, 500)
+      ? claudeTruncate(makeProviderFailure({ message: message.result }).message, 500)
       : undefined;
   const structuredError = isOverloadedResult(message)
     ? "Claude API is overloaded (529). Try again shortly."
@@ -275,4 +276,14 @@ function formatClaudeUsageLimitWait(waitMs: number): string {
   const minutes = totalMinutes % 60;
   if (hours === 0) return `${totalMinutes}m`;
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+export function claudeResetTimes(
+  times: ReadonlyMap<string, string | null>,
+  result: { readonly class: string; readonly resetAt?: string | null | undefined } | null,
+): Array<string | null> {
+  const hasResultReset = result?.class === "usage_limit" && result.resetAt != null;
+  return Array.from(times)
+    .filter(([type, time]) => !(type === "unknown" && time === null && hasResultReset))
+    .map(([, time]) => time);
 }

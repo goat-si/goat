@@ -16,10 +16,14 @@ export function trimText(value: string | null | undefined): string | undefined {
 }
 
 function compactStrings(values: ReadonlyArray<string | null | undefined>): ReadonlyArray<string> {
-  return values.flatMap((value) => {
-    const trimmed = trimText(value);
-    return trimmed === undefined ? [] : [trimmed];
-  });
+  return [
+    ...new Set(
+      values.flatMap((value) => {
+        const trimmed = trimText(value);
+        return trimmed === undefined ? [] : [trimmed];
+      }),
+    ),
+  ];
 }
 
 export function webSearchPatterns(item: CodexWebSearchItem): ReadonlyArray<string> {

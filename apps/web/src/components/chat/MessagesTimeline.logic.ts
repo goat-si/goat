@@ -19,6 +19,7 @@ import {
 import {
   formatCommandActionsLabel,
   commandVerb,
+  commandlessCommandLabel,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -185,6 +186,11 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
       ? `${commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false))} ${command}`
       : command;
   }
+  const commandless = commandlessCommandLabel(
+    entry,
+    liveActivityToolStatus(entry.toolLifecycleStatus, false),
+  );
+  if (commandless) return commandless;
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     const searchLabel =
@@ -302,7 +308,7 @@ export function liveWorkEntryLabel(
   if (command) {
     return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
-  return workEntryDisplayLabel(entry, workspaceRoot);
+  return commandlessCommandLabel(entry, status) ?? workEntryDisplayLabel(entry, workspaceRoot);
 }
 
 export function workEntryIsVisibleInGroup(

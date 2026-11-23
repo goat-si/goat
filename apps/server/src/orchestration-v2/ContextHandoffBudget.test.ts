@@ -2,6 +2,7 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import { assert, describe, it } from "@effect/vitest";
 import {
   ContextHandoffId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -94,6 +95,34 @@ const handoff: OrchestrationV2ContextHandoff = {
 };
 
 describe("handoff budget", () => {
+  it("identifies an agent sender in portable history", () => {
+    const item = {
+      id: TurnItemId.make("item:agent-message"),
+      threadId,
+      runId: RunId.make("run:source"),
+      nodeId: null,
+      providerThreadId: providerThread.id,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed" as const,
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "user_message" as const,
+      messageId: MessageId.make("message:agent"),
+      createdBy: "agent" as const,
+      creationSource: "mcp" as const,
+      senderThreadId: ThreadId.make("thread:sender"),
+      inputIntent: "turn_start" as const,
+      text: "Please review",
+      attachments: [],
+    };
+    assert.include(historicalMessage(item)?.text, 'agent in GOAT thread "thread:sender"');
+    assert.equal(historicalMessage({ ...item, text: "/compact" })?.text, "/compact");
+  });
   it("keeps the file name when a file change has no detailed paths", () => {
     const item = {
       id: TurnItemId.make("item:empty-change"),
