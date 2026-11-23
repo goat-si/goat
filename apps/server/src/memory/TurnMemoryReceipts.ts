@@ -151,7 +151,7 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
     events.pop();
     truncated = true;
   }
-  return { events, truncated, incomplete };
+  return { events, truncated, ...(incomplete ? { incomplete: true } : {}) };
 });
 
 export const makeTurnMemoryReader =
