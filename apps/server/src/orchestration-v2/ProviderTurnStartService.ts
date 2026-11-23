@@ -1,3 +1,4 @@
+import { rejectedCodexHistory, pendingBackgroundFailure } from "./goat/RejectedCodexHistory.ts";
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
 import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
@@ -94,7 +95,6 @@ import * as CloudSource from "./CloudTaskSourceService.ts";
 import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
-  ContextHandoffBackgroundWorkError,
   ContextHandoffBudgetError,
   knownProviderFailureMessage,
   makeProviderFailure,
@@ -615,8 +615,7 @@ export const layer: Layer.Layer<
       if (abandonedTurn !== undefined) {
         const liveSession = yield* providerSessions.get(providerSessionId);
         if (Option.isSome(liveSession)) {
-          // Older versions could fail the run without stopping its provider.
-          // Recover that exact turn before reusing its native conversation.
+          // Recover an older failed run's still-running native turn before reuse.
           const recovered = yield* Effect.result(
             liveSession.value.interruptTurn({
               providerThread,
@@ -896,12 +895,8 @@ export const layer: Layer.Layer<
           return fresh;
         }
         if (providerThread.nativeThreadRef === null) {
-          // Remote cloud creation starts only after the durable intent commit.
           if (cloud) return providerThread;
-          // Hand the run's provider thread to the adapter so it adopts this
-          // row's identity when attaching native state. An adapter that mints
-          // its own row instead leaves two live rows per app thread, and
-          // `activeProviderThreadId` then flaps between them on every update.
+          // The adapter must adopt this row to keep activeProviderThreadId stable.
           return yield* loadFromProvider(
             session.ensureThread({
               threadId: projection.thread.id,
@@ -917,8 +912,24 @@ export const layer: Layer.Layer<
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
           nativeSessionMissesKeptTurns(projection, providerThread, run);
+        const rejectedHistory = yield* rejectedCodexHistory({
+          driver: session.driver,
+          projection,
+          run,
+          providerThread,
+          store: projectionStore,
+        });
+        if (rejectedHistory) {
+          const pending = yield* pendingBackgroundFailure(
+            session,
+            providerThread,
+            projection.thread.id,
+            run,
+          );
+          if (pending) return yield* loadFromProvider(Effect.fail(pending));
+        }
         const resumed = yield* Effect.result(
-          uncertainDelivery || nativeSessionLacksKeptTurns
+          uncertainDelivery || nativeSessionLacksKeptTurns || rejectedHistory
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
@@ -927,7 +938,9 @@ export const layer: Layer.Layer<
                   runId,
                   cause: uncertainDelivery
                     ? "Uncertain native history injection"
-                    : "Native session holds none of the kept conversation",
+                    : nativeSessionLacksKeptTurns
+                      ? "Native session holds none of the kept conversation"
+                      : "Rejected native history",
                 }),
               )
             : session.resumeThread({
@@ -971,26 +984,13 @@ export const layer: Layer.Layer<
             Effect.catchTags({ ContextHandoffBudgetError: () => Effect.succeed(false) }),
           );
           if (!fitsFresh) return resumed.success;
-          const hasPendingWork = yield* (
-            session.hasPendingBackgroundWorkForThread?.(resumed.success, {
-              includeSubagents: true,
-            }) ??
-              session.hasPendingBackgroundWork ??
-              Effect.succeed(false)
+          const pending = yield* pendingBackgroundFailure(
+            session,
+            resumed.success,
+            projection.thread.id,
+            run,
           );
-          if (hasPendingWork) {
-            return yield* loadFromProvider(
-              Effect.fail(
-                new ProviderAdapter.ProviderAdapterTurnStartError({
-                  driver: session.driver,
-                  threadId: projection.thread.id,
-                  providerThreadId: providerThread.id,
-                  runId,
-                  cause: new ContextHandoffBackgroundWorkError(),
-                }),
-              ),
-            );
-          }
+          if (pending) return yield* loadFromProvider(Effect.fail(pending));
         }
         resumedHandoffContext = undefined;
         resumedRetryHandoff = undefined;
@@ -1011,9 +1011,11 @@ export const layer: Layer.Layer<
             ? "uncertain_history_delivery"
             : nativeSessionLacksKeptTurns
               ? "native_session_lacks_kept_turns"
-              : resumed._tag === "Success"
-                ? "handoff_budget_exhausted"
-                : "resume_failed",
+              : rejectedHistory
+                ? "rejected_native_history"
+                : resumed._tag === "Success"
+                  ? "handoff_budget_exhausted"
+                  : "resume_failed",
           errorTag: resumed._tag === "Failure" ? resumed.failure._tag : "ContextHandoffBudgetError",
         });
         const replacement = yield* loadFromProvider(
@@ -1023,7 +1025,6 @@ export const layer: Layer.Layer<
             modelSelection: run.modelSelection,
             runtimePolicy: resolvedRuntimePolicy,
             providerSessionId,
-            // Clear the native ref to force a fresh session while preserving row identity.
             existingProviderThread: { ...providerThread, nativeThreadRef: null },
             forceNewNativeThread: true,
           }),
@@ -1146,7 +1147,6 @@ export const layer: Layer.Layer<
       const retryHandoff = nativeResume
         ? { handoffs: [], attachments: providerMessage.attachments, budget: Effect.succeed(0) }
         : (resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext)));
-      // Retain accepted ownership evidence until the provider commits its next acceptance.
       const acceptedCloudTask = providerThread.nativeThreadRef?.nativeId
         ? providerThread.cloudTask
         : undefined;

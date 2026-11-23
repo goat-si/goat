@@ -43,6 +43,11 @@ const legacyFailures = {
   },
 } as const;
 const failures = {
+  invalid_encrypted_content: {
+    message:
+      "Codex could not verify this session's encrypted conversation history. Send another message to continue in a fresh session with the visible conversation history.",
+    revoke: false,
+  },
   ...legacyFailures,
   subscription_sharing_user_not_eligible: legacyFailures.subscription_sharing_v2_user_not_eligible,
   subscription_sharing_route_not_supported:
