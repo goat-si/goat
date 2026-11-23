@@ -1,4 +1,5 @@
 import { HoldsNavigation } from "~/lib/navigationHolds";
+import { useServerConfigs } from "~/state/entities";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
@@ -203,7 +204,12 @@ function GoatBotChatViewContent({
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
   const noteWordings = useState<ReadonlyMap<string, string>>(() => new Map());
-  const wordingOwner = JSON.stringify([environmentId, member?.botId ?? null]);
+  const notesEnvironmentId = availability.kind === "ready" ? availability.bot.environmentId : null;
+  const configs = useServerConfigs();
+  const scopedNotes =
+    notesEnvironmentId !== null &&
+    configs.get(notesEnvironmentId)?.environment.capabilities?.goatBotPrivateNotes === true;
+  const wordingOwner = JSON.stringify([environmentId, member?.botId ?? null, scopedNotes]);
   const [previousWordingOwner, setPreviousWordingOwner] = useState(wordingOwner);
   if (previousWordingOwner !== wordingOwner) {
     setPreviousWordingOwner(wordingOwner);

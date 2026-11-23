@@ -22,6 +22,7 @@ import "~/index.css";
 
 const state = vi.hoisted(() => ({
   narrow: false,
+  privateNotes: false,
   threads: [] as ReadonlyArray<unknown>,
   toasts: [] as string[],
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
@@ -99,7 +100,16 @@ vi.mock("~/state/channels", async (original) => {
 vi.mock("~/state/entities", async (original) => ({
   ...(await original<typeof import("~/state/entities")>()),
   useServerConfigs: () =>
-    new Map([["local", { environment: { capabilities: { goatBotNotes: true } } }]]),
+    new Map([
+      [
+        "local",
+        {
+          environment: {
+            capabilities: { goatBotNotes: true, goatBotPrivateNotes: state.privateNotes },
+          },
+        },
+      ],
+    ]),
 }));
 vi.mock("~/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
@@ -151,6 +161,7 @@ const environmentId = EnvironmentId.make("local");
 
 function setup(narrow = false) {
   state.narrow = narrow;
+  state.privateNotes = false;
   state.threads = [];
   state.toasts = [];
   state.notes = [note];
@@ -454,6 +465,22 @@ it("#3824 keeps refused note wording through closing and reopening the narrow sh
     .element(composer(screen))
     .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
   await expect.element(homeSheet()).not.toBeInTheDocument();
+});
+
+it("a notes capability change clears retained wording and releases navigation", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  expect(navigationBlocked()).toBe(true);
+  state.privateNotes = true;
+  await screen.rerender(view());
+  expect(navigationBlocked()).toBe(false);
+  state.privateNotes = false;
+  await screen.rerender(view());
+  await expect.element(screen.getByRole("button", { name: "Ask to change" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
 });
 
 it("a changed note does not resurrect its old wording when the snapshot returns", async () => {
