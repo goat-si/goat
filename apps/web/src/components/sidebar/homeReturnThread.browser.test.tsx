@@ -108,20 +108,19 @@ function createAppRouter(path: string): AnyRouter {
 /** Opens the app shell at `path` with location tracking started, as appInit does. */
 async function openApp(path: string) {
   const router = createAppRouter(path);
+  await using stack = new AsyncDisposableStack();
   // The shared test router has a single route without params; the rail reads real route params.
-  const screen = await render(<RouterProvider router={router} />, { router: false });
+  const screen = stack.use(await render(<RouterProvider router={router} />, { router: false }));
   await vi.waitFor(() =>
     expect(router.state.resolvedLocation?.href).toBe(router.state.location.href),
   );
-  const stopTracking = startMainAppLocationTracking(router);
+  stack.defer(startMainAppLocationTracking(router));
+  const owned = stack.move();
   return {
     router,
     home: () => screen.getByRole("link", { name: "Home" }),
     heading: (name: string) => screen.getByRole("heading", { name }),
-    async [Symbol.asyncDispose]() {
-      stopTracking();
-      await screen[Symbol.asyncDispose]();
-    },
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
   };
 }
 
@@ -166,6 +165,25 @@ it("Home is not the current page on a member bot's thread", async () => {
   await using app = await openApp(`/${ENV}/channel-member-bot:scout`);
 
   await expect.element(app.home()).not.toHaveAttribute("aria-current");
+});
+
+it("a main bot thread GOAT identifies only after it opened does not replace Home", async () => {
+  using _data = setup(["thread-a", "legacy-bot"]);
+  useGlobalAgentStore.setState({ botRef: null });
+  await using app = await openApp(`/${ENV}/thread-a`);
+
+  await go(app.router, `/${ENV}/legacy-bot`);
+  useGlobalAgentStore.setState({
+    botRef: {
+      environmentId: ENV,
+      projectId: ProjectId.make("bot"),
+      threadId: ThreadId.make("legacy-bot"),
+    },
+  });
+  await go(app.router, "/fleet");
+  await userEvent.click(app.home());
+
+  await expect.element(app.heading("Thread thread-a")).toBeVisible();
 });
 
 it("a thread with the bot's id on another machine is an ordinary thread", async () => {
