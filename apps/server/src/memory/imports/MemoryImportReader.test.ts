@@ -12,8 +12,6 @@ import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Scope from "effect/Scope";
 import * as Reader from "./MemoryImportReader.ts";
-import { parseCodexMemory } from "./CodexMemoryImporter.ts";
-import { codexImportChanges } from "../../../../../packages/client-runtime/src/memoryImportWorkflow.ts";
 import type { MemoryImportFixture } from "./MemoryImportFixtures.fixture.ts";
 import {
   MEMORY_IMPORT_FIXTURE_PROFILES,
@@ -420,54 +418,6 @@ const makeSourceSpy = (fixture: MemoryImportFixture, root = fixture.trustedRoot)
 const assertNoSourceWrites = (log: { writes: number }) => assert.equal(log.writes, 0);
 
 describe("MemoryImportReader", () => {
-  it.effect(
-    "does not call existing ad-hoc notes missing when MEMORY.md switches the Codex profile (#3800)",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fixture = yield* buildMemoryImportFixture("codex-ad-hoc-v1");
-          const reader = yield* Reader.acquireMemoryImportReader(readerConfig(fixture));
-          const original = yield* reader.read({ slot: fixture.snapshot.slot });
-          const parsed = yield* parseCodexMemory(original);
-          const note = parsed.find((item) => item.kind === "candidate");
-          if (!note || note.kind !== "candidate") return assert.fail("expected note");
-          NodeFS.writeFileSync(
-            NodePath.join(fixture.sourceRoot, "MEMORY.md"),
-            "# Task Group: Setup\nscope: setup\n\n## Task 1: Install\n\nUse pnpm.\n",
-          );
-          const switched = yield* reader.read({ slot: fixture.snapshot.slot });
-          assert.equal(switched.profile, "codex-handbook-v1");
-          assert.isTrue(
-            switched.files.some((file) => file.selector.startsWith("extensions/ad_hoc/notes/")),
-          );
-          const rows = yield* parseCodexMemory(switched);
-          const preview = rows.flatMap((row) =>
-            row.kind === "candidate"
-              ? [
-                  {
-                    sourceItemKey: row.candidate.sourceItemKey,
-                    sourceFingerprint: row.candidate.sourceFingerprint,
-                    byteCount: row.candidate.byteCount,
-                    mappingRequired: false,
-                  },
-                ]
-              : [],
-          );
-          const changes = codexImportChanges(preview, [
-            {
-              sourceItemKey: note.candidate.sourceItemKey,
-              sourceFingerprint: note.candidate.sourceFingerprint,
-              locallyEdited: false,
-              scope: { kind: "user" },
-            },
-          ]);
-          assert.equal(
-            changes.find((item) => item.sourceItemKey === note.candidate.sourceItemKey)?.change,
-            "Not checked in this profile",
-          );
-        }),
-      ),
-  );
   it.effect.each(hostGit.profiles)(
     "reads %s without changing original bytes or Git state",
     (profile) =>

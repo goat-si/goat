@@ -344,7 +344,6 @@ beforeEach(() => {
   state.connection = { httpBaseUrl: "https://hub.example" };
   state.deviceConnections.clear();
 });
-
 const settled = vi.fn();
 async function renderRevert(
   history:
@@ -1934,7 +1933,7 @@ import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
 import { MemoryScopeSettings } from "./MemoryScopeSettings";
 import { MemoryImportSettings } from "./MemoryImportSettings";
-import { render } from "../../../test/render";
+import { exerciseCodexConflictNotice } from "./MemoryImportSettings.browser.testkit";
 import {
   MemorySpaceId,
   type MemoryImportProviderInput,
@@ -1945,96 +1944,8 @@ import {
   memoryImportRecoveryStorage,
 } from "../../lib/memoryImportRecoveryStorage";
 const spaceId = MemorySpaceId.make(id(1));
-it("explains what selecting a Codex change does when both versions changed (#3800)", async () => {
-  const sourceId = id(61);
-  state.environment = {
-    serverConfig: {
-      environment: { capabilities: { memory: { protocolVersion: 1, codexImportUpdates: true } } },
-    },
-  };
-  state.executors.set("importProvider", async (request) => {
-    const input = (request as { input: MemoryImportProviderInput }).input;
-    if (input.action === "codexBaseline")
-      return {
-        action: input.action,
-        sourceId,
-        next: null,
-        items: [
-          {
-            sourceItemKey: "MEMORY.md#task-group:Setup",
-            sourceFingerprint: "a".repeat(64),
-            locallyEdited: true,
-            scope: { kind: "user" },
-          },
-        ],
-      };
-    if (input.action === "preview")
-      return {
-        action: input.action,
-        sourceId,
-        sessionId: "fixture",
-        items: [
-          {
-            sourceItemKey: "MEMORY.md#task-group:Setup",
-            sourceFingerprint: "b".repeat(64),
-            memoryId: id(2),
-            title: "Setup",
-            byteCount: 10,
-            mappingRequired: false,
-          },
-        ],
-      };
-    throw new Error("unexpected request");
-  });
-  const { AtomRegistry } = await import("effect/reactivity");
-  const registry = AtomRegistry.make();
-  const get = registry.get.bind(registry);
-  vi.spyOn(registry, "get").mockImplementation((atom) => {
-    const label = (atom as unknown as { label?: string }).label;
-    return label === "syncChanges"
-      ? (state.exposure as never)
-      : label
-        ? (state.allowed as never)
-        : get(atom);
-  });
-  // Router is mocked by this existing settings fixture.
-  await using screen = await render(
-    <RegistryContext value={registry}>
-      <MemoryImportSettings environmentId={envId} memorySpaceId={spaceId} />
-    </RegistryContext>,
-    { router: false },
-  );
-  for (const [name, value] of [
-    ["Import provider", "codex"],
-    ["Memory scope", "user"],
-  ]) {
-    const select = screen.container.querySelector<HTMLSelectElement>(
-      `select[aria-label="${name}"]`,
-    )!;
-    await act(async () => {
-      select.value = value!;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-  }
-  const check = [...screen.container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Check for updates",
-  )!;
-  await act(async () => check.click());
-  expect(screen.container.textContent).toContain("Changed in both");
-  expect(screen.container.textContent).toContain(
-    "Selecting this and applying it can create a conflict",
-  );
-  expect(screen.container.textContent).toContain("may resolve it automatically using a model");
-  await act(async () =>
-    screen.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(),
-  );
-  const confirm = [...screen.container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Confirm selection",
-  )!;
-  expect(confirm.disabled).toBe(false);
-  await act(async () => confirm.click());
-  expect(screen.container.textContent).toContain("Import 1 selected memories");
-});
+it("explains what selecting a Codex change does when both versions changed (#3800)", () =>
+  exerciseCodexConflictNotice(state, envId, spaceId));
 it("toggles environment agent access off and on through updateSettings independently of sharing", async () => {
   state.executors.set("updateSettings", async (input) => {
     state.calls(input);

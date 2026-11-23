@@ -38,7 +38,8 @@ import * as MemoryService from "./memory/MemoryService.ts";
 import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
+import { makeMemoryImportHandlers } from "./wsMemoryImportHandlers.ts";
+export { makeMemoryImportHandlers } from "./wsMemoryImportHandlers.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
 import { makeNoteRpcHandlersForSurface, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
@@ -62,7 +63,6 @@ import {
   EnvironmentAuthorizationError,
   FilesystemBrowseError,
   GitCommandError,
-  MemoryImportRpcError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -84,7 +84,6 @@ import {
   RpcClientId,
   ThreadId,
   WS_METHODS,
-  clientRpcRequiredScopes,
   SOURCE_CONTROL_MEDIA_ASSET,
   WsChannelRpcGroup,
   WsCoreRpcGroup,
@@ -430,36 +429,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
-const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
-
-/** Shared by the installed websocket route and the transport integration harness. */
-export const makeMemoryImportHandlers = <E>(
-  liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
-  capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-) =>
-  Effect.gen(function* () {
-    const memory = yield* MemoryService.MemoryService;
-    const runtime = yield* Effect.serviceOption(ProviderMemoryImportRuntime);
-    return WsMemoryImportRpcGroup.middleware(RpcInstrumentation).of({
-      [WS_METHODS.memoryImportProvider]: (input) =>
-        (runtime._tag === "Some"
-          ? memory
-              .importProvider(
-                input,
-                memorySessionPermit(
-                  liveScopes,
-                  capturedScopes,
-                  clientRpcRequiredScopes(WS_METHODS.memoryImportProvider, input),
-                ),
-              )
-              .pipe(Effect.provideService(ProviderMemoryImportRuntime, runtime.value))
-          : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" }))
-        ).pipe(
-          Effect.mapError((error) => (isMemoryImportRpcError(error) ? error : memoryError(error))),
-        ),
-    });
-  });
-
 const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcInstrumentation);
 // Validate the full handler map, but register smaller groups to bound layer inference.
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);

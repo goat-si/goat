@@ -2,6 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- synthetic source fixture.
+import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- synthetic source fixture.
+import * as NodePath from "node:path";
+import * as Reader from "./MemoryImportReader.ts";
+import { parseCodexMemory } from "./CodexMemoryImporter.ts";
 import { codexImportChanges } from "../../../../../packages/client-runtime/src/memoryImportWorkflow.ts";
 import * as Service from "../MemoryService.ts";
 import {
@@ -11,6 +17,59 @@ import {
 import { harness, issue, uuid, space } from "./ProviderMemoryImport.testkit.ts";
 import { live, setupProjects, batchSnapshot } from "./ProviderMemoryImportSql.testkit.ts";
 describe("Codex source updates with the SQLite import store", () => {
+  it.effect(
+    "does not call existing ad-hoc notes missing when MEMORY.md switches the Codex profile (#3800)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* buildMemoryImportFixture("codex-ad-hoc-v1");
+          const reader = yield* Reader.acquireMemoryImportReader({
+            stateDir: fixture.stateDir,
+            roots: [{ format: "codex", rootSlot: "fixture-root", path: fixture.trustedRoot }],
+            gitExecutable: NodePath.resolve("/usr/bin/git"),
+          });
+          const original = yield* reader.read({ slot: fixture.snapshot.slot });
+          const parsed = yield* parseCodexMemory(original);
+          const note = parsed.find((item) => item.kind === "candidate");
+          if (!note || note.kind !== "candidate") return assert.fail("expected note");
+          NodeFS.writeFileSync(
+            NodePath.join(fixture.sourceRoot, "MEMORY.md"),
+            "# Task Group: Setup\nscope: setup\n\n## Task 1: Install\n\nUse pnpm.\n",
+          );
+          const switched = yield* reader.read({ slot: fixture.snapshot.slot });
+          assert.equal(switched.profile, "codex-handbook-v1");
+          assert.isTrue(
+            switched.files.some((file) => file.selector.startsWith("extensions/ad_hoc/notes/")),
+          );
+          const rows = yield* parseCodexMemory(switched);
+          const preview = rows.flatMap((row) =>
+            row.kind === "candidate"
+              ? [
+                  {
+                    sourceItemKey: row.candidate.sourceItemKey,
+                    sourceFingerprint: row.candidate.sourceFingerprint,
+                    byteCount: row.candidate.byteCount,
+                    mappingRequired: false,
+                  },
+                ]
+              : [],
+          );
+          const changes = codexImportChanges(preview, [
+            {
+              sourceItemKey: note.candidate.sourceItemKey,
+              sourceFingerprint: note.candidate.sourceFingerprint,
+              locallyEdited: false,
+              scope: { kind: "user" },
+            },
+          ]);
+          assert.equal(
+            changes.find((item) => item.sourceItemKey === note.candidate.sourceItemKey)?.change,
+            "Not checked in this profile",
+          );
+        }),
+      ),
+  );
+
   it.effect(
     "tracks only applied Codex notes and compares a fresh source snapshot with the stored body",
     () =>
