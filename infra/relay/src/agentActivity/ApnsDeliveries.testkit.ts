@@ -158,6 +158,7 @@ export function layerFor(input: {
   readonly config?: RelayConfiguration.RelayConfiguration["Service"];
   readonly activityStates?: ReadonlyArray<RelayAgentActivityState>;
   readonly currentActivityStates?: ReadonlyArray<RelayAgentActivityState>;
+  readonly activityRecheckFails?: boolean;
   readonly execute?: (
     request: HttpClientRequest.HttpClientRequest,
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse>;
@@ -189,13 +190,20 @@ export function layerFor(input: {
             input.activityStates !== undefined
               ? Effect.succeed([...input.activityStates])
               : Effect.succeed([state]),
-          getForUserThread: ({ environmentId, threadId }) =>
-            Effect.succeed(
-              (input.currentActivityStates ?? input.activityStates ?? [state]).find(
-                (current) =>
-                  current.environmentId === environmentId && current.threadId === threadId,
-              ) ?? null,
-            ),
+          getForUserThread: ({ userId, environmentId, threadId }) =>
+            input.activityRecheckFails
+              ? Effect.fail(
+                  new AgentActivityRows.AgentActivityRowListPersistenceError({
+                    userId,
+                    cause: new Error("database unavailable"),
+                  }),
+                )
+              : Effect.succeed(
+                  (input.currentActivityStates ?? input.activityStates ?? [state]).find(
+                    (current) =>
+                      current.environmentId === environmentId && current.threadId === threadId,
+                  ) ?? null,
+                ),
         } satisfies AgentActivityRows.AgentActivityRows["Service"]),
         Layer.succeed(ApnsDeliveryQueue.ApnsDeliveryQueueSender, {
           send: (body) =>
