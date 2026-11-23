@@ -41,8 +41,12 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
     transfer: OrchestrationV2ContextTransfer;
     failure: Error;
   }) {
+    const source = {
+      ...input.source,
+      ...(yield* store.getThreadRecords(input.source.thread.id, ["runs", "attempts"])),
+    };
     const now = yield* DateTime.now;
-    const items = yield* readForkHistory(input.source, input.sourceRun.ordinal);
+    const items = yield* readForkHistory(source, input.sourceRun.ordinal);
     const handoff = yield* handoffs.prepareProviderHandoff({
       threadId: input.projection.thread.id,
       sourceThreadId: input.source.thread.id,
@@ -52,10 +56,10 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
       toProviderThreadId: input.providerThread.id,
       fromProviderInstanceId: input.sourceRun.providerInstanceId,
       toProviderInstanceId: input.run.providerInstanceId,
-      coveredRunOrdinals: visibleDeltaRunOrdinals(input.source, items),
+      coveredRunOrdinals: visibleDeltaRunOrdinals(source, items),
       strategy: "full_thread_summary",
       items,
-      runs: input.source.runs,
+      runs: source.runs,
       createdAt: now,
     });
     const cause = "cause" in input.failure ? input.failure.cause : undefined;

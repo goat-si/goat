@@ -14,6 +14,7 @@ export const CodexProviderCapabilitiesV2 = {
     canRollbackThread: true,
     canForkThread: true,
     canForkFromTurn: true,
+    canForkWhileSourceRunning: true,
     canForkFromSubagentThread: true,
     exposesNativeThreadId: true,
     forkHonorsTargetCwd: true,

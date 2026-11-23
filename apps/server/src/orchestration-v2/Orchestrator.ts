@@ -6667,6 +6667,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               sameProvider:
                 pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
+              hasNativeTurnBoundary:
+                sourceProjection?.providerTurns.some(
+                  (turn) =>
+                    turn.id === sourceProviderTurnId &&
+                    typeof turn.nativeTurnRef?.nativeId === "string" &&
+                    !turn.nativeTurnRef.nativeId.startsWith("turn:"),
+                ) === true,
               sourceRunStatus: sourceRun.status,
               sourceBusy: sourceProjection !== null && sourceHasActiveRun(sourceProjection.runs),
               fromSpecificTurn: sourceRun !== null,
