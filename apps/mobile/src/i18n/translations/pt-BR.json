@@ -61,5 +61,10 @@
   "a034d65164bb39de": "Copiar",
   "0165ef55eb6c8a99": "Copiar como Markdown",
   "439737cb6de2a5b3": "Copiar URL da imagem",
-  "d3d24474c922eef2": "Copiar {count} URLs de imagens"
+  "d3d24474c922eef2": "Copiar {count} URLs de imagens",
+  "1472b8664ddbb128": "Verificar atualizações do aplicativo",
+  "7ebd9f61d1766c38": "Instalar atualização do aplicativo",
+  "a840ff60c35b919d": "Ver versões beta",
+  "5df0a7f15501c3d9": "Não foi possível abrir as versões beta",
+  "78a04e0e625c0990": "Falha na atualização"
 }

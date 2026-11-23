@@ -12,8 +12,7 @@ export const threadOutboxManager = createThreadOutboxManager({
 
 /** Drain queued mutations too; optimistic publication precedes the durable file write. */
 export async function flushThreadOutbox(): Promise<void> {
-  await threadOutboxManager.serialize(async () => {});
-  await flushThreadOutboxWrites();
+  await threadOutboxManager.flush(flushThreadOutboxWrites);
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {

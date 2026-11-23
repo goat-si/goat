@@ -1,3 +1,4 @@
+import { HoldsNavigation } from "~/lib/navigationHolds";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
@@ -30,6 +31,7 @@ import {
 } from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
+import { useRetainedNoteWordings } from "./useRetainedNoteWordings";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
@@ -201,6 +203,11 @@ function GoatBotChatViewContent({
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
+  const noteWordings = useRetainedNoteWordings(
+    environmentId,
+    member?.botId ?? null,
+    availability.kind === "ready" ? availability.bot.environmentId : null,
+  );
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -317,16 +324,20 @@ function GoatBotChatViewContent({
   const onDraft =
     canSend && !hidden
       ? (text: string) => {
-          if (narrow) {
-            sheetClosedFor.current = "draft";
-            setPanelOpen(false);
-          }
-          if (composerRef.current?.offerDraft(text) === false) {
+          const composer = composerRef.current;
+          if (composer === null) return false;
+          if (!composer.offerDraft(text)) {
             toastManager.add({
               type: "info",
               title: "Your message box already has a message. Send or clear it, then try again.",
             });
+            return false;
           }
+          if (narrow) {
+            sheetClosedFor.current = "draft";
+            setPanelOpen(false);
+          }
+          return true;
         }
       : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
@@ -445,6 +456,7 @@ function GoatBotChatViewContent({
   const refusalStep = goatBotRefusalStep(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
+      {noteWordings[0].size > 0 ? <HoldsNavigation /> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
@@ -713,6 +725,7 @@ function GoatBotChatViewContent({
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}
+              noteWordings={noteWordings}
               notesRefreshKey={notesRefreshKey}
               onClose={() => {
                 setHomeReturn(null);
@@ -753,6 +766,7 @@ function GoatBotChatViewContent({
                 environmentId={bot.environmentId}
                 threadId={bot.threadId}
                 onDraft={onDraft}
+                noteWordings={noteWordings}
                 notesRefreshKey={notesRefreshKey}
                 onShowChat={() => {
                   setHomeReturn(null);

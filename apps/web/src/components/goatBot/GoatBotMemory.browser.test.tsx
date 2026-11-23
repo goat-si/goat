@@ -129,9 +129,9 @@ it("Ask to forget drafts the quoted note and nothing else", async () => {
   expect(onDraft).toHaveBeenCalledWith(goatBotForgetNoteMessage(newer.text));
 });
 
-it("Ask to change asks for the new wording first, then drafts the quoted change", async () => {
+it("a refused fill keeps the new wording for a successful retry", async () => {
   setup();
-  const onDraft = vi.fn();
+  const onDraft = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
   await using screen = await render(
     <GoatBotMemory environmentId={environmentId} onDraft={onDraft} />,
   );
@@ -142,6 +142,8 @@ it("Ask to change asks for the new wording first, then drafts the quoted change"
   await userEvent.clear(field);
   await userEvent.type(field, "Reply in English");
   await userEvent.click(screen.getByRole("button", { name: "Fill message" }));
+  await expect.element(field).toHaveValue("Reply in English");
+  await userEvent.click(screen.getByRole("button", { name: "Fill message" }));
   expect(onDraft).toHaveBeenCalledWith(goatBotChangeNoteMessage(newer.text, "Reply in English"));
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
 });
@@ -149,7 +151,7 @@ it("Ask to change asks for the new wording first, then drafts the quoted change"
 it("new wording being written holds back a New bot open until it is cancelled", async () => {
   setup();
   await using screen = await render(
-    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+    <GoatBotMemory environmentId={environmentId} onDraft={() => true} />,
   );
   expect(navigationBlocked()).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
@@ -215,7 +217,7 @@ it("cannot ask while the chat cannot send", async () => {
 it("a new list drops an open change so new wording never lands on another note", async () => {
   setup();
   await using screen = await render(
-    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+    <GoatBotMemory environmentId={environmentId} onDraft={() => true} />,
   );
   // The older note is index 0; once it is forgotten the newer note becomes index 0.
   await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).nth(1));
@@ -223,7 +225,7 @@ it("a new list drops an open change so new wording never lands on another note",
     .element(screen.getByRole("textbox", { name: "New wording" }))
     .toHaveValue(older.text);
   state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
-  await screen.rerender(<GoatBotMemory environmentId={environmentId} onDraft={() => {}} />);
+  await screen.rerender(<GoatBotMemory environmentId={environmentId} onDraft={() => true} />);
   await expect.element(screen.getByText(newer.text)).toBeVisible();
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
 });
@@ -353,7 +355,7 @@ it("keeps replaced notes behind a toggle that works from the keyboard", async ()
     },
   });
   await using screen = await render(
-    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+    <GoatBotMemory environmentId={environmentId} onDraft={() => true} />,
   );
   await expect.element(screen.getByText("Replaces: “Reply in Korean”")).toBeVisible();
   expect(screen.getByText("Replaced by: “Reply in English”").query()).toBeNull();
@@ -373,7 +375,7 @@ it("keeps replaced notes behind a toggle that works from the keyboard", async ()
 it("a correction that arrives while a change is open drops the change and hides the old note", async () => {
   setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: false } });
   await using screen = await render(
-    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} refreshKey="a" />,
+    <GoatBotMemory environmentId={environmentId} onDraft={() => true} refreshKey="a" />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
   await expect.element(screen.getByRole("textbox", { name: "New wording" })).toBeVisible();
@@ -386,7 +388,7 @@ it("a correction that arrives while a change is open drops the change and hides 
     truncated: false,
   };
   await screen.rerender(
-    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} refreshKey="b" />,
+    <GoatBotMemory environmentId={environmentId} onDraft={() => true} refreshKey="b" />,
   );
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
   expect(screen.getByText("Reply in Korean", { exact: true }).query()).toBeNull();

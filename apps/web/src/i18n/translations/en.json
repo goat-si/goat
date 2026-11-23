@@ -761,5 +761,14 @@
   "856812e7e1fc445e": "Tool calls in chat",
   "d24e3cd7bcf08490": "Keep awake while agents work",
   "7fdde2b893ba1b9d": "Removed",
-  "e58ce271d835b447": "Added"
+  "e58ce271d835b447": "Added",
+  "2e2f3c6a94895504": "Search memories",
+  "701964090d7b3438": "Clear search",
+  "69f5bba063085343": "Could not load memories",
+  "1c79d42e902ff431": "Retry",
+  "a026f1d30905695a": "Quarantined memories",
+  "65d6260964ea1eda": "Quarantined memories are excluded from search. Clear search to review them.",
+  "5c5a53ae73e4dc51": "Review memories that need attention.",
+  "45ea728edcbbc5eb": "Include quarantined memories",
+  "86d287aa1993a091": "Close"
 }

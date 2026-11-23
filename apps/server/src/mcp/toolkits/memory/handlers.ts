@@ -201,6 +201,18 @@ const decodeList = argumentsOf("memory_list", M.MemoryListInput);
 const decodeReadSource = argumentsOf("memory_read_source", M.MemoryReadSourceInput);
 const decodeRead = argumentsOf("memory_read", M.MemoryReadInput);
 const decodeHistory = argumentsOf("memory_history", M.MemoryHistoryInput);
+const historyWithoutExplicitOptOut = (input: unknown) => {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    Array.isArray(input) ||
+    !("includeRefusedReverts" in input) ||
+    input.includeRefusedReverts !== false
+  )
+    return input;
+  const { includeRefusedReverts: _optOut, ...rest } = input;
+  return rest;
+};
 const decodeSyncStatus = argumentsOf("memory_sync_status", M.MemorySyncStatusInput);
 const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
 const decodeRemember = argumentsOf("goat_memory_remember", M.MemoryRememberInput);
@@ -282,7 +294,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.history(
-        yield* decodeHistory(yield* withCurrentSpace(input)),
+        yield* decodeHistory(yield* withCurrentSpace(historyWithoutExplicitOptOut(input))),
         yield* invocationPermit("read"),
         yield* callerThread,
       );

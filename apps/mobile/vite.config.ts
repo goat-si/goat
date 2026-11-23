@@ -161,6 +161,7 @@ const reactTests = [
   "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsGoatBotRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
+  "src/features/settings/MemoryQuarantineSearch.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.editSession.test.tsx",
   "src/features/threads/AgentMessageFold.test.tsx",
   "src/features/threads/HumanHandoffCard.test.tsx",
@@ -192,6 +193,7 @@ const reactTests = [
   "src/features/pull-requests/usePullRequestDiff.test.tsx",
   "src/features/pull-requests/guide/useReviewGuide.test.tsx",
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
+  "src/features/settings/SettingsAboutRouteScreen.test.tsx",
   "src/features/settings/computerUse/AllowedApps.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
   "src/features/settings/components/SettingsDragHandle.test.tsx",
@@ -214,6 +216,7 @@ const reactTests = [
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
 // Their tests vary Platform.OS or __DEV__, which production inlining would erase.
 const devCompiledSources = [
+  "/features/settings/SettingsAboutRouteScreen.tsx",
   "/features/files/FileSourceSurface.tsx",
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",

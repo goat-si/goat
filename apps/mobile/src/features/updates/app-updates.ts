@@ -52,8 +52,12 @@ export function createAppUpdateDeferral(): AppUpdateDeferral {
 
 const appUpdateDeferral = createAppUpdateDeferral();
 
+export function isAppUpdatePending(): boolean {
+  return appUpdateDeferral.pendingInstall;
+}
+
 interface AppUpdateCheckOptions {
-  readonly applyMode?: "background" | "immediate";
+  readonly applyMode?: "background" | "immediate" | "manual";
   readonly client?: AppUpdateClient;
   readonly deferral?: AppUpdateDeferral;
   readonly environment?: AppUpdateEnvironment;
@@ -67,6 +71,7 @@ interface AppUpdateCheckProgress {
 }
 
 interface AppUpdateCheckInFlight {
+  manualRequested: boolean;
   readonly failureListeners: Set<NonNullable<AppUpdateCheckOptions["onFailure"]>>;
   readonly progress: AppUpdateCheckProgress;
   readonly promise: Promise<void>;
@@ -79,7 +84,6 @@ interface Deferred {
   readonly resolve: () => void;
 }
 
-const HIDDEN_UPDATE_TAP_COUNT = 5;
 const UPDATE_CHECK_UNAVAILABLE_ERROR_CODES = new Set([
   "ERR_NOT_AVAILABLE_IN_DEV_CLIENT",
   "ERR_UPDATES_DISABLED",
@@ -91,28 +95,12 @@ export function isAppUpdateCheckAvailable(client: Pick<AppUpdateClient, "isEnabl
   return client.isEnabled && !(typeof __DEV__ !== "undefined" && __DEV__);
 }
 
-export function registerHiddenUpdateTap(count: number): {
-  readonly nextCount: number;
-  readonly shouldCheck: boolean;
-} {
-  const nextCount = count + 1;
-  if (nextCount >= HIDDEN_UPDATE_TAP_COUNT) {
-    return {
-      nextCount: 0,
-      shouldCheck: true,
-    };
-  }
-  return {
-    nextCount,
-    shouldCheck: false,
-  };
-}
-
 export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Promise<void> {
   const client = options.client ?? Updates;
   if (!isAppUpdateCheckAvailable(client)) return;
 
   if (appUpdateCheckInFlight) {
+    if (options.applyMode === "manual") appUpdateCheckInFlight.manualRequested = true;
     await observeAppUpdateCheck(appUpdateCheckInFlight, options);
     if (options.applyMode === "immediate") {
       const deferral = options.deferral ?? appUpdateDeferral;
@@ -135,6 +123,7 @@ export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Pr
 
   const deferred = createDeferred();
   const inFlight: AppUpdateCheckInFlight = {
+    manualRequested: options.applyMode === "manual",
     failureListeners,
     progress,
     promise: deferred.promise,
@@ -143,19 +132,23 @@ export async function runAppUpdateCheck(options: AppUpdateCheckOptions = {}): Pr
   // Publish the operation before any state listener can synchronously re-enter.
   appUpdateCheckInFlight = inFlight;
 
-  const execution = performAppUpdateCheck(client, {
-    applyMode: options.applyMode,
-    deferral: options.deferral,
-    environment: options.environment,
-    onFailure: (message) => {
-      progress.failure = message;
-      notifyListeners(failureListeners, message);
+  const execution = performAppUpdateCheck(
+    client,
+    {
+      applyMode: options.applyMode,
+      deferral: options.deferral,
+      environment: options.environment,
+      onFailure: (message) => {
+        progress.failure = message;
+        notifyListeners(failureListeners, message);
+      },
+      onStateChange: (state) => {
+        progress.state = state;
+        notifyListeners(stateListeners, state);
+      },
     },
-    onStateChange: (state) => {
-      progress.state = state;
-      notifyListeners(stateListeners, state);
-    },
-  });
+    () => inFlight.manualRequested,
+  );
   void execution.then(deferred.resolve, deferred.reject);
 
   try {
@@ -210,6 +203,7 @@ async function observeAppUpdateCheck(
 async function performAppUpdateCheck(
   client: AppUpdateClient,
   options: AppUpdateCheckOptions,
+  manualRequested: () => boolean,
 ): Promise<void> {
   const setState = options.onStateChange ?? (() => {});
   const environment = options.environment ?? defaultAppUpdateEnvironment;
@@ -224,12 +218,12 @@ async function performAppUpdateCheck(
   const check = await settlePromise(() => client.checkForUpdateAsync());
   if (check._tag === "Failure") {
     reportUpdateFailure(check, "Could not check for updates.", options.onFailure);
-    setState("idle");
+    setState(deferral.pendingInstall ? "ready" : "idle");
     return;
   }
   // Rollback directives report isAvailable: false and isRollBackToEmbedded: true; still drop the running OTA.
   if (!check.value.isAvailable && !check.value.isRollBackToEmbedded) {
-    setState("current");
+    setState(deferral.pendingInstall ? "ready" : "current");
     return;
   }
 
@@ -237,15 +231,20 @@ async function performAppUpdateCheck(
   const fetched = await settlePromise(() => client.fetchUpdateAsync());
   if (fetched._tag === "Failure") {
     reportUpdateFailure(fetched, "Could not download the update.", options.onFailure);
-    setState("idle");
+    setState(deferral.pendingInstall ? "ready" : "idle");
     return;
   }
   // isNew is always false for a rollback, so it cannot be the sole gate.
   if (!fetched.value.isNew && !fetched.value.isRollBackToEmbedded) {
-    setState("current");
+    setState(deferral.pendingInstall ? "ready" : "current");
     return;
   }
 
+  if (manualRequested()) {
+    deferral.pendingInstall = true;
+    setState("ready");
+    return;
+  }
   if (options.applyMode === "immediate" || fetched.value.isRollBackToEmbedded) {
     const outcome = await installAppUpdate(
       client,
@@ -253,10 +252,12 @@ async function performAppUpdateCheck(
       deferral,
       options,
       options.applyMode === "immediate",
+      manualRequested,
     );
     if (outcome === "flush-failed") {
       setState("ready");
-      armDeferredAppUpdateInstall(client, environment, deferral);
+      if (manualRequested()) deferral.pendingInstall = true;
+      else armDeferredAppUpdateInstall(client, environment, deferral);
     }
     return;
   }
@@ -265,7 +266,7 @@ async function performAppUpdateCheck(
   armDeferredAppUpdateInstall(client, environment, deferral);
 }
 
-type AppUpdateInstallOutcome = "installed" | "flush-failed" | "restart-failed";
+type AppUpdateInstallOutcome = "installed" | "flush-failed" | "restart-failed" | "deferred";
 
 /** Flush persistence and wait for backgrounding before restarting mounted native surfaces. */
 async function installAppUpdate(
@@ -274,6 +275,7 @@ async function installAppUpdate(
   deferral: AppUpdateDeferral,
   options: AppUpdateCheckOptions,
   userRequested: boolean,
+  manualRequested: () => boolean = () => false,
 ): Promise<AppUpdateInstallOutcome> {
   if (deferral.installInProgress) return "installed";
   deferral.installInProgress = true;
@@ -281,11 +283,19 @@ async function installAppUpdate(
   setState("restarting");
   const flushed = await settlePromise(() => environment.flushPendingWrites());
   if (flushed._tag === "Failure") {
-    reportUpdateFailure(flushed, "Could not save pending state.", undefined);
-    if (!userRequested) {
-      deferral.installInProgress = false;
-      return "flush-failed";
-    }
+    reportUpdateFailure(
+      flushed,
+      "Could not save pending state.",
+      userRequested || manualRequested() ? options.onFailure : undefined,
+    );
+    deferral.installInProgress = false;
+    return "flush-failed";
+  }
+  if (!userRequested && manualRequested()) {
+    deferral.installInProgress = false;
+    deferral.pendingInstall = true;
+    setState("ready");
+    return "deferred";
   }
   const reloaded = await settlePromise(() => client.reloadAsync());
   if (reloaded._tag === "Failure") {
@@ -304,6 +314,7 @@ async function installPendingAppUpdate(
   options: AppUpdateCheckOptions,
 ): Promise<void> {
   const outcome = await installAppUpdate(client, environment, deferral, options, true);
+  if (outcome === "flush-failed") options.onStateChange?.("ready");
   if (outcome === "restart-failed") {
     deferral.pendingInstall = false;
   }

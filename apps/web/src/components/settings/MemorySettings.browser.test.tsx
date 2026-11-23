@@ -7,6 +7,7 @@ import {
   activeItem,
   exerciseMemoryMove,
   checkVirtualizedMemorySelection,
+  enterText,
   resolution,
   entry,
   retained,
@@ -529,12 +530,6 @@ async function click(label: string) {
   );
   expect(button).toBeDefined();
   await act(async () => button!.click());
-}
-async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  await act(() => {
-    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  });
 }
 // Settings renders the import and browse scope pickers under one name, so callers pass the section.
 function namedSelect(name: string, section = "") {

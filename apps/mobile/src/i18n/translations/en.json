@@ -61,5 +61,10 @@
   "a034d65164bb39de": "Copy",
   "0165ef55eb6c8a99": "Copy as Markdown",
   "439737cb6de2a5b3": "Copy Image URL",
-  "d3d24474c922eef2": "Copy {count} Image URLs"
+  "d3d24474c922eef2": "Copy {count} Image URLs",
+  "1472b8664ddbb128": "Check for app updates",
+  "7ebd9f61d1766c38": "Install app update",
+  "a840ff60c35b919d": "Check beta builds",
+  "5df0a7f15501c3d9": "Could not open beta builds",
+  "78a04e0e625c0990": "Update failed"
 }
