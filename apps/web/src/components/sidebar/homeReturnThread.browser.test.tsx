@@ -205,6 +205,30 @@ it("a draft whose send fails stays Home's target", async () => {
   await expect.element(app.heading("Draft draft-1")).toBeVisible();
 });
 
+it("a draft removed with its project mid-send never sends Home to a thread that was not created", async () => {
+  using _data = setup();
+  const draftId = DraftId.make("draft-1");
+  useComposerDraftStore
+    .getState()
+    .setProjectDraftThreadId(PROJECT, draftId, { threadId: ThreadId.make("reserved-1") });
+  const draft = useComposerDraftStore.getState().getDraftSession(draftId)!;
+  await using app = await openApp("/draft/draft-1");
+
+  await go(app.router, "/fleet");
+  useComposerDraftStore
+    .getState()
+    .markDraftThreadPromoting(draftId, scopeThreadRef(ENV, ThreadId.make("reserved-1")));
+  useComposerDraftStore.getState().clearDraftThread(draftId);
+  await userEvent.click(app.home());
+  await expect.element(app.heading("Home landing")).toBeVisible();
+
+  // The send then fails and puts the draft back.
+  await go(app.router, "/fleet");
+  restoreFailedDraftThread(draftId, draft, ThreadId.make("reserved-1"));
+  await userEvent.click(app.home());
+  await expect.element(app.heading("Draft draft-1")).toBeVisible();
+});
+
 it("a draft sent while a late-identified bot thread is open stays Home's target", async () => {
   using _data = setup(["legacy-bot"]);
   useGlobalAgentStore.setState({ botRef: null });
