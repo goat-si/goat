@@ -1,4 +1,5 @@
 import { makeCodexThreadTitle } from "./CodexThreadTitle.ts";
+import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import {
   codexMcpAppResourceUri,
   type CodexDynamicToolItem,
@@ -102,7 +103,6 @@ import {
   OrchestrationV2ProviderGoal,
   parseGoalCommand,
   ProviderDriverKind,
-  ProviderSetupError,
 } from "@goat/contracts";
 import {
   appendGeneratedImageMarkdown,
@@ -772,6 +772,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
+    checksVersionAtHandshake: adapterOptions.compatibility !== undefined,
     sessionConfigKey:
       adapterOptions.sessionConfigKey ??
       codexSessionConfigKey(adapterOptions.settings, adapterOptions.environment),
@@ -1041,15 +1042,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               version && adapterOptions.compatibility
                 ? yield* adapterOptions.compatibility(version)
                 : undefined;
-            if (advisory?.status === "broken") {
-              const target =
-                advisory.recommendedVersion ?? advisory.recommendedRange ?? "a newer version";
-              return yield* new ProviderSetupError({
+            const refused =
+              version &&
+              brokenRuntimeError({
                 instanceId: adapterOptions.instanceId,
-                operation: "runtime",
-                detail: `Codex ${version} does not work with this GOAT release. Update Codex to ${target}, then retry.`,
+                name: "Codex",
+                version,
+                advisory,
               });
-            }
+            if (refused) return yield* refused;
             yield* client.notify("initialized", undefined);
             yield* verifySessionRoute();
             yield* Ref.set(initialized, true);

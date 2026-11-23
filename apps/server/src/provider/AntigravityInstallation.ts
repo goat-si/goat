@@ -64,7 +64,7 @@ import {
 import { makeAntigravityValidator } from "./AntigravityInstallationValidate.ts";
 import { isNewer } from "./managedRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { resolveProviderCompatibility } from "./providerCompatibility.ts";
+import type { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import {
   resolveAntigravityReleaseAsset,
   type AntigravityReleaseAsset,
@@ -801,15 +801,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   return AntigravityInstallation.of({
     managedDirectory,
     compatibility: Effect.fn("AntigravityInstallation.compatibility")(function* (version: string) {
-      const manifest = yield* manifestService.current;
-      return (
-        resolveProviderCompatibility(manifest.compatibility, DRIVER, version) ??
-        resolveProviderCompatibility(
-          ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-          DRIVER,
-          version,
-        )
-      );
+      return ModelManifest.providerCompatibility(yield* manifestService.current, DRIVER, version);
     }),
     resolve,
     acquire,

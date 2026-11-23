@@ -280,6 +280,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver,
+    checksVersionAtHandshake: flavor.checksVersionAtHandshake === true,
     getCapabilities: Effect.fn("AcpAdapter.getCapabilities")(function* () {
       return yield* readCapabilities;
     }),
@@ -6793,11 +6794,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         });
 
-        const promptContent = makeAcpPromptContent({
+        const { content: promptContent, messageContent } = makeAcpPromptContent({
           driver,
           flavor,
           supportsImagePrompts,
-          resolveAttachmentPath: host.resolveAttachmentPath,
+          host,
           fileSystem,
           activeSessionSetup,
           configOptions: runtime.getConfigOptions,
@@ -7577,13 +7578,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           currentGeneration: Ref.get(runtimeCallbackGeneration),
           atGeneration: runRuntimeCallbackAtGeneration,
           sessionScope,
-          promptContent: (message) =>
-            providerMessageTextWithAttachmentPaths({
-              text: message.text,
-              attachments: message.attachments,
-              resolveAttachmentPath: host.resolveAttachmentPath,
-              resolveExtractedTextPath: host.resolveExtractedTextPath,
-            }).pipe(Effect.flatMap((text) => promptContent(text, message.attachments))),
+          promptContent: messageContent,
           watchOutcome,
           startInactivityWatchdog,
           prompt: (prompt, promptOptions) => runtime.prompt({ prompt: [...prompt] }, promptOptions),
