@@ -68,8 +68,23 @@ export const mergeProviderSnapshot = (
     return nextProvider;
   }
   const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
-  const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
+  const {
+    message: _uncheckedMessage,
+    modelsRetained: _retained,
+    ...nextWithoutMessage
+  } = nextProvider;
+  const { modelsRetained: _nextRetained, ...nextWithoutRetained } = nextProvider;
   const models = mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models);
+  const status = savedAccount?.status ?? nextProvider.status;
+  const retained =
+    nextProvider.enabled &&
+    nextProvider.installed &&
+    (status === "error" || status === "warning") &&
+    nextProvider.auth.status !== "unauthenticated" &&
+    models.length > 0 &&
+    (previousProvider.status === "ready" ||
+      (previousProvider.modelsRetained === true &&
+        previousProvider.checkedAt === nextProvider.checkedAt));
   // Folder catalogs were compared with the old machine catalog, so every folder rescans.
   const previousWorkspaceSnapshots = Equal.equals(models, previousProvider.models)
     ? previousProvider.workspaceSnapshots
@@ -91,9 +106,10 @@ export const mergeProviderSnapshot = (
           ...nextWorkspaceSnapshots,
         ].slice(-MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER);
   return {
-    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
+    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextWithoutRetained),
     ...savedAccount,
     models,
+    ...(retained ? { modelsRetained: true } : {}),
     ...(workspaceSnapshots === undefined ? {} : { workspaceSnapshots }),
     ...(nextProvider.workspaceRescannedAt === undefined &&
     previousProvider.workspaceRescannedAt !== undefined

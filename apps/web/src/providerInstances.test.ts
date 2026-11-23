@@ -59,6 +59,24 @@ const model = (slug: string, isCustom = false, isDefault = false) => ({
 });
 
 describe("isProviderInstancePickerReady", () => {
+  it("offers retained models during a transient failure, but prefers a healthy provider", () => {
+    const failed = provider({
+      provider: ProviderDriverKind.make("codex"),
+      instanceId: "codex",
+      status: "error",
+      models: [model("gpt-5.5")],
+    });
+    const healthy = provider({ provider: ProviderDriverKind.make("cursor"), instanceId: "cursor" });
+    const [retained, available] = deriveProviderInstanceEntries([
+      { ...failed, modelsRetained: true },
+      healthy,
+    ]);
+    expect(retained && isProviderInstancePickerReady(retained)).toBe(true);
+    expect(isProviderInstancePickerReady(deriveProviderInstanceEntries([failed])[0]!)).toBe(false);
+    expect(
+      resolveSelectableProviderInstance([{ ...failed, modelsRetained: true }, healthy], undefined),
+    ).toBe(available?.instanceId);
+  });
   it("rejects a disabled instance even while its last probe status is ready", () => {
     const [entry] = deriveProviderInstanceEntries([
       provider({

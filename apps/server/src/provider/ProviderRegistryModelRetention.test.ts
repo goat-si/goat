@@ -29,3 +29,49 @@ it("drops Cursor models a ready catalog read returns none of", () => {
     ...previousProvider.models,
   ]);
 });
+
+it("offers a retained catalog for only the first failed check", () => {
+  const ready = {
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    status: "ready",
+    enabled: true,
+    installed: true,
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-30T00:00:00.000Z",
+    version: "1.0.0",
+    models: [{ slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+  } as const satisfies ServerProvider;
+  const failed = {
+    ...ready,
+    status: "error",
+    auth: { status: "unknown" },
+    models: [],
+    checkedAt: "2026-10-30T00:01:00.000Z",
+  } as const satisfies ServerProvider;
+  const first = ProviderRegistry.mergeProviderSnapshot(ready, failed);
+  assert.deepStrictEqual(first.models, ready.models);
+  assert.propertyVal(first, "modelsRetained", true);
+  assert.propertyVal(ProviderRegistry.mergeProviderSnapshot(first, failed), "modelsRetained", true);
+  assert.notProperty(
+    ProviderRegistry.mergeProviderSnapshot(first, {
+      ...failed,
+      checkedAt: "2026-10-30T00:02:00.000Z",
+    }),
+    "modelsRetained",
+  );
+  assert.notProperty(ProviderRegistry.mergeProviderSnapshot(first, ready), "modelsRetained");
+  assert.notProperty(
+    ProviderRegistry.mergeProviderSnapshot(ready, { ...failed, installed: false }),
+    "modelsRetained",
+  );
+  assert.notProperty(
+    ProviderRegistry.mergeProviderSnapshot(ready, {
+      ...failed,
+      auth: { status: "unauthenticated" },
+    }),
+    "modelsRetained",
+  );
+});

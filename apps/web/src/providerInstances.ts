@@ -60,8 +60,20 @@ export function resolveProviderCatalogAvailability(input: {
 }
 
 /** Disabled instances may retain ready status until reconciliation. */
-export function isProviderInstancePickerReady(entry: ProviderInstanceEntry): boolean {
+function isProviderInstanceHealthy(entry: ProviderInstanceEntry): boolean {
   return entry.enabled && entry.isAvailable && entry.status === "ready";
+}
+
+export function isProviderInstancePickerReady(entry: ProviderInstanceEntry): boolean {
+  if (isProviderInstanceHealthy(entry)) return true;
+  if (!entry.enabled || !entry.isAvailable) return false;
+  if (entry.snapshot.modelsRetained === true) return true;
+  return (
+    entry.status === "warning" &&
+    entry.installed &&
+    entry.snapshot.auth.status === "authenticated" &&
+    entry.models.length > 0
+  );
 }
 
 export function isProviderInstancePickerVisible(entry: ProviderInstanceEntry): boolean {
@@ -225,7 +237,7 @@ export function resolveSelectableProviderInstanceEntry(
     }
   }
   return (
-    entries.find(isProviderInstancePickerReady) ??
+    entries.find(isProviderInstanceHealthy) ??
     entries.find((entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error")
   );
 }
