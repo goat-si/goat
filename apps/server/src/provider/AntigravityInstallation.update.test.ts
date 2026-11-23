@@ -15,17 +15,20 @@ import {
 } from "./AntigravityInstallation.testkit.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 
-const PINNED_WINDOWS_URL =
-  "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-x86_64.zip";
 const isNativeDownload = (url: string) => url.startsWith("https://storage.googleapis.com/");
+const isPinnedDownload = (url: string) => url.startsWith("https://dl.google.com/");
 const isManifest = (url: string) => url.includes("/manifests/windows_amd64.json");
-const withdrawing = (range: string) =>
+const nothingToInstall = {
+  detail: expect.stringContaining("No Antigravity release is available to install."),
+};
+const listing = (range: string, status: "broken" | "supported") =>
   Effect.succeed({
     ...ModelManifest.BUNDLED_MODEL_MANIFEST,
     compatibility: [
-      { driver: "antigravity", t3CodeRange: ">=0.0.42", ranges: [{ range, status: "broken" }] },
+      { driver: "antigravity", t3CodeRange: ">=0.0.42", ranges: [{ range, status }] },
     ],
   } satisfies ModelManifest.ModelManifestData);
+const withdrawing = (range: string) => listing(range, "broken");
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
   "Antigravity managed CLI updates",
@@ -58,7 +61,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
     );
 
     it.effect(
-      "keeps the pinned release and downloads no update while the manifest is unreachable",
+      "offers no runtime below 1.5 and downloads nothing while the manifest is unreachable",
       () =>
         Effect.gen(function* () {
           const { installation, requests } = yield* makeHarness({
@@ -68,43 +71,36 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
             nativeManifest: () => null,
           });
           yield* installation.checkForUpdate;
-          expect((yield* installation.state).version).toBe("1.4.5");
-          const started = yield* installation.start;
-          expect(started.version).toBe("1.4.5");
-          yield* terminalState(installation);
+          expect((yield* installation.state).version).toBeNull();
+          expect(yield* Effect.flip(installation.start)).toMatchObject(nothingToInstall);
           expect(requests.filter(isManifest)).toHaveLength(2);
           expect(requests.filter(isNativeDownload)).toEqual([]);
-          expect(requests.at(-1)).toBe(PINNED_WINDOWS_URL);
+          expect(requests.filter(isPinnedDownload)).toEqual([]);
         }),
     );
 
     it.effect.each([
-      { libc: "glibc", musl: false, version: "1.4.5" },
-      { libc: "musl", musl: true, version: null },
-    ])(
-      "with Google's channel down, Linux $libc is offered the pinned glibc runtime only on glibc",
-      ({ musl, version }) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const { installation, requests } = yield* makeHarness({
-            native: true,
-            platform: "linux",
-            arch: "x64",
-            nativeManifest: () => null,
-            fileSystem: {
-              ...fs,
-              exists: (path) =>
-                path === "/lib/libc.musl-x86_64.so.1" ? Effect.succeed(musl) : fs.exists(path),
-            },
-          });
-          yield* installation.checkForUpdate;
-          expect((yield* installation.state).version).toBe(version);
-          if (!musl) return;
-          expect(yield* Effect.flip(installation.start)).toMatchObject({
-            detail: expect.stringContaining("No Antigravity release is available to install."),
-          });
-          expect(requests.filter((url) => url.startsWith("https://dl.google.com/"))).toEqual([]);
-        }),
+      { libc: "glibc", musl: false },
+      { libc: "musl", musl: true },
+    ])("with Google's channel down, Linux $libc is offered no runtime below 1.5", ({ musl }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { installation, requests } = yield* makeHarness({
+          native: true,
+          platform: "linux",
+          arch: "x64",
+          nativeManifest: () => null,
+          fileSystem: {
+            ...fs,
+            exists: (path) =>
+              path === "/lib/libc.musl-x86_64.so.1" ? Effect.succeed(musl) : fs.exists(path),
+          },
+        });
+        yield* installation.checkForUpdate;
+        expect((yield* installation.state).version).toBeNull();
+        expect(yield* Effect.flip(installation.start)).toMatchObject(nothingToInstall);
+        expect(requests.filter(isPinnedDownload)).toEqual([]);
+      }),
     );
 
     it.effect("installs nothing when the native download's SHA-512 differs from the manifest", () =>
@@ -134,11 +130,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
           manifest: withdrawing(">=1.5.7"),
         });
         yield* installation.checkForUpdate;
-        expect((yield* installation.state).version).toBe("1.4.5");
-        yield* installation.start;
-        yield* terminalState(installation);
+        expect((yield* installation.state).version).toBeNull();
+        expect(yield* Effect.flip(installation.start)).toMatchObject(nothingToInstall);
         expect(requests.filter(isManifest)).toHaveLength(2);
         expect(requests.filter(isNativeDownload)).toEqual([]);
+        expect(requests.filter(isPinnedDownload)).toEqual([]);
       }),
     );
 
@@ -154,9 +150,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
           }),
         });
         yield* installation.checkForUpdate;
-        expect((yield* installation.state).version).toBe("1.4.5");
-        yield* installation.start;
-        yield* terminalState(installation);
+        expect((yield* installation.state).version).toBeNull();
+        expect(yield* Effect.flip(installation.start)).toMatchObject(nothingToInstall);
         expect(requests.filter(isManifest)).toHaveLength(2);
         expect(requests.some((url) => url.includes("storage.example.com"))).toBe(false);
       }),
@@ -215,22 +210,27 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
       }),
     );
 
-    it.effect.each(["1.5.0", "2.0.0"])(
-      "offers Google's %s only once the model manifest marks it supported",
-      (version) =>
+    it.effect.each([
+      { version: "1.5.0", manifest: undefined, offered: "1.5.0" },
+      { version: "1.5.0", manifest: listing(">=1.5.1 <2", "supported"), offered: null },
+      { version: "2.0.0", manifest: undefined, offered: null },
+    ])(
+      "offers Google's $version only once the model manifest marks it supported",
+      ({ version, manifest, offered }) =>
         Effect.gen(function* () {
           const { installation, requests } = yield* makeHarness({
             native: true,
             nativeVersion: version,
             platform: "win32",
             archive: Buffer.from(serverContents),
+            ...(manifest === undefined ? {} : { manifest }),
           });
           yield* installation.checkForUpdate;
-          expect((yield* installation.state).version).toBe("1.4.5");
-          yield* installation.start;
-          yield* terminalState(installation);
+          expect((yield* installation.state).version).toBe(offered);
+          if (offered !== null) return;
+          expect(yield* Effect.flip(installation.start)).toMatchObject(nothingToInstall);
           expect(requests.filter(isNativeDownload)).toEqual([]);
-          expect(requests.at(-1)).toBe(PINNED_WINDOWS_URL);
+          expect(requests.filter(isPinnedDownload)).toEqual([]);
         }),
     );
 
@@ -252,7 +252,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
     );
 
     it.effect.each([
-      ["the pin while Google's channel is unreachable", () => null, "1.4.5"],
+      ["nothing while Google's channel is unreachable", () => null, null],
       ["Google's supported release", undefined, "1.5.8"],
     ] as const)(
       "a restart over an install the 1.1.1 pin recorded as agy_acp_server_1.1.1 offers %s",

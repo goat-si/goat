@@ -163,10 +163,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         expect(yield* retry.installation.resolve().pipe(Effect.flip)).toMatchObject({
           operation: "resolve",
         });
-        // GOAT adapts upstream here: a start over a withdrawn install falls back to the pinned
-        // release instead of failing, and still never launches the withdrawn one.
-        expect(yield* retry.installation.start).toMatchObject({ version: "1.4.5" });
-        yield* terminalState(retry.installation);
+        // GOAT's pinned 1.4.5 is below 1.5 and refused too, so nothing is left to install.
+        expect(yield* retry.installation.start.pipe(Effect.flip)).toMatchObject({
+          detail: expect.stringContaining("No Antigravity release is available to install."),
+        });
         expect(yield* retry.installation.resolve().pipe(Effect.flip)).toMatchObject({
           operation: "resolve",
         });

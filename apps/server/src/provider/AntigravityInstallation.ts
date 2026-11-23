@@ -135,11 +135,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const environment = yield* HostProcess.Environment;
-  // The pinned release stays the fallback whenever Google's CLI manifest offers nothing usable.
-  const pinned =
+  const { isWithdrawn, isSupported, ensureEligible } = makeWithdrawalCheck(manifestService);
+  // The pinned release is the fallback when Google's CLI manifest offers nothing usable, unless
+  // it is refused: the 1.4.5 pin is below 1.5, so it is never offered.
+  const pinCandidate =
     options.releaseAsset === undefined
       ? resolveAntigravityReleaseAsset(platform, arch, yield* hostUsesMusl({ fs, platform, arch }))
       : options.releaseAsset;
+  const pinned =
+    pinCandidate !== null && (yield* isWithdrawn(pinCandidate.version)) ? null : pinCandidate;
   let releaseAsset: AntigravityReleaseAsset | AntigravityCliReleaseAsset | null = pinned;
   const supported =
     options.releaseAsset === undefined
@@ -182,7 +186,6 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     message: null,
   });
 
-  const { isWithdrawn, isSupported, ensureEligible } = makeWithdrawalCheck(manifestService);
   const { readRecord, executableFile } = makeRecordReaders({ fs, platform });
   const commandCandidates = makeCommandCandidates({ fs, path, platform, environment });
 
