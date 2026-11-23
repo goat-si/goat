@@ -254,19 +254,16 @@ export interface ChatMarkdownContextReference {
 }
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-
 // Heading ids are added after sanitizing, which would prefix them a second time.
 const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
   ...CHAT_MARKDOWN_REHYPE_PLUGINS,
   rehypeHeadingIds,
   rehypeTextDirection,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
-
 const CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS = [
   rehypeHeadingIds,
   rehypeTextDirection,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
-
 function markdownUrlTransform(href: string) {
   if (parseAssistantCitationHref(href)) return href;
   if (parseComposerContextHref(href)) return href;
@@ -274,7 +271,6 @@ function markdownUrlTransform(href: string) {
   if (isWindowsDrivePathHref(href)) return href;
   return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
 }
-
 function fileLinkSourcesKey(
   text: string,
   cwd: string | undefined,
@@ -290,7 +286,6 @@ function fileLinkSourcesKey(
   );
   return JSON.stringify([[...new Set(hrefs)], [...new Set(spans)]]);
 }
-
 function resolveFileLinkSources(
   key: string,
   cwd: string | undefined,
@@ -313,7 +308,6 @@ function resolveFileLinkSources(
   ]);
   return { markdownFileLinkMetaByHref, inlineCodeFileLinkMetaByText, fileLinkParentSuffixByPath };
 }
-
 function useChatMarkdownState({
   text,
   inline = false,
@@ -615,8 +609,24 @@ function useChatMarkdownState({
     if (!threadRef) return;
     // Every open supersedes pending lookups, including synchronous opens.
     const isLatestLookup = claimWorkspaceBasenameLookup();
+    // The panel reads relative paths from the thread's folder. A pull request body's `cwd` is the
+    // checkout of its repository, which can be another folder.
+    const shell = readThreadShell(threadRef);
+    const panelRoot =
+      shell?.worktreePath ??
+      projects.find(
+        (project) => project.environmentId === environmentId && project.id === shell?.projectId,
+      )?.workspaceRoot;
     const openAt = (path: string) =>
-      useRightPanelStore.getState().openFile(threadRef, path, fileLinkMeta.line);
+      useRightPanelStore
+        .getState()
+        .openFile(
+          threadRef,
+          cwd && panelRoot !== undefined && cwd !== panelRoot
+            ? resolveWorkspaceFilePath(path, cwd)
+            : path,
+          fileLinkMeta.line,
+        );
     if (
       fileLinkMeta.workspaceLookupPath === null ||
       !cwd ||
@@ -725,7 +735,6 @@ function useChatMarkdownState({
       />
     );
   };
-
   const componentState = {
     canOperateHost,
     canOperatePreview,
@@ -770,14 +779,11 @@ function useChatMarkdownState({
     closeLocalMediaPreview,
   };
 }
-
 const ChatMarkdownRendererContext = React.createContext<
   ReturnType<typeof useChatMarkdownState>["componentState"]
 >(null!);
-
 // Isolate streamed source text from the renderer context; only offset-based renderers need it.
 const ChatMarkdownTextContext = React.createContext("");
-
 // A quote card is a block. These say nothing else shares its paragraph or list item on that side.
 const LIST_MARKER = String.raw`(?:[-*+]|\d+[.)])[ \t]+`;
 const CITATION_LEADS_BLOCK = new RegExp(
@@ -786,7 +792,6 @@ const CITATION_LEADS_BLOCK = new RegExp(
 const CITATION_ENDS_BLOCK = new RegExp(
   String.raw`^[ \t]*(?:$|\n[ \t]*(?:\n|$)|\n[ \t>]*${LIST_MARKER})`,
 );
-
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
   return function MarkdownHeading({
@@ -802,7 +807,6 @@ function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
     );
   };
 }
-
 const CHAT_MARKDOWN_COMPONENTS = {
   h1: markdownHeadingRenderer(1),
   h2: markdownHeadingRenderer(2),
@@ -1170,7 +1174,6 @@ const CHAT_MARKDOWN_COMPONENTS = {
         </Tooltip>,
       );
     }
-
     const label = nodeToPlainText(children);
     const start = node?.position?.start.offset;
     const end = node?.position?.end.offset;
@@ -1413,7 +1416,6 @@ const CHAT_MARKDOWN_COMPONENTS = {
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
     }
-
     const language = extractFenceLanguage(codeBlock.className);
     if (
       mathEnabled &&
@@ -1477,7 +1479,6 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
 } satisfies Components;
-
 const REMARK_MATH: Pluggable = [remarkMath, { singleDollarTextMath: true }];
 // Shared lists, so every message with the same options shares a processor and its cache.
 const CHAT_MARKDOWN_REMARK_PLUGIN_SETS = {
@@ -1486,15 +1487,12 @@ const CHAT_MARKDOWN_REMARK_PLUGIN_SETS = {
   math: [REMARK_MATH, ...CHAT_MARKDOWN_REMARK_PLUGINS],
   mathBreaks: [REMARK_MATH, ...CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS],
 } satisfies Record<string, PluggableList>;
-
 // One combined list per pair, so a stable extra list shares a renderer and its parse cache.
 const INSIGHT_REMARK_PLUGINS: PluggableList = [remarkAssistantInsights];
-
 const markdownRenderers = new WeakMap<
   PluggableList,
   WeakMap<PluggableList, ReturnType<typeof createMarkdownRenderer>>
 >();
-
 function markdownRenderer(remarkPlugins: PluggableList, rehypePlugins: PluggableList) {
   let byRehype = markdownRenderers.get(remarkPlugins);
   if (!byRehype) markdownRenderers.set(remarkPlugins, (byRehype = new WeakMap()));
@@ -1510,7 +1508,6 @@ function markdownRenderer(remarkPlugins: PluggableList, rehypePlugins: Pluggable
   }
   return renderer;
 }
-
 const MarkdownSource = memo(function MarkdownSource({
   text,
   remarkPlugins,
@@ -1534,7 +1531,6 @@ const MarkdownSource = memo(function MarkdownSource({
   }, [render, text, element, shared, cache]);
   return <ChatMarkdownTextContext value={text}>{element}</ChatMarkdownTextContext>;
 }, sameMarkdownSource);
-
 function ChatMarkdown({
   text,
   className,
@@ -1587,7 +1583,6 @@ function ChatMarkdown({
         extraRemarkPlugins,
       );
   const blocks = streamingBlocks ?? [text];
-
   return (
     <Root
       ref={bindMarkdownRef}
@@ -1626,5 +1621,4 @@ function ChatMarkdown({
     </Root>
   );
 }
-
 export default memo(ChatMarkdown);
