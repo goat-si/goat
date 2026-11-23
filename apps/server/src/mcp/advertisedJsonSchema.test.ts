@@ -214,25 +214,25 @@ it("advertises an input decoded from untyped fields as the shape it decodes to",
   const tool = Tool.make("example", {
     parameters: Schema.Struct({ modelSelection: Schema.optional(ModelSelection) }),
   });
-  const selection = advertisedJsonSchema(tool).properties?.modelSelection;
-
-  expect(selection).toMatchObject({
-    type: "object",
-    properties: {
-      instanceId: { type: "string" },
-      model: { type: "string" },
-      options: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            value: { anyOf: [{ type: "string" }, { type: "boolean" }] },
+  expect(advertisedJsonSchema(tool).properties).toMatchObject({
+    modelSelection: {
+      type: "object",
+      properties: {
+        instanceId: { type: "string" },
+        model: { type: "string" },
+        options: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              value: { anyOf: [{ type: "string" }, { type: "boolean" }] },
+            },
+            required: ["id", "value"],
           },
-          required: ["id", "value"],
         },
       },
+      required: ["instanceId", "model"],
     },
-    required: ["instanceId", "model"],
   });
 });
