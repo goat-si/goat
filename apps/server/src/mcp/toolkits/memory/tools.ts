@@ -125,9 +125,22 @@ const ReadTool = Tool.dynamic(agentSurfaceRegistry["memory.read"].name, {
   .addDependency(ThreadManagementService.ThreadManagementService)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.read"]));
 
+const historyParameters = spaceOptional(memoryInputSchema(M.MemoryHistoryInput));
 const HistoryTool = Tool.dynamic(agentSurfaceRegistry["memory.history"].name, {
   description: agentSurfaceRegistry["memory.history"].description,
-  parameters: spaceOptional(memoryInputSchema(M.MemoryHistoryInput)),
+  parameters: {
+    ...historyParameters,
+    properties: {
+      ...(Reflect.get(historyParameters, "properties") as Record<string, unknown>),
+      // Gemini rejects a boolean enum in a tool declaration. The handler
+      // translates false to omission without changing the internal RPC codec.
+      includeRefusedReverts: {
+        type: "boolean",
+        description:
+          "Include refused reverts only when the environment advertises memory.refusedReverts.",
+      },
+    },
+  },
   success: M.MemoryHistoryPage,
   failure,
   failureMode: "return",
