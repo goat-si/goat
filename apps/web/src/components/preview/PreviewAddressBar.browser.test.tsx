@@ -1,6 +1,6 @@
 import { GTProvider } from "gt-react";
 import chinese from "~/i18n/translations/zh.json";
-import { fakeTimers } from "../../../test/render";
+import { fakeTimers, render as renderScreen } from "../../../test/render";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -97,15 +97,6 @@ describe("PreviewAddressBar", () => {
     container.remove();
     vi.unstubAllGlobals();
     timers[Symbol.dispose]();
-  });
-
-  it("localizes the address field and the open-in-browser action", async () => {
-    props.url = "";
-    props.onOpenInBrowser = vi.fn();
-    await render("zh");
-    expect(input().placeholder).toBe("搜索或输入网址");
-    expect(input().getAttribute("aria-label")).toBe("搜索或输入网址");
-    expect(container.querySelector('button[aria-label="在系统浏览器中打开"]')).not.toBeNull();
   });
 
   it("retains drafts through blur, late URL changes, tab remounts and identical ids in another environment", async () => {
@@ -323,4 +314,27 @@ describe("PreviewAddressBar", () => {
     expect(useBrowserAddressDraftStore.getState().drafts.get("tab-103")).toBe("edit-103");
     expect(useBrowserAddressDraftStore.getState().drafts.has("tab-104")).toBe(false);
   });
+});
+
+it("localizes the address field and the open-in-browser action", async () => {
+  useBrowserAddressDraftStore.setState({ drafts: new Map() });
+  await using screen = await renderScreen(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <PreviewAddressBar
+        addressKey={key("1")}
+        threadRef={ref}
+        tabId="1"
+        url=""
+        tabs={[]}
+        history={[]}
+        onSubmit={vi.fn()}
+        onActivateTab={vi.fn(() => true)}
+        onOpenInBrowser={vi.fn()}
+      />
+    </GTProvider>,
+  );
+  const input = screen.container.querySelector("input")!;
+  expect(input.placeholder).toBe("搜索或输入网址");
+  expect(input.getAttribute("aria-label")).toBe("搜索或输入网址");
+  expect(screen.container.querySelector('button[aria-label="在系统浏览器中打开"]')).not.toBeNull();
 });
