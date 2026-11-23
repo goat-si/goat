@@ -218,3 +218,21 @@ it("keeps side chat shortcuts scoped while panel shortcuts reach the main view",
   await userEvent.keyboard("{Control>}{Shift>}x{/Shift}{/Control}");
   expect(events).toEqual(["main-panel", "side-model", "main-stop"]);
 });
+
+it("leaves keys to a focused video player with controls", async () => {
+  const composerKeys: string[] = [];
+  await using _screen = await render(
+    <>
+      <Chat composerKeys={composerKeys} />
+      <video ref={focusOnMount} controls />
+    </>,
+    options,
+  );
+
+  await userEvent.keyboard(" m");
+  expect(composerKeys).toEqual([]);
+
+  (document.activeElement as HTMLElement).blur();
+  await userEvent.keyboard("a");
+  expect(composerKeys).toEqual(["a"]);
+});
