@@ -2,7 +2,7 @@ import "~/index.css";
 
 import { RegistryContext } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { type EnvironmentId, ThreadId } from "@goat/contracts";
+import { type EnvironmentId, type ScopedThreadRef, ThreadId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
@@ -40,14 +40,18 @@ const phone: PreviewMiniPlayerSource = {
   name: "Phone",
 };
 
-function Harness() {
+function Harness({ threadRef: current = threadRef }: { readonly threadRef?: ScopedThreadRef }) {
   const miniPlayer = usePreviewMiniPlayerStore((state) =>
-    selectThreadPreviewMiniPlayer(state.byThreadKey, threadRef),
+    selectThreadPreviewMiniPlayer(state.byThreadKey, current),
   );
   return (
     <ChatCanvas composerOverlayElement={null}>
       {miniPlayer ? (
-        <ThreadPreviewMiniPlayer threadRef={threadRef} miniPlayer={miniPlayer} />
+        <ThreadPreviewMiniPlayer
+          key={current.threadId}
+          threadRef={current}
+          miniPlayer={miniPlayer}
+        />
       ) : null}
     </ChatCanvas>
   );
@@ -121,4 +125,30 @@ it("holds its frame through a source change and stops when the gesture is interr
   await act(() => window.dispatchEvent(new Event("blur")));
   await point(handle("west"), "pointermove", landscape.left - 100, landscape.top + 10, 1);
   expect(rect()).toEqual(landscape);
+});
+
+it("keeps one stream when switching between threads floating the same device", async () => {
+  const otherThreadRef = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2"));
+  using _store = {
+    [Symbol.dispose]: () => {
+      usePreviewMiniPlayerStore.getState().removeThread(threadRef);
+      usePreviewMiniPlayerStore.getState().removeThread(otherThreadRef);
+    },
+  };
+  usePreviewMiniPlayerStore.getState().open(threadRef, phone);
+  usePreviewMiniPlayerStore.getState().open(otherThreadRef, phone);
+  const harness = (ref: ScopedThreadRef) => (
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <Harness threadRef={ref} />
+    </RegistryContext.Provider>
+  );
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;position:fixed;inset:0;width:1200px;height:800px";
+  await using screen = await render(harness(threadRef), { container });
+  const viewId = () => screen.getByTestId("stream").element().getAttribute("data-view-id");
+  const first = viewId();
+
+  // The stream session is keyed by view, so a new view id reconnects the device.
+  await screen.rerender(harness(otherThreadRef));
+  expect(viewId()).toBe(first);
 });

@@ -1,4 +1,5 @@
 import type { OrchestrationV2PendingBackgroundTask } from "@goat/contracts";
+import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -33,6 +34,9 @@ export function BackgroundWorkDetails({
                       ? "Command"
                       : task.kind.replaceAll("_", " ")}
                 </h3>
+                <p className="text-xs text-muted-foreground">
+                  {backgroundWorkHoldsCompletion([task]) ? "Waiting" : "Running"}
+                </p>
                 {task.startedAt ? (
                   <p className="text-xs text-muted-foreground">
                     Started{" "}

@@ -101,7 +101,7 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
-import { isWindowsAbsolutePath } from "@goat/shared/path";
+import { isHostPath } from "@goat/shared/path";
 import {
   attachTurnThreadCards,
   turnThreadTargetsEqual,
@@ -258,7 +258,7 @@ export function workEntryReadOutput(
       workEntryReadRawPaths(entry as WorkLogEntry)
         .map((path) => {
           const trimmed = path.trim().replaceAll("\\", "/");
-          if (!workspaceRoot || trimmed.startsWith("/") || isWindowsAbsolutePath(trimmed)) {
+          if (!workspaceRoot || isHostPath(trimmed)) {
             return trimmed;
           }
           const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -1179,6 +1179,7 @@ function deriveTimelineTurnFolds(input: TimelineFoldInput) {
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
+  usageLimitRunId?: RunId | null;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -1199,6 +1200,7 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input, isWorking);
+
   const embeddedResultRunIds = new Set<RunId>();
   for (const entry of timelineEntries) {
     if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
@@ -1227,7 +1229,11 @@ export function deriveMessagesTimelineRows(input: {
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
-  const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
+  const itemizedRunIds = itemizedFailedRunIds(
+    timelineEntries,
+    failedRunIds,
+    input.usageLimitRunId ?? null,
+  );
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
   const retainedAssistantReplyIds = retainedAssistantReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
@@ -1924,12 +1930,18 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
+  const latestTimelineEntry = timelineEntries.at(-1);
+  const replyIsStreaming =
+    latestTimelineEntry?.kind === "message" &&
+    latestTimelineEntry.message.role === "assistant" &&
+    latestTimelineEntry.message.streaming;
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
   if (isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
   if (
     isWorking &&
+    !replyIsStreaming &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     !compactionOnlyRunFinished &&

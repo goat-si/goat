@@ -14,7 +14,8 @@ import {
   sessionGrantsScope,
 } from "@goat/contracts";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { AppBar } from "../../components/ui/AppBar";
+import { TerminalHeader } from "./TerminalHeader";
+import { confirmTerminalClose } from "./terminalClose";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useAtomMount } from "@effect/atom-react";
@@ -54,12 +55,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { uuidv4 } from "../../lib/uuid";
 import { useServerConfigs } from "../../state/entities";
 import { useConnectionsReady } from "../../state/workspace";
-import {
-  MAX_TERMINAL_FONT_SIZE,
-  MIN_TERMINAL_FONT_SIZE,
-  TERMINAL_FONT_SIZE_STEP,
-  stepTerminalFontSize,
-} from "../../lib/appearancePreferences";
+import { stepTerminalFontSize } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   useAttachedTerminalSession,
@@ -79,9 +75,7 @@ import {
   type PendingTerminalLaunch,
 } from "./terminalLaunchContext";
 import {
-  basename,
   buildTerminalMenuSessions,
-  getTerminalStatusLabel,
   nextOpenTerminalId,
   previousLiveTerminalId,
   resolveTerminalSessionLabel,
@@ -96,94 +90,9 @@ import { createTerminalPasteSession } from "./terminalPaste";
 import { cacheTerminalGridSize, getCachedTerminalGridSize } from "./terminalUiState";
 import { getKeyboardShowEpoch, subscribeKeyboardShowing } from "./terminalKeyboardShowing";
 
-function TerminalHeader(props: {
-  readonly subtitle: string;
-  readonly isEnvironmentReady: boolean;
-  readonly canOperateTerminal: boolean;
-  readonly fontSize: number;
-  readonly terminalId: string;
-  readonly sessions: ReadonlyArray<TerminalMenuSession>;
-  readonly status: Parameters<typeof getTerminalStatusLabel>[0];
-  readonly workspaceRoot: string;
-  readonly onCloseTerminal: () => void;
-  readonly onDecreaseFontSize: () => void;
-  readonly onIncreaseFontSize: () => void;
-  readonly onOpenNewTerminal: () => void;
-  readonly onSelectTerminal: (terminalId: string) => void;
-}) {
-  return (
-    <AppBar
-      title="Terminal"
-      subtitle={props.subtitle}
-      onBack={props.onCloseTerminal}
-      backInSplitView={{
-        accessibilityLabel: "Back to chat",
-        icon: "chevron.left",
-      }}
-      menus={
-        props.isEnvironmentReady
-          ? [
-              {
-                title: "Terminal options",
-                icon: "terminal",
-                status: getTerminalStatusLabel(props.status),
-                items: [
-                  {
-                    id: "text-size",
-                    title: "Text size",
-                    icon: "textformat.size",
-                    inline: true,
-                    items: [
-                      {
-                        id: "font-decrease",
-                        title: `A- ${Math.max(MIN_TERMINAL_FONT_SIZE, props.fontSize - TERMINAL_FONT_SIZE_STEP).toFixed(1)} pt`,
-                        disabled: props.fontSize <= MIN_TERMINAL_FONT_SIZE,
-                        onPress: props.onDecreaseFontSize,
-                      },
-                      {
-                        id: "font-increase",
-                        title: `A+ ${Math.min(MAX_TERMINAL_FONT_SIZE, props.fontSize + TERMINAL_FONT_SIZE_STEP).toFixed(1)} pt`,
-                        disabled: props.fontSize >= MAX_TERMINAL_FONT_SIZE,
-                        onPress: props.onIncreaseFontSize,
-                      },
-                    ],
-                  },
-                  ...props.sessions.map((session) => ({
-                    id: `terminal-session:${session.terminalId}`,
-                    title: session.displayLabel,
-                    icon: "terminal",
-                    subtitle: [
-                      getTerminalStatusLabel({
-                        status: session.status,
-                        hasRunningSubprocess: session.hasRunningSubprocess,
-                      }),
-                      basename(session.cwd),
-                    ]
-                      .filter(Boolean)
-                      .join(" · "),
-                    selected: session.terminalId === props.terminalId,
-                    onPress: () => props.onSelectTerminal(session.terminalId),
-                  })),
-                  {
-                    id: "terminal-new",
-                    disabled: !props.canOperateTerminal,
-                    title: "Open new terminal",
-                    icon: "plus",
-                    subtitle: `Start another shell in ${basename(props.workspaceRoot) ?? "this workspace"}`,
-                    onPress: props.onOpenNewTerminal,
-                  },
-                ],
-              },
-            ]
-          : undefined
-      }
-    />
-  );
-}
-
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
-const TERMINAL_ACCESSORY_HEIGHT = 53;
+const TERMINAL_ACCESSORY_HEIGHT = Platform.OS === "android" ? 57 : 53;
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 
 class TerminalClipboardReadError extends Schema.TaggedError<TerminalClipboardReadError>()(
@@ -344,6 +253,7 @@ function ThreadTerminal(props: {
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const clearTerminal = useAtomCommand(terminalEnvironment.clear, "terminal clear");
+  const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const retryEnvironment = useRetryEnvironment();
   const selectedThreadDetail = useSelectedThreadProjection();
   const selectedThreadDetailWorktreePath =
@@ -669,7 +579,7 @@ function ThreadTerminal(props: {
     );
   };
 
-  const handleCloseTerminal = () => {
+  const handleBack = () => {
     if (navigation.canGoBack()) {
       navigation.goBack();
       return;
@@ -681,6 +591,17 @@ function ThreadTerminal(props: {
       }),
     );
   };
+
+  const handleCloseTerminal = () =>
+    confirmTerminalClose({
+      environmentId: selectedThread.environmentId,
+      threadId: selectedThread.id,
+      terminalId,
+      label: resolveTerminalSessionLabel(terminalId, terminal.summary),
+      canClose: () => readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope),
+      close: async (request) => AsyncResult.isSuccess(await closeTerminal(request)),
+      onClosed: exitNavigation.exited,
+    });
 
   const handleOpenNewTerminal = () => {
     if (!readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)) {
@@ -806,6 +727,7 @@ function ThreadTerminal(props: {
           hasRunningSubprocess: terminal.hasRunningSubprocess,
         }}
         workspaceRoot={selectedThreadProject.workspaceRoot}
+        onBack={handleBack}
         onCloseTerminal={handleCloseTerminal}
         onDecreaseFontSize={handleDecreaseFontSize}
         onIncreaseFontSize={handleIncreaseFontSize}
@@ -940,7 +862,7 @@ function ThreadTerminal(props: {
                     KeyboardController.dismiss();
                     requestCapture();
                   }}
-                  className="px-4 py-2"
+                  className="min-h-[44px] justify-center px-4 py-2"
                 >
                   <Text style={{ color: terminalTheme.foreground }}>Attach visible output</Text>
                 </Pressable>

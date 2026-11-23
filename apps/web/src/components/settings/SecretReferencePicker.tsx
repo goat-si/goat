@@ -69,10 +69,11 @@ export function SecretReferencePicker({
     !missingProvider;
   const shownCheck = check !== null && check.reference === value?.reference ? check : null;
   const runCheck = async (source: SecretReference) => {
-    setCheck({ reference: source.reference, result: null });
+    const pendingCheck = { reference: source.reference, result: null };
+    setCheck(pendingCheck);
     const response = await checkSecretSource({ environmentId, input: { source } });
     setCheck((current) =>
-      current?.reference !== source.reference
+      current !== pendingCheck
         ? current
         : {
             reference: source.reference,

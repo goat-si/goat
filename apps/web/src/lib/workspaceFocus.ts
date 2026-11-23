@@ -339,7 +339,12 @@ export function createWorkspaceFocusController(doc: Document) {
       doc.addEventListener("focusin", stop);
     };
     requestAnimationFrame(() => {
-      if (doc.activeElement !== doc.body || !doc.hasFocus()) return;
+      if (
+        doc.activeElement !== doc.body ||
+        !doc.hasFocus() ||
+        lost.closest("[inert][data-workspace-scroll-swap]")
+      )
+        return;
       if (!isWorkspaceElementVisible(lost)) restore();
       else if (lost.matches(":disabled")) waitWhileDisabled();
       else if (lostToDisabling) lost.focus({ preventScroll: true });

@@ -1,3 +1,8 @@
+import { useGT } from "gt-react";
+import {
+  LAUNCHER_SHORTCUT_BLOCKING_LAYERS,
+  useRightPanelNewShortcut,
+} from "./useRightPanelNewShortcut";
 import type {
   ContextMenuItem,
   EnvironmentId,
@@ -31,11 +36,7 @@ import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
-import {
-  resolveShortcutCommand,
-  shortcutLabelForCommand,
-  type ShortcutMatchContext,
-} from "~/keybindings";
+import { shortcutLabelForCommand, type ShortcutMatchContext } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { Button } from "~/components/ui/button";
@@ -104,6 +105,7 @@ export interface RightPanelTabsProps {
   onCloseAllSurfaces: () => void;
   onMoveSurface?: (surfaceId: string, toIndex: number) => void;
   onCopyFilePath: (relativePath: string) => void;
+  onDuplicateBrowser?: (surface: RightPanelSurface) => void;
   onAddBrowser: () => void;
   /** Keep separate from the DOM click handler so a MouseEvent cannot become a profile id. */
   onAddBrowserInProfile: (profileId: string) => void;
@@ -128,23 +130,10 @@ function shouldOpenDefaultBrowserProfileFromMenuClick(pointerType: string | unde
   return pointerType !== "touch";
 }
 
-// Closed keepMounted popups must stop blocking shortcuts once their exit transition ends.
-const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
-  "dialog-popup",
-  "alert-dialog-popup",
-  "command-dialog-popup",
-  "menu-popup",
-  "select-popup",
-  "popover-popup",
-  "combobox-popup",
-  "autocomplete-popup",
-]
-  .map((slot) => `[data-slot="${slot}"]:is([data-open],[data-ending-style])`)
-  .join(",");
-
 type TabContextMenuAction =
   | "rename"
   | "copy-path"
+  | "duplicate"
   | "toggle-mute"
   | "close"
   | "close-others"
@@ -513,6 +502,7 @@ function surfaceTitle(
 // Module-level so React only runs this callback ref on mount and unmount;
 // a fresh function would re-attach and re-focus on every render.
 export function RightPanelTabs(props: RightPanelTabsProps) {
+  const gt = useGT();
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
@@ -536,27 +526,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
   if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
 
-  const onNewSurfaceKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing) return;
-    if (
-      resolveShortcutCommand(event, props.keybindings, {
-        context: { ...props.getShortcutContext(), rightPanelOpen: true },
-      }) !== "rightPanel.new"
-    )
-      return;
-    if (!addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (!event.repeat) {
-      addSurfaceTriggerRef.current?.focus();
-      setAddSurfaceMenuOpen(true);
-    }
-  });
-  useEffect(() => {
-    if (props.open === false) return;
-    document.addEventListener("keydown", onNewSurfaceKeyDown, true);
-    return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
-  }, [props.open]);
+  useRightPanelNewShortcut(props, addSurfaceMenuOpen, setAddSurfaceMenuOpen, addSurfaceTriggerRef);
 
   const addSurfaceActions = [
     {
@@ -647,6 +617,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const menuMuted = menuOverlay?.audioMuted ?? false;
     if (surface.kind === "preview") {
       items.push({
+        id: "duplicate",
+        label: gt("Duplicate"),
+        disabled: !props.browserAvailable || !menuPreviewTabId || !props.onDuplicateBrowser,
+      });
+      items.push({
         id: "toggle-mute",
         ...tabMuteMenuItem({
           overlay: menuOverlay,
@@ -682,6 +657,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         if (surface.kind === "file" && surface.attachment === undefined) {
           props.onCopyFilePath(surface.relativePath);
         }
+        break;
+      case "duplicate":
+        props.onDuplicateBrowser?.(surface);
         break;
       case "toggle-mute": {
         const runtimeTabId =

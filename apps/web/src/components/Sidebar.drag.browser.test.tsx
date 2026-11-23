@@ -132,6 +132,7 @@ it("shows the search result drag preview while still inside the list", async () 
 
 it("keeps focus in the search box when a click picks a search result", async () => {
   const onSelect = vi.fn();
+  const onContextMenu = vi.fn();
   await using screen = await render(
     <>
       <input aria-label="Search threads" />
@@ -151,6 +152,7 @@ it("keeps focus in the search box when a click picks a search result", async () 
           searchQuery="invoice"
           onHighlight={() => {}}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
           onFileDropThreads={() => {}}
         />
       </ul>
@@ -162,4 +164,11 @@ it("keeps focus in the search box when a click picks a search result", async () 
   expect(onSelect).toHaveBeenCalledOnce();
   // Picking clears the results; a focused result would drop focus, and its recovery scrolls the list.
   await expect.element(search).toHaveFocus();
+  await act(() =>
+    screen
+      .getByRole("option")
+      .element()
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 })),
+  );
+  expect(onContextMenu).toHaveBeenCalledOnce();
 });

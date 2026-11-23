@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { SearchField } from "../../components/ui/SearchField";
 import { Toolbar } from "../../components/ui/Toolbar";
@@ -12,7 +13,7 @@ import {
   type ThirdPartyLicenseEntry,
 } from "@goat/shared/thirdPartyLicenses";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Linking, Platform, Pressable, type TextInputInstance, View } from "react-native";
+import { Platform, Pressable, type TextInputInstance, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -214,7 +215,7 @@ export function SettingsOpenSourceLicenseRouteScreen({ route }: LicenseDetailPro
             <Pressable
               accessibilityHint="Opens the project website"
               accessibilityRole="link"
-              onPress={() => void Linking.openURL(sourceUrl)}
+              onPress={() => void tryOpenExternalUrl(sourceUrl)}
               className="min-h-12 flex-row items-center gap-2 self-start py-2 active:opacity-60"
             >
               <Text className="font-goat-medium text-primary-text">Project source</Text>

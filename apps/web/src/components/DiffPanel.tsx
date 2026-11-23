@@ -210,6 +210,7 @@ export default function DiffPanel({
     edit,
   } = useDiffPanelTurn({
     threadRef: routeThreadRef,
+    workspaceRoot: activeCwd,
     selection: diffSelection,
     orderedSummaries: orderedTurnDiffSummaries,
     environmentId: activeThread?.environmentId,
@@ -292,7 +293,6 @@ export default function DiffPanel({
 
   const preview = branchDiffPreview.data;
   const gitDiff = selectedGitSource?.diff;
-
   const turnPatch = selectedTurn ? activeCheckpointDiff : edit;
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
   const isSelectedPatchTruncated =

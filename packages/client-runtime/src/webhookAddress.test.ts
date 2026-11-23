@@ -22,4 +22,17 @@ describe("webhookAddress", () => {
       note: "Public URLs arrive with GOAT Connect (coming soon).",
     });
   });
+  it("returns a public endpoint URL without a note", () => {
+    expect(webhookAddress(endpoint("https://example.com/hook"), null)).toEqual({
+      address: "https://example.com/hook",
+      copyable: true,
+      note: null,
+    });
+  });
+  it("warns when a loopback address only works on this computer", () => {
+    const result = webhookAddress(endpoint(null), "http://127.0.0.1:8787");
+    expect(result.address).toBe(`http://127.0.0.1:8787${path}`);
+    expect(result.copyable).toBe(true);
+    expect(result.note).toContain("Only this computer");
+  });
 });

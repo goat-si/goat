@@ -1,3 +1,4 @@
+import { threadLinkMatcher } from "./threadLinkMatcher";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -199,15 +200,13 @@ function ThreadPicker({
       .filter((project) => project.environmentId === environmentId)
       .map((project) => [project.id, project.title]),
   );
-  const search = query.trim().toLocaleLowerCase();
+  const matches = threadLinkMatcher(query);
   const candidates = threads
     .filter(
       (thread) =>
         thread.environmentId === environmentId &&
         thread.archivedAt === null &&
-        `${thread.title} ${projectNames.get(thread.projectId) ?? ""}`
-          .toLocaleLowerCase()
-          .includes(search),
+        matches(`${thread.title} ${projectNames.get(thread.projectId) ?? ""}`),
     )
     .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return (

@@ -1,3 +1,4 @@
+import { makeIsAvailable } from "./wslAvailability.ts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -946,17 +947,6 @@ const getUserHomeImpl = (
     Effect.orElseSucceed(() => Option.none<string>()),
   );
 
-const makeIsAvailable = Effect.fn("DesktopWslEnvironment.makeIsAvailable")(function* (
-  platform: NodeJS.Platform,
-  windir: string,
-): Effect.fn.Return<boolean, never, FileSystem.FileSystem | Path.Path> {
-  if (platform !== "win32") return false;
-  const path = yield* Path.Path;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const wslExePath = path.join(windir, "System32", "wsl.exe");
-  return yield* fileSystem.exists(wslExePath).pipe(Effect.orElseSucceed(() => false));
-});
-
 export interface DesktopWslEnvironmentTestStub {
   readonly isAvailable?: boolean;
   readonly distros?: ReadonlyArray<WslDistro>;
@@ -1056,6 +1046,7 @@ export const layer = Layer.effect(
     // Cache availability so synchronous IPC bootstrap can read it without yielding to filesystem I/O.
     const wslAvailable = yield* makeIsAvailable(environment.platform, windir).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(Path.Path, environment.path),
       Effect.withSpan("desktop.wsl.isAvailable"),
     );

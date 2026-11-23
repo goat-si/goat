@@ -53,10 +53,10 @@ export function ControlPill(props: {
   const containerClassName = cn(
     // 44pt: the minimum touch target; h-11 is only 38.5pt at the app's 14pt rem.
     isCircle
-      ? "size-[44px] items-center justify-center rounded-full"
+      ? "h-[44px] w-[44px] items-center justify-center rounded-full android:h-[48px] android:w-[48px]"
       : variant === "primary"
-        ? "h-[44px] flex-row items-center justify-center gap-2 rounded-full px-5"
-        : "h-[44px] flex-row items-center justify-center gap-2 rounded-full px-3.5",
+        ? "h-[44px] flex-row items-center justify-center gap-2 rounded-full px-5 android:h-[48px]"
+        : "h-[44px] flex-row items-center justify-center gap-2 rounded-full px-3.5 android:h-[48px]",
     variant === "primary"
       ? props.disabled
         ? "bg-subtle-strong"

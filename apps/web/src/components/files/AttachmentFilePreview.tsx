@@ -128,18 +128,17 @@ export function AttachmentFilePreview(props: {
     props.asset && "attachmentId" in props.asset ? props.asset.attachmentId : undefined;
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: props.name });
   // useAssetUrlRefresh keys its callback on these objects, so they must stay cached.
-  const resource =
-    props.asset && "resource" in props.asset
-      ? props.asset.resource
-      : attachmentId
-        ? {
-            _tag: "attachment" as const,
-            attachmentId,
-            fileName: props.name,
-            mimeType: props.mimeType,
-            disposition: "inline" as const,
-          }
-        : null;
+  const assetResource = props.asset && "resource" in props.asset ? props.asset.resource : null;
+  const attachmentResource = attachmentId
+    ? {
+        _tag: "attachment" as const,
+        attachmentId,
+        fileName: props.name,
+        mimeType: props.mimeType,
+        disposition: "inline" as const,
+      }
+    : null;
+  const resource = assetResource ?? attachmentResource;
   const downloadResource = resource
     ? resource._tag === "draft-workspace-file"
       ? resource

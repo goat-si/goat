@@ -1,3 +1,6 @@
+import { useClientSettings } from "../../hooks/useSettings";
+import { formatTimeOfDay } from "../../timestampFormat";
+import type { TimestampFormat } from "@goat/contracts/settings";
 import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -40,10 +43,16 @@ const STATUS_DOT_CLASS = {
   warning: "bg-warning",
 };
 
-function taskScheduleLine(task: ScheduledTask, timeZone: string | undefined) {
+function taskScheduleLine(
+  task: ScheduledTask,
+  timeZone: string | undefined,
+  timestampFormat: TimestampFormat,
+) {
   return (
     <>
-      {scheduleLabel(task.schedule, timeZone, task.nextRunAt)}
+      {scheduleLabel(task.schedule, timeZone, task.nextRunAt, (value) =>
+        formatTimeOfDay(value, timestampFormat),
+      )}
       {task.enabled && task.nextRunAt !== null ? (
         <>
           {" · next "}
@@ -74,6 +83,7 @@ export function ThreadAutomationsPanel(props: {
   const runTaskNow = useAtomCommand(serverEnvironment.runScheduledTaskNow, {
     label: "thread automation run now",
   });
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const navigate = useNavigate();
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
@@ -187,14 +197,14 @@ export function ThreadAutomationsPanel(props: {
                   {task.title}
                 </span>
                 <p className="truncate text-2xs text-muted-foreground">
-                  {taskScheduleLine(task, tasksQuery.data?.timeZone)} ·{" "}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, timestampFormat)} ·{" "}
                   {scheduledTaskRunPresentation(task).label}
                 </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
                 <p className="text-muted-foreground">
-                  {taskScheduleLine(task, tasksQuery.data?.timeZone)} ·{" "}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, timestampFormat)} ·{" "}
                   {scheduledTaskRunPresentation(task).label}
                 </p>
               </TooltipPopup>

@@ -27,7 +27,11 @@ import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
 import { GOAT_PIERRE_ICONS } from "~/pierre-icons";
-import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import {
+  PIERRE_TREE_UNSAFE_CSS,
+  pierreTreeStyle,
+  titleClippedPierreTreeRow,
+} from "~/pierre-tree-theme";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { joinHostPath } from "./filePath";
@@ -234,6 +238,9 @@ export default function FileBrowserPanel({
   const treeSelectionPathRef = useRef<string | null>(null);
   const selectedTreePathsRef = useRef<readonly string[]>([]);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
+  // Tree path of the revealed row. Folders restored or loaded later insert rows above it, so each
+  // path update scrolls to it again until the user takes over the scroll position.
+  const followedRevealRef = useRef<string | null>(null);
 
   // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
   const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
@@ -486,6 +493,9 @@ export default function FileBrowserPanel({
       controller.abort();
     };
   }, [load, selectedPath]);
+  const stopFollowingReveal = () => {
+    followedRevealRef.current = null;
+  };
   const handleSearchValueChange = (value: string) => {
     setQuery(value);
     if (value.trim().length === 0) {
@@ -525,9 +535,14 @@ export default function FileBrowserPanel({
       if (activeSearch !== null) model.closeSearch();
       model.resetPaths(treePaths, { initialExpandedPaths: [...expandedPathsRef.current] });
       if (activeSearch !== null) model.setSearch(activeSearch);
+    } else if (updates.length > 0) {
+      model.batch(updates);
+    } else {
       return;
     }
-    if (updates.length > 0) model.batch(updates);
+    if (followedRevealRef.current !== null) {
+      model.scrollToPath(followedRevealRef.current, { focus: false, offset: "center" });
+    }
   }, [ready, entryKinds, model, treePaths]);
 
   useEffect(() => {
@@ -538,6 +553,7 @@ export default function FileBrowserPanel({
   useEffect(() => {
     if (!selectedPath) {
       handledRevealRef.current = null;
+      followedRevealRef.current = null;
       return;
     }
     const selectedKind = entryKinds.get(selectedPath);
@@ -565,6 +581,7 @@ export default function FileBrowserPanel({
     if (selectedInTree && treeSelectionPathRef.current === selectedPath) {
       treeSelectionPathRef.current = null;
       handledRevealRef.current = revealRequest;
+      followedRevealRef.current = null;
       return;
     }
     treeSelectionPathRef.current = null;
@@ -592,6 +609,7 @@ export default function FileBrowserPanel({
       focus: true,
       offset: "center",
     });
+    followedRevealRef.current = selectedTreePath;
     queueMicrotask(() => {
       syncingSelectionRef.current = false;
     });
@@ -638,6 +656,10 @@ export default function FileBrowserPanel({
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
       data-glass-layer
+      onWheel={stopFollowingReveal}
+      onPointerDown={stopFollowingReveal}
+      onTouchStart={stopFollowingReveal}
+      onKeyDown={stopFollowingReveal}
     >
       <div
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
@@ -729,7 +751,34 @@ export default function FileBrowserPanel({
           model={model}
           aria-label={gt("{projectName} files", { projectName })}
           className="min-h-0 flex-1 overflow-hidden"
+          onClickCapture={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.button !== 0 ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey ||
+              event.altKey ||
+              dragMention.isDragInProgress()
+            ) {
+              return;
+            }
+            // Pierre emits no change for its sole selected row; read before the click to avoid double opens.
+            const selected = model.getSelectedPaths();
+            const path = selected.length === 1 ? selected[0] : undefined;
+            if (!path || entryKindsRef.current.get(path) !== "file") return;
+            const clickedSelectedRow = event.nativeEvent
+              .composedPath()
+              .some(
+                (node) =>
+                  node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
+              );
+            if (!clickedSelectedRow) return;
+            treeSelectionPathRef.current = path;
+            onOpenFile(panelPath(path));
+          }}
           style={pierreTreeStyle(resolvedTheme)}
+          onPointerOver={titleClippedPierreTreeRow}
         />
       )}
     </div>

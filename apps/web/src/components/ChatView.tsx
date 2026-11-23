@@ -40,8 +40,8 @@ import { useImplementPlanInNewThread } from "./chat/useProposedPlanSend";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
-import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
-import { resolveDraftHeroState } from "./ChatView.logic";
+import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { resolveDraftHeroState, usageLimitPausedRunId } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import {
   isPaintOnlyThreadTimeline,
@@ -319,6 +319,7 @@ import {
 } from "./chat/ProviderStatusBanner";
 import {
   getThreadErrorBannerKey,
+  resolveThreadErrorBanner,
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
@@ -327,6 +328,7 @@ import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullReq
 import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
+import { useDesktopPanelMenu } from "../hooks/useDesktopPanelMenu";
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
@@ -555,8 +557,7 @@ export default function ChatView(props: ChatViewProps) {
   const clientSettingsHydrated = useClientSettingsHydrated();
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
-  // Selects primitives: an object here is new on every router store update, which
-  // re-renders ChatView on unrelated navigation state changes.
+  // Select primitives to avoid re-rendering on unrelated router updates.
   const citationHref = useLocation({ select: (location) => location.href });
   const citationKey = useLocation({
     select: (location) => location.state.assistantCitationActivation ?? location.state.__TSR_key,
@@ -667,14 +668,12 @@ export default function ChatView(props: ChatViewProps) {
   const isRevertingCheckpoint = useComposerDraftStore((store) =>
     store.rewindingThreadKeys.has(routeThreadKey),
   );
-
   const workspaceFileDragRouteKey = `${routeThreadKey}:${draftId ?? ""}`;
   const [workspaceFileDragRoute, setWorkspaceFileDragRoute] = useState(workspaceFileDragRouteKey);
   if (workspaceFileDragRoute !== workspaceFileDragRouteKey) {
     setWorkspaceFileDragRoute(workspaceFileDragRouteKey);
     setIsWorkspaceFileDragActive(false);
   }
-
   useEffect(() => {
     if (!isWorkspaceFileDragActive) return;
     const clearWorkspaceFileDrag = () => setIsWorkspaceFileDragActive(false);
@@ -729,11 +728,9 @@ export default function ChatView(props: ChatViewProps) {
   };
   const setMultipleModelSelectionsStable = useStableCallback(setMultipleModelSelections);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
-
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
   );
-
   const fallbackDraftProjectRef = draftThread
     ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
     : null;
@@ -776,8 +773,7 @@ export default function ChatView(props: ChatViewProps) {
   const { activeProvider: selectedProviderByThreadId, modelSelectionByProvider } =
     useComposerDraftModelState(composerDraftTarget, threadHasStarted(activeThread));
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
-  // The global agent lives in a machine's no-project folder, but it is shown as
-  // one agent rather than a thread of that folder.
+  // Show the machine's no-project global agent as one agent, not as a folder thread.
   const isGlobalAgentActive =
     activeThread != null &&
     isGlobalAgentThread(
@@ -882,10 +878,13 @@ export default function ChatView(props: ChatViewProps) {
           threadId: parentSubagentThreadRef.threadId,
           title: parentSubagentThread?.title ?? "Parent thread",
         };
-  const threadError = isServerThread
-    ? (localServerError ?? serverRuntime?.lastError ?? null)
-    : localDraftError;
-  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, threadError);
+  const { threadError, sessionDismissal } = resolveThreadErrorBanner(
+    isServerThread,
+    localServerError,
+    localDraftError,
+    serverRuntime?.lastError ?? null,
+  );
+  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, sessionDismissal);
   const visibleThreadError = shouldShowThreadErrorBanner(
     routeThreadKey,
     threadError,
@@ -958,11 +957,11 @@ export default function ChatView(props: ChatViewProps) {
   };
   const limitRecoveryRun = limitRecoveryRunFor(activeThreadShell, serverRuntime);
   const recoveryHoldsSnooze = limitRecoveryHoldsSnooze(activeThreadShell, serverRuntime);
+  const usageLimitRunId = usageLimitPausedRunId(serverRuntime, serverLatestRun);
   const timelineThreadError =
     limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
       : visibleThreadError;
-
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -1052,7 +1051,6 @@ export default function ChatView(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
-
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
   const activePlan = deriveActivePlanState(serverProjection, activeActivityRun?.runId);
   const activeActivityRunSettled = isLatestRunSettled(activeActivityRun, activeRuntime);
@@ -1140,12 +1138,10 @@ export default function ChatView(props: ChatViewProps) {
   };
   const handleFilePendingChangeStable = useStableCallback(handleFilePendingChange);
   const configuredPreviewUrls = getConfiguredPreviewUrls(activeProjectScripts);
-
   useEffect(() => {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
     useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
   }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
-
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   useBrowserHistoryProject({
     threadRef: activeThreadRef,
@@ -1164,7 +1160,6 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeEnvironmentUnavailable || !activeEnvironmentUnavailableLabel || !activeEnvironment) {
       return null;
     }
-
     return {
       environmentId: activeEnvironment.environmentId,
       label: activeEnvironmentUnavailableLabel,
@@ -1187,8 +1182,7 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectIsScratch,
     logicalProjectEnvironments,
   );
-  // Run on opens when there is a choice or a machine to explain; keyboard cycling
-  // and auto balance still need two machines with the project.
+  // Keyboard cycling and auto balance need two machines with the project.
   const canPickEnvironment = hasMultipleEnvironments || environmentsWithoutProject.length > 0;
   // This device's copy of the active project: the source an SSH worktree copies.
   const sshSourceProjectId =
@@ -2480,6 +2474,7 @@ export default function ChatView(props: ChatViewProps) {
     copyRightPanelFilePathStable,
     createBrowserSurface,
     createBrowserSurfaceStable,
+    duplicateBrowserSurfaceStable,
     moveRightPanelSurfaceStable,
     onOpenTurnDiffStable,
     openChangesFromThreadPanelStable,
@@ -2669,9 +2664,9 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
-  const limitRecoveryBanner =
+  const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
     limitRecoveryRun !== null && activeThreadShell !== null
-      ? usageLimitRecoveryBannerItem({
+      ? {
           runId: limitRecoveryRun.runId,
           errorCode: serverRuntime?.lastErrorCode ?? null,
           resetAt: serverRuntime?.usageLimitResetAt ?? null,
@@ -2688,8 +2683,9 @@ export default function ChatView(props: ChatViewProps) {
             });
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
-        })
-      : null;
+        }
+      : null,
+  );
   const composerBannerItems = (() => {
     const leadItems = [...approvalBanners, ...feedbackBannerItems];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
@@ -2843,14 +2839,14 @@ export default function ChatView(props: ChatViewProps) {
       return script ? () => void runProjectScriptStable(script) : undefined;
     },
   });
-  // A focused desktop browser page forwards these chords as menu actions.
-  useEffect(() => {
-    if (embedded) return;
-    return window.desktopBridge?.onMenuAction((action) => {
-      if (action === "rightPanel.toggle") toggleRightPanelStable();
-      else if (action === "rightPanel.toggleMaximized") toggleRightPanelMaximizedStable();
-    });
-  }, [embedded, toggleRightPanelStable, toggleRightPanelMaximizedStable]);
+  useDesktopPanelMenu(
+    !embedded && !backgroundThread,
+    toggleRightPanelStable,
+    toggleRightPanelMaximizedStable,
+    () => {
+      if (activeRightPanelSurface) closeRightPanelSurface(activeRightPanelSurface);
+    },
+  );
   usePasteToFocusComposer(activeThreadId, composerRef, embedded);
   const {
     onConfirmRevertStable,
@@ -3546,6 +3542,7 @@ export default function ChatView(props: ChatViewProps) {
                   listRef={legendListRef}
                   runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                   latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
+                  usageLimitRunId={paintOnlyDisplayedTimeline ? null : usageLimitRunId}
                   announcedRun={
                     paintOnlyDisplayedTimeline
                       ? null
@@ -4012,7 +4009,7 @@ export default function ChatView(props: ChatViewProps) {
             previewMiniPlayerVisible &&
             (activePreviewMiniPlayer.source.kind === "device" || canOperatePreview) ? (
               <ThreadPreviewMiniPlayer
-                key={`${activeThreadKey}:${previewMiniPlayerSourceKey(activePreviewMiniPlayer.source)}`}
+                key={`${activePreviewMiniPlayer.source.kind === "device" ? activeThreadRef.environmentId : activeThreadKey}:${previewMiniPlayerSourceKey(activePreviewMiniPlayer.source)}`}
                 threadRef={activeThreadRef}
                 miniPlayer={activePreviewMiniPlayer}
               />
@@ -4161,6 +4158,7 @@ export default function ChatView(props: ChatViewProps) {
           onCopyFilePath={copyRightPanelFilePathStable}
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurfaceStable}
+          onDuplicateBrowser={duplicateBrowserSurfaceStable}
           onAddTerminal={addTerminalSurfaceStable}
           onAddDiff={addDiffSurfaceStable}
           onAddFiles={addFilesSurfaceStable}

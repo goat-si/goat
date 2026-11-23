@@ -2,6 +2,7 @@
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -518,15 +519,16 @@ describe("presentAsChrome", () => {
     const userDataDir = NodePath.join(directory, "profile");
     const pool = new ServerBrowserContexts(options());
     try {
+      // Chromium can write DevToolsActivePort after Playwright's launch resolves, so the port is chosen here.
+      const reserved = NodeHttp.createServer();
+      await new Promise<void>((resolve) => reserved.listen(0, "127.0.0.1", resolve));
+      const { port } = reserved.address() as NodeNet.AddressInfo;
+      await new Promise((resolve) => reserved.close(resolve));
       const desktop = await launchPersistentChromium(userDataDir, {
         headless: true,
-        args: ["--remote-debugging-port=0"],
+        args: [`--remote-debugging-port=${port}`],
       });
       try {
-        const [port] = NodeFS.readFileSync(
-          NodePath.join(userDataDir, "DevToolsActivePort"),
-          "utf8",
-        ).split("\n");
         const { browser, page } = await pool.connectDesktopPage(`http://127.0.0.1:${port}`);
         try {
           const file = NodePath.join(directory, "large.bin");

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { orderItemsByPreferredIds, sortSidebarV2ProjectGroups } from "../components/Sidebar.logic";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
@@ -7,6 +8,7 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import { useClientSettings } from "./useSettings";
 
 export function useSidebarProjectGroups() {
+  const gt = useGT();
   const projects = useProjects();
   // Activity order lags a running thread's streaming ticks until its next
   // real change; reading every tick re-rendered the whole sidebar with it.
@@ -35,5 +37,7 @@ export function useSidebarProjectGroups() {
     primaryEnvironmentId,
     resolveEnvironmentLabel: (environmentId) => labels.get(environmentId) ?? null,
   });
-  return sortSidebarV2ProjectGroups(unsortedGroups, threads, sortOrder);
+  return sortSidebarV2ProjectGroups(unsortedGroups, threads, sortOrder).map((group) =>
+    group.isScratch ? { ...group, displayName: gt("No project") } : group,
+  );
 }

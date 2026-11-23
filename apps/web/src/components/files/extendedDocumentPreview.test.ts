@@ -1,6 +1,50 @@
 import { describe, expect, it } from "vite-plus/test";
+import JSZip from "jszip";
 
-import { openRtf } from "./extendedDocumentPreview";
+import { openDocument, openNotebook, openRtf } from "./extendedDocumentPreview";
+
+it("renders built ODT indexes without their source templates", async () => {
+  const names = [
+    "table-of-content",
+    "illustration-index",
+    "table-index",
+    "object-index",
+    "user-index",
+    "alphabetical-index",
+    "bibliography",
+  ];
+  const indexes = names
+    .map(
+      (name) =>
+        `<text:${name}><text:${name}-source><text:index-title-template>Index</text:index-title-template><text:${name}-entry-template><text:index-entry-span>: </text:index-entry-span></text:${name}-entry-template></text:${name}-source><text:index-body><text:index-title><text:p>Index</text:p></text:index-title><text:p>Field notes: 1</text:p></text:index-body></text:${name}>`,
+    )
+    .join("");
+  const archive = new JSZip().file(
+    "content.xml",
+    `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text>${indexes}</office:text></office:body></office:document-content>`,
+  );
+  const result = await openDocument(archive, "odt");
+  if (result.type !== "document") throw new Error("Expected document");
+  expect(result.pages[0]?.html).toBe("<p>Index</p><p>Field notes: 1</p>".repeat(names.length));
+});
+
+it("removes terminal colors from saved notebook text outputs", () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: "code",
+          source: "",
+          outputs: [{ output_type: "stream", text: ["\u001b[", "32m42\u001b[0m\n"] }],
+        },
+      ],
+    }),
+  );
+  const result = openNotebook(bytes.buffer as ArrayBuffer);
+  if (result.type !== "notebook") throw new Error("Expected notebook");
+  expect(result.cells[0]?.outputs[0]?.text).toBe("42\n");
+});
 
 const html = (rtf: string) => {
   const result = openRtf(new TextEncoder().encode(rtf).buffer as ArrayBuffer);
@@ -9,6 +53,47 @@ const html = (rtf: string) => {
 };
 
 describe("rich text preview paragraphs", () => {
+  it("honors hidden character formatting and its reset", () => {
+    expect(
+      html(String.raw`{\rtf1 A{\v hidden{\v0 B}hidden}C\v hidden\v0 D\v hidden\plain E}`),
+    ).toEqual(["<p>ABCDE</p>"]);
+    expect(html(String.raw`{\rtf1\ansi{\v\line\line\line}First line\line Second line}`)).toEqual([
+      "<p>First line<br>Second line</p>",
+    ]);
+  });
+  it("renders TextEdit soft line breaks while hiding deleted breaks", () => {
+    const expected = html(String.raw`{\rtf1\ansi First line\line Second line}`);
+    expect(html(String.raw`{\rtf1\ansi First line\uc0\u8232 Second line}`)).toEqual(expected);
+    expect(html(String.raw`{\rtf1\ansi First line\u8232?Second line{\deleted\u8232?}}`)).toEqual(
+      expected,
+    );
+  });
+  it("starts a new line at section and column breaks without duplicate breaks", () => {
+    expect(
+      html(
+        String.raw`{\rtf1\ansi\sectd\cols2\pard North\column South\page East\sect\sectd\pard West\par}`,
+      ),
+    ).toEqual(["<p>North<br>South</p>", "<p>East<br>West<br></p>"]);
+    expect(
+      html(String.raw`{\rtf1\ansi First\par\sect\sectd Second\par\column Third\page\sect Fourth}`),
+    ).toEqual(["<p>First<br>Second<br>Third</p>", "<p>Fourth</p>"]);
+  });
+  it("hides tracked deletions while retaining replacement text", () => {
+    expect(html(String.raw`{\rtf1 aaa{\deleted bbb}{\revised BBB}ccc}`)).toEqual([
+      "<p>aaaBBBccc</p>",
+    ]);
+    expect(html(String.raw`{\rtf1 A\deleted old\deleted0 B\deleted old\plain C}`)).toEqual([
+      "<p>ABC</p>",
+    ]);
+    expect(html(String.raw`{\rtf1 A{\deleted\uc1\u945\deleted0 old}B}`)).toEqual(["<p>AB</p>"]);
+  });
+  it("decodes Mac Roman rich text", () => {
+    for (const header of [String.raw`\mac`, String.raw`\mac\ansicpg10000`]) {
+      expect(html(String.raw`{\rtf1` + header + String.raw` Caf\'8e Cr\'8fme}`)).toEqual([
+        "<p>Café Crème</p>",
+      ]);
+    }
+  });
   it("treats a backslash before a line break as a paragraph break, as TextEdit writes them", () => {
     const textEdit = String.raw`{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}
 \pard\f0\fs24 \cf0 First\

@@ -183,3 +183,9 @@ export function resolveNewTaskDraftWorkspace(input: {
     worktreeDefaultSettled: selection?.mode !== undefined || input.defaultModeSettled,
   });
 }
+
+export function newTaskModelUnavailableMessage(connected: boolean, label: string) {
+  return connected
+    ? `Your draft is saved on this device. ${label} has no model available. Install or sign in to a provider there to choose one.`
+    : "Your draft is saved on this device. Connect to an environment to choose its first model.";
+}

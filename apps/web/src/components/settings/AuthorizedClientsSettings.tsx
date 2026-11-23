@@ -1,6 +1,6 @@
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@goat/shared/authScopeOptions";
 import { PlusIcon, QrCodeIcon } from "~/components/solar";
-import { type ReactNode, memo, useId, useState } from "react";
+import { type ReactNode, memo, useId, useRef, useState } from "react";
 import {
   AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
@@ -553,6 +553,10 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
   );
 });
 
+function PairingConnectNotice({ flow, onClose }: { flow: ConnectFlowSlot; onClose: () => void }) {
+  return flow.notice(onClose);
+}
+
 type AuthorizedClientsHeaderActionProps = {
   environmentId?: EnvironmentId;
   createPairingCredential?: (input: {
@@ -582,12 +586,25 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const targetEnvironmentId = environmentId ?? primaryEnvironmentId;
   const [dialogOpen, setDialogOpen] = useState(connectFlow?.resume ?? false);
+  const pairingDialogSessionRef = useRef(0);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
     ...AuthStandardClientScopes,
   ]);
   const selectedScopes = pairingScopes.filter((scope) => delegatableScopes.includes(scope));
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
+
+  const handlePairingDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open) {
+      pairingDialogSessionRef.current += 1;
+      connectFlow?.onDone();
+      setPairingLabel("");
+      setPairingScopes(
+        AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+      );
+    }
+  };
 
   const handleCreatePairingLink = async () => {
     if (
@@ -599,6 +616,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
       )
     )
       return;
+    const dialogSession = pairingDialogSessionRef.current;
     setIsCreatingPairingLink(true);
     const settled = await settlePromise(async () => {
       const created = await createPairingCredential({
@@ -606,11 +624,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
         scopes: selectedScopes,
       });
       onPairingLinkCreated(created);
-      setPairingLabel("");
-      setPairingScopes(
-        AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
-      );
-      setDialogOpen(false);
+      if (dialogSession === pairingDialogSessionRef.current) handlePairingDialogOpenChange(false);
     });
     if (settled._tag === "Failure") {
       const error = Cause.squash(settled.cause);
@@ -639,19 +653,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
           onClick={() => void onRevokeOtherClients()}
         />
       ) : null}
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          setDialogOpen(open);
-          if (!open) {
-            connectFlow?.onDone();
-            setPairingLabel("");
-            setPairingScopes(
-              AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
-            );
-          }
-        }}
-      >
+      <Dialog open={dialogOpen} onOpenChange={handlePairingDialogOpenChange}>
         <DialogTrigger
           render={
             <Button size="xs" variant="default">
@@ -668,7 +670,12 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
-            {connectFlow?.notice(() => setDialogOpen(false))}
+            {connectFlow ? (
+              <PairingConnectNotice
+                flow={connectFlow}
+                onClose={() => handlePairingDialogOpenChange(false)}
+              />
+            ) : null}
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
                 Client label (optional)

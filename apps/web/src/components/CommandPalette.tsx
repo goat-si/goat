@@ -218,7 +218,6 @@ import {
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
-  reduceCommandPaletteUiState,
   createCommandPaletteSearchState,
   type AddProjectCloneFlow,
   type AddProjectEnvironmentOption,
@@ -234,7 +233,7 @@ import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteDialog } from "./CommandPaletteDialog";
-import { useCommandPaletteOpenRequests } from "./useCommandPaletteOpenRequests";
+import { useCommandPaletteOpenRequests, usePaletteReducer } from "./useCommandPaletteOpenRequests";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
   EMPTY_BROWSE_ENTRIES,
@@ -292,11 +291,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
   const navigate = useNavigate();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
-  const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
-    open: false,
-    mode: "command",
-    openIntent: null,
-  });
+  const [state, dispatch] = usePaletteReducer();
   const setOpen = (open: boolean) => dispatch({ _tag: "SetOpen", open });
   const toggleMode = (mode: SearchOverlayMode) => dispatch({ _tag: "ToggleMode", mode });
   const openAddProject = () => dispatch({ _tag: "OpenAddProject" });
@@ -386,6 +381,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     appearanceMode,
+    dispatch,
     keybindings,
     navigate,
     previewOpen,

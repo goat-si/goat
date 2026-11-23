@@ -27,6 +27,9 @@ vi.mock("~/connection/catalog", async () => {
     environmentCatalog: { catalogValueAtom: Atom.make({ isReady: true, entries: new Map() }) },
   };
 });
+vi.mock("./ThreadChipHoverCard", () => ({
+  ThreadChipHoverCard: ({ warning }: { warning: string }) => <span>{warning}</span>,
+}));
 vi.mock("./ProjectFavicon", () => ({ ProjectFavicon: () => null }));
 vi.mock("./contextChipParts", () => ({
   ContextChipPopover: () => null,

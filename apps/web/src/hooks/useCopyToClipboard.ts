@@ -102,8 +102,9 @@ export async function writeTextToClipboard(
   value: string,
   target = "text",
   extraFlavors?: Readonly<Record<string, string>>,
-  requireRich = false,
+  required: boolean | { requireHtml?: boolean } = false,
 ) {
+  const requireRich = typeof required === "boolean" ? required : required.requireHtml === true;
   if (typeof window === "undefined") {
     throw new ClipboardApiUnavailableError({
       target,
@@ -210,33 +211,48 @@ export function useCopyToClipboard<TContext = void>({
   onCopy?: (ctx: TContext) => void;
   onError?: (error: Error, ctx: TContext) => void;
   extraFlavors?: Readonly<Record<string, string>>;
-} = {}): { copyToClipboard: (value: string, ctx: TContext) => void; isCopied: boolean } {
+} = {}): {
+  copyToClipboard: (
+    value: string,
+    ctx: TContext,
+    flavors?: Readonly<Record<string, string>>,
+    options?: { requireHtml?: boolean },
+  ) => void;
+  isCopied: boolean;
+} {
   const [isCopied, setIsCopied] = React.useState(false);
   const timeoutIdRef = React.useRef<NodeJS.Timeout | null>(null);
-  const copyToClipboard = useStableCallback((value: string, ctx: TContext): void => {
-    void writeTextToClipboard(value, target, extraFlavors).then(
-      (didCopy) => {
-        if (!didCopy) return;
-        if (timeoutIdRef.current) {
-          clearTimeout(timeoutIdRef.current);
-        }
-        setIsCopied(true);
+  const copyToClipboard = useStableCallback(
+    (
+      value: string,
+      ctx: TContext,
+      flavors: Readonly<Record<string, string>> | undefined = extraFlavors,
+      options?: { requireHtml?: boolean },
+    ): void => {
+      void writeTextToClipboard(value, target, flavors, options).then(
+        (didCopy) => {
+          if (!didCopy) return;
+          if (timeoutIdRef.current) {
+            clearTimeout(timeoutIdRef.current);
+          }
+          setIsCopied(true);
 
-        onCopy?.(ctx);
+          onCopy?.(ctx);
 
-        if (timeout !== 0) {
-          timeoutIdRef.current = setTimeout(() => {
-            setIsCopied(false);
-            timeoutIdRef.current = null;
-          }, timeout);
-        }
-      },
-      (error) => {
-        console.error(error);
-        onError?.(error, ctx);
-      },
-    );
-  });
+          if (timeout !== 0) {
+            timeoutIdRef.current = setTimeout(() => {
+              setIsCopied(false);
+              timeoutIdRef.current = null;
+            }, timeout);
+          }
+        },
+        (error) => {
+          console.error(error);
+          onError?.(error, ctx);
+        },
+      );
+    },
+  );
 
   React.useEffect(() => {
     return (): void => {

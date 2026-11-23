@@ -8,7 +8,11 @@ import { EnvironmentId, ProviderInstanceId, type ProviderOptionSelection } from 
 import type { ModelOption } from "../../lib/modelOptions";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { modelOptionMemoryAtom } from "../../state/use-composer-drafts";
-import { canSelectModel, popoverSheetHeight } from "./thread-settings-sheet-state";
+import {
+  canSelectModel,
+  popoverSheetHeight,
+  visibleCatalogModels,
+} from "./thread-settings-sheet-state";
 import { ThreadComposer } from "./ThreadComposer";
 import type { ThreadComposerProps } from "./thread-composer-props";
 
@@ -354,4 +358,22 @@ describe("popoverSheetHeight", () => {
     expect(popoverSheetHeight({ contentHeight: 2000, windowHeight: 1194, isPad: true })).toBe(560);
     expect(popoverSheetHeight({ contentHeight: 300, windowHeight: 1194, isPad: true })).toBe(300);
   });
+});
+
+it("finds legacy models by search without enabling Show legacy models", () => {
+  const current = modelOption("gpt-next");
+  const legacy = { ...modelOption("claude-opus-4-8"), label: "Claude Opus 4.8", isLegacy: true };
+  const visible = (query: string) =>
+    visibleCatalogModels({
+      models: [current, legacy],
+      providerLabel: "Codex",
+      query,
+      favoriteKeys: new Set(),
+      favoritesOnly: false,
+      showLegacy: false,
+      isDisplayed: () => false,
+    }).map((model) => model.label);
+  expect(visible("")).toEqual(["gpt-next"]);
+  expect(visible("   ")).toEqual(["gpt-next"]);
+  expect(visible("Claude Opus 4.8")).toEqual(["Claude Opus 4.8"]);
 });

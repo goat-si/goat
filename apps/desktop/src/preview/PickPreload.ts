@@ -1,3 +1,4 @@
+import { mountAnnotationTopLayer } from "./AnnotationTopLayer.ts";
 import { describeRawElement } from "./AnnotationElementLabel.ts";
 import { positionBox } from "./AnnotationPositionBox.ts";
 import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
@@ -378,7 +379,9 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   const host = document.createElement("div");
   host.setAttribute(OVERLAY_ATTRIBUTE, "");
   host.setAttribute("dir", "ltr");
-  host.style.cssText = `position:fixed;inset:0;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
+  host.popover = "manual";
+  // Resets the UA popover box (fit-content size, auto margin, border, padding, Canvas background).
+  host.style.cssText = `position:fixed;inset:0;width:auto;height:auto;margin:0;border:0;padding:0;overflow:visible;background:transparent;color:inherit;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
   applyAnnotationTheme(host, annotationTheme);
   const shadowRoot = host.attachShadow({ mode: "closed" });
   const themeStyle = document.createElement("style");
@@ -392,7 +395,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   root.style.cssText = "pointer-events:none";
   const cursorStyle = document.createElement("style");
   cursorStyle.setAttribute(OVERLAY_ATTRIBUTE, "");
-  cursorStyle.textContent = `html[data-goat-annotation-tool] body, html[data-goat-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
+  cursorStyle.textContent = `[${OVERLAY_ATTRIBUTE}]::backdrop { display:none !important; } html[data-goat-annotation-tool] body, html[data-goat-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
   document.documentElement.appendChild(cursorStyle);
   shadowRoot.appendChild(root);
 
@@ -1240,6 +1243,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     dragHandle.removeEventListener("pointerup", onEditorPointerUp);
     dragHandle.removeEventListener("pointercancel", onEditorPointerUp);
     for (const type of PAGE_ISOLATED_EVENTS) host.removeEventListener(type, stopAtOverlay);
+    disposeTopLayer();
     document.documentElement.removeEventListener("focusout", onFocusOutToOverlay);
     if (editorLayoutFrame !== null) window.cancelAnimationFrame(editorLayoutFrame);
     ipcRenderer.off(CANCEL_PICK_CHANNEL, onCancel);
@@ -1341,7 +1345,9 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
         teardown(true);
       });
   };
-  submit.addEventListener("click", () => submitAnnotation("attach"));
+  submit.addEventListener("click", (event) => {
+    if (event.isTrusted) submitAnnotation("attach");
+  });
   const handleOverlayKey = (event: KeyboardEvent): void => {
     if (event.type !== "keydown") return;
     onKeyDown(event);
@@ -1372,7 +1378,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     document.documentElement.appendChild(inputLayer);
     inputLayer.focus({ preventScroll: true });
   }
-  document.documentElement.appendChild(host);
+  const disposeTopLayer = mountAnnotationTopLayer(host, shadowRoot);
   rootResizeObserver.observe(document.documentElement);
   refreshToolButtons();
   updateStatus();

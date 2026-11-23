@@ -1,3 +1,4 @@
+import { relativeHeaderPaths } from "../../lib/relativeHeaderPaths";
 import type { OrchestrationV2ProjectedTurnItem, RunId, ScopedThreadRef } from "@goat/contracts";
 import {
   extractFilePatch,
@@ -91,7 +92,8 @@ export const FileChangeInlineDiff = memo(function FileChangeInlineDiff(props: {
     hasOwnPatch ? { environmentId: threadRef.environmentId, ...sourceItem } : null,
   );
   const fetched = detail.data?.item;
-  const ownPatch = fetched?.type === "file_change" ? fetched.patch : undefined;
+  const ownPatch =
+    fetched?.type === "file_change" ? relativeHeaderPaths(fetched.patch, workspaceRoot) : undefined;
   const awaitingOwnPatch = hasOwnPatch && detail.isPending && !detail.error;
   const usesCheckpoint = ownPatch === undefined && !awaitingOwnPatch;
 

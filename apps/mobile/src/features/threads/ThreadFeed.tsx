@@ -1,3 +1,4 @@
+import { CollapsibleUserMessageBody } from "./CollapsibleUserMessageBody";
 import { ThreadFeedMessageFrame } from "./ThreadFeedMessageFrame";
 import { useSetupDetails } from "./use-setup-details";
 import { ThreadStatusLine, type ThreadStatusLineModel } from "./thread-status-line";
@@ -98,10 +99,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import {
-  classifyMarkdownImageSource,
-  markdownImageSourceFragment,
-} from "@goat/client-runtime/markdown-images";
+import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { videoMimeType } from "@goat/shared/video";
@@ -1346,16 +1344,23 @@ function renderFeedEntry(
                   <MarkdownImageAvailableWidthContext
                     value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
                   >
-                    <UserMessageContent
-                      text={renderedText}
-                      environmentId={props.environmentId}
-                      context={message.context}
-                      markdownStyles={styles}
-                      reviewCommentColors={props.reviewCommentColors}
-                      skills={props.skills}
-                      linkHandlers={props.markdownLinkHandlers}
-                      renderImage={props.renderMarkdownImage}
-                    />
+                    <CollapsibleUserMessageBody
+                      collapsible={foldRowId === null}
+                      expanded={props.expandedWorkRows[`message:${message.id}`] ?? false}
+                      onToggle={() => props.onToggleWorkRow(`message:${message.id}`, entry.id)}
+                      bubbleColor={userBubbleColor}
+                    >
+                      <UserMessageContent
+                        text={renderedText}
+                        environmentId={props.environmentId}
+                        context={message.context}
+                        markdownStyles={styles}
+                        reviewCommentColors={props.reviewCommentColors}
+                        skills={props.skills}
+                        linkHandlers={props.markdownLinkHandlers}
+                        renderImage={props.renderMarkdownImage}
+                      />
+                    </CollapsibleUserMessageBody>
                   </MarkdownImageAvailableWidthContext>
                 ) : null}
               </View>
@@ -2297,20 +2302,20 @@ export const ThreadFeed = memo(function ThreadFeed({
         />
       );
     }
-    if (imageSource._tag === "Blocked") {
+    if (
+      media?.kind !== "image" ||
+      !("resource" in media.source) ||
+      media.source.resource._tag !== "media-file"
+    ) {
       return <ThreadMarkdownImageUnavailable alt={image.alt} />;
     }
     return (
       <ThreadMarkdownImage
-        environmentId={props.environmentId}
-        resource={{
-          _tag: "media-file",
-          threadId: props.threadId,
-          path: imageSource.path,
-        }}
+        environmentId={media.source.environmentId}
+        resource={media.source.resource}
         alt={image.alt}
-        srcFragment={markdownImageSourceFragment(image.href)}
-        actionsSource={media?.source.actionsSource}
+        srcFragment={media.source.srcFragment}
+        actionsSource={media.source.actionsSource}
         onPressPreview={onPressPreview}
       />
     );

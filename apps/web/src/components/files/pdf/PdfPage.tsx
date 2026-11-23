@@ -22,10 +22,26 @@ export function PdfPage(props: {
   needsEnvironmentRoute: (url: string) => boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const visible = useRef<{ canvas: HTMLCanvasElement; textHost: HTMLDivElement } | null>(null);
   const layer = useRef<{ text: TextLayer; starts: number[] } | null>(null);
   const [ready, setReady] = useState(0);
   const [links, setLinks] = useState<PdfLink[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- Release the last displayed bitmap when its page leaves the viewport.
+  useEffect(
+    () => () => {
+      const current = visible.current;
+      if (current) {
+        current.canvas.width = 0;
+        current.canvas.height = 0;
+        current.canvas.remove();
+        current.textHost.remove();
+        visible.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const host = root.current;
@@ -37,7 +53,6 @@ export function PdfPage(props: {
     const canvas = document.createElement("canvas");
     const textHost = document.createElement("div");
     textHost.className = "textLayer";
-    host.append(canvas, textHost);
     void (async () => {
       const engine = await loadPdfEngine();
       if (cancelled) return;
@@ -55,8 +70,8 @@ export function PdfPage(props: {
       );
       canvas.width = Math.ceil(viewport.width * outputScale);
       canvas.height = Math.ceil(viewport.height * outputScale);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
       render = page.render({ canvas, viewport, transform: [outputScale, 0, 0, outputScale, 0, 0] });
       // Observe cancellation immediately, even if text extraction fails first.
       void render.promise.catch(() => undefined);
@@ -70,6 +85,15 @@ export function PdfPage(props: {
         render.promise,
       ]);
       if (cancelled) return;
+      const previous = visible.current;
+      if (previous) {
+        previous.canvas.width = 0;
+        previous.canvas.height = 0;
+        previous.canvas.remove();
+        previous.textHost.remove();
+      }
+      host.append(canvas, textHost);
+      visible.current = { canvas, textHost };
       layer.current = { text, starts };
       setLinks(pageLinks);
       setReady((value) => value + 1);
@@ -83,10 +107,12 @@ export function PdfPage(props: {
       text?.cancel();
       render?.cancel();
       // Release the backing store immediately, including cancelled zoom renders.
-      canvas.width = 0;
-      canvas.height = 0;
-      canvas.remove();
-      textHost.remove();
+      if (visible.current?.canvas !== canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+        canvas.remove();
+        textHost.remove();
+      }
       if (render) void render.promise.catch(() => undefined).then(() => page?.cleanup());
       else page?.cleanup();
     };
@@ -124,7 +150,7 @@ export function PdfPage(props: {
         } as CSSProperties
       }
     >
-      <div ref={root} />
+      <div ref={root} className="absolute inset-0" />
       {links.map((link) => (
         <a
           key={link.id}

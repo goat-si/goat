@@ -2,7 +2,7 @@ import { AuthSessionId, AuthStandardClientScopes, EnvironmentId } from "@goat/co
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import type { ServerClientSessionRecord } from "~/environments/primary";
 import { AuthorizedClientsHeaderAction, PairingClientsList } from "./AuthorizedClientsSettings";
 import "../../index.css";
@@ -10,6 +10,11 @@ import "../../index.css";
 vi.mock("~/state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/environments")>()),
   usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
+}));
+
+vi.mock("~/state/session", async (original) => ({
+  ...(await original<typeof import("~/state/session")>()),
+  readEnvironmentScope: () => true,
 }));
 
 function clientSession(
@@ -155,4 +160,32 @@ it("What Revoke others keeps is reachable from the keyboard while the button is 
       ),
     )
     .toBeVisible();
+});
+
+it("keeps a reopened pairing dialog open when an earlier request finishes", async () => {
+  let finish!: (result: never) => void;
+  const pending = new Promise<never>((resolve) => {
+    finish = resolve;
+  });
+  const created = vi.fn();
+  await using screen = await render(
+    <AuthorizedClientsHeaderAction
+      createPairingCredential={() => pending}
+      onPairingLinkCreated={created}
+      clientSessions={[]}
+      isRevokingOtherClients={false}
+      onRevokeOtherClients={() => {}}
+      delegatableScopes={[...AuthStandardClientScopes]}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Create link" }));
+  await userEvent.click(page.getByRole("dialog").getByRole("button", { name: "Create link" }));
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("button", { name: "Create link" }));
+  await act(async () => {
+    finish({} as never);
+    await pending;
+  });
+  await expect.element(page.getByRole("dialog", { name: "Create pairing link" })).toBeVisible();
+  expect(created).toHaveBeenCalledOnce();
 });

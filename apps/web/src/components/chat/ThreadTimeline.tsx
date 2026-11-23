@@ -73,5 +73,7 @@ export function ThreadTimeline({
     readyWorkspaceRoot,
     readyActivity,
   ]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayed.entries} />;
+  return (
+    <MessagesTimeline {...timelineProps} syncing={syncing} timelineEntries={displayed.entries} />
+  );
 }

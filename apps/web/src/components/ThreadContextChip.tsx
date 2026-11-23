@@ -6,7 +6,9 @@ import { MessagesSquareIcon } from "~/components/solar";
 import { useProject, useThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { ThreadChipHoverCard } from "./ThreadChipHoverCard";
+import { ThreadHoverCardPopup } from "./ThreadHoverCard";
+import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 
 export function ThreadContextChip(props: {
   record: Pick<ThreadContextRecord, "environmentId" | "threadId" | "title" | "host">;
@@ -52,15 +54,22 @@ export function ThreadContextChip(props: {
           </ContextChip>
         }
       />
-      <TooltipPopup side="top">
-        {props.state === "invalid"
-          ? "On another machine, so this machine's agent can't read it. Remove it or switch back to send."
-          : props.state === "unavailable"
-            ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it through this host.`
-            : shell || props.projectId !== undefined
-              ? "Open thread"
-              : "Thread no longer available"}
-      </TooltipPopup>
+      <ThreadHoverCardPopup side="top">
+        <ThreadChipHoverCard
+          title={title}
+          project={project}
+          shell={shell}
+          warning={
+            props.state === "invalid"
+              ? "On another machine, so this machine's agent can't read it. Remove it or switch back to send."
+              : props.state === "unavailable"
+                ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it through this host.`
+                : shell || props.projectId !== undefined
+                  ? "Open thread"
+                  : "Thread no longer available"
+          }
+        />
+      </ThreadHoverCardPopup>
     </Tooltip>
   );
 }

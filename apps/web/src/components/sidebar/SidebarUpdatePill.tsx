@@ -17,6 +17,7 @@ import {
   type DesktopUpdateTranslate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateInstallError,
+  installDesktopUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
@@ -198,7 +199,7 @@ export async function installLocalUpdate(
   reportError: ReportLocalUpdateError = toastUpdateError,
 ): Promise<boolean> {
   try {
-    const result = await bridge.installUpdate();
+    const result = await installDesktopUpdate(bridge);
     const actionError = getDesktopUpdateInstallError(result);
     if (actionError) {
       reportError(gt("Could not install update"), actionError);
@@ -563,7 +564,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         </PopoverPopup>
       </Popover>
     ) : (
-      <SidebarMenuItem className="ml-auto flex min-w-0 flex-1">{runningControl}</SidebarMenuItem>
+      <SidebarMenuItem className="@container/sidebar-update ml-auto flex min-w-8 flex-1">
+        {runningControl}
+      </SidebarMenuItem>
     );
   }
 
