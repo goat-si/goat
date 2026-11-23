@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { DesktopPreviewColorScheme } from "@goat/contracts";
 import {
   MinusIcon as Minus,
@@ -83,6 +84,7 @@ export function PreviewMoreMenu({
   profileName,
   move,
 }: Props) {
+  const gt = useGT();
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   const disabled = !enabled;
   return (
@@ -123,7 +125,7 @@ export function PreviewMoreMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
-        {actions.find ? <MenuItem onClick={actions.find}>Find in page</MenuItem> : null}
+        {actions.find ? <MenuItem onClick={actions.find}>{gt("Find in page")}</MenuItem> : null}
         <MenuSeparator />
         <MenuItem
           closeOnClick={false}
