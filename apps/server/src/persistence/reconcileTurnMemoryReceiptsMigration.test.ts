@@ -24,4 +24,3 @@ it.effect("appends turn receipts to an up-to-date dev ledger", () =>
     assert.deepStrictEqual(yield* runMigrations(), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
-

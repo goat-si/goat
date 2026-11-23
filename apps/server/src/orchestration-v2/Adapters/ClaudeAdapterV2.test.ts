@@ -15838,42 +15838,76 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
 
 describe("Claude WP4 memory delivery", () => {
   it.effect("records a steer only after Claude accepts it (#3801)", () =>
-    Effect.scoped(Effect.gen(function* () {
-      const threadId = ThreadId.make("receipt-steer");
-      const fixture = yield* liveClaudeQueryFixture({
-        environmentId: EnvironmentId.make("fixture"), threadId,
-        providerSessionId: "credential", providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-        endpoint: "http://127.0.0.1:43123/mcp", authorizationHeader: "Bearer fixture",
-        browserToolsAvailable: false, grantedScopes: [],
-      }, "receipt-native");
-      const allocator = yield* IdAllocator.IdAllocatorV2;
-      let receipts = 0;
-      const makeInput = (attempt: string) => ({
-        ...makeClaudeTestTurnInput({ threadId, providerThread: fixture.providerThread,
-          now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"), attemptId: RunAttemptId.make(attempt),
-          text: "hello", attachments: [] }),
-        refreshMemoryContext: () => Effect.succeed(wp4Memory()),
-        onMemoryDelivered: () => Effect.sync(() => { receipts++; }),
-      });
-      const start = makeInput("receipt-first");
-      yield* fixture.runtime.startTurn(start);
-      yield* fixture.runtime.steerTurn({ runId: start.runId, threadId, providerThread: fixture.providerThread,
-        providerTurnId: allocator.derive.providerTurn({ driver: ClaudeAdapterV2.CLAUDE_PROVIDER, nativeTurnId: `turn:${start.attemptId}` }),
-        message: { ...start.message, text: "unread" } });
-      assert.equal(receipts, 1);
-      yield* fixture.finish(fixture.offers[0]!, "00000000-0000-4000-8000-000000000121");
-      yield* Queue.take(fixture.terminals);
-      assert.equal(receipts, 1);
-      const next = makeInput("receipt-second");
-      yield* fixture.runtime.startTurn(next);
-      yield* fixture.runtime.steerTurn({ runId: next.runId, threadId, providerThread: fixture.providerThread,
-        providerTurnId: allocator.derive.providerTurn({ driver: ClaudeAdapterV2.CLAUDE_PROVIDER, nativeTurnId: `turn:${next.attemptId}` }),
-        message: { ...next.message, text: "accepted" } });
-      assert.equal(receipts, 2);
-      yield* fixture.finish(Object.assign({}, fixture.offers[3]!, { user_message_uuid: fixture.offers[3]!.uuid }), "00000000-0000-4000-8000-000000000122");
-      yield* Queue.take(fixture.terminals);
-      assert.equal(receipts, 3);
-    }).pipe(Effect.provide(layerAdapterTest))),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-steer");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-native",
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const makeInput = (attempt: string) => ({
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make(attempt),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+        });
+        const start = makeInput("receipt-first");
+        yield* fixture.runtime.startTurn(start);
+        yield* fixture.runtime.steerTurn({
+          runId: start.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${start.attemptId}`,
+          }),
+          message: { ...start.message, text: "unread" },
+        });
+        assert.equal(receipts, 1);
+        yield* fixture.finish(fixture.offers[0]!, "00000000-0000-4000-8000-000000000121");
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+        const next = makeInput("receipt-second");
+        yield* fixture.runtime.startTurn(next);
+        yield* fixture.runtime.steerTurn({
+          runId: next.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${next.attemptId}`,
+          }),
+          message: { ...next.message, text: "accepted" },
+        });
+        assert.equal(receipts, 2);
+        yield* fixture.finish(
+          Object.assign({}, fixture.offers[3]!, { user_message_uuid: fixture.offers[3]!.uuid }),
+          "00000000-0000-4000-8000-000000000122",
+        );
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 3);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
   );
   it.effect("refreshes both message builders and credentials while retaining the live query", () =>
     Effect.scoped(

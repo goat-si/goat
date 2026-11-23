@@ -125,7 +125,9 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
   }
   yield* authorize;
   let truncated = rows.length > eventLimit;
-  while (Buffer.byteLength(JSON.stringify({ events, truncated: true }), "utf8") > responseByteLimit) {
+  while (
+    Buffer.byteLength(JSON.stringify({ events, truncated: true }), "utf8") > responseByteLimit
+  ) {
     events.pop();
     truncated = true;
   }

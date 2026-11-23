@@ -148,19 +148,28 @@ it("updates an open turn memory panel when recall completes before the run ends 
   const h = createNativeMemoryHarness({ protocolVersion: 1, turnMemory: true });
   const runId = RunId.make("running-recall");
   const threadId = ThreadId.make("running-thread");
-  const update = (done: boolean) => h.registry.set(h.turnDetail, {
-    projection: {
-      runs: [{ id: runId, status: "running" }],
-      turnItems: done ? [{ id: TurnItemId.make("recall"), type: "dynamic_tool", status: "completed", runId }] : [],
-    },
-  });
+  const update = (done: boolean) =>
+    h.registry.set(h.turnDetail, {
+      projection: {
+        runs: [{ id: runId, status: "running" }],
+        turnItems: done
+          ? [{ id: TurnItemId.make("recall"), type: "dynamic_tool", status: "completed", runId }]
+          : [],
+      },
+    });
   h.responses.set(WS_METHODS.memoryTurnInspect, () => ({
-    events: h.calls.filter((c) => c.method === WS_METHODS.memoryTurnInspect).length > 1
-      ? [{ id: "1", kind: "recall", query: "fresh recall", items: [] }] : [], truncated: false,
+    events:
+      h.calls.filter((c) => c.method === WS_METHODS.memoryTurnInspect).length > 1
+        ? [{ id: "1", kind: "recall", query: "fresh recall", items: [] }]
+        : [],
+    truncated: false,
   }));
   const unsubscribe = h.registry.mount(h.turnDetail);
   update(false);
-  const view = renderNative(h, <TurnMemoryDetails environmentId={nativeEnv} threadId={threadId} runId={runId} />);
+  const view = renderNative(
+    h,
+    <TurnMemoryDetails environmentId={nativeEnv} threadId={threadId} runId={runId} />,
+  );
   try {
     await h.waitForAtom(h.memory.canInspectTurnMemory(nativeEnv), Boolean);
     await view.render();
