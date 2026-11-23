@@ -286,7 +286,7 @@ function PdfDocument(props: {
           query={query}
           error={searchError}
           isSearching={!texts}
-          current={matches.length ? matchIndex + 1 : 0}
+          currentMatch={matches.length ? matchIndex + 1 : 0}
           total={matches.length}
           onQueryChange={(value) => {
             setQuery(value);
@@ -351,19 +351,29 @@ function PdfDocument(props: {
   );
 }
 
-function PdfFindBar(props: {
+function PdfFindBar({
+  inputRef,
+  query,
+  error,
+  isSearching,
+  currentMatch,
+  total,
+  onQueryChange,
+  onNavigate,
+  onClose,
+}: {
   inputRef: Ref<HTMLInputElement>;
   query: string;
   error: Error | null;
   isSearching: boolean;
-  current: number;
+  currentMatch: number;
   total: number;
   onQueryChange: (value: string) => void;
   onNavigate: (direction: number) => void;
   onClose: () => void;
 }) {
   const gt = useGT();
-  const matchCount = { current: props.current, total: props.total };
+  const matchCount = { current: currentMatch, total: total };
   return (
     <div
       role="search"
@@ -372,23 +382,23 @@ function PdfFindBar(props: {
     >
       <div className="min-w-24 flex-1">
         <Input
-          ref={props.inputRef}
+          ref={inputRef}
           size="compact"
           aria-label={gt("Find in PDF")}
-          value={props.query}
-          onChange={(event) => props.onQueryChange(event.target.value)}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              props.onNavigate(event.shiftKey ? -1 : 1);
+              onNavigate(event.shiftKey ? -1 : 1);
             }
           }}
         />
       </div>
       <span role="status" className="min-w-0 text-muted-foreground">
-        {props.error ? (
-          props.error.message || gt("Could not search this PDF.")
-        ) : props.isSearching ? (
+        {error ? (
+          error.message || gt("Could not search this PDF.")
+        ) : isSearching ? (
           gt("Searching…")
         ) : (
           <span className="whitespace-nowrap tabular-nums">
@@ -399,21 +409,13 @@ function PdfFindBar(props: {
           </span>
         )}
       </span>
-      <PdfIconButton
-        label={gt("Previous match")}
-        disabled={!props.total}
-        onClick={() => props.onNavigate(-1)}
-      >
+      <PdfIconButton label={gt("Previous match")} disabled={!total} onClick={() => onNavigate(-1)}>
         <ChevronLeftIcon />
       </PdfIconButton>
-      <PdfIconButton
-        label={gt("Next match")}
-        disabled={!props.total}
-        onClick={() => props.onNavigate(1)}
-      >
+      <PdfIconButton label={gt("Next match")} disabled={!total} onClick={() => onNavigate(1)}>
         <ChevronRightIcon />
       </PdfIconButton>
-      <PdfIconButton label={gt("Close find")} onClick={props.onClose}>
+      <PdfIconButton label={gt("Close find")} onClick={onClose}>
         <XIcon />
       </PdfIconButton>
     </div>
