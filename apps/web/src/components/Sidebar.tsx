@@ -1,3 +1,4 @@
+import { olderSettledScopes } from "./sidebar/olderSettledScopes";
 import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
@@ -49,11 +50,9 @@ import {
 } from "@goat/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
-  ProjectId,
   type ScopedThreadRef,
   type ThreadId,
 } from "@goat/contracts";
-import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
 import { ChevronDownIcon, PlusIcon } from "~/components/solar";
 import {
   Fragment,
@@ -560,22 +559,6 @@ function useSidebarThreads(input: {
       threads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
     ),
   };
-}
-/** The sidebar's scope per environment: the scoped projects there, or every project. */
-function olderSettledScopes(
-  environmentIds: ReadonlyArray<EnvironmentId>,
-  scopedProjectKeys: ReadonlySet<string> | null,
-): ReadonlyArray<OlderSettledScope> {
-  if (scopedProjectKeys === null) {
-    return environmentIds.map((environmentId) => ({ environmentId, projectIds: null }));
-  }
-  return environmentIds.flatMap((environmentId) => {
-    const prefix = `${environmentId}:`;
-    const projectIds = [...scopedProjectKeys].flatMap((key) =>
-      key.startsWith(prefix) ? [ProjectId.make(key.slice(prefix.length))] : [],
-    );
-    return projectIds.length === 0 ? [] : [{ environmentId, projectIds }];
-  });
 }
 
 function isOptimisticDropReleased(input: {
@@ -2420,17 +2403,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
 
   const handleThreadContextMenu = useStableCallback(
-    (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
+    (threadRef: ScopedThreadRef, position: { x: number; y: number }, fromSearch = false) => {
       void (async () => {
         const api = readLocalApi();
         if (!api) return;
         const threadKey = scopedThreadKey(threadRef);
         const selectionState = useThreadSelectionStore.getState();
-        if (selectionState.hasSelection() && selectionState.selectedThreadKeys.has(threadKey)) {
+        if (
+          !fromSearch &&
+          selectionState.hasSelection() &&
+          selectionState.selectedThreadKeys.has(threadKey)
+        ) {
           await handleMultiSelectContextMenu(position);
           return;
         }
-        const thread = threadByKeyRef.current.get(threadKey);
+        const thread =
+          threadByKeyRef.current.get(threadKey) ??
+          searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -2450,8 +2439,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
-        const isSettled = settledThreadKeysRef.current.has(threadKey);
-        const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
+        const isSettled = fromSearch
+          ? thread.settledOverride === "settled"
+          : settledThreadKeysRef.current.has(threadKey);
+        const isSnoozed = fromSearch
+          ? effectiveSnoozed(thread, { now: new Date().toISOString() })
+          : snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         const snoozePresets = resolveSnoozePresets(new Date(), thread.environmentId);
         const threadProjectGroup =
@@ -2489,6 +2482,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              canRename: !fromSearch,
               fork: readThreadForkMenuState(threadRef),
               supports: {
                 settlement: supportsSettlement,
@@ -2851,6 +2845,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         searchMatchQuery={threadSearch.query}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
+                        onContextMenu={(threadRef, position) =>
+                          handleThreadContextMenu(threadRef, position, true)
+                        }
                         onFileDropThreads={handleThreadFileDrop}
                       />
                     );

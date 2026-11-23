@@ -80,6 +80,7 @@ export interface ThreadActionMenuState {
   readonly canOpenSshHandoff?: boolean | undefined;
   readonly canFollowWithBot?: boolean;
   readonly canFind?: boolean;
+  readonly canRename?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -263,7 +264,13 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
+    {
+      id: "rename",
+      label: "Rename thread",
+      icon: "pencil",
+      disabled: state.canRename === false,
+      separatorBefore: true,
+    },
     ...(state.supports.titleRegeneration
       ? [
           {
