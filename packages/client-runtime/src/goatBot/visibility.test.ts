@@ -176,14 +176,14 @@ describe("goatBotObservationThreadKeys", () => {
     expect(hidden(threads, [taskRow()])).toEqual([key("channel-child-work:old-chore")]);
   });
 
-  it("hides a task's worker the bot lists, only in the worker's own environment", () => {
+  it("hides a task's worker by its id in every environment, with its subagents", () => {
     const threads = [
       thread("channel-worker:a"),
       thread("channel-worker:a", { environmentId: REMOTE }),
       thread("worker-subagent", { subagentOf: "channel-worker:a" }),
     ];
     expect(hidden(threads, [taskRow({ id: "channel-worker:a" })])).toEqual(
-      [key("channel-worker:a"), key("worker-subagent")].toSorted(),
+      [key("channel-worker:a"), key("channel-worker:a", REMOTE), key("worker-subagent")].toSorted(),
     );
   });
 
@@ -216,7 +216,7 @@ describe("goatBotObservationThreadKeys", () => {
       thread("channel-child-work:chore", {
         environmentId: REMOTE,
         launchedBy: SESSION,
-        workKind: "chore",
+        worktreePath: "/wt/chore",
       }),
     ];
     expect(hidden(threads, [launchRow("channel-child-work:chore", "chore")])).toEqual([]);

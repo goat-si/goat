@@ -425,13 +425,7 @@ export function createChannelEnvironmentAtoms<R, E>(
           return NO_WORK;
         return botInputs(get, environmentId).inputs.flatMap((input) => {
           const value = get(retainedFor(environmentId, input));
-          return value === null
-            ? []
-            : goatBotListedWork(value.rows, {
-                originEnvironmentId: environmentId,
-                items: value.remoteWork ?? [],
-                isOpenable: (destination) => get(remoteWorkOpenable(destination)),
-              });
+          return value === null ? [] : goatBotListedWork(value.rows);
         });
       }),
     ).pipe(Atom.withLabel("environment-data:channel:goat-bot-listed-work"));

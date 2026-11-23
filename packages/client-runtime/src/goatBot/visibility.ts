@@ -1,6 +1,7 @@
 import {
+  isChannelWorkerThreadId,
   isGoatBotConversationThreadId,
-  type BotRemoteWork,
+  isRemoteChannelWorkerThreadId,
   type BotThreadRow,
   type EnvironmentId,
   type OrchestrationV2ThreadLauncher,
@@ -9,12 +10,12 @@ import {
 } from "@goat/contracts";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
-import { resolveRemoteBotWork } from "./remoteWork.ts";
 import type { HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
 
 export interface GoatBotVisibilityThread {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
+  readonly worktreePath: OrchestrationV2ThreadShell["worktreePath"];
   readonly lineage: Pick<
     OrchestrationV2ThreadShell["lineage"],
     "parentThreadId" | "relationshipToParent"
@@ -33,19 +34,19 @@ export interface GoatBotVisibilityThread {
 export interface GoatBotWorkRef {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  /**
-   * Set for a chore on another machine: that machine's own record must name this launcher, so
-   * a thread the origin cannot vouch for, such as one an older GOAT recorded without its work
-   * kind, stays in lists.
-   */
-  readonly launchedFrom?: {
-    readonly environmentId: EnvironmentId;
-    readonly threadId: ThreadId;
-  };
 }
 
 const keyOf = (environmentId: EnvironmentId, threadId: ThreadId) =>
   scopedThreadKey(scopeThreadRef(environmentId, threadId));
+
+// The server names a launch it admitted for GOAT Bot after its child-work record.
+const CHANNEL_CHILD_WORK_THREAD_PREFIX = "channel-child-work:";
+
+/** Threads that run for a bot by their id: its conversations and every task's worker. */
+const isGoatBotThreadId = (threadId: string) =>
+  isGoatBotConversationThreadId(threadId) ||
+  isChannelWorkerThreadId(threadId) ||
+  isRemoteChannelWorkerThreadId(threadId);
 
 /** Whether GOAT Bot's own work launched this thread, rather than a person or their agent. */
 export const isGoatBotLaunch = (
@@ -57,22 +58,33 @@ export const isGoatBotLaunch = (
   launcher.via !== "delegate_task" &&
   (launcher.workKind !== undefined ||
     isGoatBotConversationThreadId(launcher.threadId) ||
-    launcher.threadId.startsWith("channel-worker:"));
+    isChannelWorkerThreadId(launcher.threadId));
+
+/**
+ * Whether the thread's own record says it is a bot's work rather than a person's: a task's
+ * worker, or a launch the server marked a chore. A bot launch from before work kinds were
+ * recorded counts as a chore when it ran outside a worktree, the line the server draws today.
+ * Coding a bot sends to a worktree, and anything the user promoted, stays people's work.
+ */
+export function isGoatBotOwnWork(thread: GoatBotVisibilityThread): boolean {
+  const launcher = thread.source.launchedBy;
+  if (launcher?.kind === "promotion") return false;
+  if (isChannelWorkerThreadId(thread.id) || isRemoteChannelWorkerThreadId(thread.id)) return true;
+  if (launcher?.kind !== "launch" || launcher.via === "delegate_task") return false;
+  if (launcher.workKind !== undefined) return launcher.workKind === "chore";
+  return (
+    thread.id.startsWith(CHANNEL_CHILD_WORK_THREAD_PREFIX) &&
+    thread.worktreePath === null &&
+    isGoatBotLaunch(launcher)
+  );
+}
 
 /**
  * The threads a bot's rows open that are its own work: each task's worker and every launch the
- * server marked a chore, including chores on other machines this client can open. Coding
- * launches and unmarked ones stay people's work.
+ * server marked a chore. Coding launches and unmarked ones stay people's work; a chore on
+ * another machine leaves lists by that machine's own record.
  */
-export function goatBotListedWork(
-  rows: ReadonlyArray<BotThreadRow>,
-  remote?: {
-    /** The environment whose rows these are, where the bot's launching threads live. */
-    readonly originEnvironmentId: EnvironmentId;
-    readonly items: ReadonlyArray<BotRemoteWork>;
-    readonly isOpenable: (environmentId: EnvironmentId) => boolean;
-  },
-): GoatBotWorkRef[] {
+export function goatBotListedWork(rows: ReadonlyArray<BotThreadRow>): GoatBotWorkRef[] {
   const listed: GoatBotWorkRef[] = [];
   for (const row of rows) {
     if (row.kind === "task") {
@@ -81,30 +93,18 @@ export function goatBotListedWork(
       listed.push({ environmentId: row.environmentId, threadId: row.threadId });
     }
   }
-  if (remote === undefined) return listed;
-  for (const item of remote.items) {
-    if (item.workKind !== "chore") continue;
-    const target = resolveRemoteBotWork(item, remote.isOpenable);
-    if (target.kind !== "open") continue;
-    listed.push({
-      ...target.ref,
-      launchedFrom: { environmentId: remote.originEnvironmentId, threadId: item.callerThreadId },
-    });
-  }
   return listed;
 }
 
-/** Whether a thread's own launcher record names the launch a remote chore came from. */
+/** Whether a thread's own launcher record names the launch a remote Home link came from. */
 const recordsLaunchFrom = (
   thread: GoatBotVisibilityThread,
-  from: NonNullable<GoatBotWorkRef["launchedFrom"]>,
-  requireChore = true,
+  from: NonNullable<HomeCurrentOpenableLink["launchedFrom"]>,
 ) => {
   const launcher = thread.source.launchedBy;
   return (
     launcher?.kind === "launch" &&
     launcher.via === "ssh_thread_launch" &&
-    (!requireChore || launcher.workKind === "chore") &&
     launcher.environmentId === from.environmentId &&
     launcher.threadId === from.threadId
   );
@@ -139,24 +139,23 @@ function observedParents(thread: GoatBotVisibilityThread) {
 }
 
 /**
- * Scoped keys of the threads lists leave to GOAT Bot: its conversation threads, the work its
- * rows list (so the bot can always open what is hidden), and every subagent or delegated child
- * below them. Work no row lists yet, or any more, stays in lists.
+ * Scoped keys of the threads lists leave to GOAT Bot: its conversation threads, its own work by
+ * the thread's record (see isGoatBotOwnWork), whatever its rows or Home list now, and every
+ * subagent or delegated child below them. Search and Show GOAT Bot threads still reach them.
  */
 export function goatBotObservationThreadKeys(input: {
   readonly threads: ReadonlyArray<GoatBotVisibilityThread>;
   readonly listedWork?: ReadonlyArray<GoatBotWorkRef>;
   readonly homeWork?: ReadonlyArray<HomeCurrentOpenableLink>;
 }): ReadonlySet<string> {
-  // A listed key with launch requirements hides only when the thread meets one of them.
-  const listed = new Map<string, Array<NonNullable<GoatBotWorkRef["launchedFrom"]>> | null>();
-  for (const ref of input.listedWork ?? []) {
-    const key = keyOf(ref.environmentId, ref.threadId);
-    const current = listed.get(key);
-    if (ref.launchedFrom === undefined || current === null) listed.set(key, null);
-    else listed.set(key, [...(current ?? []), ref.launchedFrom]);
-  }
-  const home = new Map<string, Array<NonNullable<GoatBotWorkRef["launchedFrom"]>> | null>();
+  const listed = new Set(
+    (input.listedWork ?? []).map((ref) => keyOf(ref.environmentId, ref.threadId)),
+  );
+  // A remote Home link hides only when the thread's own launcher names the launch it came from.
+  const home = new Map<
+    string,
+    Array<NonNullable<HomeCurrentOpenableLink["launchedFrom"]>> | null
+  >();
   for (const link of input.homeWork ?? []) {
     const key = keyOf(link.environmentId, link.threadId);
     if (link.kind !== "remote") home.set(key, null);
@@ -165,15 +164,10 @@ export function goatBotObservationThreadKeys(input: {
   }
   const isListed = (key: string, thread: GoatBotVisibilityThread) => {
     const current = home.get(key);
-    if (
-      current === null ||
-      (current !== undefined && current.some((from) => recordsLaunchFrom(thread, from, false)))
-    )
-      return true;
-    const requirements = listed.get(key);
     return (
-      requirements === null ||
-      (requirements !== undefined && requirements.some((from) => recordsLaunchFrom(thread, from)))
+      listed.has(key) ||
+      current === null ||
+      (current !== undefined && current.some((from) => recordsLaunchFrom(thread, from)))
     );
   };
   const seeds = new Set<string>();
@@ -182,6 +176,7 @@ export function goatBotObservationThreadKeys(input: {
     const key = keyOf(thread.environmentId, thread.id);
     if (
       isGoatBotConversationThreadId(thread.id) ||
+      isGoatBotOwnWork(thread) ||
       (isListed(key, thread) && thread.source.launchedBy?.kind !== "promotion")
     ) {
       seeds.add(key);
@@ -190,8 +185,8 @@ export function goatBotObservationThreadKeys(input: {
     if (isVisibleWork(thread)) continue;
     for (const parent of observedParents(thread)) {
       const parentKey = keyOf(parent.environmentId, parent.threadId);
-      // A conversation parent is known by its id even when its shell is not loaded here.
-      if (isGoatBotConversationThreadId(parent.threadId)) seeds.add(parentKey);
+      // A conversation or worker parent is known by its id even when its shell is not loaded here.
+      if (isGoatBotThreadId(parent.threadId)) seeds.add(parentKey);
       const siblings = childrenByParent.get(parentKey);
       if (siblings === undefined) childrenByParent.set(parentKey, [key]);
       else siblings.push(key);
