@@ -227,4 +227,15 @@ Third}`;
     expect(html(textEdit)).toEqual(expected);
     expect(html(textEdit.replaceAll("\n", "\r\n"))).toEqual(expected);
   });
+  it("keeps styled surrogate-pair emojis in one formatting run", () => {
+    expect(
+      html("{\\rtf1\\ansi\\b \\uc0\\u55357 \\u56960  Launch\\b0  \\i\\uc1\\u-10187?\\u-8904?\\i0}"),
+    ).toEqual(["<p><strong>🚀 Launch</strong> <em>𝔸</em></p>"]);
+    expect(html("{\\rtf1\\b\\uc1\\u-10179\\_\\uc0\\u-8576 }")).toEqual([
+      "<p><strong>🚀</strong></p>",
+    ]);
+    expect(html("{\\rtf1\\b A\\u66\\\nC\\par D}")).toEqual([
+      "<p><strong>ABC</strong><br><strong>D</strong></p>",
+    ]);
+  });
 });
