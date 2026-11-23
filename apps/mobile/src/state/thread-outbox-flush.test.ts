@@ -71,3 +71,26 @@ it("does not block a flush on a failed read (#3830)", async () => {
   load.reject(new Error("read failed"));
   await Promise.all([failedClear, flushing]);
 });
+
+it("keeps a write failure that lands while file writes drain (#3830)", async () => {
+  const writes = Promise.withResolvers<void>();
+  const write = Promise.withResolvers<void>();
+  using _write = vi.spyOn(expoThreadOutboxStorage, "write").mockReturnValueOnce(write.promise);
+  using _remove = vi.spyOn(expoThreadOutboxStorage, "remove").mockResolvedValueOnce();
+  const flushing = threadOutboxManager.flush(() => writes.promise);
+  const failedFlush = expect(flushing).rejects.toThrow("operation enqueue failed");
+  const enqueue = enqueueThreadOutboxMessage({
+    environmentId: EnvironmentId.make("environment"),
+    threadId: ThreadId.make("thread"),
+    messageId: MessageId.make("during-drain"),
+    commandId: CommandId.make("command"),
+    text: "during drain",
+    attachments: [],
+    createdAt: "2026-06-08T10:00:00.000Z",
+  });
+  const failedEnqueue = expect(enqueue).rejects.toBeDefined();
+  write.reject(new Error("disk failed"));
+  await failedEnqueue;
+  writes.resolve();
+  await failedFlush;
+});

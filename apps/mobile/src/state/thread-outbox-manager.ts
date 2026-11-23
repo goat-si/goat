@@ -37,6 +37,14 @@ export interface ThreadOutboxManagerOptions {
   readonly warn?: (message: string, error: unknown) => void;
 }
 
+/** Reads that fail leave nothing unsaved, so only failed writes stop an update restart. */
+function blocksFlush(cause: unknown): boolean {
+  return !(
+    cause instanceof ThreadOutboxManagerError &&
+    (cause.operation === "load" || cause.operation === "clear-environment-load")
+  );
+}
+
 export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
@@ -49,6 +57,8 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   let loadPromise: Promise<boolean> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
   const pendingMutations = new Set<Promise<unknown>>();
+  // Each running flush collects write failures, including ones that settle between its snapshots.
+  const flushFailures = new Set<unknown[]>();
   const revisions = new Map<MessageId, number>();
   const bumpRevision = (messageId: MessageId): void => {
     revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
@@ -60,7 +70,10 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     pendingMutations.add(tracked);
     void tracked.then(
       () => pendingMutations.delete(tracked),
-      () => pendingMutations.delete(tracked),
+      (cause: unknown) => {
+        pendingMutations.delete(tracked);
+        if (blocksFlush(cause)) for (const failures of flushFailures) failures.push(cause);
+      },
     );
     mutationQueue = result.then(
       () => undefined,
@@ -398,34 +411,24 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     queuedMessagesByThreadKeyAtom,
     serialize,
     flush: async (flushWrites: () => Promise<void> = async () => {}) => {
-      let failure: unknown;
-      let failed = false;
-      let drained = false;
-      while (!drained) {
-        const queue = mutationQueue;
-        const results = await Promise.allSettled(pendingMutations);
-        for (const result of results) {
-          if (
-            result.status === "rejected" &&
-            !(
-              result.reason instanceof ThreadOutboxManagerError &&
-              (result.reason.operation === "load" ||
-                result.reason.operation === "clear-environment-load")
-            )
-          ) {
-            failed = true;
-            failure ??= result.reason;
+      const failures: unknown[] = [];
+      flushFailures.add(failures);
+      try {
+        let drained = false;
+        while (!drained) {
+          const queue = mutationQueue;
+          await Promise.allSettled(pendingMutations);
+          try {
+            await flushWrites();
+          } catch (cause) {
+            failures.push(cause);
           }
+          drained = queue === mutationQueue && pendingMutations.size === 0;
         }
-        try {
-          await flushWrites();
-        } catch (cause) {
-          failed = true;
-          failure ??= cause;
-        }
-        drained = queue === mutationQueue && pendingMutations.size === 0;
+      } finally {
+        flushFailures.delete(failures);
       }
-      if (failed) throw failure;
+      if (failures.length > 0) throw failures[0];
     },
     load,
     enqueue,
