@@ -94,6 +94,14 @@ describe("rich text preview paragraphs", () => {
       ]);
     }
   });
+  it("decodes rich text code pages 0 and 866", () => {
+    for (const [rtf, expected] of [
+      [String.raw`{\rtf1\ansi\ansicpg0 Caf\'e9}`, "<p>Café</p>"],
+      [String.raw`{\rtf1\ansi\ansicpg866 \'8f\'e0\'a8\'a2\'a5\'e2}`, "<p>Привет</p>"],
+    ] as const) {
+      expect(html(rtf)).toEqual([expected]);
+    }
+  });
   it("treats a backslash before a line break as a paragraph break, as TextEdit writes them", () => {
     const textEdit = String.raw`{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}
 \pard\f0\fs24 \cf0 First\
