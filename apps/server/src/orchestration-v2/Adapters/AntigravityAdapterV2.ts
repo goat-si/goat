@@ -40,6 +40,7 @@ import {
   antigravityApprovalOptions,
   antigravityToolOutlivesPrompt,
   antigravityCommandOutlivesPrompt,
+  antigravityBackgroundToolMessageStatus,
   antigravitySubagentOutput,
   classifyAntigravitySubagentToolCall,
   extractAntigravityUserInputQuestion,
@@ -249,6 +250,7 @@ export function makeAntigravityAcpAdapterFlavor(
     wakeOnDetachedRequest: true,
     replyEndsWithUsageUpdate: true,
     toolOutlivesPrompt: antigravityToolOutlivesPrompt,
+    backgroundToolMessageStatus: antigravityBackgroundToolMessageStatus,
     // agy sometimes loses the terminal update or wake for a background command, which would
     // hold the turn in Working forever. 30 minutes still leaves long commands room.
     postSettleCommandHold: {

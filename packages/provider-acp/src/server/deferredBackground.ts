@@ -220,3 +220,39 @@ export function makePostSettleHoldExpiry(input: {
     }).pipe(Effect.forkIn(input.sessionScope), Effect.asVoid);
   });
 }
+
+// Provider events include streaming deltas; avoid a span for each update.
+export const makeRearmDeferredFinalize = (
+  enabled: () => boolean,
+  hasWork: (context: ActiveAcpTurn) => boolean,
+  schedule: (context: ActiveAcpTurn) => Effect.Effect<void>,
+) =>
+  Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+    if (!enabled() || !context.promptSettled || context.finalized || hasWork(context)) return;
+    yield* schedule(context);
+  });
+
+export const settleMessageBackgroundTools = Effect.fnUntraced(function* (
+  context: ActiveAcpTurn,
+  flavor: AcpAdapterV2Flavor,
+  text: string,
+  emitTool: (context: ActiveAcpTurn, tool: AcpToolCallState) => Effect.Effect<void>,
+) {
+  if (!context.promptSettled || flavor.backgroundToolMessageStatus === undefined) return;
+  const reply = text.slice(-8_000);
+  for (const tool of context.tools.values()) {
+    if (toolStatus(tool.status) !== "running") continue;
+    const status = flavor.backgroundToolMessageStatus(tool, reply);
+    if (status !== undefined) yield* emitTool(context, { ...tool, status });
+  }
+});
+
+export const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
+  [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
+    const tool = context.tools.get(toolCallId);
+    const status = tool === undefined ? undefined : toolStatus(tool.status);
+    return status === "pending" || status === "running";
+  }) ||
+  [...context.subagents.values()].some((subagent) =>
+    acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
+  );
