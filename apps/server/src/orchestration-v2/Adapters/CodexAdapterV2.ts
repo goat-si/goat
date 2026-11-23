@@ -31,6 +31,7 @@ import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
 import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
+import { makeCodexContextRestores } from "./CodexContextRestores.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
@@ -897,8 +898,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
-        // Native thread id to the compaction whose context goes back once its turn completes.
-        const compactionsAwaitingRestore = new Map<string, string>();
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
         /** Threads Codex held before this session resumed them, such as across a server restart. */
@@ -938,6 +937,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             NonNullable<CodexTurnStartParamsWithCollaborationMode["additionalContext"]>
           >(),
         );
+        const contextRestores = makeCodexContextRestores(scope, additionalContextByThread);
         const memoryDelivery = makeCodexMemoryDelivery({
           additionalContextByThread,
           derivedCache,
@@ -1008,9 +1008,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           restorePermit.withPermits(1),
           (effect, threadId) => effect.pipe(Effect.onError(() => clearMemoryDelivery(threadId))),
           Effect.timeout("10 seconds"),
-          Effect.catch(() =>
-            Effect.logWarning("Failed to restore Codex additional context after compaction."),
-          ),
         );
         if (adapterOptions.mcpCredentialRotations)
           yield* adapterOptions.mcpCredentialRotations.pipe(
@@ -4356,6 +4353,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // their command items, while the shared provider session stays alive.
         yield* survivorHooks.handleNotification("thread/closed", (payload) =>
           Effect.gen(function* () {
+            yield* contextRestores.clear(payload.threadId);
             yield* threadClosings.close(payload.threadId);
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
@@ -4553,7 +4551,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const emitCompletedItem = (payload: CodexSchema.V2ItemCompletedNotification) =>
           Effect.gen(function* () {
             if (payload.item.type === "contextCompaction")
-              compactionsAwaitingRestore.set(payload.threadId, payload.item.id);
+              yield* contextRestores.mark(payload.threadId, payload.item.id);
             if (
               (payload.item.type === "subAgentActivity" ||
                 payload.item.type === "collabAgentToolCall") &&
@@ -6283,13 +6281,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
-            const compactionId = compactionsAwaitingRestore.get(payload.threadId);
+            const compactionId = contextRestores.take(payload.threadId);
             if (compactionId !== undefined) {
-              compactionsAwaitingRestore.delete(payload.threadId);
-              // The notification callback runs on the input reader. Let it read
-              // the injection response while the session-scoped request waits.
-              yield* restoreAdditionalContext(payload.threadId, compactionId).pipe(
-                Effect.forkIn(scope, { startImmediately: true }),
+              yield* contextRestores.fork(
+                payload.threadId,
+                restoreAdditionalContext(payload.threadId, compactionId),
               );
             }
             turnStartGuard.turnCompleted(
@@ -6749,6 +6745,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(Effect.ignore),
               ),
+              // A start cancelled while waiting has no memory or pending turn to clean up.
+              (start) =>
+                Effect.flatMap(
+                  getNativeThreadId(turnInput.providerThread),
+                  contextRestores.wait,
+                ).pipe(Effect.andThen(start)),
             ),
         );
 
@@ -7192,6 +7194,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     Effect.ignore,
                   ),
                 ),
+                // An interrupted wait must not clear the earlier compaction's memory.
+                (compact) =>
+                  Effect.flatMap(
+                    getNativeThreadId(turnInput.providerThread),
+                    contextRestores.wait,
+                  ).pipe(Effect.andThen(compact)),
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterTurnStartError({
@@ -7396,7 +7404,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return next;
               });
               sessionApprovals.delete(nativeThreadId);
-              compactionsAwaitingRestore.delete(nativeThreadId);
+              yield* contextRestores.clear(nativeThreadId);
               if (unloadInput.archive === true) {
                 // Archive also unloads, inline and without thread/closed; a resume unarchives it.
                 yield* client.request("thread/archive", { threadId: nativeThreadId });

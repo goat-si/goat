@@ -10,6 +10,7 @@ import type {
   RunId,
   ThreadId,
 } from "@goat/contracts";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 
@@ -35,6 +36,20 @@ export class ContextHandoffBackgroundWorkError extends Schema.TaggedError<Contex
 ) {
   override get message() {
     return "The target provider still has background work running. Wait for it to finish or stop it before retrying the handoff.";
+  }
+}
+
+const CODEX_RESTORE_MESSAGES = {
+  failed: "Codex could not restore context after compaction. Retry the turn.",
+  capacity:
+    "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+} as const;
+
+export class CodexContextRestoreError extends Data.TaggedError("CodexContextRestoreError")<{
+  readonly reason: keyof typeof CODEX_RESTORE_MESSAGES;
+}> {
+  override get message() {
+    return CODEX_RESTORE_MESSAGES[this.reason];
   }
 }
 
@@ -107,6 +122,12 @@ function curatedCauseMessages(cause: unknown): {
       if (typeof cause !== "object") break;
       const tag = (cause as Record<string, unknown>)._tag;
       switch (tag) {
+        case "CodexContextRestoreError": {
+          const reason = (cause as Record<string, unknown>).reason;
+          if (reason === "failed" || reason === "capacity")
+            return { known: CODEX_RESTORE_MESSAGES[reason], category: categoryMessage() };
+          break;
+        }
         case "ContextHandoffBudgetError":
           return { known: new ContextHandoffBudgetError().message, category: categoryMessage() };
         case "ContextHandoffBackgroundWorkError":

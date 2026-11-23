@@ -21,6 +21,7 @@ import {
   MAX_PROVIDER_FAILURE_MESSAGE_LENGTH,
   ContextHandoffBudgetError,
   ContextHandoffBackgroundWorkError,
+  CodexContextRestoreError,
 } from "./failure.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -336,3 +337,28 @@ it.effect("keys terminal failure items by provider turn across retries and fallb
     assert.equal(firstAttempt.ordinal, 101);
   }).pipe(Effect.provide(IdAllocator.layer)),
 );
+
+it("shows only fixed Codex context restore guidance through the run failure", () => {
+  for (const [reason, expected] of [
+    ["failed", "Codex could not restore context after compaction. Retry the turn."],
+    [
+      "capacity",
+      "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+    ],
+  ] as const) {
+    const cause = new ProviderAdapter.ProviderAdapterTurnStartError({
+      driver: ProviderDriverKind.make("codex"),
+      threadId: ThreadId.make("thread:restore-error"),
+      providerThreadId: ProviderThreadId.make("provider-thread:restore-error"),
+      runId: RunId.make("run:restore-error"),
+      cause: new CodexContextRestoreError({ reason }),
+    });
+    assert.equal(makeProviderFailure({ cause: Cause.fail(cause) }).message, expected);
+  }
+  const secret = "raw provider token secret";
+  const cause = {
+    _tag: "ProviderAdapterTurnStartError",
+    cause: { _tag: "CodexContextRestoreError", reason: secret, message: secret },
+  };
+  assert.notInclude(makeProviderFailure({ cause }).message, secret);
+});
