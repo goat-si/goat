@@ -295,9 +295,15 @@ describe("orchestration V2 thread fork", () => {
           Effect.orDie,
         ),
       );
-      const transcript = yield* CodexOrchestratorReplayHarness.decodeTranscript(
-        materializeReplayTranscriptWorkspace(rawTranscript, cwd),
-      );
+      const workspaceTranscript = materializeReplayTranscriptWorkspace(rawTranscript, cwd);
+      const transcript = yield* CodexOrchestratorReplayHarness.decodeTranscript({
+        ...workspaceTranscript,
+        // Codex names each thread after the title of its first turn.
+        metadata: {
+          ...workspaceTranscript.metadata,
+          goatReplayTitles: ["Source thread", "Forked from first response"],
+        },
+      });
 
       const materialized = yield* Effect.gen(function* () {
         const ids = yield* IdAllocator.IdAllocatorV2;

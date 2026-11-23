@@ -202,14 +202,24 @@ function receiptReplay<T extends ProviderReplayTranscript, E>(
     ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
     const modelSelection = driver === "codex" ? CODEX_MODEL_SELECTION : CLAUDE_MODEL_SELECTION;
     const workspace = yield* checkpointWorkspace("receipt-" + driver);
+    const runtimeTranscript = materializeReplayTranscriptRuntimeInstructions(
+      materializeReplayTranscriptWorkspace(receiptFrames(raw, driver, mixed), workspace),
+      {
+        driver: ProviderDriverKind.make(driver),
+        model: modelSelection.model,
+      },
+    );
     const transcript = yield* harness.decodeTranscript(
-      materializeReplayTranscriptRuntimeInstructions(
-        materializeReplayTranscriptWorkspace(receiptFrames(raw, driver, mixed), workspace),
-        {
-          driver: ProviderDriverKind.make(driver),
-          model: modelSelection.model,
-        },
-      ),
+      driver === "codex"
+        ? {
+            ...runtimeTranscript,
+            // Codex names the thread after its first turn's title.
+            metadata: {
+              ...runtimeTranscript.metadata,
+              goatReplayTitles: ["Replay fixture: receipt-codex"],
+            },
+          }
+        : runtimeTranscript,
     );
     const materialized = yield* materializeFixtureInput({
       scenario: "receipt-" + driver,

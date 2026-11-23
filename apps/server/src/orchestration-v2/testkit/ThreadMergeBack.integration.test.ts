@@ -463,9 +463,18 @@ describe("orchestration V2 merge-back provider replay", () => {
             ? yield* runOrchestratorV2ProviderReplayScenario(
                 {
                   ...scenario,
-                  transcript: yield* CodexOrchestratorReplayHarness.decodeTranscript(
-                    materializeReplayTranscriptWorkspace(transcript, cwd),
-                  ),
+                  transcript: yield* CodexOrchestratorReplayHarness.decodeTranscript({
+                    ...materializeReplayTranscriptWorkspace(transcript, cwd),
+                    // Codex names each thread after the title of its first turn.
+                    metadata: {
+                      ...transcript.metadata,
+                      goatReplayTitles: [
+                        "Merge-back source",
+                        "First merge-back sibling",
+                        "Second merge-back sibling",
+                      ],
+                    },
+                  }),
                 },
                 CodexHistoryReplayHarness,
                 // One recorded app-server serves the source thread and both forks.
