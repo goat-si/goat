@@ -98,7 +98,8 @@ describe("deriveMessagesTimelineRows once the provider turn ends", () => {
     expect(ended.map((row) => row.id)).not.toContain("working-indicator-row");
     expect(ended.find((row) => row.kind === "turn-fold")).toMatchObject({
       runId: "turn-1",
-      label: "Worked for 12s",
+      status: "worked",
+      duration: "12s",
     });
   });
 });
