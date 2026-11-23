@@ -66,6 +66,46 @@ it("removes terminal colors from saved notebook text outputs", () => {
   expect(result.cells[0]?.outputs[0]?.text).toBe("42\n");
 });
 
+it("shows notebook error outputs saved without a traceback", () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: "code",
+          source: "",
+          outputs: [
+            {
+              output_type: "error",
+              ename: "ZeroDivisionError",
+              evalue: "division by zero",
+              traceback: [],
+            },
+            {
+              output_type: "error",
+              evalue: "\u001b[31mbad input\u001b[0m",
+              traceback: [],
+            },
+            {
+              output_type: "error",
+              ename: "RuntimeError",
+              evalue: "kernel reset",
+              traceback: ["\u001b[31m\u001b[0m", "  \n"],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const result = openNotebook(bytes.buffer as ArrayBuffer);
+  if (result.type !== "notebook") throw new Error("Expected notebook");
+  expect(result.cells[0]?.outputs).toEqual([
+    { kind: "text", text: "ZeroDivisionError: division by zero" },
+    { kind: "text", text: "bad input" },
+    { kind: "text", text: "RuntimeError: kernel reset" },
+  ]);
+});
+
 const html = (rtf: string) => {
   const result = openRtf(new TextEncoder().encode(rtf).buffer as ArrayBuffer);
   if (result.type !== "document") throw new Error("Expected document");
