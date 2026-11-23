@@ -1,8 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The fixture runs a real shell with an isolated PATH.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { expect, it } from "vitest";
+import { assert, it } from "@effect/vitest";
 import { buildRemoteGoatRunnerScript } from "./tunnel.ts";
 
 it("reports missing tar before downloading the remote runtime", () => {
@@ -36,9 +37,9 @@ it("reports missing tar before downloading the remote runtime", () => {
       encoding: "utf8",
       env: { HOME: home, PATH: bin },
     });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("needs tar");
-    expect(result.stderr).not.toContain("download attempt");
+    assert.notEqual(result.status, 0);
+    assert.include(result.stderr, "needs tar");
+    assert.notInclude(result.stderr, "download attempt");
   } finally {
     NodeFS.rmSync(root, { recursive: true, force: true });
   }
