@@ -16,6 +16,7 @@ import {
   AD_HOC_WARNING,
   buildComputerUseHelperCommand,
   chooseSigningIdentity,
+  compileComputerUseLauncher,
   helperBundleIdForChannel,
   helperDesignatedRequirement,
   renderHelperInfoPlist,
@@ -60,23 +61,31 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
-  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "darwin")(
-    "packages real Mach-O slices and rejects missing architectures (#3832)",
+  it.effect.skipIf(!macWithSwift)(
+    "builds matching launcher and driver slices and rejects missing architectures",
     () =>
       Effect.gen(function* () {
         const dir = NodeFS.mkdtempSync(
           NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), "goat-arch-"),
         );
         try {
-          const source = NodePath.join(dir, "fixture.c");
+          const source = NodePath.join(dir, "main.swift");
           const universal = NodePath.join(dir, "universal");
-          NodeFS.writeFileSync(source, "int main(void) { return 0; }\n");
+          NodeFS.writeFileSync(source, 'print("helper")\n');
           const command = (program: string, args: string[]) => {
             const result = NodeChildProcess.spawnSync(program, args, { encoding: "utf8" });
             assert.strictEqual(result.status, 0, result.stderr);
             return result.stdout.trim();
           };
-          command("cc", ["-arch", "arm64", "-arch", "x86_64", source, "-o", universal]);
+          yield* compileComputerUseLauncher(
+            [source],
+            universal,
+            dir,
+            "universal",
+            runReleaseCommand,
+          );
+          const slices = (executable: string) =>
+            new Set(command("lipo", ["-archs", executable]).split(/\s+/u));
           const stage = (src: string, dest: string, arch: "arm64" | "x64" | "universal") =>
             stageComputerUseDriver(src, dest, arch, runReleaseCommand);
           for (const [arch, expected] of [
@@ -85,14 +94,15 @@ describe("build-computer-use-helper", () => {
           ] as const) {
             const dest = NodePath.join(dir, arch);
             yield* stage(universal, dest, arch);
-            assert.strictEqual(command("lipo", ["-archs", dest]), expected);
+            const launcher = NodePath.join(dir, "launcher-" + arch);
+            yield* compileComputerUseLauncher([source], launcher, dir, arch, runReleaseCommand);
+            assert.deepEqual(slices(dest), new Set([expected]));
+            assert.deepEqual(slices(launcher), new Set([expected]));
           }
           const output = NodePath.join(dir, "both");
           yield* stage(universal, output, "universal");
-          assert.deepEqual(
-            new Set(command("lipo", ["-archs", output]).split(/\s+/u)),
-            new Set(["arm64", "x86_64"]),
-          );
+          assert.deepEqual(slices(output), new Set(["arm64", "x86_64"]));
+          assert.deepEqual(slices(universal), slices(output));
           assert.isTrue(
             Exit.isFailure(yield* Effect.exit(stage(NodePath.join(dir, "arm64"), output, "x64"))),
           );
