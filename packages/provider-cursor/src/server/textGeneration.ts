@@ -21,7 +21,7 @@ import * as TextGenerationOperations from "@goat/provider-core/server/textGenera
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import { cursorSdkModelSelection } from "./sdkModel.ts";
 import type { CursorAuth } from "./auth.ts";
-import type { CatalogModels } from "./sessionEnvironment.ts";
+import type { CatalogModels, CatalogSdkModels } from "./sessionEnvironment.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import * as CursorSdk from "./CursorSdk.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -71,6 +71,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   memoryRunnerContext?: MemoryGenerationRunnerContext,
   currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment ?? process.env),
   getModels?: CatalogModels,
+  getSdkModels?: CatalogSdkModels,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
@@ -159,6 +160,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const selectedModel = cursorSdkModelSelection(
         modelSelection,
         getModels?.(apiKey, requestEnvironment) ?? [],
+        getSdkModels?.(apiKey, requestEnvironment) ?? [],
       );
       // The SDK keeps SQLite handles open after `agent.close()` and only releases
       // them from a store the caller disposes. Its state lives outside `cwd` so the
