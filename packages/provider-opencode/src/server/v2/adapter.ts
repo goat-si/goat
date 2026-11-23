@@ -17,11 +17,7 @@ import type {
 export type { ActiveTurn } from "./adapterState.ts";
 import { makeNewThreadState, trackImageJob } from "./adapterState.ts";
 import { makeTurnStatusItems } from "./turnStatusItems.ts";
-import {
-  OWNED_RECOVERY_RETRY,
-  OpenCode2ServerExitedError,
-  isPermanentRecoveryError,
-} from "./ownedRecovery.ts";
+import { whileAlive, isPermanentRecoveryError } from "./ownedRecovery.ts";
 import { recordString } from "../records.ts";
 import { OpenCode2ProviderCapabilities } from "./capabilities.ts";
 import {
@@ -2569,7 +2565,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const next = yield* borrowConnection(server, initial.launch).pipe(
           Effect.provideService(Scope.Scope, scope),
         );
-        return { next, stream: yield* next.events.pipe(Effect.provideService(Scope.Scope, scope)) };
+        const events = next.events.pipe(Effect.provideService(Scope.Scope, scope));
+        return { next, stream: yield* whileAlive(next.processExit, events) };
       }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
       const previous = currentScope;
       connection = next;
@@ -2606,15 +2603,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       // An owned process's exit, rather than a read deadline, bounds recovery; the bounded retry
       // below then borrows a restarted server. HTTP waits stay outside the event lock so Stop can still settle.
-      const exited = next.processExit;
-      yield* exited === undefined
+      yield* next.processExit === undefined
         ? reconcile().pipe(Effect.timeout(RECONCILE_TIMEOUT))
-        : reconcile().pipe(
-            Effect.retry(OWNED_RECOVERY_RETRY),
-            Effect.raceFirst(
-              exited.pipe(Effect.andThen(Effect.fail(new OpenCode2ServerExitedError()))),
-            ),
-          );
+        : whileAlive(next.processExit, reconcile());
       return stream;
     }).pipe(
       // Borrows and process exits stay bounded; only a live owned process is waited on above.

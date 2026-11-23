@@ -47,6 +47,7 @@ import {
   stopTimedOut,
   stopFirstTurn,
   turnItems,
+  terminalOf,
   resumed,
   sessionInfo,
   shellAsk,
@@ -54,6 +55,38 @@ import {
 } from "./OpenCode2AdapterV2.fixtures.testkit.ts";
 
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
+  // regression: #39120 a live owned server failed after five stalled event subscriptions
+  it.effect("keeps owned work through more than five stalled event subscriptions", () =>
+    Effect.gen(function* () {
+      let subscriptions = 0;
+      const [exit, ...restored] = reconnected({}, "succeeded");
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, id: PROMPT_ID, text: "<any>" }),
+          promptAccepted,
+          exit!,
+          ...Array.from({ length: 5 }, () => out("event.subscribe")),
+          ...restored,
+        ],
+        {
+          beforeResponse: (path) =>
+            path === "/api/event"
+              ? Effect.suspend(() => {
+                  subscriptions += 1;
+                  return subscriptions >= 2 && subscriptions <= 6 ? Effect.never : Effect.void;
+                })
+              : Effect.void,
+        },
+      );
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      yield* runtime.startTurn(turnInput(thread));
+      // Each stalled subscription waits out its 10s deadline before the next attempt.
+      for (let attempt = 0; attempt < 8; attempt++) yield* TestClock.adjust("15 seconds");
+      assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+      assert.equal(subscriptions, 7);
+    }).pipe(Effect.scoped),
+  );
+
   const ASSISTANT = "msg_0eb735d5b001oAFVeY5jz3WD4Z";
 
   const rateLimited = {
