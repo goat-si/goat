@@ -3,6 +3,7 @@ import { useNavigate, useRouter, type AnyRouter } from "@tanstack/react-router";
 import { GUEST_PAGE_PATH } from "../../guestPage";
 import { withoutAssistantCitationHash } from "../../lib/assistantCitationNavigation";
 import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../../threadRoutes";
+import { startHomeReturnMemory } from "./homeReturnThread";
 
 /** Usage opens as a modal over the last main-app view. */
 export function isAppModalPage(pathname: string) {
@@ -31,10 +32,12 @@ let appModalReturnHistoryIndex: number | null = null;
 let appModalReturnThreadTarget: ThreadRouteTarget | null = null;
 let initialHistoryIndex = 0;
 
-/** Remembers where Settings, Usage, and the utility pages lead back to. */
+/** Remembers where Settings, Usage, the utility pages, and the rail's Home lead back to. */
 export function startMainAppLocationTracking(router: AnyRouter): () => void {
   initialHistoryIndex = router.state.location.state.__TSR_index;
+  const homeReturn = startHomeReturnMemory();
   const record = () => {
+    homeReturn.record(router.state.matches.at(-1)?.params ?? {});
     const { pathname } = router.state.location;
     if (isAppModalPage(pathname) || isSettingsPage(pathname) || SHELL_LESS_PATHS.has(pathname)) {
       return;
@@ -49,7 +52,11 @@ export function startMainAppLocationTracking(router: AnyRouter): () => void {
     if (!isSidebarUtilityPage(pathname)) mainAppHref = href;
   };
   record();
-  return router.subscribe("onResolved", record);
+  const unsubscribe = router.subscribe("onResolved", record);
+  return () => {
+    unsubscribe();
+    homeReturn.stop();
+  };
 }
 
 /** The thread Usage opened over, for views mounted while it is open. */

@@ -50,6 +50,7 @@ const ENV = EnvironmentId.make("env-1");
 const OTHER_ENV = EnvironmentId.make("env-2");
 const LIVE = { archivedAt: null, deletedAt: null };
 const PROJECT = scopeProjectRef(ENV, ProjectId.make("project-1"));
+const OTHER_PROJECT = scopeProjectRef(ENV, ProjectId.make("project-2"));
 
 function setup(threads: ReadonlyArray<string> = []) {
   localStorage.removeItem(STORAGE_KEY);
@@ -212,8 +213,8 @@ it.each([
   using _data = setup(["thread-a"]);
   await using app = await openApp(`/${ENV}/thread-a`);
 
-  await go(app.router, "/fleet");
   invalidate();
+  await go(app.router, "/fleet");
   await userEvent.click(app.home());
 
   await expect.element(app.heading("Home landing")).toBeVisible();
@@ -252,7 +253,8 @@ it("Home reopens a draft, follows it once sent, and lets go once it is discarded
   drafts.setProjectDraftThreadId(PROJECT, DraftId.make("draft-1"), {
     threadId: ThreadId.make("reserved-1"),
   });
-  drafts.setProjectDraftThreadId(PROJECT, DraftId.make("draft-2"), {
+  // A project holds one draft.
+  drafts.setProjectDraftThreadId(OTHER_PROJECT, DraftId.make("draft-2"), {
     threadId: ThreadId.make("reserved-2"),
   });
   await using app = await openApp("/draft/draft-1");
@@ -279,15 +281,13 @@ it("Home reopens a draft, follows it once sent, and lets go once it is discarded
 
 it("Home does not reopen a draft on a removed machine", async () => {
   using _data = setup();
-  useComposerDraftStore
-    .getState()
-    .setProjectDraftThreadId(PROJECT, DraftId.make("draft-1"), {
-      threadId: ThreadId.make("reserved-1"),
-    });
+  useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT, DraftId.make("draft-1"), {
+    threadId: ThreadId.make("reserved-1"),
+  });
   await using app = await openApp("/draft/draft-1");
 
-  await go(app.router, "/fleet");
   data.environmentIds = [OTHER_ENV];
+  await go(app.router, "/fleet");
   await userEvent.click(app.home());
 
   await expect.element(app.heading("Home landing")).toBeVisible();
